@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { emit, listen } from '@tauri-apps/api/event'
 
 export interface MonitorInfo {
   name: string | null
@@ -18,7 +19,14 @@ export const useAppStore = defineStore('app', () => {
 
   function toggleDarkMode() {
     isDarkMode.value = !isDarkMode.value
+    // Synchroniser le thème avec toutes les fenêtres
+    emit('theme-changed', isDarkMode.value)
   }
+
+  // Écouter les changements de thème émis par une autre fenêtre
+  listen<boolean>('theme-changed', (event) => {
+    isDarkMode.value = event.payload
+  })
 
   async function loadDisplays() {
     loading.value = true
