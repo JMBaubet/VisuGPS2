@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Accueil from '../views/Accueil.vue'
 import Visualisation from '../views/Visualisation.vue'
 import EditionCamera from '../views/EditionCamera.vue'
+import ScreenBis from '../views/ScreenBis.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -20,6 +21,11 @@ const router = createRouter({
       path: '/edition-camera',
       name: 'editionCamera',
       component: EditionCamera
+    },
+    {
+      path: '/screen-bis',
+      name: 'screenBis',
+      component: ScreenBis
     }
   ]
 })

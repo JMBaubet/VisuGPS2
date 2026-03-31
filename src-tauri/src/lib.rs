@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::Manager;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Serialize)]
 pub struct MonitorInfo {
@@ -83,6 +83,26 @@ fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
 // --- Commandes Tauri ---
 
 #[tauri::command]
+async fn open_second_window(
+    app: tauri::AppHandle,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    if app.get_webview_window("screen-bis").is_some() {
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, "screen-bis", WebviewUrl::App("screen-bis".into()))
+        .title("ScreenBis")
+        .position(x as f64, y as f64)
+        .inner_size(width as f64, height as f64)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_displays(_window: tauri::Window) -> Vec<MonitorInfo> {
     #[cfg(target_os = "macos")]
     {
@@ -119,7 +139,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_displays])
+        .invoke_handler(tauri::generate_handler![get_displays, open_second_window])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
