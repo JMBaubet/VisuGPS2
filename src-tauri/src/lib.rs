@@ -1,6 +1,7 @@
 use serde::Serialize;
 #[cfg(target_os = "macos")]
 use std::ffi::CStr;
+use tauri::Manager;
 
 #[derive(Serialize)]
 pub struct MonitorInfo {
@@ -144,7 +145,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 for (_, window) in app.webview_windows().iter() {
-                    let _ = window.set_maximized(true);
+                    let _ = window.maximize();
                 }
             }
             Ok(())
