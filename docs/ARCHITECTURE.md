@@ -49,17 +49,26 @@ Structure :
 ```
 App.vue
 ├── v-app (racine Vuetify avec thème)
-│   ├── v-app-bar (barre supérieure)
-│   ├── v-navigation-drawer (menu latéral)
 │   └── v-main
 │       └── <router-view /> (pages dynamiques)
 ```
 
 Responsabilités :
-- Fournir le layout global
-- Gérer le navigation drawer
-- Appliquer le thème (via store)
-- Afficher les pages via router-view
+- Fournir le layout global avec thème
+- Détecter le label de la fenêtre courante
+- Router vers le composant approprié (Accueil vs ScreenBis)
+- Charger les informations de displays (écrans)
+- Ouvrir la fenêtre secondaire si dual-screen détecté
+- Synchroniser le thème entre fenêtres
+
+**Détection multi-fenêtres** :
+```typescript
+const currentWindow = getCurrentWindow()
+if (currentWindow.label === 'screen-bis') {
+  // Naviguer vers ScreenBis pour la fenêtre secondaire
+  await router.replace({ name: 'screenBis' })
+}
+```
 
 ## Couche de navigation (Vue Router)
 
@@ -214,24 +223,44 @@ Build: Vite Build → dist/ → Tauri Build → Executable
 }
 ```
 
-### Backend Rust : `src-tauri/src/main.rs`
+### Backend Rust : `src-tauri/src/lib.rs`
 
 ```rust
-fn main() {
+mod display;  // Module séparé pour les displays
+
+use tauri::Manager;
+use display::get_displays;
+
+#[tauri::command]
+async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
+    // Logique pour ouvrir une fenêtre secondaire
+    // ...
+}
+
+pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            // Liste des commandes exposées au frontend
+            get_displays, open_second_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 ```
 
+**Architecture modulaire Rust** :
+
+Pour garder le code Rust maintenable, les fonctionnalités sont organisées en modules:
+
+- `lib.rs` : Point d'entrée, orchestration, commandes de fenêtres
+- `display.rs` : Détection des écrans (macOS NSScreen, Windows Tauri)
+
+Chaque module peut être étendu sans surcharger `lib.rs`.
+
 **Communication Frontend ↔ Backend** :
 
 Frontend (TypeScript) :
 ```typescript
-import { invoke } from '@tauri-apps/api/tauri'
+import { invoke } from '@tauri-apps/api/core'
 const result = await invoke<string>('my_command', { arg: 'value' })
 ```
 
@@ -241,6 +270,34 @@ Backend (Rust) :
 fn my_command(arg: String) -> String {
     format!("Processed: {}", arg)
 }
+```
+
+**Communication Inter-fenêtres** :
+
+Les fenêtres communiquent via le système d'événements Tauri :
+
+Frontend (TypeScript) :
+```typescript
+import { emit, listen } from '@tauri-apps/api/event'
+
+// Émettre un événement
+await emit('event-name', { payload: 'data' })
+
+// Écouter un événement
+const unlisten = await listen<T>('event-name', (event) => {
+  console.log(event.payload)
+})
+```
+
+Exemple : Synchronisation du thème dark/light entre fenêtres :
+```typescript
+// Émission depuis appStore
+emit('theme-changed', isDarkMode.value)
+
+// Écoute dans les fenêtres
+listen<boolean>('theme-changed', (event) => {
+  isDarkMode.value = event.payload
+})
 ```
 
 ## Structure des dossiers
@@ -278,13 +335,24 @@ src/
 ```
 src-tauri/
 ├── src/
-│   └── main.rs       # Point d'entrée Rust
+│   ├── lib.rs        # Point d'entrée + orchestration
+│   ├── display.rs    # Détection et gestion des écrans
+│   └── main.rs       # Point d'entrée (auto-généré)
+├── capabilities/
+│   └── default.json  # Permissions pour les fenêtres
 ├── icons/            # Icônes de l'application
 │   ├── icon.png
 │   └── ...
 ├── Cargo.toml        # Dépendances Rust
 └── tauri.conf.json   # Configuration Tauri
 ```
+
+**Modules Rust** :
+- `lib.rs` : Orchestration principale, commandes Tauri publiques
+- `display.rs` : Détection des moniteurs (macOS NSScreen, Windows Tauri API)
+
+**Capacités Tauri** :
+- `default.json` : Permissions appliquées aux fenêtres (main et screen-bis)
 
 ## Flux de données
 

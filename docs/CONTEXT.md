@@ -1,24 +1,25 @@
-# Contexte du Projet - Template Tauri + Vue + Vuetify + Pinia + Router
+# Contexte du Projet - VisuGPS2
 
 > **Documentation destinée à Claude Code et aux développeurs**
 > Ce fichier fournit le contexte complet du projet pour faciliter le développement assisté par IA.
 
 ## Vue d'ensemble
 
-Ce projet est un **template réutilisable** pour créer des applications desktop multiplateformes. Il n'est PAS une application finale, mais une base de départ à copier pour de nouveaux projets.
+VisuGPS2 est une **application desktop multiplateformes** basée sur Tauri + Vue 3 + Vuetify, conçue pour fonctionner en dual-screen avec communication inter-fenêtres et synchronisation de thème.
 
-### Objectif du template
-- Fournir une installation automatisée en un seul script
-- Créer une structure de projet cohérente et organisée
-- Inclure toutes les technologies modernes pré-configurées
-- Être réutilisable pour de multiples projets
+### Objectifs du projet
+- Créer une application desktop native multi-fenêtres
+- Détecter automatiquement la configuration multi-écran
+- Ouvrir une fenêtre secondaire sur l'écran opposé
+- Synchroniser l'interface et l'état entre fenêtres
+- Gérer les affichages (resolution, position, scale factor)
 
-### Principes de conception
-1. **Simplicité** : Environnement minimal sans outils de linting
-2. **Modularité** : Scripts bash séparés orchestrés par un script principal
-3. **Multiplateforme** : Support macOS et Windows (bash + PowerShell)
-4. **Documentation complète** : Chaque aspect est documenté
-5. **Prêt à l'emploi** : Application exemple fonctionnelle incluse
+### Caractéristiques principales
+1. **Dual-screen support** : Détection automatique et placement sur écrans différents
+2. **Synchronisation inter-fenêtres** : Thème dark/light et communication d'événements
+3. **Modularité Rust** : Code organisé en modules (display.rs, lib.rs)
+4. **Multi-plateforme** : macOS (NSScreen) et Windows (Tauri API, Win32)
+5. **Architecture clean** : Séparation claire des responsabilités
 
 ## Stack technique
 
@@ -31,60 +32,64 @@ Ce projet est un **template réutilisable** pour créer des applications desktop
 - **Vite** comme build tool
 
 ### Backend/Desktop
-- **Tauri 1.x** pour l'application desktop native
-- **Rust** pour le backend Tauri
+- **Tauri 2.x** pour l'application desktop native
+- **Rust** pour le backend Tauri (code modulaire)
+- **objc2** + **objc2-app-kit** : Détection NSScreen sur macOS
+- **windows crate** : Win32 API pour Windows
 
 ### Outils
 - **npm** comme gestionnaire de packages
 - **Sass** pour les styles (via Vuetify)
 - **vite-plugin-vuetify** pour l'auto-import des composants
+- **cargo** comme gestionnaire de dépendances Rust
 
 ## Architecture du projet
 
 ### Structure des fichiers
 
 ```
-Base Tauri/
-├── scripts/                    # Scripts d'installation (à la racine)
-│   ├── setup.sh               # Script principal
-│   ├── check-requirements.sh
-│   ├── install-dependencies.sh
-│   ├── create-structure.sh
-│   ├── configure-app.sh
-│   ├── dev.sh
-│   └── build.sh
-│
-├── src/                       # Code source frontend
+VisuGPS2/
+├── src/                       # Code source frontend (Vue 3 + TypeScript)
 │   ├── router/
-│   │   └── index.ts          # Configuration des routes
+│   │   └── index.ts          # Routes (Accueil, Visualisation, EditionCamera, ScreenBis)
 │   ├── stores/
 │   │   ├── index.ts          # Configuration Pinia
-│   │   └── app.ts            # Store exemple (thème)
+│   │   └── app.ts            # Store app (thème, displays, loadDisplays)
 │   ├── plugins/
 │   │   └── vuetify.ts        # Configuration Vuetify
 │   ├── views/                # Pages de l'application
-│   │   ├── Home.vue
-│   │   └── About.vue
-│   ├── components/           # Composants réutilisables (vide au départ)
+│   │   ├── Accueil.vue       # Fenêtre principale avec comm. inter-fenêtres
+│   │   ├── ScreenBis.vue     # Fenêtre secondaire
+│   │   ├── EditionCamera.vue # Page caméra
+│   │   └── Visualisation.vue # Page visualisation
+│   ├── components/           # Composants réutilisables
 │   ├── assets/               # Images, styles
-│   ├── App.vue              # Layout principal
+│   ├── App.vue              # Layout racine (détection multi-fenêtres)
 │   └── main.ts              # Point d'entrée
 │
-├── src-tauri/                # Code Rust (généré par Tauri)
+├── src-tauri/                # Code Rust (Tauri 2.x)
 │   ├── src/
-│   │   └── main.rs
-│   ├── icons/
-│   ├── Cargo.toml
-│   └── tauri.conf.json
+│   │   ├── lib.rs            # Point d'entrée, open_second_window, run()
+│   │   ├── display.rs        # Détection écrans (MonitorInfo, get_displays)
+│   │   └── main.rs           # Auto-généré
+│   ├── capabilities/
+│   │   └── default.json      # Permissions fenêtres (main, screen-bis)
+│   ├── icons/                # Icônes application
+│   ├── Cargo.toml            # Dépendances Rust (objc2, windows, etc.)
+│   └── tauri.conf.json       # Config Tauri (windows, build, security)
 │
-├── docs/                     # Documentation de contexte
+├── docs/                     # Documentation
 │   ├── CONTEXT.md           # Ce fichier
-│   ├── ARCHITECTURE.md
-│   └── CONVENTIONS.md
+│   └── ARCHITECTURE.md       # Architecture détaillée
+│
+├── .claude/                  # Configuration Claude Code
+│   └── worktrees/            # Branches de travail isolées
+│       └── condescending-feistel/  # Branche de développement
 │
 ├── Configuration
-│   ├── vite.config.ts
-│   ├── tsconfig.json
+│   ├── vite.config.ts       # Configuration Vite (allowedHosts)
+│   ├── tsconfig.json        # Configuration TypeScript
+│   ├── package.json         # Dépendances npm
 │   ├── .gitignore
 │   └── .env.example
 │
@@ -184,20 +189,42 @@ const title = ref('Mon titre')
 
 ### 4. Communication Tauri
 
+**Invoquer une commande Rust** :
 ```typescript
-import { invoke } from '@tauri-apps/api/tauri'
+import { invoke } from '@tauri-apps/api/core'
 
-// Appeler une commande Rust
-const result = await invoke<string>('my_command', { arg: 'value' })
+// Appeler get_displays pour détecter les écrans
+const displays = await invoke<MonitorInfo[]>('get_displays')
+
+// Appeler open_second_window pour ouvrir ScreenBis
+await invoke('open_second_window')
 ```
 
-Côté Rust :
-```rust
-#[tauri::command]
-fn my_command(arg: String) -> String {
-    format!("Result: {}", arg)
-}
+**Commandes disponibles** :
+- `get_displays()` : Retourne la liste des écrans (MonitorInfo[])
+- `open_second_window()` : Ouvre la fenêtre ScreenBis sur l'écran opposé
+
+### 5. Communication inter-fenêtres
+
+Les fenêtres communiquent via les événements Tauri :
+
+```typescript
+import { emit, listen } from '@tauri-apps/api/event'
+
+// Fenêtre Accueil : Envoyer un nombre aléatoire à ScreenBis
+const value = Math.floor(Math.random() * 100) + 1
+await emit('accueil-to-screenbis', value)
+
+// Fenêtre ScreenBis : Écouter les événements d'Accueil
+const unlisten = await listen<number>('accueil-to-screenbis', (event) => {
+  receivedValue.value = event.payload
+})
 ```
+
+**Synchronisation du thème** :
+- Accueil émet 'theme-changed' avec isDarkMode.value
+- Toutes les fenêtres écoutent et mettent à jour leur appStore.isDarkMode
+- Le thème Vuetify se met à jour automatiquement via :theme="appStore.theme"
 
 ## Scripts d'installation
 
@@ -385,7 +412,77 @@ Ce template privilégie :
 - Pinia : https://pinia.vuejs.org/
 - Vue Router : https://router.vuejs.org/
 
+## Fonctionnalités spécifiques à VisuGPS2
+
+### Dual-screen Support
+
+**Détection automatique** :
+1. App.vue charge les displays via `appStore.loadDisplays()` (commande Rust)
+2. Si 2+ écrans détectés → `invoke('open_second_window')`
+3. Rust vérifie la position de la fenêtre main et place screen-bis sur l'autre écran
+
+**Placement des fenêtres** :
+- **macOS** : Utilise `NSScreen.screens()` pour lister les écrans
+  - Position X/Y = frame.origin pour chaque écran
+  - Scale factor = backingScaleFactor
+
+- **Windows** : Utilise Tauri `available_monitors()` et Win32 API
+  - Active monitor rect détecté au setup avec `GetForegroundWindow()`
+  - Fenêtre principale centrée sur l'écran actif
+
+**MonitorInfo struct** :
+```rust
+pub struct MonitorInfo {
+    pub name: Option<String>,      // Nom de l'écran
+    pub position: (i32, i32),      // X, Y coordinates
+    pub size: (u32, u32),          // Width, height pixels
+    pub scale_factor: f64,         // DPI scaling
+}
+```
+
+### Communication inter-fenêtres
+
+**Pattern d'implémentation** :
+1. Les fenêtres sont déclarées statiquement dans tauri.conf.json (visible: false pour screen-bis)
+2. App.vue détecte le label de la fenêtre actuelle avec `getCurrentWindow().label`
+3. Router navigue vers le composant approprié
+4. Les événements Tauri synchronisent l'état entre fenêtres
+
+**Événements utilisés** :
+- `accueil-to-screenbis` : Nombres 1-100 (Accueil → ScreenBis)
+- `screenbis-to-accueil` : Nombres 501-600 (ScreenBis → Accueil)
+- `theme-changed` : Boolean (isDarkMode) - synchronisé entre tous
+
+### Architecture Rust modulaire
+
+**display.rs - Détection des écrans**
+```rust
+pub struct MonitorInfo { ... }
+pub fn get_all_monitors() -> Vec<MonitorInfo> { ... }
+#[tauri::command]
+pub fn get_displays(window: tauri::Window) -> Vec<MonitorInfo> { ... }
+```
+
+**lib.rs - Orchestration principale**
+```rust
+mod display;
+use display::get_displays;
+
+#[tauri::command]
+async fn open_second_window(app: AppHandle) -> Result<(), String> { ... }
+
+pub fn run() { ... }
+```
+
+**Dépendances Rust** :
+- `objc2` + `objc2-app-kit` + `objc2-foundation` : Accès NSScreen sur macOS
+- `windows` : Win32 API (GetForegroundWindow, GetMonitorInfo)
+- `tauri` : APIs principales (Manager, invoke_handler, generate_handler)
+- `serde` : Sérialisation MonitorInfo
+
 ---
 
-**Dernière mise à jour** : 2026-03-24
-**Version du template** : 1.0.0
+**Dernière mise à jour** : 2026-03-31
+**Version du projet** : 0.0.1
+**Status** : En développement actif
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection
