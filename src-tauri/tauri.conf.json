@@ -14,8 +14,7 @@
       {
         "title": "VisuGPS2",
         "width": 800,
-        "height": 600,
-        "maximized": true
+        "height": 600
       }
     ],
     "security": {

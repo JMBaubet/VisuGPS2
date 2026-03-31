@@ -9,10 +9,12 @@ pub struct MonitorInfo {
     pub scale_factor: f64,
 }
 
+// --- macOS : liste tous les écrans via NSScreen (objc2) ---
+
 #[cfg(target_os = "macos")]
 fn get_all_monitors() -> Vec<MonitorInfo> {
-    use objc2_foundation::MainThreadMarker;
     use objc2_app_kit::NSScreen;
+    use objc2_foundation::MainThreadMarker;
 
     unsafe {
         let mtm = MainThreadMarker::new_unchecked();
@@ -34,21 +36,51 @@ fn get_all_monitors() -> Vec<MonitorInfo> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn get_all_monitors(window: tauri::Window) -> Vec<MonitorInfo> {
-    let mut displays = Vec::new();
+// --- Windows et autres : liste tous les écrans via Tauri ---
 
-    if let Ok(Some(monitor)) = window.primary_monitor() {
-        displays.push(MonitorInfo {
+#[cfg(not(target_os = "macos"))]
+fn get_all_monitors(window: &tauri::Window) -> Vec<MonitorInfo> {
+    if let Ok(monitors) = window.available_monitors() {
+        monitors.into_iter().map(|monitor| MonitorInfo {
             name: monitor.name().map(|s| s.to_string()),
             position: (monitor.position().x, monitor.position().y),
             size: (monitor.size().width, monitor.size().height),
             scale_factor: monitor.scale_factor(),
-        });
+        }).collect()
+    } else {
+        Vec::new()
     }
-
-    displays
 }
+
+// --- Windows : détecte l'écran actif via Win32 avant que notre fenêtre prenne le focus ---
+//
+// GetForegroundWindow() retourne la fenêtre active au moment du lancement
+// (ex: PowerShell). MonitorFromWindow() donne le moniteur de cette fenêtre.
+// Doit être appelé dans le setup Tauri, AVANT que notre fenêtre soit visible.
+
+#[cfg(target_os = "windows")]
+fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(hmonitor, &mut info).as_bool() {
+            // rcWork exclut la barre des tâches
+            let r = info.rcWork;
+            Some((r.left, r.top, r.right - r.left, r.bottom - r.top))
+        } else {
+            None
+        }
+    }
+}
+
+// --- Commandes Tauri ---
 
 #[tauri::command]
 fn get_displays(_window: tauri::Window) -> Vec<MonitorInfo> {
@@ -59,7 +91,7 @@ fn get_displays(_window: tauri::Window) -> Vec<MonitorInfo> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        get_all_monitors(_window)
+        get_all_monitors(&_window)
     }
 }
 
@@ -67,18 +99,27 @@ fn get_displays(_window: tauri::Window) -> Vec<MonitorInfo> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![get_displays])
         .setup(|app| {
+            // Sur Windows : positionner la fenêtre sur l'écran actif AVANT qu'elle s'affiche.
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Some((x, y, w, h)) = get_active_monitor_rect() {
+                        let _ = window.set_position(tauri::PhysicalPosition::new(x + w / 2 - 400, y + h / 2 - 300));
+                        let _ = window.maximize();
+                    }
+                }
+            }
+            // Sur macOS : maximiser la fenêtre après création
             #[cfg(target_os = "macos")]
             {
                 for (_, window) in app.webview_windows().iter() {
                     let _ = window.maximize();
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = app;
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![get_displays])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
