@@ -13,6 +13,14 @@
     <v-container class="mt-4">
       <h1>Accueil</h1>
 
+      <!-- Communication bi-écran -->
+      <div v-if="appStore.displays.length >= 2" class="mt-4 d-flex align-center ga-4">
+        <v-btn @click="sendRandom" color="primary">
+          Envoyer à ScreenBis
+        </v-btn>
+        <v-label class="text-h5">{{ receivedValue ?? '—' }}</v-label>
+      </div>
+
       <div v-if="appStore.loading" class="mt-4">
         <v-progress-circular indeterminate></v-progress-circular>
         <p>Chargement des informations d'affichage...</p>
@@ -63,7 +71,26 @@
 </template>
 
 <script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue'
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '../stores/app'
 
 const appStore = useAppStore()
+const receivedValue = ref<number | null>(null)
+let unlisten: UnlistenFn | null = null
+
+onMounted(async () => {
+  unlisten = await listen<number>('screenbis-to-accueil', (event) => {
+    receivedValue.value = event.payload
+  })
+})
+
+onUnmounted(() => {
+  unlisten?.()
+})
+
+async function sendRandom() {
+  const value = Math.floor(Math.random() * 100) + 1
+  await emit('accueil-to-screenbis', value)
+}
 </script>
