@@ -83,22 +83,35 @@ fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
 // --- Commandes Tauri ---
 
 #[tauri::command]
-async fn open_second_window(
-    app: tauri::AppHandle,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
+async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     if app.get_webview_window("screen-bis").is_some() {
         return Ok(());
     }
-    WebviewWindowBuilder::new(&app, "screen-bis", WebviewUrl::App("screen-bis".into()))
+
+    // Créer la fenêtre sans position initiale
+    let window = WebviewWindowBuilder::new(&app, "screen-bis", WebviewUrl::App("screen-bis".into()))
         .title("ScreenBis")
-        .position(x as f64, y as f64)
-        .inner_size(width as f64, height as f64)
         .build()
         .map_err(|e| e.to_string())?;
+
+    // Utiliser available_monitors() pour obtenir les positions en coordonnées physiques
+    // cohérentes avec set_position (même système que Tauri)
+    let primary = window.primary_monitor().ok().flatten();
+    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
+
+    let second = monitors.iter().find(|m| {
+        match &primary {
+            Some(p) => m.position() != p.position(),
+            None => true,
+        }
+    });
+
+    if let Some(monitor) = second {
+        let pos = monitor.position();
+        let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
+        let _ = window.maximize();
+    }
+
     Ok(())
 }
 

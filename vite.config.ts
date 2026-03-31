@@ -11,6 +11,8 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // Permet aux webviews Tauri secondaires d'accéder au serveur de développement
+    allowedHosts: 'all',
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
