@@ -111,7 +111,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
-                if let Some(window) = app.get_window("main") {
+                for (_, window) in app.webview_windows().iter() {
                     let _ = window.set_maximized(true);
                 }
             }
