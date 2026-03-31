@@ -1,19 +1,25 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import Home from '../views/Home.vue'
-import About from '../views/About.vue'
+import Accueil from '../views/Accueil.vue'
+import Visualisation from '../views/Visualisation.vue'
+import EditionCamera from '../views/EditionCamera.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: Home
+      name: 'accueil',
+      component: Accueil
     },
     {
-      path: '/about',
-      name: 'about',
-      component: About
+      path: '/visualisation',
+      name: 'visualisation',
+      component: Visualisation
+    },
+    {
+      path: '/edition-camera',
+      name: 'editionCamera',
+      component: EditionCamera
     }
   ]
 })
