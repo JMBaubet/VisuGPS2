@@ -12,8 +12,7 @@ import { useAppStore } from './stores/app'
 
 const appStore = useAppStore()
 
-onMounted(async () => {
-  await appStore.loadDisplays()
-  await appStore.positionWindowOnActiveDisplay()
+onMounted(() => {
+  appStore.loadDisplays()
 })
 </script>

@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 export interface MonitorInfo {
   name: string | null
@@ -34,36 +33,12 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function positionWindowOnActiveDisplay() {
-    try {
-      const activeDisplay = await invoke<MonitorInfo | null>('get_active_display')
-      if (!activeDisplay) return
-
-      const mainWindow = WebviewWindow.getByLabel('main')
-      if (!mainWindow) return
-
-      const [x, y] = activeDisplay.position
-      const [width, height] = activeDisplay.size
-
-      // Centrer la fenêtre sur l'écran actif (par défaut 800x600)
-      const windowWidth = 800
-      const windowHeight = 600
-      const centerX = x + Math.floor((width - windowWidth) / 2)
-      const centerY = y + Math.floor((height - windowHeight) / 2)
-
-      await mainWindow.setPosition({ x: centerX, y: centerY })
-    } catch (error) {
-      console.error('Failed to position window:', error)
-    }
-  }
-
   return {
     isDarkMode,
     theme,
     toggleDarkMode,
     displays,
     loading,
-    loadDisplays,
-    positionWindowOnActiveDisplay
+    loadDisplays
   }
 })
