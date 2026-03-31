@@ -1,4 +1,5 @@
 use serde::Serialize;
+#[cfg(target_os = "macos")]
 use std::ffi::CStr;
 
 #[derive(Serialize)]
@@ -128,6 +129,7 @@ pub fn run() {
             // GetForegroundWindow() retourne ici la fenêtre depuis laquelle l'app a été lancée.
             #[cfg(target_os = "windows")]
             {
+                use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {
                     if let Some((x, y, w, h)) = get_active_monitor_rect() {
                         let _ = window.set_position(tauri::PhysicalPosition::new(x + w / 2 - 400, y + h / 2 - 300));
