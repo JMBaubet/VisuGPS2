@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::Manager;
 
 #[derive(Serialize)]
 pub struct MonitorInfo {
@@ -53,10 +53,6 @@ fn get_all_monitors(window: &tauri::Window) -> Vec<MonitorInfo> {
 }
 
 // --- Windows : détecte l'écran actif via Win32 avant que notre fenêtre prenne le focus ---
-//
-// GetForegroundWindow() retourne la fenêtre active au moment du lancement
-// (ex: PowerShell). MonitorFromWindow() donne le moniteur de cette fenêtre.
-// Doit être appelé dans le setup Tauri, AVANT que notre fenêtre soit visible.
 
 #[cfg(target_os = "windows")]
 fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
@@ -71,7 +67,6 @@ fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
             ..Default::default()
         };
         if GetMonitorInfoW(hmonitor, &mut info).as_bool() {
-            // rcWork exclut la barre des tâches
             let r = info.rcWork;
             Some((r.left, r.top, r.right - r.left, r.bottom - r.top))
         } else {
@@ -84,34 +79,33 @@ fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
 
 #[tauri::command]
 async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
-    if app.get_webview_window("screen-bis").is_some() {
-        return Ok(());
-    }
+    // screen-bis est déclarée dans tauri.conf.json avec visible: false
+    // On la place sur l'écran OPPOSÉ à celui où se trouve actuellement main
+    let screen_bis = app
+        .get_webview_window("screen-bis")
+        .ok_or("Fenêtre screen-bis introuvable")?;
 
-    // Créer la fenêtre sans position initiale
-    let window = WebviewWindowBuilder::new(&app, "screen-bis", WebviewUrl::App("screen-bis".into()))
-        .title("ScreenBis")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let main_window = app
+        .get_webview_window("main")
+        .ok_or("Fenêtre main introuvable")?;
 
-    // Utiliser available_monitors() pour obtenir les positions en coordonnées physiques
-    // cohérentes avec set_position (même système que Tauri)
-    let primary = window.primary_monitor().ok().flatten();
-    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
+    // Écran actuel de la fenêtre principale (pas forcément le primaire OS)
+    let main_monitor = main_window.current_monitor().ok().flatten();
 
-    let second = monitors.iter().find(|m| {
-        match &primary {
-            Some(p) => m.position() != p.position(),
-            None => true,
-        }
+    let monitors = screen_bis.available_monitors().map_err(|e| e.to_string())?;
+
+    // Trouver l'écran différent de celui de main
+    let other = monitors.iter().find(|m| match &main_monitor {
+        Some(current) => m.position() != current.position(),
+        None => true,
     });
 
-    if let Some(monitor) = second {
+    if let Some(monitor) = other {
         let pos = monitor.position();
-        let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
-        let _ = window.maximize();
+        let _ = screen_bis.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
     }
 
+    let _ = screen_bis.show();
     Ok(())
 }
 
@@ -133,7 +127,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // Sur Windows : positionner la fenêtre sur l'écran actif AVANT qu'elle s'affiche.
+            // Sur Windows : positionner la fenêtre principale sur l'écran actif
             #[cfg(target_os = "windows")]
             {
                 if let Some(window) = app.get_webview_window("main") {
@@ -143,10 +137,10 @@ pub fn run() {
                     }
                 }
             }
-            // Sur macOS : maximiser la fenêtre après création
+            // Sur macOS : maximiser uniquement la fenêtre principale
             #[cfg(target_os = "macos")]
             {
-                for (_, window) in app.webview_windows().iter() {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.maximize();
                 }
             }
