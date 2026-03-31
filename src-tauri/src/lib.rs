@@ -76,18 +76,16 @@ fn get_all_monitors() -> Vec<MonitorInfo> {
 
 #[cfg(not(target_os = "macos"))]
 fn get_all_monitors(window: tauri::Window) -> Vec<MonitorInfo> {
-    let mut displays = Vec::new();
-
-    if let Ok(Some(monitor)) = window.primary_monitor() {
-        displays.push(MonitorInfo {
+    if let Ok(monitors) = window.available_monitors() {
+        monitors.into_iter().map(|monitor| MonitorInfo {
             name: monitor.name().map(|s| s.to_string()),
             position: (monitor.position().x, monitor.position().y),
             size: (monitor.size().width, monitor.size().height),
             scale_factor: monitor.scale_factor(),
-        });
+        }).collect()
+    } else {
+        Vec::new()
     }
-
-    displays
 }
 
 #[tauri::command]
