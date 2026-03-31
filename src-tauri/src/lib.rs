@@ -1,6 +1,4 @@
 use serde::Serialize;
-#[cfg(target_os = "macos")]
-use std::ffi::CStr;
 use tauri::Manager;
 
 #[derive(Serialize)]
@@ -11,54 +9,30 @@ pub struct MonitorInfo {
     pub scale_factor: f64,
 }
 
-// --- macOS : liste tous les écrans via NSScreen ---
+// --- macOS : liste tous les écrans via NSScreen (objc2) ---
 
 #[cfg(target_os = "macos")]
 fn get_all_monitors() -> Vec<MonitorInfo> {
-    use objc::{class, msg_send, sel, sel_impl};
-    use objc::runtime::Object;
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::MainThreadMarker;
 
     unsafe {
-        let screen_class = class!(NSScreen);
-        let screens: *mut Object = msg_send![screen_class, screens];
-        let count: usize = msg_send![screens, count];
-
-        let mut displays = Vec::new();
-
-        for i in 0..count {
-            let screen: *mut Object = msg_send![screens, objectAtIndex:i];
-
-            #[repr(C)]
-            struct CGPoint { x: f64, y: f64 }
-            #[repr(C)]
-            struct CGSize { width: f64, height: f64 }
-            #[repr(C)]
-            struct CGRect { origin: CGPoint, size: CGSize }
-
-            let frame: CGRect = msg_send![screen, frame];
-            let scale: f64 = msg_send![screen, backingScaleFactor];
-
-            let name: *mut Object = msg_send![screen, localizedName];
-            let display_name: Option<String> = if !name.is_null() {
-                let string_ptr: *const u8 = msg_send![name, UTF8String];
-                if !string_ptr.is_null() {
-                    Some(CStr::from_ptr(string_ptr as *const i8).to_string_lossy().into_owned())
-                } else {
-                    None
+        let mtm = MainThreadMarker::new_unchecked();
+        let screens = NSScreen::screens(mtm);
+        screens
+            .iter()
+            .map(|screen| {
+                let frame = screen.frame();
+                let scale = screen.backingScaleFactor();
+                let name = screen.localizedName();
+                MonitorInfo {
+                    name: Some(name.to_string()),
+                    position: (frame.origin.x as i32, frame.origin.y as i32),
+                    size: (frame.size.width as u32, frame.size.height as u32),
+                    scale_factor: scale,
                 }
-            } else {
-                None
-            };
-
-            displays.push(MonitorInfo {
-                name: display_name,
-                position: (frame.origin.x as i32, frame.origin.y as i32),
-                size: (frame.size.width as u32, frame.size.height as u32),
-                scale_factor: scale,
-            });
-        }
-
-        displays
+            })
+            .collect()
     }
 }
 
@@ -109,7 +83,7 @@ fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
 // --- Commandes Tauri ---
 
 #[tauri::command]
-fn get_displays(window: tauri::Window) -> Vec<MonitorInfo> {
+fn get_displays(_window: tauri::Window) -> Vec<MonitorInfo> {
     #[cfg(target_os = "macos")]
     {
         get_all_monitors()
@@ -117,7 +91,7 @@ fn get_displays(window: tauri::Window) -> Vec<MonitorInfo> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        get_all_monitors(&window)
+        get_all_monitors(&_window)
     }
 }
 
@@ -127,10 +101,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Sur Windows : positionner la fenêtre sur l'écran actif AVANT qu'elle s'affiche.
-            // GetForegroundWindow() retourne ici la fenêtre depuis laquelle l'app a été lancée.
             #[cfg(target_os = "windows")]
             {
-                use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {
                     if let Some((x, y, w, h)) = get_active_monitor_rect() {
                         let _ = window.set_position(tauri::PhysicalPosition::new(x + w / 2 - 400, y + h / 2 - 300));
@@ -138,20 +110,16 @@ pub fn run() {
                     }
                 }
             }
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![get_displays])
-        .setup(|app| {
+            // Sur macOS : maximiser la fenêtre après création
             #[cfg(target_os = "macos")]
             {
                 for (_, window) in app.webview_windows().iter() {
                     let _ = window.maximize();
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = app;
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![get_displays])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
