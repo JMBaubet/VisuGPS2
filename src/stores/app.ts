@@ -10,12 +10,32 @@ export interface MonitorInfo {
   scale_factor: number
 }
 
+export interface ModeInfo {
+  nom: string
+  descrition: string
+  création: string
+  révision?: string
+}
+
 export const useAppStore = defineStore('app', () => {
   const isDarkMode = ref(false)
   const displays = ref<MonitorInfo[]>([])
   const loading = ref(false)
 
+  // Environnements et modes d'exécution
+  const isDev = ref(false)
+  const activeMode = ref('OPE')
+  const isDebug = ref(false)
+  const modes = ref<ModeInfo[]>([])
+  const showModeDialog = ref(false)
+
   const theme = computed(() => isDarkMode.value ? 'dark' : 'light')
+
+  // Description du mode actif
+  const activeModeDescription = computed(() => {
+    const found = modes.value.find(m => m.nom === activeMode.value)
+    return found ? found.descrition : activeMode.value
+  })
 
   function toggleDarkMode() {
     isDarkMode.value = !isDarkMode.value
@@ -41,12 +61,92 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  // Actions de gestion des modes d'exécution
+  async function loadExecutionEnv() {
+    try {
+      const env = await invoke<{ is_dev: boolean; active_mode: string }>('get_execution_env')
+      isDev.value = env.is_dev
+      activeMode.value = env.active_mode
+    } catch (error) {
+      console.error('Failed to load execution env:', error)
+    }
+  }
+
+  async function loadModes() {
+    try {
+      const result = await invoke<ModeInfo[]>('get_modes')
+      modes.value = result
+    } catch (error) {
+      console.error('Failed to load modes:', error)
+    }
+  }
+
+  async function createMode(nom: string, descrition: string) {
+    try {
+      await invoke('create_mode', { nom, descrition })
+      await loadModes()
+    } catch (error) {
+      console.error('Failed to create mode:', error)
+      throw error
+    }
+  }
+
+  async function updateMode(oldNom: string, newNom: string, descrition: string) {
+    try {
+      await invoke('update_mode', { oldNom, newNom, descrition })
+      if (activeMode.value === oldNom) {
+        activeMode.value = newNom
+      }
+      await loadModes()
+    } catch (error) {
+      console.error('Failed to update mode:', error)
+      throw error
+    }
+  }
+
+  async function deleteMode(nom: string) {
+    try {
+      console.log("deleteMode: ", nom)
+      await invoke('delete_mode', { nom })
+      await loadModes()
+    } catch (error) {
+      console.error('Failed to delete mode:', error)
+      throw error
+    }
+  }
+
+  async function selectMode(nom: string) {
+    try {
+      await invoke('select_mode', { nom })
+    } catch (error) {
+      console.error('Failed to select mode:', error)
+      throw error
+    }
+  }
+
+  function toggleDebug() {
+    isDebug.value = !isDebug.value
+  }
+
   return {
     isDarkMode,
     theme,
     toggleDarkMode,
     displays,
     loading,
-    loadDisplays
+    loadDisplays,
+    isDev,
+    activeMode,
+    isDebug,
+    modes,
+    showModeDialog,
+    activeModeDescription,
+    loadExecutionEnv,
+    loadModes,
+    createMode,
+    updateMode,
+    deleteMode,
+    selectMode,
+    toggleDebug
   }
 })

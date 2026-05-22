@@ -1,6 +1,7 @@
 <template>
   <div>
     <v-toolbar>
+      <ModeExecutionBtnToggle />
       <v-spacer></v-spacer>
       <v-btn icon :to="{ name: 'editionCamera' }">
         <v-icon>mdi-camera-image</v-icon>
@@ -9,6 +10,11 @@
         <v-icon>{{ appStore.isDarkMode ? 'mdi-weather-night' : 'mdi-weather-sunny' }}</v-icon>
       </v-btn>
     </v-toolbar>
+
+    <!-- Dialogue pour la gestion des modes d'exécution -->
+    <v-dialog v-model="appStore.showModeDialog" max-width="600px" persistent>
+      <ModeExecutionCard />
+    </v-dialog>
 
     <v-container class="mt-4">
       <h1>Accueil</h1>
@@ -74,12 +80,17 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '../stores/app'
+import ModeExecutionBtnToggle from '../components/ModeExecutionBtnToggle.vue'
+import ModeExecutionCard from '../components/Accueil/ModeExecutionCard.vue'
 
 const appStore = useAppStore()
 const receivedValue = ref<number | null>(null)
 let unlisten: UnlistenFn | null = null
 
 onMounted(async () => {
+  await appStore.loadExecutionEnv()
+  await appStore.loadModes()
+
   unlisten = await listen<number>('screenbis-to-accueil', (event) => {
     receivedValue.value = event.payload
   })

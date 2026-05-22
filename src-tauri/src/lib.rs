@@ -1,4 +1,6 @@
 mod display;
+#[allow(non_snake_case)]
+mod gestionMode;
 
 use tauri::Manager;
 use display::get_displays;
@@ -84,7 +86,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_displays, open_second_window])
+        .invoke_handler(tauri::generate_handler![
+            get_displays,
+            open_second_window,
+            gestionMode::get_execution_env,
+            gestionMode::get_modes,
+            gestionMode::create_mode,
+            gestionMode::update_mode,
+            gestionMode::delete_mode,
+            gestionMode::select_mode
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
