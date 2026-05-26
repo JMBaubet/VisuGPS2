@@ -600,6 +600,25 @@ setup.sh
         └──→ Génère tsconfig.json
 ```
 
+## Gestion des Modes d'Exécution (Multi-environnement)
+
+### 1. Variables de mode d'exécution dans le store Pinia (`src/stores/app.ts`)
+
+Pour gérer les configurations multi-environnements en DEV et PROD, le store `app` expose plusieurs états :
+- `activeModeDev` : Le mode d'exécution actif pour le développement (lu à partir de la variable `APP_ENV_DEV` du fichier `.env`).
+- `activeModeProd` : Le mode d'exécution actif pour la production.
+- `isDev` : Un booléen indiquant si l'application s'exécute en mode développement.
+
+### 2. Contrôles de l'interface utilisateur (`ModeExecutionCard.vue`)
+
+- **Puces d'état (Chips)** :
+  - Un chip **Actif** est affiché sur le mode correspondant à `activeModeProd` (vert si le mode est `OPE`, bleu dans les autres cas).
+  - Un chip **Actif Dev** (orange) s'affiche sur le mode correspondant à `activeModeDev` uniquement si l'application s'exécute en mode DEV (`isDev` est vrai).
+- **Restrictions sur les actions (Édition/Suppression)** :
+  - Les boutons **Supprimer** (`mdi-delete`) et **Modifier** (`mdi-pencil`) sont conditionnellement masqués :
+    - Si le mode est le mode de production principal (`OPE`).
+    - Si le mode correspond à `activeModeDev` ou à `activeModeProd`. Cela empêche toute suppression accidentelle du mode de développement ou du mode de production actif.
+
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.

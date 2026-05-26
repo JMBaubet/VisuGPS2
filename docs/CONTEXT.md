@@ -480,9 +480,22 @@ pub fn run() { ... }
 - `tauri` : APIs principales (Manager, invoke_handler, generate_handler)
 - `serde` : Sérialisation MonitorInfo
 
+### Gestion Dynamique des Modes d'Exécution
+
+L'application intègre un système robuste de gestion des modes d'exécution (définis dans un fichier de configuration Lu par Rust et exposé au Frontend) :
+
+1. **Variables du Store** :
+   - `activeModeDev` correspond à l'environnement pointé en développement.
+   - `activeModeProd` correspond à l'environnement actif en production.
+
+2. **Logique d'Interface (`ModeExecutionCard.vue`)** :
+   - Un chip **Actif** s'affiche en vert pour le mode `OPE` et en bleu pour tout autre mode de production actif.
+   - Un chip **Actif Dev** (orange) s'affiche uniquement en mode développement pour le mode correspondant à `activeModeDev`.
+   - Les boutons d'action (Éditer/Supprimer) sont désactivés/masqués pour le mode `OPE`, ainsi que pour les modes actifs de développement (`activeModeDev`) et de production (`activeModeProd`).
+
 ---
 
-**Dernière mise à jour** : 2026-03-31
+**Dernière mise à jour** : 2026-05-26
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes
