@@ -42,10 +42,10 @@
           </template>
 
           <template v-slot:append>
-            <!-- Label Actif -->
+            <!-- Label Actif du mode Prod en vert si OPE sinon en bleu -->
             <v-chip
-              v-if="mode.nom === appStore.activeMode"
-              color="primary"
+              v-if="mode.nom === appStore.activeModeProd"
+              :color="mode.nom === 'OPE' ? 'success' : 'primary'"
               variant="elevated"
               size="small"
               class="ml-2"
@@ -53,9 +53,20 @@
               Actif
             </v-chip>
 
+            <!-- Label Actif du mode Dev : visible uniquement en mode DEV -->
+            <v-chip
+              v-if="appStore.isDev && mode.nom === appStore.activeModeDev"
+              color="orange"
+              variant="elevated"
+              size="small"
+              class="ml-2"
+            >
+              Actif Dev
+            </v-chip>
+
             <!-- Delete Button (Visible si EVAL, non-actif) -->
             <v-btn
-              v-if="mode.nom !== 'OPE' && mode.nom !== appStore.activeMode"
+              v-if="mode.nom !== 'OPE' && (mode.nom !== appStore.activeModeDev && mode.nom !== appStore.activeModeProd)"
               icon="mdi-delete"
               variant="text"
               color="error"
@@ -66,7 +77,7 @@
 
             <!-- Edit Button (Visible si EVAL) -->
             <v-btn
-              v-if="mode.nom !== 'OPE'"
+              v-if="mode.nom !== 'OPE' && (mode.nom !== appStore.activeModeDev && mode.nom !== appStore.activeModeProd)"
               icon="mdi-pencil"
               variant="text"
               color="primary"

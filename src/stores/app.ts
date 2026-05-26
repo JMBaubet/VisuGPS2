@@ -25,6 +25,8 @@ export const useAppStore = defineStore('app', () => {
   // Environnements et modes d'exécution
   const isDev = ref(false)
   const activeMode = ref('OPE')
+  const activeModeDev = ref('OPE')
+  const activeModeProd = ref('PROD')
   const isDebug = ref(false)
   const modes = ref<ModeInfo[]>([])
   const showModeDialog = ref(false)
@@ -64,9 +66,11 @@ export const useAppStore = defineStore('app', () => {
   // Actions de gestion des modes d'exécution
   async function loadExecutionEnv() {
     try {
-      const env = await invoke<{ is_dev: boolean; active_mode: string }>('get_execution_env')
+      const env = await invoke<{ is_dev: boolean; active_mode_dev: string; active_mode_prod: string }>('get_execution_env')
       isDev.value = env.is_dev
-      activeMode.value = env.active_mode
+      activeModeDev.value = env.active_mode_dev
+      activeModeProd.value = env.active_mode_prod
+      activeMode.value = env.is_dev ? env.active_mode_dev : env.active_mode_prod
     } catch (error) {
       console.error('Failed to load execution env:', error)
     }
@@ -137,6 +141,8 @@ export const useAppStore = defineStore('app', () => {
     loadDisplays,
     isDev,
     activeMode,
+    activeModeDev,
+    activeModeProd,
     isDebug,
     modes,
     showModeDialog,

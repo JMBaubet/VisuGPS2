@@ -20,7 +20,8 @@ pub struct ModeConfig {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExecutionEnv {
     pub is_dev: bool,
-    pub active_mode: String,
+    pub active_mode_dev: String,
+    pub active_mode_prod: String,
 }
 
 // Lit le mode actif depuis le fichier .env
@@ -124,15 +125,9 @@ fn save_modes_to_file(app_data_dir: &Path, config: &ModeConfig) -> Result<(), St
 pub async fn get_execution_env(app: tauri::AppHandle) -> Result<ExecutionEnv, String> {
     let is_dev = cfg!(debug_assertions);
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let active_mode = read_active_mode(&app_data_dir, is_dev);
-
-    // S'assurer que le répertoire de ce mode actif existe
-    let mode_dir = app_data_dir.join(&active_mode);
-    if !mode_dir.exists() {
-        std::fs::create_dir_all(&mode_dir).map_err(|e| e.to_string())?;
-    }
-
-    Ok(ExecutionEnv { is_dev, active_mode })
+    let active_mode_dev = read_active_mode(&app_data_dir, true);
+    let active_mode_prod = read_active_mode(&app_data_dir, false);
+    Ok(ExecutionEnv { is_dev, active_mode_dev, active_mode_prod })
 }
 
 #[tauri::command]
