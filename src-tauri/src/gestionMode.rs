@@ -271,7 +271,15 @@ pub async fn select_mode(app: tauri::AppHandle, nom: String) -> Result<(), Strin
     let is_dev = cfg!(debug_assertions);
     write_active_mode(&app_data_dir, is_dev, &nom)?;
 
-    // Redémarrage de l'application
-    app.restart();
-    Ok(())
+    // Redémarrage de l'application en mode BUILD, sinon arret
+    //app.restart();
+    //Ok(())
+    if is_dev {
+        // En DEV : on arrête juste le processus
+        std::process::exit(0);
+    } else {
+        // En PROD (build) : on utilise le restart propre
+        app.restart();
+        Ok(())
+}
 }

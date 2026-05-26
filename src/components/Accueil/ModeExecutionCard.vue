@@ -27,7 +27,7 @@
         <v-list-item v-for="mode in appStore.modes" :key="mode.nom" class="border-bottom py-2">
           <template v-slot:title>
             <span :class="mode.nom === 'OPE' ? 'text-green font-weight-bold' : 'text-blue font-weight-bold'">
-              {{ mode.nom }}
+              {{ mode.nom !== "OPE" ? mode.nom.substr(5) : "OPE" }}
             </span>
             <div
               class="text-caption text-grey-darken-1"
@@ -94,7 +94,7 @@
               color="success"
               @click="handleSelect(mode.nom)"
               class="ml-2"
-              title="Sélectionner ce mode"
+              title="Activer ce mode"
             ></v-btn>
           </template>
         </v-list-item>
@@ -125,9 +125,7 @@
             <v-text-field
               label="Nom du mode"
               v-model="editModeName"
-              placeholder="EVAL_version_x.y.z"
-              hint="Le nom doit obligatoirement commencer par 'EVAL_'"
-              persistent-hint
+              placeholder="Version_x.y.z"
               class="mb-4"
               variant="outlined"
               density="compact"
@@ -164,8 +162,8 @@
     <!-- Dialogue de confirmation Vuetify -->
     <v-dialog v-model="confirmDialog" max-width="450" persistent>
       <v-card>
-        <v-card-title class="headline">Confirmation</v-card-title>
-        <v-card-text>{{ confirmMessage }}</v-card-text>
+        <v-card-title class="headline bg-primary"  >{{ confirmTitle }}</v-card-title>
+        <v-card-text style="white-space: pre-line;">{{ confirmMessage }}</v-card-text>
         <v-card-actions>
           <v-spacer></v-spacer>
           <v-btn variant="text" @click="onConfirmCancel">Annuler</v-btn>
@@ -197,10 +195,12 @@ const errorMessage = ref('')
 
 // Dialogue de confirmation Vuetify
 const confirmDialog = ref(false)
+const confirmTitle = ref('')
 const confirmMessage = ref('')
 let confirmResolve: ((value: boolean) => void) | null = null
 
-function showConfirm(message: string): Promise<boolean> {
+function showConfirm(title: string, message: string): Promise<boolean> {
+  confirmTitle.value = title
   confirmMessage.value = message
   confirmDialog.value = true
   return new Promise((resolve) => {
@@ -231,7 +231,7 @@ function showError(message: string) {
 
 function startCreate() {
   newMode.value = true
-  editModeName.value = 'EVAL_'
+  editModeName.value = ''
   editModeDescription.value = ''
   errorMessage.value = ''
   showModifications.value = true
@@ -239,7 +239,7 @@ function startCreate() {
 
 function startEdit(mode: ModeInfo) {
   newMode.value = false
-  editModeName.value = mode.nom
+  editModeName.value = mode.nom.substring(5) 
   editModeDescription.value = mode.descrition
   oldModeName.value = mode.nom
   errorMessage.value = ''
@@ -253,7 +253,7 @@ function cancelModifications() {
 
 async function saveMode() {
   errorMessage.value = ''
-  const trimmedName = editModeName.value.trim()
+  const trimmedName = 'EVAL_' + editModeName.value.trim()
   const trimmedDesc = editModeDescription.value.trim()
 
   if (!trimmedName.startsWith('EVAL_')) {
@@ -279,7 +279,7 @@ async function saveMode() {
 }
 
 async function handleDelete(nom: string) {
-  const confirmed = await showConfirm(`Êtes-vous sûr de vouloir supprimer le mode '${nom}' ?`)
+  const confirmed = await showConfirm(`Suppression du mode ${nom.substring(5)}`, `Êtes-vous sûr de vouloir supprimer ce mode  ?`)
   if (confirmed) {
     try {
       await appStore.deleteMode(nom)
@@ -290,7 +290,7 @@ async function handleDelete(nom: string) {
 }
 
 async function handleSelect(nom: string) {
-  const confirmed = await showConfirm(`L'application va redémarrer pour basculer vers le mode '${nom}'. Continuer ?`)
+  const confirmed = await showConfirm(`Activation du mode ${nom.substring(5)}`, `L'application doit redémarrer pour basculer vers le nouveau mode.\n\nÊtes vous sûr de vouloir continuer ?`)
   if (confirmed) {
     try {
       await appStore.selectMode(nom)

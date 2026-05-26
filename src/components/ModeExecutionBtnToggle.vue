@@ -16,7 +16,7 @@ const appStore = useAppStore()
       title="Environnement de développement"
     ></v-btn>
     <v-btn
-      :text="appStore.activeMode !== 'OPE' ? appStore.activeModeDescription : 'OK'"
+      :text="appStore.activeMode !== 'OPE' ? appStore.activeMode.substr(5) : 'OK'"
       :class="appStore.activeMode !== 'OPE' ? 'bg-blue' : 'bg-green'"
       variant="tonal"
       @click="appStore.showModeDialog = true"
