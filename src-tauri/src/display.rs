@@ -70,51 +70,74 @@ pub fn get_displays(_window: tauri::Window) -> Vec<MonitorInfo> {
     }
 }
 
-// --- Commandes d'ouverture de fenêtre déplacée ici ---
+// --- Lecture de la configuration d'écran depuis .env.local ---
+
+/// Lit les variables PRIMARY_DISPLAY et SECONDARY_DISPLAY depuis .env.local.
+/// Retourne (primary_index, secondary_index) avec des valeurs par défaut (0, 1).
+fn read_display_config() -> (usize, usize) {
+    // Charger le fichier .env.local (situé à la racine du projet, un niveau au-dessus de src-tauri)
+    // dotenvy::from_filename_override permet de charger sans erreur si le fichier n'existe pas
+    let _ = dotenvy::from_filename_override(".env.local");
+
+    let primary = std::env::var("PRIMARY_DISPLAY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let secondary = std::env::var("SECONDARY_DISPLAY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1);
+
+    println!("[display] Configuration lue : PRIMARY_DISPLAY={}, SECONDARY_DISPLAY={}", primary, secondary);
+    (primary, secondary)
+}
+
+// --- Commandes d'ouverture de fenêtre ---
 
 #[tauri::command]
 pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     // screen-bis est déclarée dans tauri.conf.json avec visible: false
-    // On la place sur l'écran OPPOSÉ à celui où se trouve actuellement main
     let screen_bis = app
         .get_webview_window("screen-bis")
         .ok_or("Fenêtre screen-bis introuvable")?;
 
-    let main_window = app
-        .get_webview_window("main")
-        .ok_or("Fenêtre main introuvable")?;
-
-    // Écran actuel de la fenêtre principale (pas forcément le primaire OS)
-    let main_monitor = main_window.current_monitor().ok().flatten();
+    let (_, secondary_index) = read_display_config();
 
     let monitors = screen_bis.available_monitors().map_err(|e| e.to_string())?;
-    println!("[debug] Nombre de moniteurs disponibles : {}", monitors.len());
+    println!("[display] Nombre de moniteurs disponibles : {}", monitors.len());
     for (i, m) in monitors.iter().enumerate() {
         let name = m.name().map(|n| n.as_str()).unwrap_or("<sans_nom>");
-        println!("[debug] Moniteur {}: nom={}, pos=({},{}) taille=({}x{})", i, name, m.position().x, m.position().y, m.size().width, m.size().height);
+        println!("[display]   Moniteur {}: nom={}, pos=({},{}) taille=({}x{})",
+            i, name, m.position().x, m.position().y, m.size().width, m.size().height);
     }
-    // Trouver l'écran différent de celui de main
-    let other = monitors.iter().find(|m| match &main_monitor {
-        Some(current) => m.position() != current.position(),
-        None => true,
-    });
-    println!("[debug] Main monitor position: {:?}", main_monitor.as_ref().map(|m| (m.position().x, m.position().y)));
-    // Hide the window before repositioning to ensure macOS respects the new location
+
+    // Sélectionner le moniteur par index configuré, ou le dernier disponible
+    let target_index = if secondary_index < monitors.len() {
+        secondary_index
+    } else if monitors.len() > 1 {
+        // Si l'index configuré dépasse le nombre de moniteurs, prendre le dernier
+        println!("[display] SECONDARY_DISPLAY={} hors limites, utilisation du moniteur {}",
+            secondary_index, monitors.len() - 1);
+        monitors.len() - 1
+    } else {
+        println!("[display] Un seul moniteur disponible, screen-bis sur le moniteur 0");
+        0
+    };
+
+    let target_monitor = &monitors[target_index];
+    let pos = target_monitor.position();
+    println!("[display] Positionnement de screen-bis sur moniteur {} à ({}, {})", target_index, pos.x, pos.y);
+
+    // Hide the window before repositioning
     let _ = screen_bis.hide();
-    if let Some(monitor) = other {
-        // Les positions retournées par macOS sont en coordonnées logiques (points),
-        // donc on utilise LogicalPosition au lieu de PhysicalPosition
-        let pos = monitor.position();
-        println!("[debug] Positionnement en LogicalPosition({}, {})", pos.x, pos.y);
-        let _ = screen_bis.set_position(tauri::LogicalPosition::new(pos.x as f64, pos.y as f64));
-    }
+    let _ = screen_bis.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
+
     // Show the secondary window, maximize it on the target monitor, and give it focus
     let _ = screen_bis.show();
-    if other.is_some() {
-        let _ = screen_bis.maximize();
-    }
+    let _ = screen_bis.maximize();
     let _ = screen_bis.set_focus();
-    println!("[debug] ScreenBis affichée et focus appliqué");
+    println!("[display] screen-bis affichée et focus appliqué sur moniteur {}", target_index);
     Ok(())
 }
 
@@ -127,47 +150,40 @@ pub async fn close_second_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// --- Détecter l'écran actif sous Windows ---
-
-#[cfg(target_os = "windows")]
-fn get_active_monitor_rect() -> Option<(i32, i32, i32, i32)> {
-    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        if GetMonitorInfoW(hmonitor, &mut info).as_bool() {
-            let r = info.rcWork;
-            Some((r.left, r.top, r.right - r.left, r.bottom - r.top))
-        } else {
-            None
-        }
-    }
-}
-
 // --- Configuration des affichages au démarrage de l'app ---
 
 pub fn setup_display(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Positionnement/Maximisation de la fenêtre principale
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(window) = app.get_webview_window("main") {
-            if let Some((x, y, w, h)) = get_active_monitor_rect() {
-                let _ = window.set_position(tauri::PhysicalPosition::new(x + w / 2 - 400, y + h / 2 - 300));
-                let _ = window.maximize();
-            }
+    let (primary_index, _) = read_display_config();
+
+    // 1. Positionnement/Maximisation de la fenêtre principale sur le moniteur configuré
+    if let Some(window) = app.get_webview_window("main") {
+        let monitors = window.available_monitors()?;
+        println!("[display] setup_display – {} moniteur(s) détecté(s)", monitors.len());
+        for (i, m) in monitors.iter().enumerate() {
+            let name = m.name().map(|n| n.to_string()).unwrap_or_else(|| "<sans_nom>".to_string());
+            println!("[display]   Moniteur {}: nom={}, pos=({},{}) taille=({}x{})",
+                i, name, m.position().x, m.position().y, m.size().width, m.size().height);
         }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.maximize();
-        }
+
+        let target_index = if primary_index < monitors.len() {
+            primary_index
+        } else {
+            println!("[display] PRIMARY_DISPLAY={} hors limites, utilisation du moniteur 0", primary_index);
+            0
+        };
+
+        let target = &monitors[target_index];
+        let pos = target.position();
+        let size = target.size();
+        println!("[display] Fenêtre principale → moniteur {} à ({}, {}), taille {}x{}",
+            target_index, pos.x, pos.y, size.width, size.height);
+
+        // Positionner la fenêtre au centre du moniteur cible, puis maximiser
+        let _ = window.set_position(tauri::PhysicalPosition::new(
+            pos.x + (size.width as i32) / 2 - 400,
+            pos.y + (size.height as i32) / 2 - 300,
+        ));
+        let _ = window.maximize();
     }
 
     // 2. Interception de l'événement de fermeture sur screen-bis pour la masquer au lieu de la détruire
