@@ -9,7 +9,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAppStore } from './stores/app'
 
@@ -25,10 +24,7 @@ onMounted(async () => {
     return
   }
 
-  // Fenêtre principale : charger les displays et ouvrir la 2e fenêtre si bi-écran
+  // Fenêtre principale : charger les displays sans ouvrir automatiquement la 2e fenêtre
   await appStore.loadDisplays()
-  if (appStore.displays.length >= 2) {
-    await invoke('open_second_window')
-  }
 })
 </script>
