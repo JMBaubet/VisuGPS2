@@ -88,19 +88,33 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     let main_monitor = main_window.current_monitor().ok().flatten();
 
     let monitors = screen_bis.available_monitors().map_err(|e| e.to_string())?;
-
+    println!("[debug] Nombre de moniteurs disponibles : {}", monitors.len());
+    for (i, m) in monitors.iter().enumerate() {
+        let name = m.name().map(|n| n.as_str()).unwrap_or("<sans_nom>");
+        println!("[debug] Moniteur {}: nom={}, pos=({},{}) taille=({}x{})", i, name, m.position().x, m.position().y, m.size().width, m.size().height);
+    }
     // Trouver l'écran différent de celui de main
     let other = monitors.iter().find(|m| match &main_monitor {
         Some(current) => m.position() != current.position(),
         None => true,
     });
-
+    println!("[debug] Main monitor position: {:?}", main_monitor.as_ref().map(|m| (m.position().x, m.position().y)));
+    // Hide the window before repositioning to ensure macOS respects the new location
+    let _ = screen_bis.hide();
     if let Some(monitor) = other {
+        // Les positions retournées par macOS sont en coordonnées logiques (points),
+        // donc on utilise LogicalPosition au lieu de PhysicalPosition
         let pos = monitor.position();
-        let _ = screen_bis.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
+        println!("[debug] Positionnement en LogicalPosition({}, {})", pos.x, pos.y);
+        let _ = screen_bis.set_position(tauri::LogicalPosition::new(pos.x as f64, pos.y as f64));
     }
-
+    // Show the secondary window, maximize it on the target monitor, and give it focus
     let _ = screen_bis.show();
+    if other.is_some() {
+        let _ = screen_bis.maximize();
+    }
+    let _ = screen_bis.set_focus();
+    println!("[debug] ScreenBis affichée et focus appliqué");
     Ok(())
 }
 
