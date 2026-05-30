@@ -225,17 +225,17 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let primary_criteria =
-            env::var("PRIMARY_MONITOR_CRITERIA").unwrap_or_else(|_| "origin".to_string());
-        let main_window = app
-            .get_webview_window("main")
-            .ok_or("Fenêtre main introuvable")?;
-        if let Err(e) = place_window_on_monitor(&main_window, &monitors, &primary_criteria) {
-            eprintln!(
-                "[warning] Impossible de placer la fenêtre principale: {}",
-                e
-            );
-        }
+        //        let primary_criteria =
+        //          env::var("PRIMARY_MONITOR_CRITERIA").unwrap_or_else(|_| "origin".to_string());
+        //       let main_window = app
+        //            .get_webview_window("main")
+        //            .ok_or("Fenêtre main introuvable")?;
+        //        if let Err(e) = place_window_on_monitor(&main_window, &monitors, &secondary_criteria) {
+        //            eprintln!(
+        //                "[warning] Impossible de placer la fenêtre principale: {}",
+        //                e
+        //            );
+        //        }
     }
 
     // Placement de la fenêtre secondaire
