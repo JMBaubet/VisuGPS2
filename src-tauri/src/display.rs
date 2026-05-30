@@ -32,8 +32,8 @@ pub fn get_all_monitors() -> Vec<MonitorInfo> {
                 let scale = screen.backingScaleFactor();
                 let name_ns = screen.localizedName();
                 let name_string = name_ns.to_string();
-                // Détection simple de l'écran intégré via le nom
-                let is_builtin = name_string.contains("Built-in") || name_string.contains("Interne");
+                let is_builtin =
+                    name_string.contains("Built-in") || name_string.contains("Interne");
                 MonitorInfo {
                     name: Some(name_string),
                     position: (frame.origin.x as i32, frame.origin.y as i32),
@@ -50,7 +50,7 @@ pub fn get_all_monitors() -> Vec<MonitorInfo> {
 // Windows et autres : récupération via Tauri
 // -----------------------------------------------------------------------------
 #[cfg(not(target_os = "macos"))]
-pub fn get_all_monitors(window: &tauri::Window) -> Vec<MonitorInfo> {
+pub fn get_all_monitors(window: &tauri::WebviewWindow) -> Vec<MonitorInfo> {
     if let Ok(monitors) = window.available_monitors() {
         monitors
             .into_iter()
@@ -75,7 +75,7 @@ pub fn get_all_monitors(window: &tauri::Window) -> Vec<MonitorInfo> {
 
 // Commande Tauri pour obtenir les infos écrans
 #[tauri::command]
-pub fn get_displays(_window: tauri::Window) -> Vec<MonitorInfo> {
+pub fn get_displays(_window: tauri::WebviewWindow) -> Vec<MonitorInfo> {
     #[cfg(target_os = "macos")]
     {
         get_all_monitors()
@@ -101,7 +101,7 @@ fn load_env(app_handle: &tauri::AppHandle) {
 
     if let Some(path) = path {
         if path.exists() {
-            let _ = dotenvy::from_path(&path); // emprunt, pas de move
+            let _ = dotenvy::from_path(&path);
             println!("[DEBUG] .env.local chargé depuis {:?}", path);
         } else {
             println!("[DEBUG] .env.local non trouvé à {:?}", path);
@@ -157,14 +157,13 @@ fn place_window_on_monitor(
     let target = find_monitor_by_criteria(monitors, criteria)
         .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
     let pos = target.position;
-    // macOS : coordonnées logiques (points)
     window
         .set_position(tauri::LogicalPosition::new(pos.0 as f64, pos.1 as f64))
         .map_err(|e| e.to_string())?;
     window.maximize().map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_os = "macos"))] // Windows
+#[cfg(not(target_os = "macos"))]
 fn place_window_on_monitor(
     window: &tauri::WebviewWindow,
     monitors: &[MonitorInfo],
@@ -172,19 +171,13 @@ fn place_window_on_monitor(
 ) -> Result<(), String> {
     let target = find_monitor_by_criteria(monitors, criteria)
         .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
-    // Windows : coordonnées physiques (pixels) et redimensionnement exact
     window
         .set_position(tauri::PhysicalPosition::new(
             target.position.0 as f64,
             target.position.1 as f64,
         ))
         .map_err(|e| e.to_string())?;
-    window
-        .set_size(tauri::PhysicalSize::new(
-            target.size.0 as f64,
-            target.size.1 as f64,
-        ))
-        .map_err(|e| e.to_string())?;
+    window.maximize().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -195,8 +188,8 @@ fn place_window_on_monitor(
 pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     load_env(&app);
 
-    let secondary_criteria = env::var("SECONDARY_MONITOR_CRITERIA")
-        .unwrap_or_else(|_| "other".to_string());
+    let secondary_criteria =
+        env::var("SECONDARY_MONITOR_CRITERIA").unwrap_or_else(|_| "other".to_string());
 
     let screen_bis = app
         .get_webview_window("screen-bis")
@@ -210,10 +203,13 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // CORRECTION : On demande directement la fenêtre native "Window"
+            // au lieu de la "WebviewWindow", ce qui correspond exactement à la signature.
             let main_window = app
                 .get_webview_window("main")
                 .ok_or("Fenêtre main introuvable")?;
-            get_all_monitors(&main_window.clone().into())
+
+            get_all_monitors(&main_window)
         }
     };
 
@@ -229,13 +225,16 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let primary_criteria = env::var("PRIMARY_MONITOR_CRITERIA")
-            .unwrap_or_else(|_| "origin".to_string());
+        let primary_criteria =
+            env::var("PRIMARY_MONITOR_CRITERIA").unwrap_or_else(|_| "origin".to_string());
         let main_window = app
             .get_webview_window("main")
             .ok_or("Fenêtre main introuvable")?;
         if let Err(e) = place_window_on_monitor(&main_window, &monitors, &primary_criteria) {
-            eprintln!("[warning] Impossible de placer la fenêtre principale: {}", e);
+            eprintln!(
+                "[warning] Impossible de placer la fenêtre principale: {}",
+                e
+            );
         }
     }
 
@@ -243,14 +242,11 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     let _ = screen_bis.hide();
     if let Err(e) = place_window_on_monitor(&screen_bis, &monitors, &secondary_criteria) {
         eprintln!("[warning] Placement secondaire: {}", e);
-        // Fallback sur "other"
         if let Err(e2) = place_window_on_monitor(&screen_bis, &monitors, "other") {
             return Err(format!("Échec du placement de screen-bis: {}", e2));
         }
     }
 
-    // Pause nécessaire sur macOS pour que la nouvelle position soit prise en compte
-    // (ne nuit pas sur Windows)
     tauri::async_runtime::spawn_blocking(|| {
         std::thread::sleep(std::time::Duration::from_millis(100));
     })
@@ -311,11 +307,10 @@ pub fn setup_display(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
 
         if let Err(e) = place_window_on_monitor(&window, &monitors, &primary_criteria) {
             eprintln!("[warning] Erreur placement fenêtre principale: {}", e);
-            let _ = window.maximize(); // fallback
+            let _ = window.maximize();
         }
     }
 
-    // Interception de la fermeture de screen-bis pour la masquer au lieu de la détruire
     if let Some(screen_bis) = app.get_webview_window("screen-bis") {
         let screen_bis_clone = screen_bis.clone();
         screen_bis.on_window_event(move |event| {
