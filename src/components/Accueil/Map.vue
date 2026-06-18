@@ -6,13 +6,24 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import { useSettingsStore } from '../../stores/settings'
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
-
+const settingsStore = useSettingsStore()
 const mapContainer = ref<HTMLDivElement | null>(null)
 let map: mapboxgl.Map | null = null
 
-onMounted(() => {
+onMounted(async () => {
+  let token = ''
+  try {
+    token = await settingsStore.getSettingValue('Systeme.Key.mapBox')
+  } catch (error) {
+    console.error('Failed to retrieve MapBox token from settings:', error)
+  }
+
+  // Utiliser le token personnalisé s'il existe, sinon se rabattre sur la variable d'environnement
+  //mapboxgl.accessToken = token || import.meta.env.VITE_MAPBOX_TOKEN || ''
+  mapboxgl.accessToken = token || '' 
+
   if (mapContainer.value) {
     map = new mapboxgl.Map({
       container: mapContainer.value,

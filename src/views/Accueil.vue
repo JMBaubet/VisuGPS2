@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAppStore } from '../stores/app'
+import { useSettingsStore } from '../stores/settings'
 import Map from '../components/Accueil/Map.vue'
 import AppBar from '../components/Accueil/AppBar.vue'
 import CircuitsDrawer from '../components/Accueil/CircuitsDrawer.vue'
@@ -8,12 +9,14 @@ import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 import ModeExecutionCard from '../components/Accueil/ModeExecutionCard.vue'
 
 const appStore = useAppStore()
+const settingsStore = useSettingsStore()
 const setting = ref(false)
 
 onMounted(async () => {
   await appStore.loadExecutionEnv()
   await appStore.loadModes()
   await appStore.loadDisplays()
+  await settingsStore.loadSettings()
 })
 </script>
 

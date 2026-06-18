@@ -25,7 +25,7 @@ pub struct ExecutionEnv {
 }
 
 // Lit le mode actif depuis le fichier .env
-fn read_active_mode(app_data_dir: &Path, is_dev: bool) -> String {
+pub(crate) fn read_active_mode(app_data_dir: &Path, is_dev: bool) -> String {
     let env_path = app_data_dir.join(".env");
     if !env_path.exists() {
         let _ = std::fs::create_dir_all(app_data_dir);

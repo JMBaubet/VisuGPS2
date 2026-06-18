@@ -1,0 +1,21 @@
+[Accueil.nbrCircuits.list]
+description = "Nombre maximum de circuits affichés dans la liste"
+doc = """
+Ce paramètre permet de gérer le nombre de circuits qui sont affichés dans la liste de la page d'accueil.
+Les circuits affichés sont les plus proches du centre de la carte
+"""
+type = "Entier"
+default = 6
+min = 1
+max = 20
+step = 1
+
+[Systeme.Key.mapBox]
+description = "Clé API pour l'affichage des cartes MapBox"
+doc = """
+Pour obtenir votre clé API veuillez vous rendre sur le site https://www.mapbox.com/ pour créer votre compte.
+**Attention** : Bien que pour notre besoin l'utilisation est entièrement gratuite, une empreinte carte bleue est nécessaire à la création du compte.
+"""
+type = "Secret"
+default = ""
+critique = true
