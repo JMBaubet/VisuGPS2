@@ -23,19 +23,23 @@ function onSave() {
 }
 
 function onReset() {
-  emit('reset', props.setting.path)
+  if (props.setting.is_overridden) {
+    emit('reset', props.setting.path)
+  } else {
+    currentValue.value = props.setting.default
+  }
 }
 </script>
 
 <template>
-  <v-card class="mx-auto" max-width="500" elevation="2">
+  <v-card class="mx-auto" width="600" elevation="2">
     <v-card-item>
       <div class="d-flex align-center justify-space-between w-100">
         <v-card-title class="text-h6 font-weight-bold text-primary">
           {{ setting.description }}
         </v-card-title>
         <v-btn
-          v-if="currentValue !== setting.default"
+          v-if="setting.is_overridden || currentValue !== setting.default"
           icon="mdi-undo"
           variant="text"
           color="warning"

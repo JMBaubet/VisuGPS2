@@ -13,6 +13,7 @@ export interface SettingDefinition {
   max?: number | null
   step?: number | null
   critique?: boolean | null
+  is_overridden: boolean
 }
 
 export const useSettingsStore = defineStore('settings', () => {

@@ -21,12 +21,12 @@ pub struct SettingDefinition {
     pub max: Option<i64>,
     pub step: Option<i64>,
     pub critique: Option<bool>,
+    pub is_overridden: bool,
 }
 
 pub struct SettingsState {
     pub default_toml: toml::Table,
     pub user_overrides: toml::Table,
-    pub active_mode: String,
     pub config_path: PathBuf,
     pub master_key: [u8; 32],
 }
@@ -193,6 +193,7 @@ fn flatten_settings(table: &toml::Table, prefix: &str, acc: &mut Vec<SettingDefi
                 max,
                 step,
                 critique,
+                is_overridden: false,
             });
         }
     } else {
@@ -269,6 +270,7 @@ fn get_merged_settings(
     
     for def in &mut definitions {
         if let Some(user_val) = get_toml_value_by_path(overrides_table, &def.path) {
+            def.is_overridden = true;
             if def.setting_type == "Secret" {
                 if let Some(ciphertext_b64) = user_val.as_str() {
                     if !ciphertext_b64.is_empty() {
@@ -281,6 +283,7 @@ fn get_merged_settings(
                 def.value = toml_to_json(user_val);
             }
         } else {
+            def.is_overridden = false;
             if def.setting_type == "Secret" {
                 if let Some(default_str) = def.default.as_str() {
                     if !default_str.is_empty() {
@@ -340,7 +343,6 @@ pub fn init_settings_state(app_handle: &AppHandle) -> Result<Arc<RwLock<Settings
     Ok(Arc::new(RwLock::new(SettingsState {
         default_toml,
         user_overrides,
-        active_mode,
         config_path,
         master_key,
     })))
