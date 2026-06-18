@@ -14,6 +14,7 @@
 8. [Internationalisation (i18n)](#internationalisation-i18n)
 9. [Notifications système](#notifications-système)
 10. [Gestion des formulaires](#gestion-des-formulaires)
+11. [Ajouter un paramètre de configuration](#ajouter-un-paramètre-de-configuration)
 
 ---
 
@@ -737,3 +738,44 @@ Avant d'ajouter une nouvelle fonctionnalité :
 - [Vue 3 Examples](https://vuejs.org/examples/)
 - [Vuetify Components](https://vuetifyjs.com/en/components/all/)
 - [Pinia Examples](https://pinia.vuejs.org/cookbook/)
+
+---
+
+## Ajouter un paramètre de configuration
+
+Le système de paramètres repose sur le fichier de configuration par défaut.
+
+### Étape 1 : Déclarer le paramètre
+Ajoutez-le dans `src-tauri/settings.default.toml` :
+
+```toml
+[MaNouvelle.Section.monParametre]
+description = "Description courte de ce paramètre"
+doc = "Explication Markdown détaillée pour l'utilisateur"
+type = "Entier" # Actuellement géré: "Entier", "Secret"
+default = 42
+min = 0 # Optionnel
+max = 100 # Optionnel
+```
+
+### Étape 2 : Créer le composant d'édition (si type non géré)
+Si vous créez un nouveau type (ex: "Chaine", "Couleur"), vous devrez :
+1. Créer le composant Vue correspondant `SettingsEditChaine.vue` dans `src/components/Accueil/` (inspirez-vous de `SettingsEditEntier.vue`).
+2. L'ajouter au `v-switch` (ou logique équivalente) dans `src/components/Accueil/SettingsDrawer.vue` pour l'affichage dynamique.
+
+### Étape 3 : Utiliser le paramètre
+Dans n'importe quel composant Vue :
+
+```vue
+<script setup lang="ts">
+import { computed } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
+
+const settingsStore = useSettingsStore()
+
+const monParam = computed(() => {
+  const setting = settingsStore.settings.find(s => s.path === 'MaNouvelle.Section.monParametre')
+  return setting ? setting.value : 42
+})
+</script>
+```

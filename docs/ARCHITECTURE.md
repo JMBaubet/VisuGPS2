@@ -619,6 +619,28 @@ Pour gérer les configurations multi-environnements en DEV et PROD, le store `ap
     - Si le mode est le mode de production principal (`OPE`).
     - Si le mode correspond à `activeModeDev` ou à `activeModeProd`. Cela empêche toute suppression accidentelle du mode de développement ou du mode de production actif.
 
+## Gestion des Paramètres (Settings)
+
+L'application intègre un système robuste de gestion des paramètres de configuration.
+
+### Architecture du système de paramètres
+
+1. **Définition (Backend Rust)** :
+   - Les paramètres par défaut sont définis dans `src-tauri/settings.default.toml` (embarqué dans l'exécutable).
+   - Les paramètres modifiés par l'utilisateur sont sauvegardés dans un fichier `config-dev.toml` (en mode dev) ou `config.toml` (en production) dans le dossier de configuration de l'OS (`Application Support` sur macOS).
+
+2. **Sécurité (Secrets)** :
+   - Les paramètres sensibles (type `Secret`, comme les clés API) sont chiffrés avec AES-256-GCM avant écriture sur disque.
+   - La clé de chiffrement ("master key") est stockée dans le gestionnaire de mots de passe de l'OS en production (Keyring/Trousseau), ou codée en dur en développement pour éviter les pop-ups macOS incessants lors des recompilations.
+
+3. **Store (Frontend Pinia)** :
+   - `src/stores/settings.ts` charge les paramètres via la commande Tauri `get_settings`.
+   - Il maintient l'état réactif de chaque paramètre (`value`, `default`, `is_overridden`, etc.).
+
+4. **Interface (Vue)** :
+   - Des composants dédiés (`SettingsEditEntier.vue`, `SettingsEditSecret.vue`) permettent de modifier, sauvegarder et réinitialiser (undo) les paramètres.
+   - Le menu des paramètres s'affiche dans un panneau latéral (`SettingsDrawer.vue`).
+
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
