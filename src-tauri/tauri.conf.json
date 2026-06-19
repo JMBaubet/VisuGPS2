@@ -15,13 +15,18 @@
         "label": "main",
         "title": "VisuGPS2",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "closable": false,
+        "minimizable": true,
+        "maximizable": false,
+        "fullscreen": false
       },
       {
         "label": "screen-bis",
         "title": "ScreenBis",
-        "width": 800,
-        "height": 600,
+        "width": 8,
+        "height": 6,
+        "closable": false,
         "visible": false
       }
     ],

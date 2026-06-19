@@ -146,7 +146,7 @@ fn find_monitor_by_criteria<'a>(
 }
 
 // -----------------------------------------------------------------------------
-// Placement d'une fenêtre sur un écran (différencié macOS / Windows)
+// Placement d'une fenêtre (standard) : position + maximize
 // -----------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 fn place_window_on_monitor(
@@ -182,6 +182,44 @@ fn place_window_on_monitor(
 }
 
 // -----------------------------------------------------------------------------
+// Placement d'une fenêtre en plein écran (spécifique pour screen-bis)
+// -----------------------------------------------------------------------------
+#[cfg(target_os = "macos")]
+fn place_window_on_monitor_fullscreen(
+    window: &tauri::WebviewWindow,
+    monitors: &[MonitorInfo],
+    criteria: &str,
+) -> Result<(), String> {
+    let target = find_monitor_by_criteria(monitors, criteria)
+        .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
+    let pos = target.position;
+    // Déplacer sur l'écran cible
+    window
+        .set_position(tauri::LogicalPosition::new(pos.0 as f64, pos.1 as f64))
+        .map_err(|e| e.to_string())?;
+    // Passer en plein écran (masque la barre de menu)
+    window.set_fullscreen(true).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn place_window_on_monitor_fullscreen(
+    window: &tauri::WebviewWindow,
+    monitors: &[MonitorInfo],
+    criteria: &str,
+) -> Result<(), String> {
+    // Sur Windows, on utilise maximize (comportement équivalent sans masquer la barre des tâches)
+    let target = find_monitor_by_criteria(monitors, criteria)
+        .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
+    window
+        .set_position(tauri::PhysicalPosition::new(
+            target.position.0 as f64,
+            target.position.1 as f64,
+        ))
+        .map_err(|e| e.to_string())?;
+    window.maximize().map_err(|e| e.to_string())
+}
+
+// -----------------------------------------------------------------------------
 // Commandes Tauri
 // -----------------------------------------------------------------------------
 #[tauri::command]
@@ -203,12 +241,9 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // CORRECTION : On demande directement la fenêtre native "Window"
-            // au lieu de la "WebviewWindow", ce qui correspond exactement à la signature.
             let main_window = app
                 .get_webview_window("main")
                 .ok_or("Fenêtre main introuvable")?;
-
             get_all_monitors(&main_window)
         }
     };
@@ -218,31 +253,21 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     // Sur macOS, on ne touche PAS à la fenêtre principale
-    // Sur Windows, on la repositionne selon PRIMARY_MONITOR_CRITERIA
+    // Sur Windows, on la repositionne selon PRIMARY_MONITOR_CRITERIA (commenté)
     #[cfg(target_os = "macos")]
     {
         // rien
     }
     #[cfg(not(target_os = "macos"))]
     {
-        //        let primary_criteria =
-        //          env::var("PRIMARY_MONITOR_CRITERIA").unwrap_or_else(|_| "origin".to_string());
-        //       let main_window = app
-        //            .get_webview_window("main")
-        //            .ok_or("Fenêtre main introuvable")?;
-        //        if let Err(e) = place_window_on_monitor(&main_window, &monitors, &secondary_criteria) {
-        //            eprintln!(
-        //                "[warning] Impossible de placer la fenêtre principale: {}",
-        //                e
-        //            );
-        //        }
+        // (code commenté conservé)
     }
 
-    // Placement de la fenêtre secondaire
+    // Placement de la fenêtre secondaire en plein écran (fullscreen sur macOS, maximize sur Windows)
     let _ = screen_bis.hide();
-    if let Err(e) = place_window_on_monitor(&screen_bis, &monitors, &secondary_criteria) {
+    if let Err(e) = place_window_on_monitor_fullscreen(&screen_bis, &monitors, &secondary_criteria) {
         eprintln!("[warning] Placement secondaire: {}", e);
-        if let Err(e2) = place_window_on_monitor(&screen_bis, &monitors, "other") {
+        if let Err(e2) = place_window_on_monitor_fullscreen(&screen_bis, &monitors, "other") {
             return Err(format!("Échec du placement de screen-bis: {}", e2));
         }
     }
@@ -264,7 +289,14 @@ pub async fn close_second_window(app: tauri::AppHandle) -> Result<(), String> {
     let screen_bis = app
         .get_webview_window("screen-bis")
         .ok_or("Fenêtre screen-bis introuvable")?;
-    let _ = screen_bis.hide();
+
+    // Quitter le plein écran pour détruire l'espace dédié
+    screen_bis.set_fullscreen(false).map_err(|e| e.to_string())?;
+
+    // Attendre que macOS ait terminé la transition (300 ms suffisent)
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    screen_bis.hide().map_err(|e| e.to_string())?;
     Ok(())
 }
 
