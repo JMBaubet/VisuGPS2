@@ -86,31 +86,6 @@ pub fn get_displays(_window: tauri::WebviewWindow) -> Vec<MonitorInfo> {
 }
 
 // -----------------------------------------------------------------------------
-// Chargement de .env.local (ressource externe)
-// -----------------------------------------------------------------------------
-fn load_env(app_handle: &tauri::AppHandle) {
-    let path = if cfg!(debug_assertions) {
-        std::env::current_dir().ok().map(|p| p.join(".env.local"))
-    } else {
-        app_handle
-            .path()
-            .resolve(".env.local", tauri::path::BaseDirectory::Resource)
-            .ok()
-    };
-
-    if let Some(path) = path {
-        if path.exists() {
-            let _ = dotenvy::from_path(&path);
-            println!("[DEBUG] .env.local chargé depuis {:?}", path);
-        } else {
-            println!("[DEBUG] .env.local non trouvé à {:?}", path);
-        }
-    } else {
-        println!("[DEBUG] Impossible de déterminer le chemin pour .env.local");
-    }
-}
-
-// -----------------------------------------------------------------------------
 // Sélection d'un écran par critère textuel
 // -----------------------------------------------------------------------------
 fn find_monitor_by_criteria<'a>(
@@ -240,8 +215,6 @@ fn place_window_on_monitor_fullscreen(
 // -----------------------------------------------------------------------------
 #[tauri::command]
 pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
-    load_env(&app);
-
     let secondary_criteria = if let Some(state) = app.try_state::<std::sync::Arc<tokio::sync::RwLock<crate::settings::SettingsState>>>() {
         let state_read = state.read().await;
         crate::settings::get_toml_value_by_path(&state_read.user_overrides, "Affichage.moniteurs.secondaire")
@@ -334,8 +307,6 @@ pub async fn close_second_window(app: tauri::AppHandle) -> Result<(), String> {
 // Configuration au démarrage de l'application
 // -----------------------------------------------------------------------------
 pub fn setup_display(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    load_env(&app.handle());
-
     let primary_criteria = if let Some(state) = app.handle().try_state::<std::sync::Arc<tokio::sync::RwLock<crate::settings::SettingsState>>>() {
         if let Ok(state_read) = state.try_read() {
             crate::settings::get_toml_value_by_path(&state_read.user_overrides, "Affichage.moniteurs.principal")

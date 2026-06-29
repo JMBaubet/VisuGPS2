@@ -6,6 +6,11 @@ mod settings;
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;
 
+#[tauri::command]
+fn exit_app(app_handle: tauri::AppHandle) {
+    app_handle.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -21,6 +26,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            exit_app,
             get_displays,
             open_second_window,
             close_second_window,

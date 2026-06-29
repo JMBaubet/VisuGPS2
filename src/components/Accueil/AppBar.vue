@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core'
 import ModeExecutionBtnToggle from '../ModeExecutionBtnToggle.vue'
 
 const props = defineProps<{
@@ -12,6 +13,10 @@ const emit = defineEmits<{
 
 function changeMode() {
   emit('update:theme', props.theme === 'light' ? 'dark' : 'light')
+}
+
+async function quitApp() {
+  await invoke('exit_app')
 }
 </script>
 
@@ -40,6 +45,7 @@ function changeMode() {
     <v-btn
       color="red"
       icon="mdi-exit-to-app"
+      @click="quitApp"
     ></v-btn>
   </v-app-bar>
 </template>
