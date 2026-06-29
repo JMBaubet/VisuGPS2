@@ -51,11 +51,14 @@ async function onClose() {
     // Si on est dans la fenêtre secondaire, on appelle Rust pour la masquer
     try {
       await invoke('close_second_window')
+      // Notifier la fenêtre principale que screenBis est fermée
+      await emit('screenbis-closed')
     } catch (e) {
       console.error('Erreur lors de la fermeture de la seconde fenêtre :', e)
     }
   } else {
     // Si on est dans la fenêtre principale (mode mono-écran), on change de vue pour retourner à l'accueil
+    appStore.isScreenBisOpen = false
     router.push({ name: 'accueil' })
   }
 }

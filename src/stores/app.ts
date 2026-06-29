@@ -21,6 +21,7 @@ export const useAppStore = defineStore('app', () => {
   const isDarkMode = ref(false)
   const displays = ref<MonitorInfo[]>([])
   const loading = ref(false)
+  const isScreenBisOpen = ref(false)
 
   // Environnements et modes d'exécution
   const isDev = ref(false)
@@ -139,6 +140,7 @@ export const useAppStore = defineStore('app', () => {
     displays,
     loading,
     loadDisplays,
+    isScreenBisOpen,
     isDev,
     activeMode,
     activeModeDev,

@@ -141,11 +141,13 @@ async function visualiserCircuit() {
   if (appStore.displays.length >= 2) {
     try {
       await invoke('open_second_window')
+      appStore.isScreenBisOpen = true
     } catch (e) {
       console.error('Erreur lors de l\'ouverture de la seconde fenêtre :', e)
     }
   } else {
     // Configuration mono-écran : afficher ScreenBis.vue dans la fenêtre actuelle
+    appStore.isScreenBisOpen = true
     router.push({ name: 'screenBis' })
   }
 }
