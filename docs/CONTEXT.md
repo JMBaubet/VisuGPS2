@@ -203,6 +203,7 @@ await invoke('open_second_window')
 **Commandes disponibles** :
 - `get_displays()` : Retourne la liste des écrans (MonitorInfo[])
 - `open_second_window()` : Ouvre la fenêtre ScreenBis sur l'écran opposé
+- `exit_app()` : Ferme et quitte proprement l'application depuis le backend Rust
 
 ### 5. Communication inter-fenêtres
 
@@ -456,6 +457,7 @@ pub struct MonitorInfo {
 - `accueil-to-screenbis` : Nombres 1-100 (Accueil → ScreenBis)
 - `screenbis-to-accueil` : Nombres 501-600 (ScreenBis → Accueil)
 - `theme-changed` : Boolean (isDarkMode) - synchronisé entre tous
+- `screenbis-closed` : Émis par ScreenBis lors de sa fermeture pour informer l'AppBar et réinitialiser `appStore.isScreenBisOpen` à `false`
 
 ### Architecture Rust modulaire
 
