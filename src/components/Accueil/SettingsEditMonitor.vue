@@ -52,20 +52,24 @@ const monitorOptions = computed(() => {
     { value: 'external', title: 'Écran externe (external)' }
   ]
 
-  // Ajouter les moniteurs détectés physiquement
-  const physicalMonitors = appStore.displays
-    .map(d => d.name)
-    .filter((name): name is string => !!name)
-  
-  // Supprimer les doublons de noms
-  const uniquePhysical = [...new Set(physicalMonitors)]
+  const isWindows = navigator.userAgent.includes('Windows')
 
-  if (uniquePhysical.length > 0) {
-    // Dans Vuetify v-select, on peut passer des objets avec props ou utiliser des sous-headers
-    // Pour simplifier, on ajoute les options directement
-    uniquePhysical.forEach(name => {
-      options.push({ value: name, title: name })
-    })
+  if (!isWindows) {
+    // Ajouter les moniteurs détectés physiquement
+    const physicalMonitors = appStore.displays
+      .map(d => d.name)
+      .filter((name): name is string => !!name)
+    
+    // Supprimer les doublons de noms
+    const uniquePhysical = [...new Set(physicalMonitors)]
+
+    if (uniquePhysical.length > 0) {
+      // Dans Vuetify v-select, on peut passer des objets avec props ou utiliser des sous-headers
+      // Pour simplifier, on ajoute les options directement
+      uniquePhysical.forEach(name => {
+        options.push({ value: name, title: name })
+      })
+    }
   }
 
   return options
