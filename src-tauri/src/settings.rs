@@ -207,7 +207,7 @@ fn flatten_settings(table: &toml::Table, prefix: &str, acc: &mut Vec<SettingDefi
 }
 
 // Lit une valeur TOML par son chemin pointé (ex: "Accueil.nbrCircuits.list")
-fn get_toml_value_by_path<'a>(table: &'a toml::Table, path: &str) -> Option<&'a toml::Value> {
+pub(crate) fn get_toml_value_by_path<'a>(table: &'a toml::Table, path: &str) -> Option<&'a toml::Value> {
     let parts: Vec<&str> = path.split('.').collect();
     let mut current = table;
     for (i, part) in parts.iter().enumerate() {

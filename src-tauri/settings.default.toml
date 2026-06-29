@@ -19,3 +19,28 @@ Pour obtenir votre clé API veuillez vous rendre sur le site https://www.mapbox.
 type = "Secret"
 default = ""
 critique = true
+
+[Affichage.moniteurs.principal]
+description = "Écran pour la fenêtre principale"
+doc = """
+Sélectionnez l'écran sur lequel s'ouvre la fenêtre principale de l'application.
+Vous pouvez choisir un critère prédéfini :
+- **origin** : écran principal (position 0,0)
+- **other** : premier écran secondaire
+- **builtin** : écran intégré (macOS) ou alias de origin sur Windows
+- **external** : écran externe (macOS) ou alias de other sur Windows
+ou sélectionner un nom d'écran spécifique parmi ceux détectés.
+"""
+type = "monitor_selection"
+default = "origin"
+critique = false
+
+[Affichage.moniteurs.secondaire]
+description = "Écran pour la fenêtre secondaire"
+doc = """
+Sélectionnez l'écran sur lequel s'ouvre la fenêtre secondaire (screen-bis).
+Mêmes options que pour la fenêtre principale.
+"""
+type = "monitor_selection"
+default = "other"
+critique = false

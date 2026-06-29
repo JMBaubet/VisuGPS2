@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::env;
 use tauri::Manager;
 
 #[derive(Serialize, Clone, Debug)]
@@ -145,6 +144,27 @@ fn find_monitor_by_criteria<'a>(
     }
 }
 
+fn find_monitor_by_name<'a>(monitors: &'a [MonitorInfo], name: &str) -> Option<&'a MonitorInfo> {
+    monitors.iter().find(|m| {
+        m.name.as_deref()
+            .map(|n| n.eq_ignore_ascii_case(name))
+            .unwrap_or(false)
+    })
+}
+
+pub fn resolve_monitor_selection<'a>(selection: &str, monitors: &'a [MonitorInfo]) -> &'a MonitorInfo {
+    let known_criteria = ["origin", "other", "builtin", "external"];
+    let found = if known_criteria.contains(&selection) {
+        find_monitor_by_criteria(monitors, selection)
+    } else {
+        find_monitor_by_name(monitors, selection)
+    };
+    found.unwrap_or_else(|| {
+        eprintln!("[warning] Écran '{}' introuvable, fallback sur origin", selection);
+        monitors.iter().find(|m| m.position == (0, 0)).unwrap_or_else(|| &monitors[0])
+    })
+}
+
 // -----------------------------------------------------------------------------
 // Placement d'une fenêtre (standard) : position + maximize
 // -----------------------------------------------------------------------------
@@ -152,10 +172,9 @@ fn find_monitor_by_criteria<'a>(
 fn place_window_on_monitor(
     window: &tauri::WebviewWindow,
     monitors: &[MonitorInfo],
-    criteria: &str,
+    selection: &str,
 ) -> Result<(), String> {
-    let target = find_monitor_by_criteria(monitors, criteria)
-        .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
+    let target = resolve_monitor_selection(selection, monitors);
     let pos = target.position;
     window
         .set_position(tauri::LogicalPosition::new(pos.0 as f64, pos.1 as f64))
@@ -167,10 +186,9 @@ fn place_window_on_monitor(
 fn place_window_on_monitor(
     window: &tauri::WebviewWindow,
     monitors: &[MonitorInfo],
-    criteria: &str,
+    selection: &str,
 ) -> Result<(), String> {
-    let target = find_monitor_by_criteria(monitors, criteria)
-        .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
+    let target = resolve_monitor_selection(selection, monitors);
     window
         .set_position(tauri::PhysicalPosition::new(
             target.position.0 as f64,
@@ -188,10 +206,9 @@ fn place_window_on_monitor(
 fn place_window_on_monitor_fullscreen(
     window: &tauri::WebviewWindow,
     monitors: &[MonitorInfo],
-    criteria: &str,
+    selection: &str,
 ) -> Result<(), String> {
-    let target = find_monitor_by_criteria(monitors, criteria)
-        .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
+    let target = resolve_monitor_selection(selection, monitors);
     let pos = target.position;
     // Déplacer sur l'écran cible
     window
@@ -205,11 +222,10 @@ fn place_window_on_monitor_fullscreen(
 fn place_window_on_monitor_fullscreen(
     window: &tauri::WebviewWindow,
     monitors: &[MonitorInfo],
-    criteria: &str,
+    selection: &str,
 ) -> Result<(), String> {
     // Sur Windows, on utilise maximize (comportement équivalent sans masquer la barre des tâches)
-    let target = find_monitor_by_criteria(monitors, criteria)
-        .ok_or_else(|| format!("Aucun écran trouvé pour le critère '{}'", criteria))?;
+    let target = resolve_monitor_selection(selection, monitors);
     window
         .set_position(tauri::PhysicalPosition::new(
             target.position.0 as f64,
@@ -226,8 +242,16 @@ fn place_window_on_monitor_fullscreen(
 pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
     load_env(&app);
 
-    let secondary_criteria =
-        env::var("SECONDARY_MONITOR_CRITERIA").unwrap_or_else(|_| "other".to_string());
+    let secondary_criteria = if let Some(state) = app.try_state::<std::sync::Arc<tokio::sync::RwLock<crate::settings::SettingsState>>>() {
+        let state_read = state.read().await;
+        crate::settings::get_toml_value_by_path(&state_read.user_overrides, "Affichage.moniteurs.secondaire")
+            .or_else(|| crate::settings::get_toml_value_by_path(&state_read.default_toml, "Affichage.moniteurs.secondaire"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("other")
+            .to_string()
+    } else {
+        "other".to_string()
+    };
 
     let screen_bis = app
         .get_webview_window("screen-bis")
@@ -312,8 +336,19 @@ pub async fn close_second_window(app: tauri::AppHandle) -> Result<(), String> {
 pub fn setup_display(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     load_env(&app.handle());
 
-    let primary_criteria =
-        env::var("PRIMARY_MONITOR_CRITERIA").unwrap_or_else(|_| "origin".to_string());
+    let primary_criteria = if let Some(state) = app.handle().try_state::<std::sync::Arc<tokio::sync::RwLock<crate::settings::SettingsState>>>() {
+        if let Ok(state_read) = state.try_read() {
+            crate::settings::get_toml_value_by_path(&state_read.user_overrides, "Affichage.moniteurs.principal")
+                .or_else(|| crate::settings::get_toml_value_by_path(&state_read.default_toml, "Affichage.moniteurs.principal"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("origin")
+                .to_string()
+        } else {
+            "origin".to_string()
+        }
+    } else {
+        "origin".to_string()
+    };
 
     if let Some(window) = app.get_webview_window("main") {
         let monitors = {

@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/app'
 import { useSettingsStore } from '../../stores/settings'
 import SettingsEditEntier from './SettingsEditEntier.vue'
 import SettingsEditSecret from './SettingsEditSecret.vue'
+import SettingsEditMonitor from './SettingsEditMonitor.vue'
 
 const appStore = useAppStore()
 const settingsStore = useSettingsStore()
@@ -17,7 +18,10 @@ const emit = defineEmits<{
 }>()
 
 onMounted(async () => {
-  await settingsStore.loadSettings()
+  await Promise.all([
+    settingsStore.loadSettings(),
+    appStore.loadDisplays()
+  ])
 })
 
 const nbrCircuitsSetting = computed(() => 
@@ -28,8 +32,19 @@ const mapBoxSetting = computed(() =>
   settingsStore.settings.find(s => s.path === 'Systeme.Key.mapBox')
 )
 
+const principalSetting = computed(() => 
+  settingsStore.settings.find(s => s.path === 'Affichage.moniteurs.principal')
+)
+
+const secondaireSetting = computed(() => 
+  settingsStore.settings.find(s => s.path === 'Affichage.moniteurs.secondaire')
+)
+
+const hasMultipleDisplays = computed(() => appStore.displays.length > 1)
+
 const showNbrCircuitsDialog = ref(false)
 const showMapBoxDialog = ref(false)
+const showMonitorDialog = ref(false)
 
 function openModes() {
   emit('update:modelValue', false)
@@ -46,11 +61,17 @@ function openMapBox() {
   showMapBoxDialog.value = true
 }
 
+function openMonitors() {
+  emit('update:modelValue', false)
+  showMonitorDialog.value = true
+}
+
 async function handleUpdate(path: string, value: any) {
   try {
     await settingsStore.updateSetting(path, value)
     showNbrCircuitsDialog.value = false
     showMapBoxDialog.value = false
+    showMonitorDialog.value = false
   } catch (err) {
     console.error(err)
   }
@@ -61,6 +82,7 @@ async function handleReset(path: string) {
     await settingsStore.resetSetting(path)
     showNbrCircuitsDialog.value = false
     showMapBoxDialog.value = false
+    showMonitorDialog.value = false
   } catch (err) {
     console.error(err)
   }
@@ -102,6 +124,14 @@ async function handleReset(path: string) {
         value="licences"
         @click="openMapBox"
         ></v-list-item>
+
+        <v-list-item
+        v-if="hasMultipleDisplays"
+        prepend-icon="mdi-projector"
+        title="Configuration des fenêtres"
+        value="moniteurs"
+        @click="openMonitors"
+        ></v-list-item>
     </v-list>
   </v-navigation-drawer>
 
@@ -119,6 +149,16 @@ async function handleReset(path: string) {
     <SettingsEditSecret
       v-if="mapBoxSetting"
       :setting="mapBoxSetting"
+      @update="payload => handleUpdate(payload.path, payload.value)"
+      @reset="handleReset"
+    />
+  </v-dialog>
+
+  <v-dialog v-model="showMonitorDialog" max-width="600">
+    <SettingsEditMonitor
+      v-if="principalSetting && secondaireSetting"
+      :principal-setting="principalSetting"
+      :secondaire-setting="secondaireSetting"
       @update="payload => handleUpdate(payload.path, payload.value)"
       @reset="handleReset"
     />

@@ -45,7 +45,6 @@
       "icons/icon.ico"
     ],
     "resources": [
-      ".env.local",
       "settings.default.toml"
     ]
   }
