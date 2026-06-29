@@ -421,14 +421,18 @@ Ce template privilégie :
 2. Si 2+ écrans détectés → `invoke('open_second_window')`
 3. Rust vérifie la position de la fenêtre main et place screen-bis sur l'autre écran
 
-**Placement des fenêtres** :
-- **macOS** : Utilise `NSScreen.screens()` pour lister les écrans
+**Placement des fenêtres (Configurable)** :
+Le choix de l'écran (principal, secondaire) pour chaque fenêtre est paramétrable par l'utilisateur via le panneau des réglages (paramètres de type `monitor_selection` : `Affichage.moniteurs.principal`, `Affichage.moniteurs.secondaire`).
+Les valeurs peuvent être des critères génériques (`origin`, `other`, `builtin`, `external`) ou un nom d'écran spécifique détecté.
+
+- **macOS** : Utilise `NSScreen.screens()` pour lister les écrans.
+  - Différenciation entre écran interne (`builtin`) et externe (`external`).
   - Position X/Y = frame.origin pour chaque écran
   - Scale factor = backingScaleFactor
 
 - **Windows** : Utilise Tauri `available_monitors()` et Win32 API
   - Active monitor rect détecté au setup avec `GetForegroundWindow()`
-  - Fenêtre principale centrée sur l'écran actif
+  - Les écrans génériques de type "DISPLAY_X" détectés physiquement peuvent être filtrés si besoin.
 
 **MonitorInfo struct** :
 ```rust

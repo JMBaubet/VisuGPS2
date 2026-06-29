@@ -752,7 +752,7 @@ Ajoutez-le dans `src-tauri/settings.default.toml` :
 [MaNouvelle.Section.monParametre]
 description = "Description courte de ce paramètre"
 doc = "Explication Markdown détaillée pour l'utilisateur"
-type = "Entier" # Actuellement géré: "Entier", "Secret"
+type = "Entier" # Actuellement géré: "Entier", "Secret", "monitor_selection"
 default = 42
 min = 0 # Optionnel
 max = 100 # Optionnel
@@ -760,7 +760,7 @@ max = 100 # Optionnel
 
 ### Étape 2 : Créer le composant d'édition (si type non géré)
 Si vous créez un nouveau type (ex: "Chaine", "Couleur"), vous devrez :
-1. Créer le composant Vue correspondant `SettingsEditChaine.vue` dans `src/components/Accueil/` (inspirez-vous de `SettingsEditEntier.vue`).
+1. Créer le composant Vue correspondant `SettingsEditChaine.vue` dans `src/components/Accueil/` (inspirez-vous de `SettingsEditEntier.vue` ou `SettingsEditMonitor.vue`).
 2. L'ajouter au `v-switch` (ou logique équivalente) dans `src/components/Accueil/SettingsDrawer.vue` pour l'affichage dynamique.
 
 ### Étape 3 : Utiliser le paramètre

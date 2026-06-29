@@ -638,7 +638,7 @@ L'application intègre un système robuste de gestion des paramètres de configu
    - Il maintient l'état réactif de chaque paramètre (`value`, `default`, `is_overridden`, etc.).
 
 4. **Interface (Vue)** :
-   - Des composants dédiés (`SettingsEditEntier.vue`, `SettingsEditSecret.vue`) permettent de modifier, sauvegarder et réinitialiser (undo) les paramètres.
+   - Des composants dédiés (`SettingsEditEntier.vue`, `SettingsEditSecret.vue`, `SettingsEditMonitor.vue`) permettent de modifier, sauvegarder et réinitialiser (undo) les paramètres.
    - Le menu des paramètres s'affiche dans un panneau latéral (`SettingsDrawer.vue`).
 
 ---
