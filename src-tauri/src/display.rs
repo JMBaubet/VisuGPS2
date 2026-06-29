@@ -265,7 +265,8 @@ pub async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
 
     // Placement de la fenêtre secondaire en plein écran (fullscreen sur macOS, maximize sur Windows)
     let _ = screen_bis.hide();
-    if let Err(e) = place_window_on_monitor_fullscreen(&screen_bis, &monitors, &secondary_criteria) {
+    if let Err(e) = place_window_on_monitor_fullscreen(&screen_bis, &monitors, &secondary_criteria)
+    {
         eprintln!("[warning] Placement secondaire: {}", e);
         if let Err(e2) = place_window_on_monitor_fullscreen(&screen_bis, &monitors, "other") {
             return Err(format!("Échec du placement de screen-bis: {}", e2));
@@ -291,10 +292,15 @@ pub async fn close_second_window(app: tauri::AppHandle) -> Result<(), String> {
         .ok_or("Fenêtre screen-bis introuvable")?;
 
     // Quitter le plein écran pour détruire l'espace dédié
-    screen_bis.set_fullscreen(false).map_err(|e| e.to_string())?;
+    screen_bis
+        .set_fullscreen(false)
+        .map_err(|e| e.to_string())?;
 
-    // Attendre que macOS ait terminé la transition (300 ms suffisent)
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    #[cfg(target_os = "macos")]
+    {
+        // Attendre que macOS ait terminé la transition (1500 ms sont nécessaires sous macOS)
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    }
 
     screen_bis.hide().map_err(|e| e.to_string())?;
     Ok(())
