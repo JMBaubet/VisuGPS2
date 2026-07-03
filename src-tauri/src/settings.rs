@@ -12,15 +12,19 @@ use rand::RngCore;
 pub struct SettingDefinition {
     pub path: String,
     pub description: String,
-    pub doc: String,
+    #[serde(rename = "documentation")] // anciennement "doc"
+    pub documentation: String,
     #[serde(rename = "type")]
     pub setting_type: String,
     pub default: serde_json::Value,
     pub value: serde_json::Value,
-    pub min: Option<i64>,
-    pub max: Option<i64>,
-    pub step: Option<i64>,
-    pub critique: Option<bool>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub step: Option<f64>,
+    #[serde(rename = "critical")] // anciennement "critique"
+    pub critical: Option<bool>,
+    pub unit: Option<String>,
+    pub choices: Option<Vec<serde_json::Value>>,
     pub is_overridden: bool,
 }
 

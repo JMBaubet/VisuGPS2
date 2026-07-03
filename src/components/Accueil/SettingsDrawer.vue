@@ -142,6 +142,7 @@ async function handleReset(path: string) {
       :setting="nbrCircuitsSetting"
       @update="payload => handleUpdate(payload.path, payload.value)"
       @reset="handleReset"
+      @close="showNbrCircuitsDialog = false"
     />
   </v-dialog>
 

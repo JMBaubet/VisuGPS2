@@ -10,6 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update', payload: { path: string; value: number }): void
   (e: 'reset', path: string): void
+  (e: 'close'): void
 }>()
 
 const currentValue = ref<number>(props.setting.value)
@@ -20,6 +21,10 @@ watch(() => props.setting.value, (newVal) => {
 
 function onSave() {
   emit('update', { path: props.setting.path, value: currentValue.value })
+}
+
+function onClose() {
+  emit('close')
 }
 
 function onReset() {
@@ -38,6 +43,7 @@ function onReset() {
         <v-card-title class="text-h6 font-weight-bold text-primary">
           {{ setting.description }}
         </v-card-title>
+        <v-spacer></v-spacer>
         <v-btn
           v-if="setting.is_overridden || currentValue !== setting.default"
           icon="mdi-undo"
@@ -47,11 +53,19 @@ function onReset() {
           title="Restaurer la valeur par défaut"
           @click="onReset"
         ></v-btn>
+        <v-btn
+          icon="mdi-close"
+          variant="text"
+          density="comfortable"
+          title="Quitter"
+          @click="onClose"
+        ></v-btn>
       </div>
     </v-card-item>
 
     <v-card-text>
       <div class="d-flex align-center mt-2">
+         <v-col class="mt-n2" cols="9">
         <v-slider
           v-model="currentValue"
           :min="setting.min ?? 1"
@@ -61,7 +75,9 @@ function onReset() {
           class="align-center mr-4"
           color="primary"
         ></v-slider>
+        </v-col>
 
+        <v-col class="mt-n2" cols="3">
         <v-text-field
           v-model.number="currentValue"
           type="number"
@@ -72,6 +88,7 @@ function onReset() {
           :min="setting.min ?? 1"
           :max="setting.max ?? 100"
         ></v-text-field>
+        </v-col>
       </div>
 
       <div class="mt-4 markdown-doc" v-html="renderMarkdown(setting.doc)"></div>
@@ -85,6 +102,11 @@ function onReset() {
         @click="onSave"
       >
         Enregistrer
+      </v-btn>
+      <v-btn
+        @click="onClose"
+      >
+        Quitter
       </v-btn>
     </v-card-actions>
   </v-card>
