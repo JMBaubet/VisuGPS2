@@ -18,7 +18,6 @@ const settingsStore = useSettingsStore()
 const appStore = useAppStore()
 const valPrincipal = ref<string>(props.principalSetting.value)
 const valSecondaire = ref<string>(props.secondaireSetting.value)
-const refreshing = ref(false)
 
 // États pour les dialogues de confirmation
 const showCloseConfirmDialog = ref(false)
@@ -35,7 +34,11 @@ watch(() => props.secondaireSetting.value, (newVal) => {
 
 onMounted(async () => {
   if (appStore.displays.length === 0) {
-    await refreshDisplays()
+    try {
+      await appStore.loadDisplays()
+    } catch (err) {
+      console.error(err)
+    }
   }
 })
 
@@ -151,14 +154,6 @@ function confirmClose() {
 }
 
 // --- États pour l'affichage des boutons ----------------------------------
-
-const isPrincipalModified = computed(() => 
-  valPrincipal.value !== props.principalSetting.value
-)
-
-const isSecondaireModified = computed(() => 
-  valSecondaire.value !== props.secondaireSetting.value
-)
 
 const isPrincipalDefault = computed(() =>
   valPrincipal.value === props.principalSetting.default

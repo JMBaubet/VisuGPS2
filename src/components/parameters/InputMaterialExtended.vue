@@ -6,7 +6,6 @@ import { computed, ref } from 'vue'
 import type { SettingDefinition } from '../../stores/settings'
 import {
   isValidHexAlpha,
-  nearestMaterialColor,
 } from '../../utils/materialColors'
 
 const props = defineProps<{
@@ -188,7 +187,7 @@ const COLOR_NAMES: Record<string, string> = {
 }
 
 // Ajouter les noms des couleurs de base
-Object.entries(MATERIAL_VARIATIONS).forEach(([key, value]) => {
+Object.entries(MATERIAL_VARIATIONS).forEach(([_, value]) => {
   COLOR_NAMES[value.variations[5]] = value.name
 })
 

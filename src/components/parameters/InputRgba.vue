@@ -4,7 +4,7 @@
 // et un carré d'aperçu. Le défaut est rappelé.
 import { computed } from 'vue'
 import type { SettingDefinition } from '../../stores/settings'
-import { isValidHexAlpha, hexToRgbaString } from '../../utils/materialColors'
+import { isValidHexAlpha } from '../../utils/materialColors'
 
 const props = defineProps<{
   def: SettingDefinition
@@ -20,8 +20,6 @@ const emit = defineEmits<{
 const safeValue = computed(() =>
   isValidHexAlpha(props.modelValue) ? props.modelValue : '#000000FF'
 )
-const rgbaString = computed(() => hexToRgbaString(safeValue.value))
-const defaultHint = computed(() => `Défaut : ${props.def.default}`)
 
 function normalizeColor(value: any): string {
   // Si c'est une chaîne

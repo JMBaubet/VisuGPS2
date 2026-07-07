@@ -6,7 +6,6 @@ import type { SettingDefinition } from '../../stores/settings'
 import {
   MATERIAL_PRIMARY_SWATCHES,
   isValidHexAlpha,
-  nearestMaterialColor,
 } from '../../utils/materialColors'
 
 const props = defineProps<{
@@ -97,21 +96,7 @@ const defaultColorName = computed(() => {
   return COLOR_NAMES[normalized] || defaultColor.value
 })
 
-// En cas de saisie libre (rare, le picker contraint normalement), on ramène
-// la couleur à la nuance 500 de base la plus proche.
-function onUpdate(v: string) {
-  const color = String(v).toUpperCase()
-  // Vérifier si c'est du blanc ou du noir
-  if (color === '#FFFFFF' || color === '#FFF' || color === '#FFFFFFFF') {
-    emit('update:modelValue', '#FFFFFFFF')
-    return
-  }
-  if (color === '#000000' || color === '#000' || color === '#FF000000') {
-    emit('update:modelValue', '#FF000000')
-    return
-  }
-  emit('update:modelValue', nearestMaterialColor(color))
-}
+
 
 function selectColor(hex: string) {
   emit('update:modelValue', hex)
