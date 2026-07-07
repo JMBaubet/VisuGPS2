@@ -61,7 +61,12 @@ export const useSettingsStore = defineStore('settings', () => {
   async function updateSetting(path: string, value: any) {
     loading.value = true
     try {
-      await invoke('update_setting', { path, value })
+      const def = getParamDef(path)
+      if (def && value === def.default) {
+        await invoke('reset_setting', { path })
+      } else {
+        await invoke('update_setting', { path, value })
+      }
       await loadSettings() // recharger pour obtenir les valeurs masquées des secrets
     } catch (error) {
       console.error(`Failed to update setting ${path}:`, error)

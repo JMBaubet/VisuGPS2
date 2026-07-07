@@ -58,21 +58,6 @@ function openMonitors() {
   showMonitorDialog.value = true
 }
 
-async function handleMonitorUpdate(path: string, value: any) {
-  try {
-    await settingsStore.updateSetting(path, value)
-  } catch (err) {
-    console.error(err)
-  }
-}
-
-async function handleMonitorReset(path: string) {
-  try {
-    await settingsStore.resetSetting(path)
-  } catch (err) {
-    console.error(err)
-  }
-}
 </script>
 
 <template>
@@ -146,11 +131,10 @@ async function handleMonitorReset(path: string) {
   <!-- Dialogue spécifique moniteurs (carte double principal/secondaire) -->
   <v-dialog v-model="showMonitorDialog" max-width="600">
     <SettingsEditMonitor
-      v-if="principalSetting && secondaireSetting"
+      v-if="showMonitorDialog && principalSetting && secondaireSetting"
       :principal-setting="principalSetting"
       :secondaire-setting="secondaireSetting"
-      @update="payload => handleMonitorUpdate(payload.path, payload.value)"
-      @reset="handleMonitorReset"
+      @close="showMonitorDialog = false"
     />
   </v-dialog>
 </template>
