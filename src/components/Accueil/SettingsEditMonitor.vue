@@ -147,7 +147,7 @@ function onResetSecondaire() {
           density="comfortable"
           hide-details
         ></v-select>
-        <div class="mt-2 markdown-doc" v-html="renderMarkdown(principalSetting.doc)"></div>
+        <div class="mt-2 markdown-doc" v-html="renderMarkdown(principalSetting.documentation)"></div>
       </div>
 
       <v-divider class="my-4"></v-divider>
@@ -175,7 +175,7 @@ function onResetSecondaire() {
           density="comfortable"
           hide-details
         ></v-select>
-        <div class="mt-2 markdown-doc" v-html="renderMarkdown(secondaireSetting.doc)"></div>
+        <div class="mt-2 markdown-doc" v-html="renderMarkdown(secondaireSetting.documentation)"></div>
       </div>
     </v-card-text>
 

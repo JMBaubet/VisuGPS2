@@ -1,10 +1,22 @@
+# Paramètres applicatifs.
+# Schéma (aligné sur la spec EN) :
+#   type          = "int" | "float" | "bool" | "secret" | "list" | "rgba"
+#                  | "material_primary" | "material_extended" | "monitor"
+#   description   = libellé court affiché en en-tête de carte
+#   documentation = texte Markdown rendu dans la carte (anciennement "doc")
+#   default       = valeur par défaut
+#   min/max/step  = optionnels, numériques (acceptent entiers et décimaux)
+#   unit          = optionnel, unité affichée (ex: "ms", "s")
+#   choices       = optionnel, tableau de chaînes (type "list" contraint)
+#   critical      = optionnel (booléen, anciennement "critique")
+
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits affichés."
-doc = """
+documentation = """
 Ce paramètre permet de gérer le nombre de circuits qui sont affichés dans la liste de la page d'accueil.
 Les circuits affichés sont les plus proches du centre de la carte
 """
-type = "Entier"
+type = "int"
 default = 6
 min = 1
 max = 20
@@ -12,17 +24,17 @@ step = 2
 
 [Systeme.Key.mapBox]
 description = "Clé API MapBox"
-doc = """
+documentation = """
 Pour obtenir votre clé API veuillez vous rendre sur le site https://www.mapbox.com/ pour créer votre compte.
 **Attention** : Bien que pour notre besoin l'utilisation est entièrement gratuite, une empreinte carte bleue est nécessaire à la création du compte.
 """
-type = "Secret"
+type = "secret"
 default = ""
-critique = true
+critical = true
 
 [Affichage.moniteurs.principal]
 description = "Écran pour la fenêtre principale"
-doc = """
+documentation = """
 Sélectionnez l'écran sur lequel s'ouvre la fenêtre principale de l'application.
 Vous pouvez choisir un critère prédéfini :
 - **origin** : écran principal (position 0,0)
@@ -31,16 +43,107 @@ Vous pouvez choisir un critère prédéfini :
 - **external** : écran externe (macOS) ou alias de other sur Windows
 ou sélectionner un nom d'écran spécifique parmi ceux détectés.
 """
-type = "monitor_selection"
+type = "monitor"
 default = "origin"
-critique = false
+critical = false
 
 [Affichage.moniteurs.secondaire]
 description = "Écran pour la fenêtre secondaire"
-doc = """
+documentation = """
 Sélectionnez l'écran sur lequel s'ouvre la fenêtre secondaire (screen-bis).
 Mêmes options que pour la fenêtre principale.
 """
-type = "monitor_selection"
+type = "monitor"
 default = "other"
-critique = false
+critical = false
+
+# ---------------------------------------------------------------------------
+# Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.
+# Ils servent de démonstration / de tests et peuvent être supprimés une fois
+# les vrais paramètres branchés.
+# ---------------------------------------------------------------------------
+
+[Exemples.bool]
+description = "Mode sombre (exemple booléen)"
+documentation = """
+Active ou désactive le mode sombre de l'interface.
+- Activé : les couleurs de fond sont assombries.
+- Désactivé : le thème clair est utilisé.
+"""
+type = "bool"
+default = false
+
+[Exemples.float]
+description = "Délai de rafraîchissement (exemple décimal)"
+documentation = """
+Intervalle de temps entre deux rafraîchissements automatiques de la carte.
+Plus la valeur est faible, plus la carte est réactive, mais plus la charge
+processeur augmente.
+"""
+type = "float"
+default = 0.5
+min = 0.1
+max = 5.0
+step = 0.1
+unit = "s"
+
+[Exemples.int]
+description = "Nombre d'éléments en cache (exemple entier)"
+documentation = """
+Nombre maximum d'éléments conservés en cache mémoire.
+Valeur strictement positive.
+"""
+type = "int"
+default = 30
+min = 0
+max = 500
+step = 10
+unit = "éléments"
+
+[Exemples.secret]
+description = "Jeton d'authentification (exemple secret)"
+documentation = """
+Valeur masquée et chiffrée sur disque (AES-256-GCM).
+Laissez vide pour désactiver l'authentification.
+"""
+type = "secret"
+default = ""
+critical = true
+
+[Exemples.list]
+description = "Niveau de détail des logs (exemple liste)"
+documentation = """
+Choix contraint parmi les niveaux de sévérité standards.
+Les niveaux supérieurs incluent les niveaux inférieurs.
+"""
+type = "list"
+default = "info"
+choices = ["error", "warning", "info", "debug", "trace"]
+
+[Exemples.rgba]
+description = "Couleur de trace (exemple RGBA)"
+documentation = """
+Couleur utilisée pour dessiner la trace GPS sur la carte.
+Le canal alpha règle la transparence (FF = opaque, 00 = invisible).
+"""
+type = "rgba"
+default = "#FF5722FF"
+
+[Exemples.materialPrimary]
+description = "Couleur d'accentuation (exemple Material primaire)"
+documentation = """
+Couleur principale d'accentuation issue de la palette Material Design de base.
+Seules les couleurs de base sont sélectionnables.
+"""
+type = "material_primary"
+default = "#3F51B5FF"
+
+[Exemples.materialExtended]
+description = "Couleur de surbrillance (exemple Material étendu)"
+documentation = """
+Couleur de surbrillon issue de la palette Material Design étendue
+(nuances 50 à 900 par teinte). Seules ces couleurs sont sélectionnables,
+afin de garantir le respect de la charte.
+"""
+type = "material_extended"
+default = "#5C6BC0FF"

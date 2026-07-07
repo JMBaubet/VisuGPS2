@@ -168,35 +168,64 @@ fn json_to_toml(val: &serde_json::Value) -> Option<toml::Value> {
     }
 }
 
+// Lit une valeur TOML comme f64, en acceptant indifféremment un entier ou un flottant.
+// Nécessaire car `min = 0.5` est un Float et `min = 1` un Integer en TOML, et que l'on
+// doit supporter à la fois `int` et `float` côté paramètres.
+fn toml_as_f64(val: &toml::Value) -> Option<f64> {
+    match val {
+        toml::Value::Integer(i) => Some(*i as f64),
+        toml::Value::Float(f) => Some(*f),
+        _ => None,
+    }
+}
+
+// Valide qu'une chaîne est une couleur hexadécimale avec canal alpha : #RRGGBBAA.
+fn is_hex_alpha(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    s.len() == 9 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
+}
+
 // Parcourt récursivement le TOML par défaut pour extraire les définitions de paramètres
 fn flatten_settings(table: &toml::Table, prefix: &str, acc: &mut Vec<SettingDefinition>) {
     if table.contains_key("type") {
         if let Some(setting_type) = table.get("type").and_then(|v| v.as_str()) {
             let description = table.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let doc = table.get("doc").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            
+            let documentation = table.get("documentation")
+                .or_else(|| table.get("doc")) // rétro-compatibilité temporaire
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
             let default_val = if let Some(d) = table.get("default") {
                 toml_to_json(d)
             } else {
                 serde_json::Value::Null
             };
 
-            let min = table.get("min").and_then(|v| v.as_integer());
-            let max = table.get("max").and_then(|v| v.as_integer());
-            let step = table.get("step").and_then(|v| v.as_integer());
-            let critique = table.get("critique").and_then(|v| v.as_bool());
+            let min = table.get("min").and_then(toml_as_f64);
+            let max = table.get("max").and_then(toml_as_f64);
+            let step = table.get("step").and_then(toml_as_f64);
+            let critical = table.get("critical")
+                .or_else(|| table.get("critique")) // rétro-compatibilité temporaire
+                .and_then(|v| v.as_bool());
+            let unit = table.get("unit").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let choices = table.get("choices").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().map(toml_to_json).collect::<Vec<_>>()
+            });
 
             acc.push(SettingDefinition {
                 path: prefix.to_string(),
                 description,
-                doc,
+                documentation,
                 setting_type: setting_type.to_string(),
                 default: default_val.clone(),
                 value: default_val,
                 min,
                 max,
                 step,
-                critique,
+                critical,
+                unit,
+                choices,
                 is_overridden: false,
             });
         }
@@ -275,7 +304,7 @@ fn get_merged_settings(
     for def in &mut definitions {
         if let Some(user_val) = get_toml_value_by_path(overrides_table, &def.path) {
             def.is_overridden = true;
-            if def.setting_type == "Secret" {
+            if def.setting_type == "secret" {
                 if let Some(ciphertext_b64) = user_val.as_str() {
                     if !ciphertext_b64.is_empty() {
                         def.value = serde_json::Value::String("********".to_string());
@@ -288,7 +317,7 @@ fn get_merged_settings(
             }
         } else {
             def.is_overridden = false;
-            if def.setting_type == "Secret" {
+            if def.setting_type == "secret" {
                 if let Some(default_str) = def.default.as_str() {
                     if !default_str.is_empty() {
                         def.value = serde_json::Value::String("********".to_string());
@@ -376,26 +405,44 @@ pub async fn update_setting(
         .ok_or_else(|| format!("Paramètre inconnu : {}", path))?;
         
     let toml_val = match def.setting_type.as_str() {
-        "Entier" => {
+        "int" => {
             let val_i64 = value.as_i64()
                 .ok_or_else(|| format!("Valeur invalide pour un entier : {:?}", value))?;
-            
+
             if let Some(min) = def.min {
-                if val_i64 < min {
+                if (val_i64 as f64) < min {
                     return Err(format!("Valeur inférieure au minimum autorisé ({})", min));
                 }
             }
             if let Some(max) = def.max {
-                if val_i64 > max {
+                if (val_i64 as f64) > max {
                     return Err(format!("Valeur supérieure au maximum autorisé ({})", max));
                 }
             }
             toml::Value::Integer(val_i64)
         }
-        "Secret" => {
+        "float" => {
+            let val_f64 = value.as_f64()
+                .ok_or_else(|| format!("Valeur invalide pour un décimal : {:?}", value))?;
+
+            // On conserve les bornes et le pas tels quels ; l'arrondi au pas est appliqué
+            // côté UI. Ici on valide seulement l'intervalle.
+            if let Some(min) = def.min {
+                if val_f64 < min {
+                    return Err(format!("Valeur inférieure au minimum autorisé ({})", min));
+                }
+            }
+            if let Some(max) = def.max {
+                if val_f64 > max {
+                    return Err(format!("Valeur supérieure au maximum autorisé ({})", max));
+                }
+            }
+            toml::Value::Float(val_f64)
+        }
+        "secret" => {
             let val_str = value.as_str()
                 .ok_or_else(|| format!("Valeur invalide pour un secret : {:?}", value))?;
-            
+
             if val_str.is_empty() {
                 toml::Value::String("".to_string())
             } else {
@@ -403,7 +450,35 @@ pub async fn update_setting(
                 toml::Value::String(encrypted)
             }
         }
+        "bool" => {
+            let val_bool = value.as_bool()
+                .ok_or_else(|| format!("Valeur invalide pour un booléen : {:?}", value))?;
+            toml::Value::Boolean(val_bool)
+        }
+        "list" => {
+            let val_str = value.as_str()
+                .ok_or_else(|| format!("Valeur invalide pour une liste (chaîne attendue) : {:?}", value))?
+                .to_string();
+            // Si des choix sont définis, on restreint la valeur à cet ensemble.
+            if let Some(choices) = &def.choices {
+                let allowed = choices.iter().any(|c| c.as_str() == Some(val_str.as_str()));
+                if !allowed {
+                    return Err(format!("Valeur '{}' non autorisée pour cette liste", val_str));
+                }
+            }
+            toml::Value::String(val_str)
+        }
+        "rgba" | "material_primary" | "material_extended" => {
+            // Toutes les couleurs sont stockées au format hexadécimal avec alpha : #RRGGBBAA.
+            let val_str = value.as_str()
+                .ok_or_else(|| format!("Valeur couleur invalide (chaîne hex attendue) : {:?}", value))?;
+            if !is_hex_alpha(val_str) {
+                return Err("Couleur invalide : format attendu #RRGGBBAA".to_string());
+            }
+            toml::Value::String(val_str.to_string())
+        }
         _ => {
+            // Fall-through générique pour les types non strictement validés (ex: "monitor").
             if let Some(toml_v) = json_to_toml(&value) {
                 toml_v
             } else {
@@ -452,7 +527,7 @@ pub async fn get_setting_value(
         let mut definitions = Vec::new();
         flatten_settings(&state_read.default_toml, "", &mut definitions);
         if let Some(def) = definitions.iter().find(|d| d.path == path) {
-            if def.setting_type == "Secret" {
+            if def.setting_type == "secret" {
                 if let Some(ciphertext_b64) = user_val.as_str() {
                     if ciphertext_b64.is_empty() {
                         return Ok(serde_json::Value::String("".to_string()));

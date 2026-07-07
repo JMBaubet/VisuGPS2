@@ -2,8 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAppStore } from '../../stores/app'
 import { useSettingsStore } from '../../stores/settings'
-import SettingsEditEntier from './SettingsEditEntier.vue'
-import SettingsEditSecret from './SettingsEditSecret.vue'
+import ParameterCard from '../parameters/ParameterCard.vue'
 import SettingsEditMonitor from './SettingsEditMonitor.vue'
 
 const appStore = useAppStore()
@@ -24,26 +23,23 @@ onMounted(async () => {
   ])
 })
 
-const nbrCircuitsSetting = computed(() => 
-  settingsStore.settings.find(s => s.path === 'Accueil.nbrCircuits.list')
-)
-
-const mapBoxSetting = computed(() => 
-  settingsStore.settings.find(s => s.path === 'Systeme.Key.mapBox')
-)
-
-const principalSetting = computed(() => 
+// --- Paramètres réels ----------------------------------------------------
+const nbrCircuitsPath = 'Accueil.nbrCircuits.list'
+const mapBoxPath = 'Systeme.Key.mapBox'
+const principalSetting = computed(() =>
   settingsStore.settings.find(s => s.path === 'Affichage.moniteurs.principal')
 )
-
-const secondaireSetting = computed(() => 
+const secondaireSetting = computed(() =>
   settingsStore.settings.find(s => s.path === 'Affichage.moniteurs.secondaire')
 )
 
 const hasMultipleDisplays = computed(() => appStore.displays.length > 1)
 
-const showNbrCircuitsDialog = ref(false)
-const showMapBoxDialog = ref(false)
+// --- Dialogue générique ParameterCard -----------------------------------
+const paramDialog = ref(false)
+const currentParamKey = ref<string | null>(null)
+
+// --- Dialogue spécifique moniteurs (carte double) ------------------------
 const showMonitorDialog = ref(false)
 
 function openModes() {
@@ -51,14 +47,10 @@ function openModes() {
   appStore.showModeDialog = true
 }
 
-function openNbrCircuits() {
+function openParam(path: string) {
   emit('update:modelValue', false)
-  showNbrCircuitsDialog.value = true
-}
-
-function openMapBox() {
-  emit('update:modelValue', false)
-  showMapBoxDialog.value = true
+  currentParamKey.value = path
+  paramDialog.value = true
 }
 
 function openMonitors() {
@@ -66,23 +58,17 @@ function openMonitors() {
   showMonitorDialog.value = true
 }
 
-async function handleUpdate(path: string, value: any) {
+async function handleMonitorUpdate(path: string, value: any) {
   try {
     await settingsStore.updateSetting(path, value)
-    showNbrCircuitsDialog.value = false
-    showMapBoxDialog.value = false
-    showMonitorDialog.value = false
   } catch (err) {
     console.error(err)
   }
 }
 
-async function handleReset(path: string) {
+async function handleMonitorReset(path: string) {
   try {
     await settingsStore.resetSetting(path)
-    showNbrCircuitsDialog.value = false
-    showMapBoxDialog.value = false
-    showMonitorDialog.value = false
   } catch (err) {
     console.error(err)
   }
@@ -91,7 +77,7 @@ async function handleReset(path: string) {
 
 <template>
   <v-navigation-drawer
-    location="right" 
+    location="right"
     :model-value="modelValue"
     @update:model-value="emit('update:modelValue', $event)"
     temporary
@@ -110,19 +96,19 @@ async function handleReset(path: string) {
         value="mode"
         @click="openModes"
         ></v-list-item>
-        
+
         <v-list-item
         prepend-icon="mdi-map-legend"
         title="Nbre de circuits affichés"
         value="nbre-circuits"
-        @click="openNbrCircuits"
+        @click="openParam(nbrCircuitsPath)"
         ></v-list-item>
-        
+
         <v-list-item
         prepend-icon="mdi-key-chain"
         title="Licences"
         value="licences"
-        @click="openMapBox"
+        @click="openParam(mapBoxPath)"
         ></v-list-item>
 
         <v-list-item
@@ -132,36 +118,39 @@ async function handleReset(path: string) {
         value="moniteurs"
         @click="openMonitors"
         ></v-list-item>
+
+        <v-divider class="my-2"></v-divider>
+
+        <!-- Paramètres d'exemple (démonstration ParameterCard) -->
+        <v-list-subheader>Exemples par type</v-list-subheader>
+        <v-list-item prepend-icon="mdi-toggle-switch-outline" title="Booléen" value="ex-bool" @click="openParam('Exemples.bool')"></v-list-item>
+        <v-list-item prepend-icon="mdi-decimal" title="Décimal" value="ex-float" @click="openParam('Exemples.float')"></v-list-item>
+        <v-list-item prepend-icon="mdi-numeric" title="Entier" value="ex-int" @click="openParam('Exemples.int')"></v-list-item>
+        <v-list-item prepend-icon="mdi-form-textbox-password" title="Secret" value="ex-secret" @click="openParam('Exemples.secret')"></v-list-item>
+        <v-list-item prepend-icon="mdi-format-list-bulleted" title="Liste" value="ex-list" @click="openParam('Exemples.list')"></v-list-item>
+        <v-list-item prepend-icon="mdi-palette" title="Couleur RGBA" value="ex-rgba" @click="openParam('Exemples.rgba')"></v-list-item>
+        <v-list-item prepend-icon="mdi-palette-outline" title="Material primaire" value="ex-mp" @click="openParam('Exemples.materialPrimary')"></v-list-item>
+        <v-list-item prepend-icon="mdi-palette-swatch" title="Material étendu" value="ex-me" @click="openParam('Exemples.materialExtended')"></v-list-item>
     </v-list>
   </v-navigation-drawer>
 
-  <!-- Dialogues d'édition des paramètres -->
-  <v-dialog v-model="showNbrCircuitsDialog" max-width="500">
-    <SettingsEditEntier
-      v-if="nbrCircuitsSetting"
-      :setting="nbrCircuitsSetting"
-      @update="payload => handleUpdate(payload.path, payload.value)"
-      @reset="handleReset"
-      @close="showNbrCircuitsDialog = false"
+  <!-- Dialogue générique ParameterCard -->
+  <v-dialog v-model="paramDialog" max-width="620">
+    <ParameterCard
+      v-if="currentParamKey"
+      :param-key="currentParamKey"
+      @close="paramDialog = false"
     />
   </v-dialog>
 
-  <v-dialog v-model="showMapBoxDialog" max-width="500">
-    <SettingsEditSecret
-      v-if="mapBoxSetting"
-      :setting="mapBoxSetting"
-      @update="payload => handleUpdate(payload.path, payload.value)"
-      @reset="handleReset"
-    />
-  </v-dialog>
-
+  <!-- Dialogue spécifique moniteurs (carte double principal/secondaire) -->
   <v-dialog v-model="showMonitorDialog" max-width="600">
     <SettingsEditMonitor
       v-if="principalSetting && secondaireSetting"
       :principal-setting="principalSetting"
       :secondaire-setting="secondaireSetting"
-      @update="payload => handleUpdate(payload.path, payload.value)"
-      @reset="handleReset"
+      @update="payload => handleMonitorUpdate(payload.path, payload.value)"
+      @reset="handleMonitorReset"
     />
   </v-dialog>
 </template>
