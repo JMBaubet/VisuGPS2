@@ -751,17 +751,17 @@ Ajoutez-le dans `src-tauri/settings.default.toml` :
 ```toml
 [MaNouvelle.Section.monParametre]
 description = "Description courte de ce paramètre"
-doc = "Explication Markdown détaillée pour l'utilisateur"
-type = "Entier" # Actuellement géré: "Entier", "Secret", "monitor_selection"
+documentation = "Explication Markdown détaillée pour l'utilisateur"
+type = "int" # Actuellement gérés: "int", "float", "bool", "secret", "list", "rgba", "material_primary", "material_extended", "monitor"
 default = 42
 min = 0 # Optionnel
 max = 100 # Optionnel
 ```
 
-### Étape 2 : Créer le composant d'édition (si type non géré)
-Si vous créez un nouveau type (ex: "Chaine", "Couleur"), vous devrez :
-1. Créer le composant Vue correspondant `SettingsEditChaine.vue` dans `src/components/Accueil/` (inspirez-vous de `SettingsEditEntier.vue` ou `SettingsEditMonitor.vue`).
-2. L'ajouter au `v-switch` (ou logique équivalente) dans `src/components/Accueil/SettingsDrawer.vue` pour l'affichage dynamique.
+### Étape 2 : Créer le composant de saisie (si type non géré)
+Si vous créez un nouveau type (ex: "Chaine"), vous devrez :
+1. Créer le composant Vue d'entrée `InputChaine.vue` dans [src/components/parameters/](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/).
+2. L'ajouter à la liste de sélection adaptative dans [ParameterCard.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/ParameterCard.vue).
 
 ### Étape 3 : Utiliser le paramètre
 Dans n'importe quel composant Vue :

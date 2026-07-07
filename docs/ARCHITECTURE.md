@@ -638,8 +638,9 @@ L'application intègre un système robuste de gestion des paramètres de configu
    - Il maintient l'état réactif de chaque paramètre (`value`, `default`, `is_overridden`, etc.).
 
 4. **Interface (Vue)** :
-   - Des composants dédiés (`SettingsEditEntier.vue`, `SettingsEditSecret.vue`, `SettingsEditMonitor.vue`) permettent de modifier, sauvegarder et réinitialiser (undo) les paramètres.
-   - Le menu des paramètres s'affiche dans un panneau latéral (`SettingsDrawer.vue`).
+   - Une carte d'édition générique ([ParameterCard.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/ParameterCard.vue)) s'appuie sur des composants d'entrée spécifiques par type ([InputBool.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/InputBool.vue), [InputInt.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/InputInt.vue), etc.) pour modifier, sauvegarder et réinitialiser (undo) les paramètres individuels.
+   - Un composant spécifique ([SettingsEditMonitor.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsEditMonitor.vue)) gère la configuration combinée des écrans principal et secondaire.
+   - Le menu des paramètres s'affiche dans un panneau latéral ([SettingsDrawer.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsDrawer.vue)).
 
 ---
 
