@@ -342,7 +342,7 @@ export const useProductsStore = defineStore('products', () => {
 
 ### Côté Rust
 
-`src-tauri/src/main.rs`
+`src-tauri/src/lib.rs` (ou un module dédié comme `import_gpx.rs`)
 ```rust
 use tauri::command;
 
@@ -360,8 +360,10 @@ async fn fetch_system_info() -> Result<SystemInfo, String> {
     })
 }
 
-fn main() {
+pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             greet,
             fetch_system_info
@@ -371,11 +373,13 @@ fn main() {
 }
 ```
 
+> ⚠️ **Ne pas modifier `main.rs`** : il se contente d'appeler `tauri_app_lib::run()`. Les commandes sont enregistrées dans **`lib.rs`** (ou dans un module déclaré via `mod mon_module;` dans `lib.rs`). Voir [COMMANDS.md](./COMMANDS.md) pour la procédure complète.
+
 ### Côté Frontend
 
 `src/services/tauri.ts`
 ```typescript
-import { invoke } from '@tauri-apps/api/tauri'
+import { invoke } from '@tauri-apps/api/core'
 
 export interface SystemInfo {
   os: string
@@ -734,7 +738,7 @@ Avant d'ajouter une nouvelle fonctionnalité :
 ---
 
 **Ressources utiles** :
-- [Tauri Guides](https://tauri.app/v1/guides/)
+- [Tauri v2 Guides](https://tauri.app/develop/)
 - [Vue 3 Examples](https://vuejs.org/examples/)
 - [Vuetify Components](https://vuetifyjs.com/en/components/all/)
 - [Pinia Examples](https://pinia.vuejs.org/cookbook/)

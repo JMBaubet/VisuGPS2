@@ -1,14 +1,15 @@
-# Documentation du Template
+# Documentation de VisuGPS2
 
-> Documentation complète pour développeurs et IA (Claude Code)
+> Documentation complète pour développeurs et IA (ZCode / Claude Code)
 
 ## Vue d'ensemble
 
-Cette documentation fournit un contexte complet pour travailler avec ce template Tauri + Vue + Vuetify + Pinia + Router. Elle est particulièrement utile pour :
+VisuGPS2 est une **application desktop** de visualisation de traces GPX, basée sur **Tauri v2** (Rust) + **Vue 3** + **Vuetify 3**. Elle supporte le multi-écrans, les modes d'exécution isolés, et la gestion de paramètres avec chiffrement des secrets.
 
-- **Claude Code et autres IA** : Comprendre l'architecture et les conventions
+Cette documentation est particulièrement utile pour :
+- **ZCode et autres IA** : Comprendre l'architecture et les conventions avant d'intervenir
 - **Nouveaux développeurs** : Onboarding rapide sur le projet
-- **Référence** : Guide des bonnes pratiques et patterns
+- **Référence** : Catalogue des commandes, du stockage, des conventions
 
 ## Documents disponibles
 
@@ -16,7 +17,7 @@ Cette documentation fournit un contexte complet pour travailler avec ce template
 **Contexte général du projet**
 
 Le point de départ essentiel. Explique :
-- L'objectif et la philosophie du template
+- L'objectif et la philosophie de l'application
 - La stack technique utilisée
 - La structure générale des fichiers
 - Les patterns et conventions de base
@@ -29,13 +30,35 @@ Le point de départ essentiel. Explique :
 
 Plongée approfondie dans l'architecture :
 - Couches de l'application (Frontend, Router, State, Build, Desktop)
-- Communication entre les couches
-- Configuration de chaque outil (Vite, Tauri, Vuetify, etc.)
-- Flux de données
-- Patterns architecturaux
-- Diagrammes
+- Communication entre les couches (invoke Tauri, événements inter-fenêtres)
+- Configuration de chaque outil (Vite, Tauri v2, Vuetify, etc.)
+- Flux de données et patterns architecturaux
+- Gestion des modes d'exécution et des paramètres
 
 👉 **Lire ce fichier** pour comprendre le fonctionnement interne.
+
+### 📡 [COMMANDS.md](./COMMANDS.md)
+**Référence des commandes Tauri**
+
+Catalogue exhaustif des **18 commandes** backend↔frontend :
+- Application, affichage/multi-écrans, modes d'exécution, paramètres, traces GPX
+- Signatures Rust, types de retour, règles métier
+- Exemples d'appel côté TypeScript
+- Procédure pour ajouter une nouvelle commande
+
+👉 **Consulter ce fichier** pour toute interaction avec le backend.
+
+### 💾 [DATA_STORAGE.md](./DATA_STORAGE.md)
+**Schéma de stockage des données**
+
+Comprendre où vit chaque donnée sur disque :
+- Arborescence complète (`{app_data_dir}/`)
+- Fichiers détaillés (`.env`, `ModeExe.toml`, `traces.json`, `config.toml`)
+- Résolution des chemins en fonction du mode actif
+- Sécurité des secrets (AES-256-GCM, keyring OS)
+- Isolation des données par mode d'exécution
+
+👉 **Lire ce fichier** pour comprendre la persistance.
 
 ### 📐 [CONVENTIONS.md](./CONVENTIONS.md)
 **Conventions de code et bonnes pratiques**
@@ -47,69 +70,88 @@ Guide exhaustif des conventions :
 - Vue et Composition API
 - Vuetify
 - Gestion des erreurs
-- Imports/exports
 
 👉 **Consulter ce fichier** avant d'écrire du code.
 
 ### 🔧 [EXTENDING.md](./EXTENDING.md)
-**Guide d'extension du template**
+**Guide d'extension de l'application**
 
 Tutoriels pratiques pour ajouter :
-- Une nouvelle page
-- Un nouveau store Pinia
-- Un composant réutilisable
-- Une API externe
-- Des commandes Tauri
-- L'authentification
-- Une base de données locale
-- L'internationalisation (i18n)
-- Des notifications
-- La gestion de formulaires
+- Une nouvelle page, un nouveau store Pinia, un composant réutilisable
+- Des commandes Tauri, un paramètre de configuration
+- Une base de données locale, l'internationalisation (i18n), etc.
 
 👉 **Utiliser ce fichier** comme référence lors du développement.
 
+### 🧩 [SPEC_IMPORT_GPX.md](./SPEC_IMPORT_GPX.md)
+**Spécification du module d'import GPX**
+
+Document de référence détaillé du module GPX :
+- Architecture cible, gestion des chemins et modes d'exécution
+- Backend Rust : parsing, stats (Haversine), détection d'éditeur, registre
+- Frontend : store Pinia, composants, notifications
+- Cas d'erreur et comportements attendus
+
+👉 **Lire ce fichier** pour comprendre le module traces GPX.
+
+### 🤖 [CLAUDE-CODE-GUIDE.md](./CLAUDE-CODE-GUIDE.md)
+**Guide d'utilisation avec un assistant IA**
+
+Comment tirer le meilleur parti de ZCode / Claude Code :
+- Fichiers de contexte à fournir selon la tâche
+- Exemples de prompts efficaces
+- Workflow recommandé (comprendre → planifier → implémenter → vérifier)
+
+👉 **Lire ce fichier** pour travailler efficacement avec l'IA.
+
 ## Comment utiliser cette documentation
 
-### Pour Claude Code (IA)
+### Pour ZCode (IA)
 
-Lors d'une session de développement, indiquez à Claude Code :
+Lors d'une session de développement, indiquez à l'IA :
 
 ```
 "Consulte docs/CONTEXT.md pour comprendre le projet"
 "Respecte les conventions dans docs/CONVENTIONS.md"
 "Suis l'architecture décrite dans docs/ARCHITECTURE.md"
+"Référence-toi à docs/COMMANDS.md pour les commandes Tauri"
 ```
 
-Ou fournissez simplement le chemin vers ces fichiers pour que Claude comprenne le contexte.
+Ou fournissez simplement le chemin vers ces fichiers pour que l'IA comprenne le contexte.
 
 ### Pour les développeurs
 
 1. **Première fois** : Lire CONTEXT.md puis ARCHITECTURE.md
 2. **Avant de coder** : Parcourir CONVENTIONS.md
-3. **Ajout de fonctionnalités** : Référencer EXTENDING.md
-4. **En cas de doute** : Rechercher dans la documentation appropriée
+3. **Interaction backend** : Référencer COMMANDS.md et DATA_STORAGE.md
+4. **Ajout de fonctionnalités** : Référencer EXTENDING.md
+5. **En cas de doute** : Rechercher dans la documentation appropriée
 
 ## Structure de la documentation
 
 ```
 docs/
-├── README.md           # Ce fichier (index)
-├── CONTEXT.md          # Contexte général (8KB)
-├── ARCHITECTURE.md     # Architecture technique (12KB)
-├── CONVENTIONS.md      # Conventions de code (15KB)
-└── EXTENDING.md        # Guide d'extension (18KB)
+├── README.md              # Ce fichier (index)
+├── CONTEXT.md             # Contexte général
+├── ARCHITECTURE.md        # Architecture technique
+├── COMMANDS.md            # Référence des commandes Tauri (18 commandes)
+├── DATA_STORAGE.md        # Schéma de stockage des données
+├── CONVENTIONS.md         # Conventions de code
+├── EXTENDING.md           # Guide d'extension
+├── SPEC_IMPORT_GPX.md     # Spécification du module GPX
+└── CLAUDE-CODE-GUIDE.md   # Guide d'utilisation avec IA
 ```
 
-## Maintien de la documentation
+## Maintenance de la documentation
 
 ### Quand mettre à jour
 
 Mettre à jour la documentation quand :
-- ✅ Ajout d'une nouvelle convention
-- ✅ Modification de l'architecture
-- ✅ Changement de la structure des fichiers
-- ✅ Ajout d'un pattern important
-- ✅ Nouvelle dépendance majeure
+- ✅ Ajout d'une nouvelle commande Tauri → mettre à jour **COMMANDS.md**
+- ✅ Modification du stockage disque → mettre à jour **DATA_STORAGE.md**
+- ✅ Modification de l'architecture ou de la structure des fichiers → **ARCHITECTURE.md**
+- ✅ Ajout d'une convention ou d'un pattern important → **CONVENTIONS.md**
+- ✅ Nouvelle dépendance majeure ou nouvelle fonctionnalité → **CONTEXT.md**
 
 ### Comment mettre à jour
 
@@ -117,35 +159,6 @@ Mettre à jour la documentation quand :
 2. Ajouter/modifier la section appropriée
 3. Maintenir la cohérence avec les autres documents
 4. Mettre à jour la date en bas du document
-
-## Principes de documentation
-
-Cette documentation suit ces principes :
-
-1. **Clarté** : Explications simples et directes
-2. **Exemples** : Code concret plutôt que théorie
-3. **Cohérence** : Même format dans tous les documents
-4. **Complétude** : Couvre tous les aspects importants
-5. **Maintenance** : Mise à jour régulière avec le code
-
-## Ressources externes
-
-### Documentation officielle
-
-- **Tauri** : https://tauri.app/v1/guides/
-- **Vue 3** : https://vuejs.org/guide/introduction.html
-- **Vuetify 3** : https://vuetifyjs.com/en/getting-started/installation/
-- **Pinia** : https://pinia.vuejs.org/introduction.html
-- **Vue Router** : https://router.vuejs.org/guide/
-- **Vite** : https://vitejs.dev/guide/
-- **TypeScript** : https://www.typescriptlang.org/docs/
-
-### Communautés
-
-- **Discord Tauri** : https://discord.com/invite/tauri
-- **Discord Vue** : https://discord.com/invite/vue
-- **Discord Vuetify** : https://discord.gg/vuetify
-- **Forum Vue** : https://forum.vuejs.org/
 
 ## FAQ
 
@@ -161,25 +174,8 @@ Plus proche de la Composition API, meilleure inférence TypeScript, plus flexibl
 
 Material Design mature, composants riches, documentation excellente, grande communauté.
 
-### Comment contribuer à la documentation ?
-
-1. Suivre le format existant
-2. Ajouter des exemples concrets
-3. Tester les exemples de code
-4. Maintenir la cohérence terminologique
-
-## Changelog de la documentation
-
-### Version 1.0.0 (2026-03-24)
-- ✨ Création initiale de la documentation
-- 📋 CONTEXT.md : Contexte général du projet
-- 🏗️ ARCHITECTURE.md : Architecture technique
-- 📐 CONVENTIONS.md : Conventions de code
-- 🔧 EXTENDING.md : Guide d'extension
-- 📚 README.md : Index de la documentation
-
 ---
 
-**Dernière mise à jour** : 2026-03-24
-**Version du template** : 1.0.0
-**Mainteneur** : Template générique réutilisable
+**Dernière mise à jour** : 2026-07-10
+**Version de l'application** : 0.0.1
+**Status** : En développement actif

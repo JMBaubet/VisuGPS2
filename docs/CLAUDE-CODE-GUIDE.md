@@ -1,19 +1,19 @@
-# Guide pour utiliser Claude Code avec ce template
+# Guide pour utiliser un assistant IA (ZCode / Claude Code) avec VisuGPS2
 
-> Comment tirer le meilleur parti de Claude Code dans ce projet
+> Comment tirer le meilleur parti d'un assistant IA dans ce projet
 
 ## Introduction
 
-Ce template a été conçu avec une documentation complète pour faciliter le travail avec Claude Code (et autres assistants IA). Ce guide explique comment utiliser efficacement Claude Code dans ce contexte.
+VisuGPS2 est documenté en profondeur pour faciliter le travail avec ZCode (et Claude Code ou tout autre assistant IA). Ce guide explique comment utiliser efficacement un assistant IA dans ce contexte.
 
 ## 🚀 Démarrage rapide
 
-### Première interaction avec Claude Code
+### Première interaction avec l'assistant IA
 
-Lorsque vous démarrez une session de développement, donnez ce contexte à Claude :
+Lorsque vous démarrez une session de développement, donnez ce contexte à l'IA :
 
 ```
-J'utilise le template Tauri + Vue + Vuetify + Pinia + Router.
+Je travaille sur VisuGPS2 (Tauri v2 + Vue 3 + Vuetify + Pinia).
 Merci de lire docs/CONTEXT.md pour comprendre le projet avant de commencer.
 ```
 
@@ -23,7 +23,7 @@ Ou plus simplement :
 Lis docs/CONTEXT.md
 ```
 
-Claude Code va lire le fichier de contexte et comprendre :
+L'IA va lire le fichier de contexte et comprendre :
 - L'architecture du projet
 - Les conventions utilisées
 - Les patterns à suivre
@@ -37,8 +37,11 @@ Claude Code va lire le fichier de contexte et comprendre :
 |-------|----------------|----------|
 | Découvrir le projet | `docs/CONTEXT.md` | "Lis docs/CONTEXT.md" |
 | Comprendre l'architecture | `docs/ARCHITECTURE.md` | "Lis docs/ARCHITECTURE.md" |
+| Commandes backend | `docs/COMMANDS.md` | "Consulte docs/COMMANDS.md pour les commandes Tauri" |
+| Stockage des données | `docs/DATA_STORAGE.md` | "Lis docs/DATA_STORAGE.md pour comprendre la persistance" |
 | Écrire du code | `docs/CONVENTIONS.md` | "Respecte docs/CONVENTIONS.md" |
 | Ajouter une fonctionnalité | `docs/EXTENDING.md` | "Consulte docs/EXTENDING.md pour ajouter [fonctionnalité]" |
+| Module GPX | `docs/SPEC_IMPORT_GPX.md` | "Lis docs/SPEC_IMPORT_GPX.md" |
 
 ## 💬 Exemples de prompts efficaces
 
@@ -230,20 +233,24 @@ Migre ce composant vers notre stack en respectant :
 
 Si vous utilisez Claude Code en IDE, vous pouvez configurer le contexte du workspace :
 
-`.claude/context.md` (si supporté)
+`.claude/context.md` ou fichier `AGENTS.md` (si supporté)
 ```markdown
-Ce projet utilise Tauri + Vue + Vuetify + Pinia + Router.
+Ce projet est VisuGPS2 (Tauri v2 + Vue 3 + Vuetify + Pinia + Router).
 
 Documentation de référence :
 - docs/CONTEXT.md : Vue d'ensemble
 - docs/ARCHITECTURE.md : Architecture technique
+- docs/COMMANDS.md : Référence des 18 commandes Tauri
+- docs/DATA_STORAGE.md : Schéma de stockage des données
 - docs/CONVENTIONS.md : Conventions de code
 - docs/EXTENDING.md : Guide d'extension
+- docs/SPEC_IMPORT_GPX.md : Spécification du module GPX
 
 Principes :
 - Composition API uniquement
 - Setup stores pattern pour Pinia
 - TypeScript strict
+- Commandes Tauri comme seule passerelle d'E/S disque
 - Pas de linting (environnement minimal)
 ```
 
@@ -344,6 +351,6 @@ R : Oui ! "Ajoute cette convention à docs/CONVENTIONS.md"
 
 ---
 
-**Note** : Cette documentation évoluera avec le projet. N'hésitez pas à l'améliorer en fonction de votre expérience avec Claude Code.
+**Note** : Cette documentation évoluera avec le projet. N'hésitez pas à l'améliorer en fonction de votre expérience.
 
-**Dernière mise à jour** : 2026-03-24
+**Dernière mise à jour** : 2026-07-10

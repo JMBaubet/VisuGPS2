@@ -542,7 +542,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 
 // 3. Imports Tauri
-import { invoke } from '@tauri-apps/api/tauri'
+import { invoke } from '@tauri-apps/api/core'
 
 // 4. Imports locaux
 import MyComponent from '@/components/MyComponent.vue'

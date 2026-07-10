@@ -2,6 +2,7 @@ mod display;
 #[allow(non_snake_case)]
 mod gestionMode;
 mod settings;
+mod import_gpx;
 
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;
@@ -15,6 +16,7 @@ fn exit_app(app_handle: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Initialisation du système de paramètres
             let settings_state = settings::init_settings_state(app.handle())
@@ -39,7 +41,11 @@ pub fn run() {
             settings::get_settings,
             settings::update_setting,
             settings::reset_setting,
-            settings::get_setting_value
+            settings::get_setting_value,
+            import_gpx::import_gpx_file,
+            import_gpx::get_traces,
+            import_gpx::delete_trace,
+            import_gpx::update_trace
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

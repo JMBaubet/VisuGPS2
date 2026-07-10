@@ -54,7 +54,12 @@ VisuGPS2/
 │   │   └── index.ts          # Routes (Accueil, Visualisation, EditionCamera, ScreenBis)
 │   ├── stores/
 │   │   ├── index.ts          # Configuration Pinia
-│   │   └── app.ts            # Store app (thème, displays, loadDisplays)
+│   │   ├── app.ts            # Store applicatif (thème, displays, modes d'exécution)
+│   │   ├── settings.ts       # Store des paramètres de configuration
+│   │   ├── traces.ts         # Store des traces GPX importées
+│   │   └── ui.ts             # Store des notifications (snackbar)
+│   ├── utils/
+│   │   └── format.ts         # Helpers de formatage (distance, élévation, durée)
 │   ├── plugins/
 │   │   └── vuetify.ts        # Configuration Vuetify
 │   ├── views/                # Pages de l'application
@@ -63,28 +68,33 @@ VisuGPS2/
 │   │   ├── EditionCamera.vue # Page caméra
 │   │   └── Visualisation.vue # Page visualisation
 │   ├── components/           # Composants réutilisables
+│   │   ├── Accueil/          # Composants de la page d'accueil
+│   │   └── parameters/       # Composants d'édition des paramètres
 │   ├── assets/               # Images, styles
 │   ├── App.vue              # Layout racine (détection multi-fenêtres)
 │   └── main.ts              # Point d'entrée
 │
 ├── src-tauri/                # Code Rust (Tauri 2.x)
 │   ├── src/
-│   │   ├── lib.rs            # Point d'entrée, open_second_window, run()
+│   │   ├── lib.rs            # Point d'entrée, orchestration, run()
 │   │   ├── display.rs        # Détection écrans (MonitorInfo, get_displays)
-│   │   └── main.rs           # Auto-généré
+│   │   ├── gestionMode.rs   # Gestion modes d'exécution (CRUD, .env)
+│   │   ├── settings.rs       # Paramètres de configuration (TOML, secrets)
+│   │   ├── import_gpx.rs     # Import de fichiers GPX (parsing, stats, registre)
+│   │   └── main.rs           # Auto-généré (délègue à lib.rs)
 │   ├── capabilities/
 │   │   └── default.json      # Permissions fenêtres (main, screen-bis)
+│   ├── settings.default.toml # Paramètres par défaut (embarqué)
 │   ├── icons/                # Icônes application
-│   ├── Cargo.toml            # Dépendances Rust (objc2, windows, etc.)
+│   ├── Cargo.toml            # Dépendances Rust
 │   └── tauri.conf.json       # Config Tauri (windows, build, security)
 │
 ├── docs/                     # Documentation
 │   ├── CONTEXT.md           # Ce fichier
-│   └── ARCHITECTURE.md       # Architecture détaillée
-│
-├── .claude/                  # Configuration Claude Code
-│   └── worktrees/            # Branches de travail isolées
-│       └── condescending-feistel/  # Branche de développement
+│   ├── ARCHITECTURE.md       # Architecture détaillée
+│   ├── EXTENDING.md         # Guide d'extension
+│   ├── SPEC_IMPORT_GPX.md   # Spécification module import GPX
+│   └── …
 │
 ├── Configuration
 │   ├── vite.config.ts       # Configuration Vite (allowedHosts)
@@ -200,10 +210,33 @@ const displays = await invoke<MonitorInfo[]>('get_displays')
 await invoke('open_second_window')
 ```
 
-**Commandes disponibles** :
+**Commandes disponibles** (voir [COMMANDS.md](./COMMANDS.md) pour la référence complète avec signatures) :
+
+**Application & affichage** :
+- `exit_app()` : Quitte proprement l'application depuis le backend Rust
 - `get_displays()` : Retourne la liste des écrans (MonitorInfo[])
-- `open_second_window()` : Ouvre la fenêtre ScreenBis sur l'écran opposé
-- `exit_app()` : Ferme et quitte proprement l'application depuis le backend Rust
+- `open_second_window()` : Ouvre la fenêtre ScreenBis sur l'écran secondaire
+- `close_second_window()` : Ferme la fenêtre ScreenBis
+
+**Modes d'exécution** :
+- `get_execution_env()` : Retourne les infos d'environnement (is_dev, active_mode_dev, active_mode_prod)
+- `get_modes()` : Retourne la liste des modes d'exécution (ModeInfo[])
+- `create_mode(nom, descrition)` : Crée un nouveau mode d'exécution
+- `update_mode(old_nom, new_nom, descrition)` : Modifie un mode existant
+- `delete_mode(nom)` : Supprime un mode d'exécution
+- `select_mode(nom)` : Change le mode actif (redémarre l'app)
+
+**Paramètres** :
+- `get_settings()` : Retourne les paramètres fusionnés (défaut + surcharges, secrets masqués)
+- `update_setting(path, value)` : Met à jour un paramètre (chiffre les secrets)
+- `reset_setting(path)` : Rétablit un paramètre à sa valeur par défaut
+- `get_setting_value(path)` : Retourne la valeur effective d'un paramètre (déchiffrée pour les secrets)
+
+**Traces GPX** :
+- `import_gpx_file()` : Importe un fichier GPX via le sélecteur natif (retourne TraceMetadata)
+- `get_traces()` : Retourne la liste des traces importées pour le mode actif
+- `delete_trace(traceId)` : Supprime une trace (fichier GPX + entrée du registre)
+- `update_trace(traceId, favorite?, isDisplayed?)` : Met à jour partiellement une trace (PATCH)
 
 ### 5. Communication inter-fenêtres
 
@@ -250,25 +283,34 @@ Si vous modifiez les scripts :
 
 ⚠️ **Important** : Maintenir la compatibilité macOS/Windows (bash + PowerShell)
 
-## Application exemple
-
-L'application générée par `setup.sh` contient :
+## Application VisuGPS2
 
 ### Pages
-- **Home** (`/`) : Page d'accueil avec liste des technologies
-- **About** (`/about`) : Page à propos avec infos sur le template
+- **Accueil** (`/`) : Fenêtre principale — drawer gauche (liste circuits), carte Mapbox, drawer droit (paramètres)
+- **ScreenBis** (`/screen-bis`) : Fenêtre secondaire pour le dual-screen
+- **Visualisation** (`/visualisation`) : Stub (toolbar Home uniquement, vue réservée à la visualisation 3D)
+- **EditionCamera** (`/edition-camera`) : Stub (toolbar Home uniquement, vue réservée à l'édition caméra)
 
 ### Fonctionnalités
-- Navigation drawer (menu hamburger)
-- Toggle thème dark/light (via store Pinia)
-- App bar avec titre
-- Routing fonctionnel
+- Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
+- Carte Mapbox GL (token via paramètre `Systeme.Key.mapBox`)
+- Toggle thème dark/light (synchronisé entre fenêtres)
+- Gestion des modes d'exécution (OPE / EVAL_*)
+- Système de paramètres TOML avec chiffrement des secrets
+- Détection multi-écrans et placement automatique
 
 ### Store exemple
-`src/stores/app.ts` gère le thème :
+`src/stores/app.ts` gère le thème et l'environnement d'exécution :
 - `isDarkMode` : état du thème
 - `theme` : computed qui retourne 'dark' ou 'light'
 - `toggleDarkMode()` : action pour basculer
+- `displays` : liste des écrans détectés
+- `isDev`, `activeMode`, `modes` : environnement et modes d'exécution
+
+Autres stores existants :
+- `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
+- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store)
+- `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 
 ## Variables d'environnement
 
@@ -308,10 +350,12 @@ const appName = import.meta.env.VITE_APP_NAME
 
 ### Ajouter une commande Tauri
 
-1. Modifier `src-tauri/src/main.rs`
+1. Créer un module dans `src-tauri/src/` (ou ajouter la commande dans un module existant)
 2. Définir `#[tauri::command]`
-3. Ajouter dans `.invoke_handler()`
-4. Appeler avec `invoke()` côté frontend
+3. Enregistrer le module dans `src-tauri/src/lib.rs` (`mod mon_module;`)
+4. Ajouter la commande dans `.invoke_handler()` de `lib.rs`
+5. Appeler avec `invoke()` côté frontend
+6. Si la commande utilise un plugin, l'ajouter via `.plugin(...)` dans `lib.rs` et la permission dans `capabilities/default.json`
 
 ## Configuration Tauri
 
@@ -469,22 +513,80 @@ pub fn get_all_monitors() -> Vec<MonitorInfo> { ... }
 pub fn get_displays(window: tauri::Window) -> Vec<MonitorInfo> { ... }
 ```
 
+**gestionMode.rs - Gestion des modes d'exécution**
+```rust
+pub struct ModeInfo { nom, descrition, création, révision }
+pub fn read_active_mode(app_data_dir: &Path, is_dev: bool) -> String { ... }
+#[tauri::command]
+pub async fn get_execution_env(app: AppHandle) -> Result<ExecutionEnv, String> { ... }
+#[tauri::command]
+pub async fn get_modes(app: AppHandle) -> Result<Vec<ModeInfo>, String> { ... }
+// + create_mode, update_mode, delete_mode, select_mode
+```
+
+**settings.rs - Paramètres de configuration**
+```rust
+pub struct SettingDefinition { path, description, documentation, type, default, value, … }
+pub fn init_settings_state(app_handle: &AppHandle) -> Result<Arc<RwLock<SettingsState>>, String> { ... }
+#[tauri::command]
+pub async fn get_settings(app: AppHandle) -> Result<Vec<SettingDefinition>, String> { ... }
+// + update_setting, reset_setting, get_setting_value
+```
+
+**import_gpx.rs - Import de traces GPX**
+```rust
+pub struct Point3D { lat, lon, alt }
+pub struct TraceStats { start_point, end_point, distance_m, positive_elevation_m, … }
+pub struct TraceMetadata {
+    id, name, source, source_url, activity_type, filename, import_date, stats, hash,
+    favorite,        // favori (persisté, #[serde(default)])
+    is_displayed,    // affichage carte (persisté, #[serde(default)])
+}
+#[tauri::command]
+pub async fn import_gpx_file(app: AppHandle) -> Result<TraceMetadata, String> { ... }
+#[tauri::command]
+pub async fn get_traces(app: AppHandle) -> Result<Vec<TraceMetadata>, String> { ... }
+#[tauri::command]
+pub async fn delete_trace(app: AppHandle, trace_id: String) -> Result<(), String> { ... }
+#[tauri::command]
+pub async fn update_trace(
+    app: AppHandle, trace_id: String,
+    favorite: Option<bool>, is_displayed: Option<bool>,
+) -> Result<(), String> { ... }
+```
+
 **lib.rs - Orchestration principale**
 ```rust
 mod display;
-use display::get_displays;
+mod gestionMode;
+mod settings;
+mod import_gpx;
 
-#[tauri::command]
-async fn open_second_window(app: AppHandle) -> Result<(), String> { ... }
-
-pub fn run() { ... }
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| { /* init settings + display */ })
+        .invoke_handler(tauri::generate_handler![/* toutes les commandes */])
+        .run(tauri::generate_context!())
+}
 ```
 
 **Dépendances Rust** :
 - `objc2` + `objc2-app-kit` + `objc2-foundation` : Accès NSScreen sur macOS
 - `windows` : Win32 API (GetForegroundWindow, GetMonitorInfo)
 - `tauri` : APIs principales (Manager, invoke_handler, generate_handler)
-- `serde` : Sérialisation MonitorInfo
+- `tauri-plugin-dialog` : Sélecteur de fichiers natif (Tauri 2.x)
+- `tauri-plugin-opener` : Ouverture de liens dans le navigateur
+- `serde` + `serde_json` : Sérialisation
+- `toml` : Lecture/écriture des fichiers de configuration
+- `chrono` : Dates et heures
+- `gpx` : Parsing des fichiers GPX
+- `geo` : Calculs géodésiques (Haversine)
+- `sha2` + `hex` : Empreintes SHA256 (anti-doublon)
+- `uuid` : Identifiants uniques
+- `keyring` + `aes-gcm` : Chiffrement des secrets
+- `dotenvy` : Variables d'environnement
 
 ### Gestion Dynamique des Modes d'Exécution
 
@@ -501,7 +603,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-05-26
+**Dernière mise à jour** : 2026-07-10
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox

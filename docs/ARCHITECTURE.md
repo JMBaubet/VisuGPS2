@@ -78,8 +78,10 @@ if (currentWindow.label === 'screen-bis') {
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', name: 'home', component: Home },
-    { path: '/about', name: 'about', component: About }
+    { path: '/', name: 'accueil', component: Accueil },
+    { path: '/visualisation', name: 'visualisation', component: Visualisation },
+    { path: '/edition-camera', name: 'editionCamera', component: EditionCamera },
+    { path: '/screen-bis', name: 'screenBis', component: ScreenBis }
   ]
 })
 ```
@@ -87,7 +89,7 @@ const router = createRouter({
 **Stratégie de routing** :
 - `createWebHistory()` : URLs propres sans `#`
 - Navigation par `name` recommandée (plus stable que `path`)
-- Lazy loading pour les routes non-critiques
+- 4 routes : `accueil`, `visualisation`, `editionCamera`, `screenBis`
 
 **Ajout de routes** :
 ```typescript
@@ -200,28 +202,33 @@ Build: Vite Build → dist/ → Tauri Build → Executable
 
 ## Couche Desktop (Tauri)
 
-### Configuration : `src-tauri/tauri.conf.json`
+### Configuration : `src-tauri/tauri.conf.json` (Tauri v2)
 
 ```json
 {
   "build": {
-    "beforeDevCommand": "npm run dev",       // Lance Vite en dev
-    "beforeBuildCommand": "npm run build",   // Build Vite avant Tauri
-    "devPath": "http://localhost:1420",      // URL du dev server
-    "distDir": "../dist"                     // Dossier de build
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
   },
-  "tauri": {
-    "allowlist": {
-      "all": false  // Sécurité : tout désactivé par défaut
-    },
-    "windows": [{
-      "title": "Mon Application",
-      "width": 800,
-      "height": 600
-    }]
+  "app": {
+    "windows": [
+      { "label": "main", "title": "VisuGPS2", "width": 800, "height": 600, "resizable": false, "maximizable": false, "closable": false },
+      { "label": "screen-bis", "width": 8, "height": 6, "visible": false, "closable": false }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "resources": ["settings.default.toml"]
   }
 }
 ```
+
+**Spécificités Tauri v2** :
+- `devUrl`/`frontendDist` (et non `devPath`/`distDir` comme en v1)
+- Section `app` (et non `tauri`)
+- Permissions gérées via `capabilities/default.json` (et non `allowlist`)
 
 ### Backend Rust : `src-tauri/src/lib.rs`
 
@@ -239,8 +246,12 @@ async fn open_second_window(app: tauri::AppHandle) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            get_displays, open_second_window
+            // 18 commandes : voir COMMANDS.md pour le catalogue complet
+            exit_app, get_displays, open_second_window, close_second_window,
+            gestionMode::*, settings::*, import_gpx::*
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -253,6 +264,9 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 
 - `lib.rs` : Point d'entrée, orchestration, commandes de fenêtres
 - `display.rs` : Détection des écrans (macOS NSScreen, Windows Tauri)
+- `gestionMode.rs` : Gestion des modes d'exécution (CRUD, sélection, fichier `.env`)
+- `settings.rs` : Système de paramètres de configuration (TOML, chiffrement des secrets)
+- `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces)
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -310,14 +324,28 @@ src/
 │   └── index.ts
 ├── stores/           # Stores Pinia (state management)
 │   ├── index.ts      # Configuration
-│   └── app.ts        # Store exemple
+│   ├── app.ts        # Store applicatif (thème, displays, modes d'exécution)
+│   ├── settings.ts   # Store des paramètres de configuration
+│   ├── traces.ts     # Store des traces GPX importées
+│   └── ui.ts         # Store des notifications (snackbar)
+├── utils/            # Fonctions utilitaires
+│   └── format.ts     # Helpers de formatage (distance, élévation, durée)
 ├── plugins/          # Plugins Vue (Vuetify, etc.)
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
 │   ├── Home.vue
 │   └── About.vue
 ├── components/       # Composants réutilisables
-│   └── (vide au départ)
+│   ├── Accueil/      # Composants de la page d'accueil
+│   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits
+│   │   ├── Circuit.vue          # Carte d'un circuit
+│   │   ├── AppBar.vue
+│   │   ├── ModeExecutionCard.vue
+│   │   └── SettingsDrawer.vue
+│   └── parameters/   # Composants d'édition des paramètres
+│       ├── ParameterCard.vue
+│       ├── InputBool.vue
+│       └── …
 ├── assets/           # Ressources statiques
 │   └── styles/
 ├── App.vue          # Layout racine
@@ -335,24 +363,36 @@ src/
 ```
 src-tauri/
 ├── src/
-│   ├── lib.rs        # Point d'entrée + orchestration
-│   ├── display.rs    # Détection et gestion des écrans
-│   └── main.rs       # Point d'entrée (auto-généré)
+│   ├── lib.rs            # Point d'entrée + orchestration
+│   ├── display.rs        # Détection et gestion des écrans
+│   ├── gestionMode.rs    # Gestion des modes d'exécution
+│   ├── settings.rs       # Système de paramètres de configuration
+│   ├── import_gpx.rs     # Import de fichiers GPX
+│   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
-│   └── default.json  # Permissions pour les fenêtres
-├── icons/            # Icônes de l'application
+│   │   └── default.json  # Permissions pour les fenêtres
+├── icons/                # Icônes de l'application
 │   ├── icon.png
 │   └── ...
-├── Cargo.toml        # Dépendances Rust
-└── tauri.conf.json   # Configuration Tauri
+├── settings.default.toml # Paramètres par défaut (embarqué)
+├── Cargo.toml            # Dépendances Rust
+└── tauri.conf.json       # Configuration Tauri
 ```
 
 **Modules Rust** :
-- `lib.rs` : Orchestration principale, commandes Tauri publiques
+- `lib.rs` : Orchestration principale, commandes Tauri publiques, plugins
 - `display.rs` : Détection des moniteurs (macOS NSScreen, Windows Tauri API)
+- `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
+- `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
+- `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
 
 **Capacités Tauri** :
-- `default.json` : Permissions appliquées aux fenêtres (main et screen-bis)
+- `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
+  - `core:default` : permissions de base
+  - `opener:default` : ouverture de liens dans le navigateur
+  - `dialog:allow-open` : sélecteur de fichiers natif (import GPX)
+
+> Note : Tauri v2 utilise le système de **capabilities** (et non l'`allowlist` de v1). Aucune permission `fs:` n'est déclarée : l'accès disque se fait via `std::fs` côté Rust.
 
 ## Flux de données
 
@@ -462,30 +502,29 @@ Vue 3 avec Proxy :
 
 ## Sécurité
 
-### 1. Tauri Allowlist
+### 1. Capabilities Tauri v2
+
+Le système de capabilities remplace l'`allowlist` de Tauri v1. Déclaré dans `src-tauri/capabilities/default.json` :
 
 ```json
-"allowlist": {
-  "all": false,  // Tout désactivé par défaut
-  "fs": {
-    "all": false,
-    "readFile": true  // Activer seulement ce qui est nécessaire
-  }
+{
+  "permissions": ["core:default", "opener:default", "dialog:allow-open"]
 }
 ```
+
+Seules les permissions strictement nécessaires sont activées. Aucun accès disque direct côté frontend (`fs` non déclaré) : tout passe par les commandes Tauri.
 
 ### 2. Content Security Policy
 
-Configuré dans `tauri.conf.json` :
-```json
-"security": {
-  "csp": "default-src 'self'; script-src 'self'"
-}
-```
+Configuré dans `tauri.conf.json` : `"csp": null` (désactivé — acceptable pour une app desktop sans contenu distant).
 
-### 3. Variables d'environnement
+### 3. Chiffrement des secrets
 
-- Seules les variables `VITE_*` sont exposées au frontend
+Les paramètres de type `secret` sont chiffrés en **AES-256-GCM** avant écriture disque (clé keyring OS en prod, statique en dev). Voir [DATA_STORAGE.md](./DATA_STORAGE.md).
+
+### 4. Variables d'environnement
+
+- Seules les variables `VITE_*` / `TAURI_*` sont exposées au frontend (`envPrefix` dans `vite.config.ts`)
 - Variables sensibles uniquement côté Rust
 - Pas de secrets dans le code frontend
 
@@ -642,6 +681,61 @@ L'application intègre un système robuste de gestion des paramètres de configu
    - Un composant spécifique ([SettingsEditMonitor.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsEditMonitor.vue)) gère la configuration combinée des écrans principal et secondaire.
    - Le menu des paramètres s'affiche dans un panneau latéral ([SettingsDrawer.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsDrawer.vue)).
 
+## Import de traces GPX
+
+L'application permet d'importer des fichiers GPX provenant de plateformes comme Garmin Connect, Strava, OpenRunner ou RideWithGPS.
+
+### Architecture du module GPX
+
+1. **Backend Rust** (`src-tauri/src/import_gpx.rs`) :
+   - Le sélecteur de fichier natif est ouvert via le plugin `tauri-plugin-dialog` (pas d'API Tauri 1.x).
+   - Le parsing utilise le crate `gpx` (version 0.10) et les calculs géodésiques le crate `geo` (Haversine).
+   - Les données sont stockées dans le **dossier du mode d'exécution actif** : `{app_data_dir}/{active_mode}/gpx/` pour les fichiers et `{app_data_dir}/{active_mode}/traces.json` pour le registre.
+   - Le registre est sauvegardé avec une **écriture atomique** (fichier `.tmp` + `rename`).
+   - Les doublons sont détectés par **empreinte SHA256** du contenu binaire.
+
+2. **Détection heuristique de l'éditeur** :
+   - Priorité : `<link href>` → `creator` → nom de track → signature XML → "Inconnu".
+   - Éditeurs reconnus : Strava, Garmin Connect, OpenRunner, RideWithGPS.
+
+3. **Store Frontend** (`src/stores/traces.ts`) :
+   - Pattern Setup Store (comme `app.ts` et `settings.ts`).
+   - Actions `loadTraces()` et `importerGpx()` passent par des commandes Tauri (le frontend ne connaît pas le mode actif).
+   - Types `TraceMetadata`, `TraceStats`, `Point3D` en miroir exact des structs Rust.
+
+4. **Composants Vue** :
+   - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store.
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé, durée) au lieu de données en dur.
+
+5. **Notifications** (`src/stores/ui.ts`) :
+   - Store mutualisé pour les snackbars Vuetify (succès, erreur, avertissement, info).
+
+### Stockage par mode d'exécution
+
+```
+{app_data_dir}/
+├── .env                     # Mode actif (APP_ENV_DEV / APP_ENV_PROD)
+├── ModeExe.toml             # Définition des modes
+└── {active_mode}/           # Ex : OPE, EVAL_essai
+    ├── gpx/                 # Fichiers .gpx copiés (nom unique si doublon)
+    ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
+    ├── config-dev.toml      # Surcharges de paramètres (dev)
+    └── config.toml          # Surcharges de paramètres (prod)
+```
+
+### Commandes Tauri du module GPX
+
+| Commande | Description |
+|----------|-------------|
+| `import_gpx_file` | Ouvre le sélecteur natif, parse le GPX, copie le fichier, met à jour le registre. Retourne `TraceMetadata`. |
+| `get_traces` | Retourne `Vec<TraceMetadata>` pour le mode d'exécution actif. |
+| `delete_trace` | Supprime le fichier GPX + l'entrée du registre (écriture atomique). |
+| `update_trace` | Mise à jour partielle (PATCH) d'une trace : `favorite` et/ou `is_displayed` (persistés). |
+
+> Référence complète des 18 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
+
+**Dernière mise à jour** : 2026-07-10
