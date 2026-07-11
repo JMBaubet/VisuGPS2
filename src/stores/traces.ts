@@ -10,6 +10,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { haversineMeters } from '../utils/geo'
 
 // --- Types (miroir exact des structs Rust import_gpx.rs, snake_case) ---
 
@@ -65,9 +66,27 @@ export const useTracesStore = defineStore('traces', () => {
   // État réactif
   const traces = ref<TraceMetadata[]>([])
   const loading = ref(false)
+  /** Centre courant de la carte (mis à jour par Map.vue sur moveend). */
+  const mapCenter = ref<{ lat: number; lon: number }>({ lat: 43.7, lon: 2.0 })
 
   // Getters
   const traceCount = computed(() => traces.value.length)
+
+  /** Traces triées par distance croissante au centre courant de la carte. */
+  const sortedTracesByDistance = computed(() =>
+    [...traces.value]
+      .map(t => ({
+        trace: t,
+        distance: haversineMeters(
+          mapCenter.value.lat,
+          mapCenter.value.lon,
+          t.stats.start_point.lat,
+          t.stats.start_point.lon,
+        ),
+      }))
+      .sort((a, b) => a.distance - b.distance)
+      .map(entry => entry.trace),
+  )
 
   /**
    * Charge la liste des traces depuis le backend.
@@ -141,17 +160,28 @@ export const useTracesStore = defineStore('traces', () => {
     }
   }
 
+  /**
+   * Met à jour le centre de la carte.
+   * Appelé par Map.vue sur moveend pour synchroniser le tri par distance.
+   */
+  function updateMapCenter(lat: number, lon: number) {
+    mapCenter.value = { lat, lon }
+  }
+
   // Exposition publique
   return {
     // État
     traces,
     loading,
+    mapCenter,
     // Getters
     traceCount,
+    sortedTracesByDistance,
     // Actions
     loadTraces,
     importerGpx,
     supprimerTrace,
     updateTrace,
+    updateMapCenter,
   }
 })

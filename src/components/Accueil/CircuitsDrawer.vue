@@ -142,7 +142,7 @@ onMounted(() => {
     <!-- Liste des traces importées -->
     <v-list-item class="pt-4 px-0">
       <Circuit
-        v-for="trace in tracesStore.traces"
+        v-for="trace in tracesStore.sortedTracesByDistance"
         :key="trace.id"
         :trace="trace"
         @delete="confirmerSuppression"
