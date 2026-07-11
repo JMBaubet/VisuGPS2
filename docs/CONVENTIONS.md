@@ -531,6 +531,20 @@ async function fetchUser(userId: string): Promise<User> {
 
 ## Import et Export
 
+### Utilitaires (`src/utils/`)
+
+Les fonctions utilitaires sont regroupées dans `src/utils/` par thème. Chaque fichier exporte des **fonctions nommées** (pas d'objets littéraux de type `Service`, pas de classes).
+
+Fichiers existants :
+- `format.ts` : formatage d'affichage (`formatDistance`, `formatElevation`, `formatDuration`, `formatCoordinate`, `formatAltitude`)
+- `geo.ts` : calculs géographiques (`toRadians`, `haversineMeters`)
+
+**Règles** :
+- Named exports uniquement (pas de `export default`)
+- Fonctions pures (pas d'effets de bord ni de dépendance à l'état global)
+- Typage strict : paramètres et retours typés, JSDoc pour les fonctions publiques
+- Imports relatifs depuis le consommateur (pas d'alias `@/`)
+
 ### Ordre des imports
 
 ```typescript
@@ -539,17 +553,23 @@ import { ref, computed, onMounted } from 'vue'
 
 // 2. Imports Vue Router / Pinia
 import { useRouter } from 'vue-router'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '../stores/user'
 
 // 3. Imports Tauri
 import { invoke } from '@tauri-apps/api/core'
 
-// 4. Imports locaux
-import MyComponent from '@/components/MyComponent.vue'
-import { helper } from '@/utils/helpers'
+// 4. Imports tiers (mapbox-gl, etc.)
+import mapboxgl from 'mapbox-gl'
 
-// 5. Imports types
-import type { User } from '@/types'
+// 5. Imports locaux : composants
+import MyComponent from '../components/MyComponent.vue'
+
+// 6. Imports locaux : utilitaires
+import { helper } from '../utils/helpers'
+import { haversineMeters } from '../utils/geo'
+
+// 7. Imports types
+import type { User } from '../stores/user'
 ```
 
 ### Exports

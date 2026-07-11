@@ -150,6 +150,8 @@ Mettre à jour la documentation quand :
 - ✅ Ajout d'une nouvelle commande Tauri → mettre à jour **COMMANDS.md**
 - ✅ Modification du stockage disque → mettre à jour **DATA_STORAGE.md**
 - ✅ Modification de l'architecture ou de la structure des fichiers → **ARCHITECTURE.md**
+- ✅ Ajout de couches Mapbox (clustering, sources, popups) → **ARCHITECTURE.md**
+- ✅ Ajout d'un utilitaire dans `src/utils/` → **CONVENTIONS.md** + **EXTENDING.md**
 - ✅ Ajout d'une convention ou d'un pattern important → **CONVENTIONS.md**
 - ✅ Nouvelle dépendance majeure ou nouvelle fonctionnalité → **CONTEXT.md**
 
@@ -176,6 +178,6 @@ Material Design mature, composants riches, documentation excellente, grande comm
 
 ---
 
-**Dernière mise à jour** : 2026-07-10
+**Dernière mise à jour** : 2026-07-11
 **Version de l'application** : 0.0.1
 **Status** : En développement actif

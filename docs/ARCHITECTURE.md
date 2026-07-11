@@ -328,8 +328,9 @@ src/
 │   ├── settings.ts   # Store des paramètres de configuration
 │   ├── traces.ts     # Store des traces GPX importées
 │   └── ui.ts         # Store des notifications (snackbar)
-├── utils/            # Fonctions utilitaires
-│   └── format.ts     # Helpers de formatage (distance, élévation, durée)
+├── utils/            # Fonctions utilitaires (named exports)
+│   ├── format.ts     # Helpers de formatage (distance, élévation, durée)
+│   └── geo.ts        # Utilitaires géographiques (Haversine, tri par distance)
 ├── plugins/          # Plugins Vue (Vuetify, etc.)
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
@@ -337,8 +338,9 @@ src/
 │   └── About.vue
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
-│   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits
+│   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits (triée par distance)
 │   │   ├── Circuit.vue          # Carte d'un circuit
+│   │   ├── Map.vue              # Carte Mapbox GL (clusters de points de départ)
 │   │   ├── AppBar.vue
 │   │   ├── ModeExecutionCard.vue
 │   │   └── SettingsDrawer.vue
@@ -425,6 +427,17 @@ Frontend appelle invoke()
   → Rust traite et retourne
   → Tauri désérialise le résultat
   → Frontend reçoit le résultat
+```
+
+### 4. Synchronisation carte ↔ liste (clustering)
+
+```
+Utilisateur déplace/zoome la carte
+  → Map.vue : événement moveend (debounce 150 ms)
+  → tracesStore.updateMapCenter(lat, lng)
+  → Invalidation du getter computed sortedTracesByDistance
+  → CircuitsDrawer.vue : la v-for se réordonne automatiquement
+  → L'utilisateur voit la liste se réorganiser par distance croissante
 ```
 
 ## Patterns architecturaux
@@ -702,10 +715,24 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
    - Pattern Setup Store (comme `app.ts` et `settings.ts`).
    - Actions `loadTraces()` et `importerGpx()` passent par des commandes Tauri (le frontend ne connaît pas le mode actif).
    - Types `TraceMetadata`, `TraceStats`, `Point3D` en miroir exact des structs Rust.
+   - Getter `sortedTracesByDistance` : trie les traces par distance Haversine croissante au centre courant de la carte (`mapCenter`).
+   - Action `updateMapCenter(lat, lon)` : appelée par `Map.vue` sur `moveend` (debounce) pour synchroniser le tri.
 
 4. **Composants Vue** :
-   - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store.
+   - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, triée par distance (`sortedTracesByDistance`).
    - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé, durée) au lieu de données en dur.
+
+5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
+   - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).
+   - **Source GeoJSON clusterisée** : toutes les traces importées, coordonnées `[lon, lat]`, `cluster: true`, `clusterRadius: 50`, `clusterMaxZoom: 14`.
+   - **3 couches** : `clusters` (cercles colorés par paliers de point_count), `cluster-count` (symbole texte), `unclustered-point` (cercle bleu).
+   - **Synchronisation carte ↔ store** : `moveend` (debounce 150 ms) → `tracesStore.updateMapCenter()` → invalidation du getter `sortedTracesByDistance` → réordonnancement de la liste.
+   - **Interactions** : clic cluster → `easeTo` vers le centre au zoom d'expansion ; clic point → popup (nom, source, coordonnées) ; curseur `pointer` au survol.
+   - **Réactivité** : `watch(traces)` → `setData()` sur la source GeoJSON pour suivre imports/suppressions.
+
+6. **Utilitaire géographique** (`src/utils/geo.ts`) :
+   - Fonctions nommées exportées (pattern `format.ts`) : `toRadians()`, `haversineMeters()`.
+   - R = 6 371 000 m (cohérent avec le backend Rust `import_gpx.rs`).
 
 5. **Notifications** (`src/stores/ui.ts`) :
    - Store mutualisé pour les snackbars Vuetify (succès, erreur, avertissement, info).
@@ -738,4 +765,4 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-07-10
+**Dernière mise à jour** : 2026-07-11

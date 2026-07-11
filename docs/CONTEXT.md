@@ -59,7 +59,8 @@ VisuGPS2/
 │   │   ├── traces.ts         # Store des traces GPX importées
 │   │   └── ui.ts             # Store des notifications (snackbar)
 │   ├── utils/
-│   │   └── format.ts         # Helpers de formatage (distance, élévation, durée)
+│   │   ├── format.ts         # Helpers de formatage (distance, élévation, durée)
+│   │   └── geo.ts            # Utilitaires géographiques (Haversine, tri par distance)
 │   ├── plugins/
 │   │   └── vuetify.ts        # Configuration Vuetify
 │   ├── views/                # Pages de l'application
@@ -286,14 +287,16 @@ Si vous modifiez les scripts :
 ## Application VisuGPS2
 
 ### Pages
-- **Accueil** (`/`) : Fenêtre principale — drawer gauche (liste circuits), carte Mapbox, drawer droit (paramètres)
+- **Accueil** (`/`) : Fenêtre principale — drawer gauche (liste circuits triée par distance au centre de la carte), carte Mapbox (clusters de points de départ, popups), drawer droit (paramètres)
 - **ScreenBis** (`/screen-bis`) : Fenêtre secondaire pour le dual-screen
 - **Visualisation** (`/visualisation`) : Stub (toolbar Home uniquement, vue réservée à la visualisation 3D)
 - **EditionCamera** (`/edition-camera`) : Stub (toolbar Home uniquement, vue réservée à l'édition caméra)
 
 ### Fonctionnalités
 - Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
-- Carte Mapbox GL (token via paramètre `Systeme.Key.mapBox`)
+- Carte Mapbox GL avec **clustering** des points de départ (token via paramètre `Systeme.Key.mapBox`)
+- **Synchronisation carte ↔ liste** : la liste des circuits est triée par distance au centre courant de la carte (Haversine), recalculée en temps réel sur `moveend` (debounce 150 ms)
+- Clic sur un cluster → zoom d'expansion ; clic sur un point → popup (nom, source, coordonnées)
 - Toggle thème dark/light (synchronisé entre fenêtres)
 - Gestion des modes d'exécution (OPE / EVAL_*)
 - Système de paramètres TOML avec chiffrement des secrets
@@ -309,7 +312,7 @@ Si vous modifiez les scripts :
 
 Autres stores existants :
 - `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
-- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store)
+- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`.
 - `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 
 ## Variables d'environnement
@@ -603,7 +606,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-07-10
+**Dernière mise à jour** : 2026-07-11
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, synchronisation liste triée par distance)
