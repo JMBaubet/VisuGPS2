@@ -42,6 +42,7 @@ L'IA va lire le fichier de contexte et comprendre :
 | Écrire du code | `docs/CONVENTIONS.md` | "Respecte docs/CONVENTIONS.md" |
 | Ajouter une fonctionnalité | `docs/EXTENDING.md` | "Consulte docs/EXTENDING.md pour ajouter [fonctionnalité]" |
 | Module GPX | `docs/SPEC_IMPORT_GPX.md` | "Lis docs/SPEC_IMPORT_GPX.md" |
+| Affichage traces/favoris sur carte | `docs/SPEC_AFFICHAGE_TRACES.md` | "Lis docs/SPEC_AFFICHAGE_TRACES.md (spécification à implémenter)" |
 
 ## 💬 Exemples de prompts efficaces
 
@@ -245,6 +246,7 @@ Documentation de référence :
 - docs/CONVENTIONS.md : Conventions de code
 - docs/EXTENDING.md : Guide d'extension
 - docs/SPEC_IMPORT_GPX.md : Spécification du module GPX
+- docs/SPEC_AFFICHAGE_TRACES.md : Spécification favoris & affichage carte (à implémenter)
 
 Principes :
 - Composition API uniquement
@@ -353,4 +355,4 @@ R : Oui ! "Ajoute cette convention à docs/CONVENTIONS.md"
 
 **Note** : Cette documentation évoluera avec le projet. N'hésitez pas à l'améliorer en fonction de votre expérience.
 
-**Dernière mise à jour** : 2026-07-10
+**Dernière mise à jour** : 2026-07-30

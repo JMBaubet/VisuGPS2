@@ -339,8 +339,8 @@ src/
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
 │   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits (triée par distance)
-│   │   ├── Circuit.vue          # Carte d'un circuit
-│   │   ├── Map.vue              # Carte Mapbox GL (clusters de points de départ)
+│   │   ├── Circuit.vue          # Carte d'un circuit (2 lignes d'icônes d'action, extension Info, focus carte)
+│   │   ├── Map.vue              # Carte Mapbox GL (clusters, favoris, traces affichées, focus)
 │   │   ├── AppBar.vue
 │   │   ├── ModeExecutionCard.vue
 │   │   └── SettingsDrawer.vue
@@ -717,18 +717,20 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
    - Types `TraceMetadata`, `TraceStats`, `Point3D` en miroir exact des structs Rust.
    - Getter `sortedTracesByDistance` : trie les traces par distance Haversine croissante au centre courant de la carte (`mapCenter`).
    - Action `updateMapCenter(lat, lon)` : appelée par `Map.vue` sur `moveend` (debounce) pour synchroniser le tri.
+   - État `focusedTraceId` : id de la trace « focus » temporaire (clic Info dans `Circuit.vue`), observé par `Map.vue` pour isoler et cadrer la trace (cf. §5). État UI éphémère, non persisté.
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, triée par distance (`sortedTracesByDistance`).
-   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé, durée) au lieu de données en dur.
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
    - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).
-   - **Source GeoJSON clusterisée** : toutes les traces importées, coordonnées `[lon, lat]`, `cluster: true`, `clusterRadius: 50`, `clusterMaxZoom: 14`.
-   - **3 couches** : `clusters` (cercles colorés par paliers de point_count), `cluster-count` (symbole texte), `unclustered-point` (cercle bleu).
-   - **Synchronisation carte ↔ store** : `moveend` (debounce 150 ms) → `tracesStore.updateMapCenter()` → invalidation du getter `sortedTracesByDistance` → réordonnancement de la liste.
+   - **Sources GeoJSON** : `traces` (clusterisée, points de départ, `cluster: true`, `clusterRadius: 50`, `clusterMaxZoom: 14`), `favorites` (LineString favoris), `displayed-traces` (LineString dégradé, `lineMetrics: true`), `focus-traces` (LineString isolée en mode focus).
+   - **Couches** (du bas vers le haut) : `clusters` / `cluster-count` / `unclustered-point` (points de départ) ; `favorites-line` (couleur favori, épaisseur 6) ; `displayed-traces-line` (dégradé bleu→rouge, épaisseur 4) ; `focus-traces-line` (même dégradé, masquée par défaut).
+   - **Synchronisation carte ↔ store** : `moveend` (debounce 150 ms) → `tracesStore.updateMapCenter()` → invalidation du getter `sortedTracesByDistance` → réordonnancement de la liste. Pendant un focus, `moveend` **ne met pas à jour** `mapCenter` (stabilité du tri).
    - **Interactions** : clic cluster → `easeTo` vers le centre au zoom d'expansion ; clic point → popup (nom, source, coordonnées) ; curseur `pointer` au survol.
-   - **Réactivité** : `watch(traces)` → `setData()` sur la source GeoJSON pour suivre imports/suppressions.
+   - **Focus carte** : `watch(tracesStore.focusedTraceId)` → sauvegarde de la vue, masquage des couches favoris/affichées, affichage isolé de la trace dans `focus-traces-line`, cadrage par `fitBounds`, retour par `flyTo` (durée `Carte.Traces.dureeFlyTo`).
+   - **Réactivité** : `watch(traces)` → `setData()` sur les sources pour suivre imports/suppressions/bascules ; `watch(settings)` → `setPaintProperty` pour le style.
 
 6. **Utilitaire géographique** (`src/utils/geo.ts`) :
    - Fonctions nommées exportées (pattern `format.ts`) : `toRadians()`, `haversineMeters()`.
@@ -765,4 +767,4 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-07-11
+**Dernière mise à jour** : 2026-07-30

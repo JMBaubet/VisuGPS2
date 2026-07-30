@@ -106,6 +106,26 @@ function openMonitors() {
 
         <v-divider class="my-2"></v-divider>
 
+        <!-- Paramètres de la carte : favoris et traces affichées -->
+        <v-list-subheader>Carte — Favoris</v-list-subheader>
+        <v-list-item prepend-icon="mdi-map-marker-multiple-outline" title="Couleur des clusters favoris" value="carte-fav-cluster" @click="openParam('Carte.Favoris.couleurCluster')"></v-list-item>
+        <v-list-item prepend-icon="mdi-map-marker-star" title="Couleur des traces favorites" value="carte-fav-trace" @click="openParam('Carte.Favoris.couleurTrace')"></v-list-item>
+        <v-list-item prepend-icon="mdi-format-line-weight" title="Épaisseur des traces favorites" value="carte-fav-epaisseur" @click="openParam('Carte.Favoris.epaisseur')"></v-list-item>
+
+        <v-list-subheader>Carte — Clusters</v-list-subheader>
+        <v-list-item prepend-icon="mdi-format-list-numbered" title="Seuil du popup de cluster" value="carte-clusters-seuil" @click="openParam('Carte.Clusters.seuilPopupCircuits')"></v-list-item>
+
+        <v-list-subheader>Carte — Traces affichées</v-list-subheader>
+        <v-list-item prepend-icon="mdi-gradient-horizontal" title="Couleur de début du dégradé" value="carte-traces-debut" @click="openParam('Carte.Traces.couleurDebut')"></v-list-item>
+        <v-list-item prepend-icon="mdi-toggle-switch-outline" title="Couleur intermédiaire" value="carte-traces-milieu-actif" @click="openParam('Carte.Traces.activerCouleurMilieu')"></v-list-item>
+        <v-list-item prepend-icon="mdi-palette" title="Couleur intermédiaire du dégradé" value="carte-traces-milieu" @click="openParam('Carte.Traces.couleurMilieu')"></v-list-item>
+        <v-list-item prepend-icon="mdi-percent" title="Position couleur intermédiaire" value="carte-traces-position" @click="openParam('Carte.Traces.positionCouleurMilieu')"></v-list-item>
+        <v-list-item prepend-icon="mdi-gradient-vertical" title="Couleur de fin du dégradé" value="carte-traces-fin" @click="openParam('Carte.Traces.couleurFin')"></v-list-item>
+        <v-list-item prepend-icon="mdi-format-line-weight" title="Épaisseur des traces affichées" value="carte-traces-epaisseur" @click="openParam('Carte.Traces.epaisseur')"></v-list-item>
+        <v-list-item prepend-icon="mdi-timer-outline" title="Durée de l'animation du focus" value="carte-traces-flyto" @click="openParam('Carte.Traces.dureeFlyTo')"></v-list-item>
+
+        <v-divider class="my-2"></v-divider>
+
         <!-- Paramètres d'exemple (démonstration ParameterCard) -->
         <v-list-subheader>Exemples par type</v-list-subheader>
         <v-list-item prepend-icon="mdi-toggle-switch-outline" title="Booléen" value="ex-bool" @click="openParam('Exemples.bool')"></v-list-item>

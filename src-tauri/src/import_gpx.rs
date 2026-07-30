@@ -100,6 +100,20 @@ fn get_gpx_dir(mode_dir: &Path) -> Result<PathBuf, String> {
     Ok(gpx_dir)
 }
 
+/// Retourne le dossier geojson/ à l'intérieur du mode actif.
+/// Contient les LineString GeoJSON des traces (un fichier `{id}.geojson` par trace).
+fn get_geojson_dir(mode_dir: &Path) -> Result<PathBuf, String> {
+    let geojson_dir = mode_dir.join("geojson");
+    std::fs::create_dir_all(&geojson_dir)
+        .map_err(|e| format!("Impossible de créer le dossier geojson : {}", e))?;
+    Ok(geojson_dir)
+}
+
+/// Retourne le chemin du fichier LineString GeoJSON d'une trace, d'après son UUID.
+fn get_geojson_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
+    mode_dir.join("geojson").join(format!("{}.geojson", trace_id))
+}
+
 /// Retourne le chemin du registre traces.json du mode actif.
 fn get_traces_path(mode_dir: &Path) -> PathBuf {
     mode_dir.join("traces.json")
@@ -463,6 +477,56 @@ fn compute_stats(gpx: &gpx::Gpx) -> Result<(TraceStats, usize), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Extraction des coordonnées LineString (au format Mapbox [lon, lat])
+// ---------------------------------------------------------------------------
+
+/// Extrait les coordonnées de tous les points du GPX au format Mapbox `[lon, lat]`.
+///
+/// Réutilise la même boucle d'itération que `compute_stats` (`tracks → segments → points`).
+/// Le GPX fournit `lat = pt.y()` et `lon = pt.x()`, d'où `[lon, lat] = [pt.x(), pt.y()]`.
+/// Lève une erreur explicite si le GPX contient strictement moins de 2 points
+/// (une LineString valide en nécessite au moins 2).
+fn extract_line_coordinates(gpx: &gpx::Gpx) -> Result<Vec<[f64; 2]>, String> {
+    let mut coords: Vec<[f64; 2]> = Vec::new();
+
+    for track in &gpx.tracks {
+        for segment in &track.segments {
+            for wp in &segment.points {
+                let pt = wp.point();
+                // Coordonnées Mapbox : [longitude, latitude] = [pt.x(), pt.y()]
+                coords.push([pt.x(), pt.y()]);
+            }
+        }
+    }
+
+    if coords.len() < 2 {
+        return Err(
+            "Le fichier GPX contient moins de 2 points : impossible de créer une LineString."
+                .to_string(),
+        );
+    }
+
+    Ok(coords)
+}
+
+/// Construit une Feature GeoJSON (LineString) à partir des coordonnées et de la trace.
+///
+/// Le `properties.id` reprend l'UUID de la trace (clé de liaison avec `TraceMetadata`).
+fn build_geojson_feature(coords: Vec<[f64; 2]>, id: &str, name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": coords,
+        },
+        "properties": {
+            "id": id,
+            "name": name,
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Gestion du registre traces.json
 // ---------------------------------------------------------------------------
 
@@ -579,6 +643,21 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     let id = uuid::Uuid::new_v4().to_string();
     let import_date = chrono::Utc::now().to_rfc3339();
 
+    // 8bis. Générer la LineString GeoJSON et l'écrire dans geojson/{id}.geojson
+    //       (après génération de l'UUID, avant la construction de TraceMetadata).
+    let geojson_dir = get_geojson_dir(&mode_dir)?;
+    let coords = extract_line_coordinates(&gpx)?;
+    let feature = build_geojson_feature(coords, &id, &name);
+    let geojson_path = geojson_dir.join(format!("{}.geojson", &id));
+    // Écriture atomique (tmp + rename), cohérent avec save_registry.
+    let geojson_tmp = geojson_path.with_extension("geojson.tmp");
+    let geojson_content = serde_json::to_string_pretty(&feature)
+        .map_err(|e| format!("Sérialisation GeoJSON : {}", e))?;
+    std::fs::write(&geojson_tmp, geojson_content)
+        .map_err(|e| format!("Écriture du fichier GeoJSON temporaire : {}", e))?;
+    std::fs::rename(&geojson_tmp, &geojson_path)
+        .map_err(|e| format!("Renommage du fichier GeoJSON : {}", e))?;
+
     let metadata = TraceMetadata {
         id,
         name,
@@ -644,6 +723,7 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
         .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
 
     let filename = registry[idx].filename.clone();
+    let trace_id_owned = registry[idx].id.clone();
 
     // 1) Supprimer le fichier GPX (tolérant si absent)
     let gpx_file = gpx_dir.join(&filename);
@@ -652,10 +732,17 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
             .map_err(|e| format!("Suppression du fichier GPX : {}", e))?;
     }
 
-    // 2) Retirer l'entrée du registre en mémoire
+    // 2) Supprimer le fichier LineString GeoJSON (tolérant si absent)
+    let geojson_file = get_geojson_path(&mode_dir, &trace_id_owned);
+    if geojson_file.exists() {
+        std::fs::remove_file(&geojson_file)
+            .map_err(|e| format!("Suppression du fichier GeoJSON : {}", e))?;
+    }
+
+    // 3) Retirer l'entrée du registre en mémoire
     registry.remove(idx);
 
-    // 3) Sauvegarde atomique (tmp + rename via save_registry)
+    // 4) Sauvegarde atomique (tmp + rename via save_registry)
     save_registry(&traces_path, &registry)?;
 
     Ok(())
@@ -696,4 +783,101 @@ pub async fn update_trace(
     save_registry(&traces_path, &registry)?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Commande Tauri : get_trace_geometry
+// ---------------------------------------------------------------------------
+
+/// Géométrie (LineString GeoJSON) d'une trace, retournée par `get_trace_geometry`.
+#[derive(serde::Serialize)]
+pub struct TraceGeometry {
+    /// Identifiant (UUID) de la trace.
+    pub id: String,
+    /// Feature GeoJSON (LineString) de la trace.
+    pub geometry: serde_json::Value,
+}
+
+/// Régénère le fichier `geojson/{trace_id}.geojson` depuis le GPX original.
+///
+/// Utilisé pour migrer les traces importées avant l'existence du dossier
+/// `geojson/` (le fichier LineString n'était pas créé à l'import à l'époque).
+/// Retourne la Feature GeoJSON fraîchement écrite. Écriture atomique.
+fn rebuild_geometry_from_gpx(
+    mode_dir: &Path,
+    gpx_dir: &Path,
+    registry: &[TraceMetadata],
+    trace_id: &str,
+) -> Result<serde_json::Value, String> {
+    let trace = registry
+        .iter()
+        .find(|t| t.id == trace_id)
+        .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
+
+    let gpx_file = gpx_dir.join(&trace.filename);
+    if !gpx_file.exists() {
+        return Err(format!(
+            "Fichier GPX source introuvable pour la trace (id={}, fichier={:?})",
+            trace_id, gpx_file
+        ));
+    }
+
+    let file = std::fs::File::open(&gpx_file)
+        .map_err(|e| format!("Ouverture du fichier GPX : {}", e))?;
+    let reader = BufReader::new(file);
+    let gpx = gpx::read(reader).map_err(|e| format!("Fichier GPX invalide : {}", e))?;
+
+    let coords = extract_line_coordinates(&gpx)?;
+    let feature = build_geojson_feature(coords, trace_id, &trace.name);
+
+    // Écriture atomique du fichier geojson/{trace_id}.geojson.
+    let geojson_dir = get_geojson_dir(mode_dir)?;
+    let geojson_path = geojson_dir.join(format!("{}.geojson", trace_id));
+    let geojson_tmp = geojson_path.with_extension("geojson.tmp");
+    let geojson_content = serde_json::to_string_pretty(&feature)
+        .map_err(|e| format!("Sérialisation GeoJSON : {}", e))?;
+    std::fs::write(&geojson_tmp, geojson_content)
+        .map_err(|e| format!("Écriture du fichier GeoJSON temporaire : {}", e))?;
+    std::fs::rename(&geojson_tmp, &geojson_path)
+        .map_err(|e| format!("Renommage du fichier GeoJSON : {}", e))?;
+
+    Ok(feature)
+}
+
+/// Retourne la Feature LineString GeoJSON d'une trace par son identifiant.
+///
+/// Lit le fichier `{mode_dir}/geojson/{trace_id}.geojson` généré à l'import.
+/// Si ce fichier manque (trace importée avant l'existence du dossier `geojson/`),
+/// il est régénéré automatiquement depuis le GPX original, puis mis en cache.
+/// Le `properties.id` de la Feature correspond à l'UUID de la trace.
+#[tauri::command]
+pub async fn get_trace_geometry(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<TraceGeometry, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let geojson_path = get_geojson_path(&mode_dir, &trace_id);
+
+    // Cas normal : le fichier GeoJSON existe déjà, on le lit.
+    if geojson_path.exists() {
+        let content = std::fs::read_to_string(&geojson_path)
+            .map_err(|e| format!("Lecture du fichier GeoJSON : {}", e))?;
+        let geometry: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Fichier GeoJSON invalide : {}", e))?;
+        return Ok(TraceGeometry {
+            id: trace_id,
+            geometry,
+        });
+    }
+
+    // Cas de migration : le fichier manque, on le régénère depuis le GPX.
+    let gpx_dir = get_gpx_dir(&mode_dir)?;
+    let traces_path = get_traces_path(&mode_dir);
+    let registry = load_registry(&traces_path);
+    let geometry = rebuild_geometry_from_gpx(&mode_dir, &gpx_dir, &registry, &trace_id)?;
+
+    Ok(TraceGeometry {
+        id: trace_id,
+        geometry,
+    })
 }

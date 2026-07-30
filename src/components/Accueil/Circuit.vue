@@ -2,9 +2,10 @@
   <v-card
     min-height="80px"
     width="500"
-    class="mx-auto"
-    @mouseenter="onMouseEnter"
-    @mouseleave="onMouseLeave"
+    class="mx-auto circuit-card"
+    :class="{ 'circuit-hover': isHovering }"
+    @mouseenter="isHovering = true"
+    @mouseleave="onInfoLeave"
   >
 
     <!-- Bande couleur gauche -->
@@ -15,7 +16,7 @@
 
     <v-card-title
       style="max-height: 40px"
-      :class="['d-flex', 'align-center', 'pr-0']"
+      :class="['d-flex', 'align-center']"
     >
       <span
         style="display: block; "
@@ -23,37 +24,57 @@
       >
         {{ trace.name }}
       </span>
-      <v-spacer></v-spacer> <!-- A garder pour avoir les menus à droite -->
-      <v-menu open-on-hover location="right top">
-        <template v-slot:activator="{ props }">
-          <v-btn icon="mdi-dots-vertical" variant="text" v-bind="props"></v-btn>
-        </template>
-
-        <v-list density="compact">
-          <v-list-item @click="">
-            <v-icon left small>mdi-pencil</v-icon>
-            <span class="ml-2">Éditer</span>
-          </v-list-item>
-
-          <v-list-item @click="">
-            <v-icon left small>mdi-account-group</v-icon>
-            <span class="ml-2">Gérer les groupes...</span>
-          </v-list-item>
-
-          <v-list-item @click="">
-            <v-icon left small>mdi-sun-thermometer-outline</v-icon>
-            <span class="ml-2">Gérer la météo...</span>
-          </v-list-item>
-
-          <v-list-item @click="visualiserCircuit">
-            <v-icon left small color="green">mdi-video-image</v-icon>
-            <span class="text-green-darken-3 ml-2">Visualiser</span>
-          </v-list-item>
-        </v-list>
-      </v-menu>
+      <v-spacer></v-spacer> <!-- Pousse les icônes à droite (alignées sur la ligne Distance/Dénivelé) -->
+      <div class="d-flex align-center">
+        <!-- Éditer : visible au survol uniquement -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-pencil"
+          variant="text"
+          density="comfortable"
+          size="small"
+          title="Éditer"
+          @click=""
+        />
+        <!-- Gérer les groupes : visible au survol uniquement -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-account-group"
+          variant="text"
+          density="comfortable"
+          size="small"
+          title="Gérer les groupes"
+          @click=""
+        />
+        <!-- Gérer la météo : visible au survol uniquement -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-sun-thermometer-outline"
+          variant="text"
+          density="comfortable"
+          size="small"
+          title="Gérer la météo"
+          @click=""
+        />
+        <!-- Visualiser : visible au survol uniquement -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-video-image"
+          variant="text"
+          density="comfortable"
+          size="small"
+          color="green"
+          title="Visualiser"
+          @click="visualiserCircuit"
+        />
+      </div>
     </v-card-title>
 
-    <!-- Affichage des données principales (distance, dénivelé + badges d'état) -->
+    <!-- Affichage des données principales (distance, dénivelé + actions rapides) -->
     <v-card-text
       style="display: flex; align-items: center"
       class="pt-2"
@@ -64,104 +85,85 @@
       </span>
       <v-spacer></v-spacer>
       <div class="d-flex align-center">
-        <v-icon
-          v-if="isSelected"
-          color="orange"
-          icon="mdi-star"
+        <!-- Supprimer : visible au survol uniquement -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-delete"
+          color="red-darken-3"
+          variant="text"
+          density="comfortable"
           size="small"
-          @click="emitToggleFavorite"
-          class="mr-1"
-          title="Retirer des favoris"
+          title="Supprimer"
+          @click="emitDelete"
         />
-        <v-icon
-          v-if="isDisplayed"
-          color="blue"
-          icon="mdi-map-check"
+        <!-- Exporter (non câblé) : visible au survol uniquement -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-export"
+          variant="text"
+          density="comfortable"
           size="small"
+          title="Exporter"
+        />
+        <!-- Info : visible au survol uniquement -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-information-outline"
+          variant="text"
+          density="comfortable"
+          size="small"
+          :title="infoExpanded ? 'Masquer les informations' : 'Informations'"
+          @click="onInfoClick"
+        />
+        <!-- Affichage : visible si actif, sinon au survol (masqué par opacité) -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !(isDisplayed || isHovering) }"
+          :icon="isDisplayed ? 'mdi-map-check' : 'mdi-map-check-outline'"
+          :color="isDisplayed ? 'blue' : ''"
+          variant="text"
+          density="comfortable"
+          size="small"
+          :title="isDisplayed ? 'Masquer' : 'Afficher'"
           @click="emitToggleDisplay"
-          title="Masquer"
+        />
+        <!-- Favoris : visible si actif, sinon au survol (masqué par opacité) -->
+        <v-btn
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !(isSelected || isHovering) }"
+          :icon="isSelected ? 'mdi-star' : 'mdi-star-outline'"
+          :color="isSelected ? 'orange' : ''"
+          variant="text"
+          density="comfortable"
+          size="small"
+          :title="isSelected ? 'Retirer des favoris' : 'Ajouter aux favoris'"
+          @click="emitToggleFavorite"
         />
       </div>
     </v-card-text>
 
-    <!-- Section info déroulante (ouverte au hover, basculable au clic) -->
+    <!-- Section info déroulante (ouverte au clic sur Info, refermée au survol sortant) -->
     <v-expand-transition>
-      <div v-if="info" @click="info = false" style="cursor: pointer;" :class="computedBackgroundColor">
+      <div
+        v-if="infoExpanded"
+      >
         <v-divider></v-divider>
         <v-card-text class="py-2 px-4">
-          <!-- Première ligne : activité (gauche) + icônes d'action (droite) -->
-          <div class="d-flex align-center mb-1">
-            <span class="text-caption font-weight-bold">{{ trace.activity_type || '' }}</span>
-            <v-spacer></v-spacer>
-            <div class="d-flex align-center">
-              <!-- Lien source -->
-              <v-icon
-                v-if="trace.source_url"
-                icon="mdi-link-variant"
-                size="small"
-                class="mr-1"
-                @click.stop="ouvrirSource"
-                title="Ouvrir la source"
-              />
-              <!-- Favoris -->
-              <v-icon
-                :icon="isSelected ? 'mdi-star' : 'mdi-star-outline'"
-                :color="isSelected ? 'orange' : ''"
-                size="small"
-                class="mr-1"
-                @click.stop="emitToggleFavorite"
-                :title="isSelected ? 'Retirer des favoris' : 'Ajouter aux favoris'"
-              />
-              <!-- Affichage -->
-              <v-icon
-                :icon="isDisplayed ? 'mdi-map-check' : 'mdi-map-check-outline'"
-                :color="isDisplayed ? 'blue' : ''"
-                size="small"
-                class="mr-1"
-                @click.stop="emitToggleDisplay"
-                :title="isDisplayed ? 'Masquer' : 'Afficher'"
-              />
-              <!-- Exporter (non câblé) -->
-              <v-icon
-                icon="mdi-export"
-                size="small"
-                class="mr-1"
-                title="Exporter"
-              />
-              <!-- Supprimer -->
-              <v-icon
-                icon="mdi-delete"
-                color="red-darken-3"
-                size="small"
-                @click.stop="emitDelete"
-                title="Supprimer"
-              />
-            </div>
-          </div>
-
-          <!-- Deuxième ligne : date d'import -->
-          <div class="text-caption text-disabled mb-1">
+          <div class="text-body-2 mb-1">
             Importé le {{ formattedImportDate }}
           </div>
-
-          <!-- Contenu existant conservé -->
-          <b>{{ trace.name }}</b>
-          <br />
-          <span class="text-caption">Source : {{ trace.source }}</span>
-          <br v-if="trace.source_url" />
-          <span v-if="trace.source_url" class="text-caption text-blue">
-            <v-icon size="x-small" icon="mdi-link-variant" /> {{ trace.source_url }}
-          </span>
-          <br v-if="trace.activity_type" />
-          <span v-if="trace.activity_type" class="text-caption">
-            Activité : {{ trace.activity_type }}
-          </span>
-          <br />
-          <span class="text-caption">
-            {{ trace.stats.points_count }} points
-            | Dénivelé − : {{ formatElevation(trace.stats.negative_elevation_m) }}
-            | Durée : {{ formattedDuration }}
-          </span>
+          <div class="text-body-2 mb-1">
+            Source : {{ trace.source }}
+          </div>
+          <div v-if="trace.source_url" class="text-body-2 d-flex align-center">
+            <v-icon size="small" icon="mdi-link-variant" class="mr-1" />
+            <a href="#" @click.prevent="ouvrirSource" class="text-blue">
+              {{ trace.source_url }}
+            </a>
+          </div>
         </v-card-text>
       </div>
     </v-expand-transition>
@@ -174,16 +176,23 @@
 /**
  * Composant affichant une carte de circuit (trace GPX importée).
  *
- * Refonte : section info ouvrable au hover (délai 300 ms), actions rapides
- * (favoris, affichage, export, suppression) déplacées dans la section info,
- * menu réduit aux actions de gestion avancée.
+ * Deux lignes d'icônes d'action (masquées par opacité hors survol) :
+ *  - ligne de titre : Éditer, Gérer les groupes, Gérer la météo, Visualiser
+ *  - ligne Distance / Dénivelé : Supprimer, Exporter, Info, Affichage, Favoris
+ * (les Favoris et l'Affichage restent visibles s'ils sont actifs).
+ *
+ * Le bouton Info déploie une section (v-expand-transition) contenant les
+ * détails du circuit (date d'import, source, lien) ; elle se réduit dès que le
+ * curseur quitte la carte. Le clic Info déclenche en outre un focus carte
+ * (état `focusedTraceId` du store traces) : Map.vue isole la trace et la cadre.
  */
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../stores/app'
+import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
-import { formatDistance, formatElevation, formatDuration } from '../../utils/format'
+import { formatDistance, formatElevation } from '../../utils/format'
 
 const emit = defineEmits<{
   /** Émis quand l'utilisateur demande la suppression de la trace. */
@@ -203,47 +212,41 @@ const props = defineProps<{
 
 const appStore = useAppStore()
 const router = useRouter()
+const tracesStore = useTracesStore()
 
-const info = ref(false)
-let infoTimer: ReturnType<typeof setTimeout> | null = null
-
-function toggleInfo() {
-  info.value = !info.value
-
-  if (infoTimer) clearTimeout(infoTimer)
-
-  if (info.value) {
-    infoTimer = setTimeout(() => {
-      info.value = false
-    }, 10000) // Fermeture automatique après 10 secondes
-  }
-}
-
-// --- Gestion du hover ---
-
+/** État d'ouverture de la section info déroulante. */
+const infoExpanded = ref(false)
+/** true tant que le curseur survole la carte (régit l'affichage des actions). */
 const isHovering = ref(false)
-let hoverTimer: ReturnType<typeof setTimeout> | null = null
 
-function onMouseEnter() {
-  isHovering.value = true
-  if (!info.value) {
-    toggleInfo()
+/**
+ * Ouvre/ferme la section info et pilote le focus carte correspondant.
+ * Une seule carte peut avoir le focus à la fois : la prise d'un nouveau focus
+ * ferme automatiquement les autres sections ouvertes (via le watcher ci-dessous).
+ */
+function onInfoClick() {
+  if (infoExpanded.value) {
+    infoExpanded.value = false
+    if (tracesStore.focusedTraceId === props.trace.id) tracesStore.focusedTraceId = null
+  } else {
+    infoExpanded.value = true
+    tracesStore.focusedTraceId = props.trace.id
   }
 }
 
-function onMouseLeave() {
+/** Ferme la section info et libère le focus quand le curseur quitte la carte. */
+function onInfoLeave() {
   isHovering.value = false
-  hoverTimer = setTimeout(() => {
-    if (!isHovering.value && info.value) {
-      toggleInfo()
-    }
-  }, 300)
+  if (!infoExpanded.value) return
+  infoExpanded.value = false
+  if (tracesStore.focusedTraceId === props.trace.id) tracesStore.focusedTraceId = null
 }
 
-/** Nettoyer les timers au démontage du composant. */
-onUnmounted(() => {
-  if (infoTimer) clearTimeout(infoTimer)
-  if (hoverTimer) clearTimeout(hoverTimer)
+// Synchronisation : si une autre carte prend le focus, refermer celle-ci.
+watch(() => tracesStore.focusedTraceId, (newId) => {
+  if (newId !== props.trace.id && infoExpanded.value) {
+    infoExpanded.value = false
+  }
 })
 
 // --- État persisté (lié aux props via le backend) ---
@@ -255,7 +258,6 @@ const isDisplayed = computed(() => props.trace.is_displayed)
 
 const formattedDistance = computed(() => formatDistance(props.trace.stats.distance_m))
 const formattedElevation = computed(() => formatElevation(props.trace.stats.positive_elevation_m))
-const formattedDuration = computed(() => formatDuration(props.trace.stats.duration_s))
 
 /** Date d'import formatée en français (JJ/MM/AAAA à HH:MM). */
 const formattedImportDate = computed(() => {
@@ -273,30 +275,13 @@ const formattedImportDate = computed(() => {
   }
 })
 
-/** Classe CSS de la bande couleur, avec fallback sur la source. */
-const computedBackgroundColor = computed(() => {
-  if (props.backgroundColor) return props.backgroundColor
-  // Attribution par défaut selon la source
-  switch (props.trace.source) {
-    case 'Strava': return 'bg-orange'
-    case 'Garmin Connect': return 'bg-blue'
-    case 'OpenRunner': return 'bg-green'
-    case 'RideWithGPS': return 'bg-purple'
-    default: return 'bg-grey'
-  }
-})
-
-// sourceIcon conservé en cas de réutilisation future (tooltip source dans la section info)
-const _sourceIcon = computed(() => {
-  switch (props.trace.source) {
-    case 'Strava': return 'mdi-run-fast'
-    case 'Garmin Connect': return 'mdi-watch'
-    case 'OpenRunner': return 'mdi-map-marker-path'
-    case 'RideWithGPS': return 'mdi-bicycle'
-    default: return null
-  }
-})
-void _sourceIcon
+/**
+ * Classe CSS de la bande couleur, neutre par défaut.
+ * Conservée pour un usage futur (mise à jour des données de visualisation).
+ */
+const computedBackgroundColor = computed(() =>
+  props.backgroundColor ? props.backgroundColor : 'bg-grey'
+)
 
 // --- Actions ---
 
@@ -355,5 +340,34 @@ async function visualiserCircuit() {
   width: 10px;
   height: 100%;
   border-radius: 8px 0 0 8px;
+}
+
+/*
+ * Survol du circuit : on teinte la surface avec une part de `on-surface`.
+ * Cette variable est foncée en thème clair et claire en thème sombre, le
+ * mélange assombrit donc la carte en mode clair et l'éclaircit en mode sombre,
+ * sans aucune détection de thème.
+ */
+.circuit-card {
+  transition: background-color 0.15s ease;
+}
+
+.circuit-hover {
+  background-color: color-mix(in srgb, rgb(var(--v-theme-surface)) 88%, rgb(var(--v-theme-on-surface)));
+}
+
+/*
+ * Boutons d'action : toujours présents dans le layout (ils gardent leur
+ * emplacement), mais masqués visuellement par opacité tant que le curseur
+ * n'est pas sur la carte. L'icône reste intangible quand elle est masquée.
+ */
+.action-btn {
+  opacity: 1;
+  transition: opacity 0.15s ease;
+}
+
+.action-btn--hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 </style>

@@ -58,6 +58,127 @@ default = "other"
 critical = false
 
 # ---------------------------------------------------------------------------
+# Paramètres de la carte — favoris et affichage des traces.
+# Toutes les couleurs affichées sur la carte Mapbox sont de type
+# `material_extended` (palette Material Design, nuances 50 → 900), mais
+# restent stockées au format #RRGGBBAA (validées comme `rgba` côté backend).
+# ---------------------------------------------------------------------------
+
+# --- Favoris ---
+
+[Carte.Favoris.couleurCluster]
+description = "Couleur des clusters contenant au moins un favori"
+documentation = """
+Couleur appliquée au cercle d'un cluster Mapbox dès qu'il contient
+au moins une trace marquée comme favorite. Jaune Material (yellow 500).
+"""
+type = "material_extended"
+default = "#FFEB3BFF"
+
+[Carte.Favoris.couleurTrace]
+description = "Couleur de tracé des traces favorites"
+documentation = """
+Couleur utilisée pour dessiner la totalité de la LineString d'une trace
+marquée comme favorite. Identique à la couleur du cluster favori par défaut.
+"""
+type = "material_extended"
+default = "#FFEB3BFF"
+
+[Carte.Favoris.epaisseur]
+description = "Épaisseur des traces favorites (px)"
+documentation = """
+Épaisseur de ligne (en pixels) des traces favorites sur la carte.
+"""
+type = "int"
+default = 6
+min = 1
+max = 20
+step = 1
+unit = "px"
+
+# --- Clusters ---
+
+[Carte.Clusters.seuilPopupCircuits]
+description = "Seuil de circuits pour le popup de cluster"
+documentation = """
+Nombre maximum de circuits au-delà duquel un clic sur un cluster déclenche
+le zoom d'expansion plutôt que l'affichage du popup listant les circuits.
+Si un cluster contient un nombre de circuits inférieur ou égal à ce seuil,
+un clic affiche un popup avec la liste des circuits (nom + icônes favori
+et affichage). Au-delà du seuil, le cluster s'étend (zoom d'expansion).
+"""
+type = "int"
+default = 10
+min = 2
+max = 20
+step = 1
+
+# --- Traces affichées (dégradé) ---
+
+[Carte.Traces.couleurDebut]
+description = "Couleur de début du dégradé"
+documentation = "Couleur du tracé au point de départ de la trace. Bleu Material (blue 500)."
+type = "material_extended"
+default = "#2196F3FF"
+
+[Carte.Traces.activerCouleurMilieu]
+description = "Activer la couleur intermédiaire du dégradé"
+documentation = """
+Si activé, le dégradé passe par une couleur intermédiaire (mauve) à la
+position définie par `positionCouleurMilieu`. Si désactivé, dégradé direct
+début → fin.
+"""
+type = "bool"
+default = true
+
+[Carte.Traces.couleurMilieu]
+description = "Couleur intermédiaire du dégradé"
+documentation = "Couleur intermédiaire (mauve) du dégradé. Violet Material (purple 500)."
+type = "material_extended"
+default = "#9C27B0FF"
+
+[Carte.Traces.positionCouleurMilieu]
+description = "Position de la couleur intermédiaire (%)"
+documentation = """
+Position de la couleur intermédiaire le long de la trace, exprimée en
+pourcentage de la distance cumulée (0 = départ, 100 = arrivée).
+"""
+type = "float"
+default = 0.5
+min = 0.0
+max = 1.0
+step = 0.05
+
+[Carte.Traces.couleurFin]
+description = "Couleur de fin du dégradé"
+documentation = "Couleur du tracé au point d'arrivée de la trace. Rouge Material (red 500)."
+type = "material_extended"
+default = "#F44336FF"
+
+[Carte.Traces.epaisseur]
+description = "Épaisseur des traces affichées (px)"
+documentation = "Épaisseur de ligne (en pixels) des traces affichées sur la carte."
+type = "int"
+default = 4
+min = 1
+max = 20
+step = 1
+unit = "px"
+
+[Carte.Traces.dureeFlyTo]
+description = "Durée de l'animation flyTo du focus carte (ms)"
+documentation = """
+Durée en millisecondes de l'animation de déplacement de la carte lors du focus
+sur un circuit (clic sur Info) et de son retour à la vue précédente.
+"""
+type = "int"
+default = 500
+min = 100
+max = 2000
+step = 100
+unit = "ms"
+
+# ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.
 # Ils servent de démonstration / de tests et peuvent être supprimés une fois
 # les vrais paramètres branchés.

@@ -94,6 +94,21 @@ Document de référence détaillé du module GPX :
 
 👉 **Lire ce fichier** pour comprendre le module traces GPX.
 
+### 🗺️ [SPEC_AFFICHAGE_TRACES.md](./SPEC_AFFICHAGE_TRACES.md)
+**Spécification — Favoris & affichage des traces sur la carte**
+
+Document de référence de l'affichage des traces sur la carte Mapbox :
+- (Dés)sélection des favoris : couleur de cluster et tracé paramétrables (`material_extended`)
+- Création de LineString GeoJSON à l'import et lien ID ↔ trace (`geojson/{id}.geojson`)
+- Affichage/masquage des traces via dégradé bleu → rouge (couleur intermédiaire optionnelle)
+- Paramètres `[Carte.*]` (dont `Carte.Traces.dureeFlyTo`) et couches Mapbox (`favorites-line`, `displayed-traces-line`, `focus-traces-line`)
+- **Focus carte** : clic Info d'un circuit isole et cadre la trace (§8-bis), via l'état `focusedTraceId`
+- Commande backend `get_trace_geometry`
+
+> ✅ **Statut** : **implémenté**. Ce document était à l'origine une spécification « à implémenter » ; les fonctionnalités décrites (favoris, affichage dégradé, couches Mapbox, commande `get_trace_geometry`) sont en place. La fonctionnalité de focus carte (clic Info), le paramètre `Carte.Traces.dureeFlyTo` et l'état `focusedTraceId` ont été ajoutés lors de la refonte de `Circuit.vue`.
+
+👉 **Lire ce fichier** pour comprendre l'architecture d'affichage des traces et le mode focus.
+
 ### 🤖 [CLAUDE-CODE-GUIDE.md](./CLAUDE-CODE-GUIDE.md)
 **Guide d'utilisation avec un assistant IA**
 
@@ -131,15 +146,16 @@ Ou fournissez simplement le chemin vers ces fichiers pour que l'IA comprenne le 
 
 ```
 docs/
-├── README.md              # Ce fichier (index)
-├── CONTEXT.md             # Contexte général
-├── ARCHITECTURE.md        # Architecture technique
-├── COMMANDS.md            # Référence des commandes Tauri (18 commandes)
-├── DATA_STORAGE.md        # Schéma de stockage des données
-├── CONVENTIONS.md         # Conventions de code
-├── EXTENDING.md           # Guide d'extension
-├── SPEC_IMPORT_GPX.md     # Spécification du module GPX
-└── CLAUDE-CODE-GUIDE.md   # Guide d'utilisation avec IA
+├── README.md                  # Ce fichier (index)
+├── CONTEXT.md                 # Contexte général
+├── ARCHITECTURE.md            # Architecture technique
+├── COMMANDS.md                # Référence des commandes Tauri (18 commandes)
+├── DATA_STORAGE.md            # Schéma de stockage des données
+├── CONVENTIONS.md             # Conventions de code
+├── EXTENDING.md               # Guide d'extension
+├── SPEC_IMPORT_GPX.md         # Spécification du module GPX
+├── SPEC_AFFICHAGE_TRACES.md   # Spécification favoris & affichage carte (à implémenter)
+└── CLAUDE-CODE-GUIDE.md       # Guide d'utilisation avec IA
 ```
 
 ## Maintenance de la documentation
@@ -178,6 +194,6 @@ Material Design mature, composants riches, documentation excellente, grande comm
 
 ---
 
-**Dernière mise à jour** : 2026-07-11
+**Dernière mise à jour** : 2026-07-30
 **Version de l'application** : 0.0.1
 **Status** : En développement actif

@@ -95,6 +95,7 @@ VisuGPS2/
 │   ├── ARCHITECTURE.md       # Architecture détaillée
 │   ├── EXTENDING.md         # Guide d'extension
 │   ├── SPEC_IMPORT_GPX.md   # Spécification module import GPX
+│   ├── SPEC_AFFICHAGE_TRACES.md # Spécification favoris & affichage carte (à implémenter)
 │   └── …
 │
 ├── Configuration
@@ -295,7 +296,9 @@ Si vous modifiez les scripts :
 ### Fonctionnalités
 - Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
 - Carte Mapbox GL avec **clustering** des points de départ (token via paramètre `Systeme.Key.mapBox`)
+- Affichage des traces favorites et forcées (dégradé bleu → rouge, couches Mapbox dédiées)
 - **Synchronisation carte ↔ liste** : la liste des circuits est triée par distance au centre courant de la carte (Haversine), recalculée en temps réel sur `moveend` (debounce 150 ms)
+- **Focus carte** : clic sur Info d'un circuit isole et cadre la trace (`fitBounds`), puis revient à la vue précédente (`flyTo`) — durée paramétrable (`Carte.Traces.dureeFlyTo`)
 - Clic sur un cluster → zoom d'expansion ; clic sur un point → popup (nom, source, coordonnées)
 - Toggle thème dark/light (synchronisé entre fenêtres)
 - Gestion des modes d'exécution (OPE / EVAL_*)
@@ -312,7 +315,7 @@ Si vous modifiez les scripts :
 
 Autres stores existants :
 - `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
-- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`.
+- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`.
 - `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 
 ## Variables d'environnement
@@ -606,7 +609,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-07-11
+**Dernière mise à jour** : 2026-07-30
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, synchronisation liste triée par distance)
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance)

@@ -68,6 +68,13 @@ export const useTracesStore = defineStore('traces', () => {
   const loading = ref(false)
   /** Centre courant de la carte (mis à jour par Map.vue sur moveend). */
   const mapCenter = ref<{ lat: number; lon: number }>({ lat: 43.7, lon: 2.0 })
+  /**
+   * id de la trace « focus » temporaire (clic sur Info dans Circuit.vue), ou null.
+   * État UI éphémère observé par Map.vue pour isoler et cadrer la trace.
+   */
+  const focusedTraceId = ref<string | null>(null)
+  /** Cache des géométries (LineString) déjà chargées depuis le backend, keyé par id. */
+  const geometryCache = new Map<string, GeoJSON.Feature>()
 
   // Getters
   const traceCount = computed(() => traces.value.length)
@@ -132,6 +139,7 @@ export const useTracesStore = defineStore('traces', () => {
     loading.value = true
     try {
       await invoke('delete_trace', { traceId })   // camelCase TS → trace_id Rust
+      geometryCache.delete(traceId)               // invalider le cache de géométrie
       await loadTraces()                           // recharger (source de vérité = backend)
     } finally {
       loading.value = false
@@ -161,6 +169,25 @@ export const useTracesStore = defineStore('traces', () => {
   }
 
   /**
+   * Récupère la géométrie (LineString) d'une trace depuis le backend.
+   *
+   * Utilise un cache interne (`geometryCache`) pour éviter de relire le backend
+   * à chaque bascule d'affichage d'une même trace. Le cache est vidé à la
+   * suppression d'une trace.
+   */
+  async function getTraceGeometry(traceId: string): Promise<GeoJSON.Feature> {
+    const cached = geometryCache.get(traceId)
+    if (cached) return cached
+
+    const result = await invoke<{ id: string; geometry: GeoJSON.Feature }>(
+      'get_trace_geometry',
+      { traceId },
+    )
+    geometryCache.set(traceId, result.geometry)
+    return result.geometry
+  }
+
+  /**
    * Met à jour le centre de la carte.
    * Appelé par Map.vue sur moveend pour synchroniser le tri par distance.
    */
@@ -174,6 +201,7 @@ export const useTracesStore = defineStore('traces', () => {
     traces,
     loading,
     mapCenter,
+    focusedTraceId,
     // Getters
     traceCount,
     sortedTracesByDistance,
@@ -182,6 +210,7 @@ export const useTracesStore = defineStore('traces', () => {
     importerGpx,
     supprimerTrace,
     updateTrace,
+    getTraceGeometry,
     updateMapCenter,
   }
 })

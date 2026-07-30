@@ -1,0 +1,1 @@
+# Plan d'implémentation — Affichage des traces GPX sur la carte (Favoris & Dégradé)

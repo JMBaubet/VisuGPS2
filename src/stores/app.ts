@@ -17,8 +17,30 @@ export interface ModeInfo {
   révision?: string
 }
 
+/** Clé localStorage de persistance du thème (clair/sombre). */
+const THEME_STORAGE_KEY = 'visugps2.theme.dark'
+
+/** Lit le thème persisté depuis localStorage (clair par défaut). */
+function loadPersistedTheme(): boolean {
+  try {
+    return localStorage.getItem(THEME_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+/** Persiste le thème dans localStorage (tolérant aux erreurs d'accès). */
+function persistTheme(dark: boolean) {
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, String(dark))
+  } catch (e) {
+    console.error('Impossible de persister le thème :', e)
+  }
+}
+
 export const useAppStore = defineStore('app', () => {
-  const isDarkMode = ref(false)
+  // Thème initial restauré depuis localStorage (clair par défaut).
+  const isDarkMode = ref(loadPersistedTheme())
   const displays = ref<MonitorInfo[]>([])
   const loading = ref(false)
   const isScreenBisOpen = ref(false)
@@ -42,6 +64,7 @@ export const useAppStore = defineStore('app', () => {
 
   function toggleDarkMode() {
     isDarkMode.value = !isDarkMode.value
+    persistTheme(isDarkMode.value)
     // Synchroniser le thème avec toutes les fenêtres
     emit('theme-changed', isDarkMode.value)
   }
@@ -49,6 +72,7 @@ export const useAppStore = defineStore('app', () => {
   // Écouter les changements de thème émis par une autre fenêtre
   listen<boolean>('theme-changed', (event) => {
     isDarkMode.value = event.payload
+    persistTheme(isDarkMode.value)
   })
 
   async function loadDisplays() {
