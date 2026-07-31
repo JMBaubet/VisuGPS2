@@ -1,141 +1,144 @@
 <script setup lang="ts">
+// SettingsDrawer : drawer de paramètres.
+//
+// Pilotage 100 % dynamique : l'organisation (vues, catégories, actions,
+// handlers spéciaux) est déclarée dans la table `[_meta]` du fichier
+// `settings.default.toml` et exposée par la commande `get_settings_meta`.
+// Aucune entrée n'est hardcodée dans ce composant : ajouter un paramètre
+// dans le TOML le fait apparaître automatiquement dans la bonne catégorie.
+//
+// Sections affichées :
+//   1. Actions système (ex: Modes d'exécution) — entrées non-paramètres.
+//   2. Catégories système (ex: Licences, Configuration des fenêtres).
+//   3. Catégories de la vue active (ex: Carte — Traces).
+//
+// Indicateurs visuels (sans icône additionnelle, pour préserver la flèche
+// de l'accordéon) :
+//   - criticité  → icône du paramètre en orange (warning) ;
+//   - surcharge  → libellé du paramètre en bleu (info).
+// Remontés au niveau catégorie (OR sur les enfants).
 import { ref, computed, onMounted } from 'vue'
 import { useAppStore } from '../../stores/app'
 import { useSettingsStore } from '../../stores/settings'
+import { useSettingsTree, type CategoryNode } from '../../composables/useSettingsTree'
 import ParameterCard from '../parameters/ParameterCard.vue'
 import SettingsEditMonitor from './SettingsEditMonitor.vue'
+import SettingsCategory from './SettingsCategory.vue'
 
 const appStore = useAppStore()
 const settingsStore = useSettingsStore()
 
-defineProps<{
-  modelValue: boolean
-}>()
-
-const emit = defineEmits<{
-  (e: 'update:modelValue', val: boolean): void
-}>()
+const { systemActions, systemCategories, viewCategories } = useSettingsTree()
 
 onMounted(async () => {
+  // Le meta est statique : un seul chargement suffit. Les settings sont
+  // également chargés ici pour garantir la fraîcheur à l'ouverture du drawer.
   await Promise.all([
     settingsStore.loadSettings(),
-    appStore.loadDisplays()
+    settingsStore.loadSettingsMeta(),
+    appStore.loadDisplays(),
   ])
 })
 
-// --- Paramètres réels ----------------------------------------------------
-const nbrCircuitsPath = 'Accueil.nbrCircuits.list'
-const mapBoxPath = 'Systeme.Key.mapBox'
+// --- Paramètres spéciaux (moniteurs) -------------------------------------
 const principalSetting = computed(() =>
   settingsStore.settings.find(s => s.path === 'Affichage.moniteurs.principal')
 )
 const secondaireSetting = computed(() =>
   settingsStore.settings.find(s => s.path === 'Affichage.moniteurs.secondaire')
 )
-
 const hasMultipleDisplays = computed(() => appStore.displays.length > 1)
 
-// --- Dialogue générique ParameterCard -----------------------------------
+// --- Dialogues ------------------------------------------------------------
 const paramDialog = ref(false)
 const currentParamKey = ref<string | null>(null)
-
-// --- Dialogue spécifique moniteurs (carte double) ------------------------
 const showMonitorDialog = ref(false)
 
-function openModes() {
-  emit('update:modelValue', false)
-  appStore.showModeDialog = true
+/** Action système (ex: openModes), identifiée par son champ `action`.
+ *  Le drawer reste ouvert : on ferme via le bouton dédié, l'icône AppBar
+ *  ou un clic sur la carte. */
+function onSystemAction(action: string) {
+  if (action === 'openModes') {
+    appStore.showModeDialog = true
+  }
 }
 
 function openParam(path: string) {
-  emit('update:modelValue', false)
   currentParamKey.value = path
   paramDialog.value = true
 }
 
 function openMonitors() {
-  emit('update:modelValue', false)
   showMonitorDialog.value = true
 }
 
+/** Clic sur une catégorie à handler spécial : on délègue l'ouverture. */
+function onCategoryClick(category: CategoryNode) {
+  if (category.handler === 'monitors' && hasMultipleDisplays.value) {
+    openMonitors()
+  }
+}
 </script>
 
 <template>
   <v-navigation-drawer
     location="right"
-    :model-value="modelValue"
-    @update:model-value="emit('update:modelValue', $event)"
+    width="420"
+    :model-value="appStore.isSettingsDrawerOpen"
+    @update:model-value="appStore.isSettingsDrawerOpen = $event"
     temporary
   >
-    <v-list-item
-        prepend-icon="mdi-cog"
-        title="Paramètres"
-    ></v-list-item>
+    <!-- En-tête : titre + bouton de fermeture -->
+    <div class="d-flex align-center px-4 py-3">
+      <v-icon icon="mdi-cog" class="mr-3"></v-icon>
+      <span class="text-h6">Paramètres</span>
+      <v-spacer></v-spacer>
+      <v-btn
+        icon="mdi-close"
+        variant="text"
+        density="comfortable"
+        title="Fermer"
+        @click="appStore.isSettingsDrawerOpen = false"
+      ></v-btn>
+    </div>
 
     <v-divider></v-divider>
 
-    <v-list density="compact" nav>
+    <v-list class="settings-list" density="compact" nav>
+      <!-- 1. Actions système (entrées non-paramètres) -->
+      <template v-if="systemActions.length">
         <v-list-item
-        prepend-icon="mdi-database-cog-outline"
-        title="Modes d'exécution"
-        value="mode"
-        @click="openModes"
+          v-for="action in systemActions"
+          :key="`action-${action.key}`"
+          :prepend-icon="action.icon"
+          :title="action.label"
+          :value="`action-${action.key}`"
+          @click="onSystemAction(action.action)"
         ></v-list-item>
-
-        <v-list-item
-        prepend-icon="mdi-map-legend"
-        title="Nbre de circuits affichés"
-        value="nbre-circuits"
-        @click="openParam(nbrCircuitsPath)"
-        ></v-list-item>
-
-        <v-list-item
-        prepend-icon="mdi-key-chain"
-        title="Licences"
-        value="licences"
-        @click="openParam(mapBoxPath)"
-        ></v-list-item>
-
-        <v-list-item
-        v-if="hasMultipleDisplays"
-        prepend-icon="mdi-projector"
-        title="Configuration des fenêtres"
-        value="moniteurs"
-        @click="openMonitors"
-        ></v-list-item>
-
         <v-divider class="my-2"></v-divider>
+      </template>
 
-        <!-- Paramètres de la carte : favoris et traces affichées -->
-        <v-list-subheader>Carte — Favoris</v-list-subheader>
-        <v-list-item prepend-icon="mdi-map-marker-multiple-outline" title="Couleur des clusters favoris" value="carte-fav-cluster" @click="openParam('Carte.Favoris.couleurCluster')"></v-list-item>
-        <v-list-item prepend-icon="mdi-map-marker-star" title="Couleur des traces favorites" value="carte-fav-trace" @click="openParam('Carte.Favoris.couleurTrace')"></v-list-item>
-        <v-list-item prepend-icon="mdi-format-line-weight" title="Épaisseur des traces favorites" value="carte-fav-epaisseur" @click="openParam('Carte.Favoris.epaisseur')"></v-list-item>
+      <!-- 2. Catégories système (communes à toutes les vues) -->
+      <SettingsCategory
+        v-for="category in systemCategories"
+        :key="`sys-${category.id}`"
+        :category="category"
+        :can-open-handler="category.handler === 'monitors' ? hasMultipleDisplays : true"
+        @open-param="openParam"
+        @category-click="onCategoryClick"
+      />
 
-        <v-list-subheader>Carte — Clusters</v-list-subheader>
-        <v-list-item prepend-icon="mdi-format-list-numbered" title="Seuil du popup de cluster" value="carte-clusters-seuil" @click="openParam('Carte.Clusters.seuilPopupCircuits')"></v-list-item>
+      <v-divider v-if="systemCategories.length" class="my-2"></v-divider>
 
-        <v-list-subheader>Carte — Traces affichées</v-list-subheader>
-        <v-list-item prepend-icon="mdi-gradient-horizontal" title="Couleur de début du dégradé" value="carte-traces-debut" @click="openParam('Carte.Traces.couleurDebut')"></v-list-item>
-        <v-list-item prepend-icon="mdi-toggle-switch-outline" title="Couleur intermédiaire" value="carte-traces-milieu-actif" @click="openParam('Carte.Traces.activerCouleurMilieu')"></v-list-item>
-        <v-list-item prepend-icon="mdi-palette" title="Couleur intermédiaire du dégradé" value="carte-traces-milieu" @click="openParam('Carte.Traces.couleurMilieu')"></v-list-item>
-        <v-list-item prepend-icon="mdi-percent" title="Position couleur intermédiaire" value="carte-traces-position" @click="openParam('Carte.Traces.positionCouleurMilieu')"></v-list-item>
-        <v-list-item prepend-icon="mdi-gradient-vertical" title="Couleur de fin du dégradé" value="carte-traces-fin" @click="openParam('Carte.Traces.couleurFin')"></v-list-item>
-        <v-list-item prepend-icon="mdi-format-line-weight" title="Épaisseur des traces affichées" value="carte-traces-epaisseur" @click="openParam('Carte.Traces.epaisseur')"></v-list-item>
-        <v-list-item prepend-icon="mdi-timer-outline" title="Durée de l'animation du focus" value="carte-traces-flyto" @click="openParam('Carte.Traces.dureeFlyTo')"></v-list-item>
-
-        <v-divider class="my-2"></v-divider>
-
-        <!-- Paramètres d'exemple (démonstration ParameterCard) -->
-        <v-list-subheader>Exemples par type</v-list-subheader>
-        <v-list-item prepend-icon="mdi-toggle-switch-outline" title="Booléen" value="ex-bool" @click="openParam('Exemples.bool')"></v-list-item>
-        <v-list-item prepend-icon="mdi-decimal" title="Décimal" value="ex-float" @click="openParam('Exemples.float')"></v-list-item>
-        <v-list-item prepend-icon="mdi-numeric" title="Entier" value="ex-int" @click="openParam('Exemples.int')"></v-list-item>
-        <v-list-item prepend-icon="mdi-form-textbox-password" title="Secret" value="ex-secret" @click="openParam('Exemples.secret')"></v-list-item>
-        <v-list-item prepend-icon="mdi-format-list-bulleted" title="Liste" value="ex-list" @click="openParam('Exemples.list')"></v-list-item>
-        <v-list-item prepend-icon="mdi-palette" title="Couleur RGBA" value="ex-rgba" @click="openParam('Exemples.rgba')"></v-list-item>
-        <v-list-item prepend-icon="mdi-palette-outline" title="Material primaire" value="ex-mp" @click="openParam('Exemples.materialPrimary')"></v-list-item>
-        <v-list-item prepend-icon="mdi-palette-swatch" title="Material étendu" value="ex-me" @click="openParam('Exemples.materialExtended')"></v-list-item>
+      <!-- 3. Catégories de la vue active -->
+      <SettingsCategory
+        v-for="category in viewCategories"
+        :key="`view-${category.id}`"
+        :category="category"
+        :can-open-handler="true"
+        @open-param="openParam"
+        @category-click="onCategoryClick"
+      />
     </v-list>
   </v-navigation-drawer>
 
@@ -158,3 +161,15 @@ function openMonitors() {
     />
   </v-dialog>
 </template>
+
+<style scoped>
+/* Les items du drawer ne sont pas des cibles de navigation : on neutralise
+   la teinte "active" (sélection persistante au clic) pour revenir au fond
+   par défaut après l'animation. En Vuetify 3, la teinte est peinte sur un
+   élément enfant `.v-list-item__overlay` (géré par opacité), d'où le ciblage
+   de cet overlay plutôt que du list-item lui-même. Le survol (hover) reste
+   inchangé. */
+.settings-list :deep(.v-list-item--active > .v-list-item__overlay) {
+  opacity: 0 !important;
+}
+</style>

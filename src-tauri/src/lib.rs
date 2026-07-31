@@ -39,6 +39,7 @@ pub fn run() {
             gestionMode::delete_mode,
             gestionMode::select_mode,
             settings::get_settings,
+            settings::get_settings_meta,
             settings::update_setting,
             settings::reset_setting,
             settings::get_setting_value,

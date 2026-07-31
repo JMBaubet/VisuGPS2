@@ -112,7 +112,9 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 ### `settings.default.toml` — Schéma de paramètres
 
-Situé dans `src-tauri/settings.default.toml`, **embarqué dans l'exécutable** via `tauri.conf.json` (`resources`). Lu au démarrage via `resource_dir()` par `init_settings_state`. Définit tous les paramètres avec `description`, `documentation` (Markdown), `type`, `default`, et optionnellement `min`/`max`/`step`/`unit`/`choices`/`critical`.
+Situé dans `src-tauri/settings.default.toml`, **embarqué dans l'exécutable** via `tauri.conf.json` (`resources`). Lu au démarrage via `resource_dir()` par `init_settings_state`. Définit tous les paramètres avec `description`, `documentation` (Markdown), `type`, `default`, et optionnellement `min`/`max`/`step`/`unit`/`choices`/`critical`/`icon` (icône MDI du drawer).
+
+Ce fichier contient également une **table spéciale `[_meta]`** (placée en tête, avant les tables de paramètres) qui décrit l'organisation du drawer : vues (associées aux noms de routes Vue Router), groupes système communs à toutes les vues, actions (entrées non-paramètres), handlers (catégories à carte dédiée) et libellés/icônes des catégories. Cette table est **exclue du « flatten »** des paramètres (`flatten_settings` ignore la clé `_meta`) et n'est lue que par la commande `get_settings_meta`.
 
 ## Résolution des chemins (backend)
 
@@ -155,4 +157,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-07-10
+**Dernière mise à jour** : 2026-07-31

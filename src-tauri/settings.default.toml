@@ -9,6 +9,70 @@
 #   unit          = optionnel, unité affichée (ex: "ms", "s")
 #   choices       = optionnel, tableau de chaînes (type "list" contraint)
 #   critical      = optionnel (booléen, anciennement "critique")
+#   icon          = optionnel, nom d'icône MDI pour le drawer (défaut = icône par type)
+
+# ===========================================================================
+# Organisation des paramètres pour le drawer (table spéciale `_meta`).
+# Toutes les sous-tables de `_meta` DOIVENT être contiguës et placées avant
+# les tables de paramètres (convention TOML). Cette table est exclue du
+# « flatten » des paramètres : elle n'est lue que par `get_settings_meta`.
+# ===========================================================================
+
+# --- Paramètres système (communs à toutes les vues) ---
+# Les groupes sont les catégories effectivement affichées en section système.
+[_meta.system]
+groups = ["Systeme.Key", "Affichage.moniteurs"]
+
+# Entrées d'action non-paramètres affichées en tête de la section système.
+[_meta.system.actions.modes]
+label = "Modes d'exécution"
+icon = "mdi-database-cog-outline"
+action = "openModes"
+
+# Groupes utilisant un handler spécial au lieu de ParameterCard individuel.
+[_meta.system.handlers]
+"Affichage.moniteurs" = "monitors"
+
+# --- Vues applicatives (chacune expose ses propres catégories) ---
+# La clé de chaque vue correspond au `name` d'une route Vue Router
+# (cf. src/router/index.ts). Seules les catégories listées s'affichent
+# lorsque la vue est active (en plus des catégories système ci-dessus).
+#
+# État actuel du router : accueil (contient la carte Map), visualisation
+# et editionCamera (stubs), screenBis (fenêtre secondaire). Les paramètres
+# de la carte vivent donc dans la vue `accueil`. Quand de nouvelles vues
+# auront leurs propres paramètres, ajoutez une entrée [_meta.views.<route>].
+
+[_meta.views.accueil]
+label = "Accueil"
+icon = "mdi-home"
+groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Exemples"]
+
+# --- Métadonnées d'affichage des catégories (libellé / icône) ---
+# Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
+[_meta.groups."Systeme.Key"]
+label = "Licences"
+icon = "mdi-key-chain"
+
+[_meta.groups."Accueil.nbrCircuits"]
+label = "Circuits affichés"
+icon = "mdi-map-legend"
+
+[_meta.groups."Affichage.moniteurs"]
+label = "Configuration des fenêtres"
+icon = "mdi-projector"
+
+[_meta.groups."Carte.Favoris"]
+label = "Carte — Favoris"
+icon = "mdi-star"
+
+[_meta.groups."Carte.Traces"]
+label = "Carte — Traces affichées"
+icon = "mdi-gradient-horizontal"
+
+[_meta.groups."Carte.Clusters"]
+label = "Carte — Clusters"
+icon = "mdi-format-list-numbered"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits affichés."
@@ -74,6 +138,7 @@ au moins une trace marquée comme favorite. Jaune Material (yellow 500).
 """
 type = "material_extended"
 default = "#FFEB3BFF"
+icon = "mdi-map-marker-multiple-outline"
 
 [Carte.Favoris.couleurTrace]
 description = "Couleur de tracé des traces favorites"
@@ -83,6 +148,7 @@ marquée comme favorite. Identique à la couleur du cluster favori par défaut.
 """
 type = "material_extended"
 default = "#FFEB3BFF"
+icon = "mdi-map-marker-star"
 
 [Carte.Favoris.epaisseur]
 description = "Épaisseur des traces favorites (px)"
@@ -95,6 +161,7 @@ min = 1
 max = 20
 step = 1
 unit = "px"
+icon = "mdi-format-line-weight"
 
 # --- Clusters ---
 
@@ -120,6 +187,7 @@ description = "Couleur de début du dégradé"
 documentation = "Couleur du tracé au point de départ de la trace. Bleu Material (blue 500)."
 type = "material_extended"
 default = "#2196F3FF"
+icon = "mdi-gradient-horizontal"
 
 [Carte.Traces.activerCouleurMilieu]
 description = "Activer la couleur intermédiaire du dégradé"
@@ -130,12 +198,14 @@ début → fin.
 """
 type = "bool"
 default = true
+icon = "mdi-toggle-switch-outline"
 
 [Carte.Traces.couleurMilieu]
 description = "Couleur intermédiaire du dégradé"
 documentation = "Couleur intermédiaire (mauve) du dégradé. Violet Material (purple 500)."
 type = "material_extended"
 default = "#9C27B0FF"
+icon = "mdi-palette"
 
 [Carte.Traces.positionCouleurMilieu]
 description = "Position de la couleur intermédiaire (%)"
@@ -148,12 +218,14 @@ default = 0.5
 min = 0.0
 max = 1.0
 step = 0.05
+icon = "mdi-percent"
 
 [Carte.Traces.couleurFin]
 description = "Couleur de fin du dégradé"
 documentation = "Couleur du tracé au point d'arrivée de la trace. Rouge Material (red 500)."
 type = "material_extended"
 default = "#F44336FF"
+icon = "mdi-gradient-vertical"
 
 [Carte.Traces.epaisseur]
 description = "Épaisseur des traces affichées (px)"
@@ -164,6 +236,7 @@ min = 1
 max = 20
 step = 1
 unit = "px"
+icon = "mdi-format-line-weight"
 
 [Carte.Traces.dureeFlyTo]
 description = "Durée de l'animation flyTo du focus carte (ms)"
@@ -177,6 +250,7 @@ min = 100
 max = 2000
 step = 100
 unit = "ms"
+icon = "mdi-timer-outline"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.

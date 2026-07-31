@@ -802,7 +802,15 @@ export function haversineMeters(
 
 ## Ajouter un paramètre de configuration
 
-Le système de paramètres repose sur le fichier de configuration par défaut.
+Le système de paramètres repose sur le fichier de configuration par défaut
+`src-tauri/settings.default.toml`, qui contient **deux choses** :
+
+- les **paramètres** eux-mêmes (tables `[Categorie.SousCategorie.monParam]`) ;
+- l'**organisation du drawer** dans une table spéciale `[_meta]` (vues, catégories
+  système, actions, handlers, libellés/icônes).
+
+Un paramètre n'apparaît dans le drawer **que si son groupe est référencé** dans
+`[_meta]` (section système ou groupes d'une vue).
 
 ### Étape 1 : Déclarer le paramètre
 Ajoutez-le dans `src-tauri/settings.default.toml` :
@@ -815,14 +823,42 @@ type = "int" # Actuellement gérés: "int", "float", "bool", "secret", "list", "
 default = 42
 min = 0 # Optionnel
 max = 100 # Optionnel
+icon = "mdi-numeric" # Optionnel : icône MDI pour le drawer (défaut = icône par type)
+critical = false # Optionnel : paramètre sensible (icône affichée en orange dans le drawer)
 ```
 
-### Étape 2 : Créer le composant de saisie (si type non géré)
+### Étape 2 : Référencer le groupe dans `[_meta]`
+Pour que le paramètre s'affiche, ajoutez son groupe à `_meta` :
+
+- **Dans une vue** (paramètres liés à une page) : `[_meta.views.<route>.groups]`,
+  où `<route>` est le `name` d'une route Vue Router.
+- **En section système** (commun à toutes les vues) : `[_meta.system.groups]`.
+- Pour personnaliser le libellé/l'icône de la catégorie :
+  `[_meta.groups."<chemin.du.groupe>"]`.
+
+```toml
+# Exemple : le groupe MaNouvelle.Section apparaît sur la vue "accueil"
+[_meta.views.accueil]
+label = "Accueil"
+icon = "mdi-home"
+groups = ["Accueil", "Carte.Traces", "MaNouvelle.Section"]  # <- ajouté ici
+
+# Libellé/icône optionnels de la catégorie
+[_meta.groups."MaNouvelle.Section"]
+label = "Ma nouvelle section"
+icon = "mdi-tune"
+```
+
+> **Handlers spéciaux** : si une catégorie ne doit pas ouvrir `ParameterCard`
+> paramètre par paramètre (ex: `Affichage.moniteurs` → carte double), déclarez-le
+> dans `[_meta.system.handlers]` : `"Affichage.moniteurs" = "monitors"`.
+
+### Étape 3 : Créer le composant de saisie (si type non géré)
 Si vous créez un nouveau type (ex: "Chaine"), vous devrez :
 1. Créer le composant Vue d'entrée `InputChaine.vue` dans [src/components/parameters/](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/).
 2. L'ajouter à la liste de sélection adaptative dans [ParameterCard.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/ParameterCard.vue).
 
-### Étape 3 : Utiliser le paramètre
+### Étape 4 : Utiliser le paramètre
 Dans n'importe quel composant Vue :
 
 ```vue
@@ -838,3 +874,8 @@ const monParam = computed(() => {
 })
 </script>
 ```
+
+> Le drawer est entièrement piloté par `[_meta]` via le composable
+> [useSettingsTree.ts](file:///Volumes/Externe/Dev/VisuGPS2/src/composables/useSettingsTree.ts) :
+> il construit l'arbre des catégories filtré par la route active. Aucune entrée
+> n'est à coder côté composant pour faire apparaître le nouveau paramètre.

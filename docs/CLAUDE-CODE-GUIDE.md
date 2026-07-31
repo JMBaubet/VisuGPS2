@@ -241,7 +241,7 @@ Ce projet est VisuGPS2 (Tauri v2 + Vue 3 + Vuetify + Pinia + Router).
 Documentation de référence :
 - docs/CONTEXT.md : Vue d'ensemble
 - docs/ARCHITECTURE.md : Architecture technique
-- docs/COMMANDS.md : Référence des 18 commandes Tauri
+- docs/COMMANDS.md : Référence des 20 commandes Tauri
 - docs/DATA_STORAGE.md : Schéma de stockage des données
 - docs/CONVENTIONS.md : Conventions de code
 - docs/EXTENDING.md : Guide d'extension

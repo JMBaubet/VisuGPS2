@@ -44,6 +44,8 @@ export const useAppStore = defineStore('app', () => {
   const displays = ref<MonitorInfo[]>([])
   const loading = ref(false)
   const isScreenBisOpen = ref(false)
+  // État d'ouverture du drawer de paramètres (global, monté dans App.vue).
+  const isSettingsDrawerOpen = ref(false)
 
   // Environnements et modes d'exécution
   const isDev = ref(false)
@@ -165,6 +167,7 @@ export const useAppStore = defineStore('app', () => {
     loading,
     loadDisplays,
     isScreenBisOpen,
+    isSettingsDrawerOpen,
     isDev,
     activeMode,
     activeModeDev,

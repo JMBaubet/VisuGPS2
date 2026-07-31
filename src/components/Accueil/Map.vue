@@ -748,6 +748,10 @@ function initializeMap() {
   map.on('dblclick', () => closeCurrentPopup())
   map.on('click', 'clusters', handleClusterClick)
   map.on('click', 'unclustered-point', handlePointClick)
+  // Fermer le drawer de paramètres au clic sur la carte.
+  map.on('click', () => {
+    appStore.isSettingsDrawerOpen = false
+  })
 }
 
 // --- Réactivité : mise à jour des données sans recréer la carte ---

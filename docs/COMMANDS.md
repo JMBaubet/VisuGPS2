@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (18 commandes)
+## Catalogue (20 commandes)
 
 ### Application
 
@@ -71,6 +71,7 @@ pub struct ModeInfo {
 | Commande | Signature Rust | Retour |
 |---|---|---|
 | `get_settings` | `async (state) -> Result<Vec<SettingDefinition>, String>` | Tous les paramètres fusionnés (défaut + surcharges). Secrets masqués `********`. |
+| `get_settings_meta` | `async (state) -> Result<SettingsMeta, String>` | Organisation du drawer (table `[_meta]` du TOML : vues, groupes système, actions, handlers, libellés/icônes des catégories). |
 | `update_setting` | `async (state, path, value) -> Result<(), String>` | Valide et persiste un paramètre (chiffre les secrets). |
 | `reset_setting` | `async (state, path) -> Result<(), String>` | Supprime la surcharge (retour à la valeur par défaut). |
 | `get_setting_value` | `async (state, path) -> Result<Value, String>` | Valeur effective (déchiffrée pour les secrets). Usage interne (ex. token Mapbox). |
@@ -85,6 +86,7 @@ pub struct ModeInfo {
 | `get_traces` | `async (app) -> Result<Vec<TraceMetadata>, String>` | Liste les traces du mode actif depuis `traces.json`. |
 | `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + l'entrée du registre (écriture atomique). |
 | `update_trace` | `async (app, trace_id, favorite: Option<bool>, is_displayed: Option<bool>) -> Result<(), String>` | Mise à jour partielle (PATCH) d'une trace. Seuls les champs `Some(...)` sont modifiés. |
+| `get_trace_geometry` | `async (app, trace_id) -> Result<TraceGeometry, String>` | Géométrie GeoJSON d'une trace (lu depuis le cache, ou régénéré depuis le GPX en cas de migration). |
 
 **Type `TraceMetadata`** (miroir TS dans `src/stores/traces.ts`) :
 ```rust
@@ -136,4 +138,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-07-10
+**Dernière mise à jour** : 2026-07-31

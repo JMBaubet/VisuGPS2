@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -25,7 +26,58 @@ pub struct SettingDefinition {
     pub critical: Option<bool>,
     pub unit: Option<String>,
     pub choices: Option<Vec<serde_json::Value>>,
+    /// Icône MDI optionnelle pour le drawer (défaut = icône par type côté frontend).
+    pub icon: Option<String>,
     pub is_overridden: bool,
+}
+
+// --- Métadonnées d'organisation du drawer (table `_meta` du TOML) ----------
+
+/// Métadonnées d'une entrée d'action (non-paramètre) en section système.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActionEntry {
+    pub label: String,
+    pub icon: String,
+    /// Nom du handler frontend à invoquer (ex: "openModes").
+    pub action: String,
+}
+
+/// Paramètres communs à toutes les vues (section système du drawer).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SystemMeta {
+    /// Groupes racine toujours visibles (ex: "Systeme", "Affichage").
+    pub groups: Vec<String>,
+    /// Entrées d'action affichées en tête de la section système.
+    pub actions: BTreeMap<String, ActionEntry>,
+    /// Groupes utilisant un handler spécial au lieu de ParameterCard individuel
+    /// (ex: "Affichage.moniteurs" -> "monitors").
+    pub handlers: BTreeMap<String, String>,
+}
+
+/// Métadonnées d'une vue applicative.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ViewMeta {
+    pub label: String,
+    pub icon: String,
+    /// Catégories (groupes) exposées par cette vue.
+    pub groups: Vec<String>,
+}
+
+/// Métadonnées d'affichage d'une catégorie (libellé / icône optionnels).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GroupMeta {
+    pub label: Option<String>,
+    pub icon: Option<String>,
+}
+
+/// Organisation complète du drawer, lue depuis la table `_meta` du TOML.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettingsMeta {
+    pub system: SystemMeta,
+    /// Clé = nom de la vue (ex: "accueil", "carte"), aligné sur les noms de route.
+    pub views: BTreeMap<String, ViewMeta>,
+    /// Clé = identifiant de groupe (ex: "Carte.Traces").
+    pub groups: BTreeMap<String, GroupMeta>,
 }
 
 pub struct SettingsState {
@@ -209,6 +261,7 @@ fn flatten_settings(table: &toml::Table, prefix: &str, acc: &mut Vec<SettingDefi
                 .or_else(|| table.get("critique")) // rétro-compatibilité temporaire
                 .and_then(|v| v.as_bool());
             let unit = table.get("unit").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let icon = table.get("icon").and_then(|v| v.as_str()).map(|s| s.to_string());
             let choices = table.get("choices").and_then(|v| v.as_array()).map(|arr| {
                 arr.iter().map(toml_to_json).collect::<Vec<_>>()
             });
@@ -226,17 +279,115 @@ fn flatten_settings(table: &toml::Table, prefix: &str, acc: &mut Vec<SettingDefi
                 critical,
                 unit,
                 choices,
+                icon,
                 is_overridden: false,
             });
         }
     } else {
         for (k, v) in table {
+            // La table `_meta` décrit l'organisation du drawer : ce n'est pas
+            // un paramètre, on l'ignore lors du flatten (lue par extract_meta).
+            if prefix.is_empty() && k == "_meta" {
+                continue;
+            }
             if let Some(sub_table) = v.as_table() {
                 let next_prefix = if prefix.is_empty() { k.clone() } else { format!("{}.{}", prefix, k) };
                 flatten_settings(sub_table, &next_prefix, acc);
             }
         }
     }
+}
+
+// Extrait les métadonnées d'organisation (_meta) du TOML par défaut.
+// Renvoie une structure vide si la table `_meta` est absente ou mal formée,
+// de façon à ne jamais bloquer le démarrage de l'application.
+fn extract_meta(default_table: &toml::Table) -> SettingsMeta {
+    let empty = SettingsMeta {
+        system: SystemMeta {
+            groups: Vec::new(),
+            actions: BTreeMap::new(),
+            handlers: BTreeMap::new(),
+        },
+        views: BTreeMap::new(),
+        groups: BTreeMap::new(),
+    };
+
+    let meta = match default_table.get("_meta").and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => return empty,
+    };
+
+    // --- system ---
+    let system = meta.get("system").and_then(|v| v.as_table());
+    let system_meta = if let Some(sys) = system {
+        let groups = sys.get("groups")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let mut actions = BTreeMap::new();
+        if let Some(acts) = sys.get("actions").and_then(|v| v.as_table()) {
+            for (key, val) in acts {
+                if let Some(entry) = val.as_table() {
+                    let label = entry.get("label").and_then(|v| v.as_str()).unwrap_or(key).to_string();
+                    let icon = entry.get("icon").and_then(|v| v.as_str()).unwrap_or("mdi-cog").to_string();
+                    let action = entry.get("action").and_then(|v| v.as_str()).unwrap_or(key).to_string();
+                    actions.insert(key.clone(), ActionEntry { label, icon, action });
+                }
+            }
+        }
+
+        let mut handlers = BTreeMap::new();
+        if let Some(hs) = sys.get("handlers").and_then(|v| v.as_table()) {
+            for (key, val) in hs {
+                if let Some(s) = val.as_str() {
+                    handlers.insert(key.clone(), s.to_string());
+                }
+            }
+        }
+
+        SystemMeta { groups, actions, handlers }
+    } else {
+        empty.system.clone()
+    };
+
+    // --- views ---
+    let mut views = BTreeMap::new();
+    if let Some(views_tbl) = meta.get("views").and_then(|v| v.as_table()) {
+        for (name, val) in views_tbl {
+            if let Some(v) = val.as_table() {
+                let label = v.get("label").and_then(|x| x.as_str()).unwrap_or(name).to_string();
+                let icon = v.get("icon").and_then(|x| x.as_str()).unwrap_or("mdi-eye").to_string();
+                let groups = v.get("groups")
+                    .and_then(|x| x.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                views.insert(name.clone(), ViewMeta { label, icon, groups });
+            }
+        }
+    }
+
+    // --- groups (métadonnées d'affichage des catégories) ---
+    let mut groups = BTreeMap::new();
+    if let Some(groups_tbl) = meta.get("groups").and_then(|v| v.as_table()) {
+        for (id, val) in groups_tbl {
+            if let Some(g) = val.as_table() {
+                let label = g.get("label").and_then(|x| x.as_str()).map(|s| s.to_string());
+                let icon = g.get("icon").and_then(|x| x.as_str()).map(|s| s.to_string());
+                groups.insert(id.clone(), GroupMeta { label, icon });
+            }
+        }
+    }
+
+    SettingsMeta { system: system_meta, views, groups }
 }
 
 // Lit une valeur TOML par son chemin pointé (ex: "Accueil.nbrCircuits.list")
@@ -388,6 +539,15 @@ pub async fn get_settings(
 ) -> Result<Vec<SettingDefinition>, String> {
     let state_read = state.read().await;
     Ok(get_merged_settings(&state_read.default_toml, &state_read.user_overrides))
+}
+
+// Commande Tauri : Récupère les métadonnées d'organisation du drawer (table `_meta`).
+#[tauri::command]
+pub async fn get_settings_meta(
+    state: tauri::State<'_, Arc<RwLock<SettingsState>>>,
+) -> Result<SettingsMeta, String> {
+    let state_read = state.read().await;
+    Ok(extract_meta(&state_read.default_toml))
 }
 
 // Commande Tauri : Met à jour un paramètre
@@ -545,6 +705,65 @@ pub async fn get_setting_value(
     if let Some(def) = definitions.iter().find(|d| d.path == path) {
         return Ok(def.default.clone());
     }
-    
+
     Err(format!("Paramètre inconnu : {}", path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lit le vrai `settings.default.toml` livré avec l'application et valide
+    /// que la table `_meta` est correctement extraite et correctement exclue
+    /// du flatten des paramètres.
+    #[test]
+    fn meta_is_extracted_and_excluded_from_flatten() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        // 1. `_meta` ne doit pas générer de paramètres fantômes.
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        assert!(
+            !defs.iter().any(|d| d.path.starts_with("_meta")),
+            "la table `_meta` ne doit pas produire de paramètres"
+        );
+        assert!(
+            defs.iter().any(|d| d.path == "Systeme.Key.mapBox"),
+            "les paramètres réels doivent toujours être présents"
+        );
+        // La clé MapBox doit être marquée critique (drapeau `critical = true`
+        // du TOML), pour que le drawer l'affiche en orange.
+        let mapbox = defs.iter().find(|d| d.path == "Systeme.Key.mapBox").unwrap();
+        assert_eq!(mapbox.critical, Some(true), "Systeme.Key.mapBox doit être critique");
+
+        // 2. Les métadonnées sont extraites.
+        let meta = extract_meta(&table);
+        // Les groupes système sont les catégories réellement affichées
+        // (sous-groupes porteurs de paramètres, pas les racines nues).
+        assert!(meta.system.groups.contains(&"Systeme.Key".to_string()));
+        assert!(
+            meta.system.groups.contains(&"Affichage.moniteurs".to_string()),
+            "groups système = {:?}",
+            meta.system.groups
+        );
+        // Action système « Modes d'exécution ».
+        let modes = meta.system.actions.get("modes").expect("action 'modes' déclarée");
+        assert_eq!(modes.action, "openModes");
+        // Handler spécial pour les moniteurs (clé quotée contenant un point).
+        assert_eq!(
+            meta.system.handlers.get("Affichage.moniteurs"),
+            Some(&"monitors".to_string())
+        );
+        // Métadonnée de catégorie pour une clé quotée.
+        assert_eq!(
+            meta.groups.get("Affichage.moniteurs").and_then(|g| g.label.as_deref()),
+            Some("Configuration des fenêtres")
+        );
+        // Au moins la vue `accueil` est déclarée.
+        assert!(meta.views.contains_key("accueil"));
+    }
 }

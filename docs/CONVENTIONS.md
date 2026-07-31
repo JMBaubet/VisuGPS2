@@ -545,6 +545,33 @@ Fichiers existants :
 - Typage strict : paramètres et retours typés, JSDoc pour les fonctions publiques
 - Imports relatifs depuis le consommateur (pas d'alias `@/`)
 
+### Composables (`src/composables/`)
+
+Les composables encapsulent de la **logique réutilisable avec état réactif** (refs/computed/watchers liés à des stores ou à la route), par opposition aux utilitaires (`src/utils/`) qui sont des fonctions pures sans réactivité. Un composable = un fichier nommé `use<Domaine>.ts`.
+
+Fichier existant :
+- `useSettingsTree.ts` : construit l'arbre catégories/paramètres du drawer de paramètres à partir de `[_meta]`, filtré selon la route active, avec calcul des remontées criticité/surcharge.
+
+**Règles** :
+- Convention de nommage : `use` + Nom + `Store`/`Tree`/… en PascalCase, fonction `useXxx()` exportée nommée
+- Retourne un objet de refs/computed réactifs (jamais de valeurs brutes déréférencées)
+- Typage strict : exporter les interfaces publiques (`CategoryNode`, `ParamNode`, …)
+- Imports relatifs depuis le consommateur (pas d'alias `@/`)
+
+```typescript
+// src/composables/useSettingsTree.ts
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { useSettingsStore } from '../stores/settings'
+
+export function useSettingsTree() {
+  const route = useRoute()
+  const settingsStore = useSettingsStore()
+  const viewCategories = computed(() => /* … */)
+  return { viewCategories }
+}
+```
+
 ### Ordre des imports
 
 ```typescript

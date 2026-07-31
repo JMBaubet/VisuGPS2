@@ -230,6 +230,7 @@ await invoke('open_second_window')
 
 **Paramètres** :
 - `get_settings()` : Retourne les paramètres fusionnés (défaut + surcharges, secrets masqués)
+- `get_settings_meta()` : Retourne l'organisation du drawer (table `[_meta]` : vues, groupes système, actions, handlers, libellés/icônes)
 - `update_setting(path, value)` : Met à jour un paramètre (chiffre les secrets)
 - `reset_setting(path)` : Rétablit un paramètre à sa valeur par défaut
 - `get_setting_value(path)` : Retourne la valeur effective d'un paramètre (déchiffrée pour les secrets)
@@ -239,6 +240,7 @@ await invoke('open_second_window')
 - `get_traces()` : Retourne la liste des traces importées pour le mode actif
 - `delete_trace(traceId)` : Supprime une trace (fichier GPX + entrée du registre)
 - `update_trace(traceId, favorite?, isDisplayed?)` : Met à jour partiellement une trace (PATCH)
+- `get_trace_geometry(traceId)` : Retourne la géométrie GeoJSON d'une trace (cache, ou régénéré depuis le GPX)
 
 ### 5. Communication inter-fenêtres
 
@@ -532,11 +534,13 @@ pub async fn get_modes(app: AppHandle) -> Result<Vec<ModeInfo>, String> { ... }
 
 **settings.rs - Paramètres de configuration**
 ```rust
-pub struct SettingDefinition { path, description, documentation, type, default, value, … }
+pub struct SettingDefinition { path, description, documentation, type, default, value, min, max, step, critical, unit, choices, icon, is_overridden }
+// icon: Option<String> — icône MDI optionnelle pour le drawer (défaut = icône par type)
+pub struct SettingsMeta { system, views, groups }   // organisation du drawer (table [_meta])
 pub fn init_settings_state(app_handle: &AppHandle) -> Result<Arc<RwLock<SettingsState>>, String> { ... }
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Result<Vec<SettingDefinition>, String> { ... }
-// + update_setting, reset_setting, get_setting_value
+// + get_settings_meta, update_setting, reset_setting, get_setting_value
 ```
 
 **import_gpx.rs - Import de traces GPX**
@@ -609,7 +613,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-07-30
+**Dernière mise à jour** : 2026-07-31
 **Version du projet** : 0.0.1
 **Status** : En développement actif
 **Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance)

@@ -33,11 +33,57 @@ export interface SettingDefinition {
   unit?: string | null
   /** Choix autorisés pour un paramètre de type `list`. */
   choices?: any[] | null
+  /** Icône MDI optionnelle pour le drawer (défaut = icône par type). */
+  icon?: string | null
   is_overridden: boolean
+}
+
+// --- Métadonnées d'organisation du drawer (table `_meta` du TOML) ----------
+
+/** Entrée d'action (non-paramètre) affichée en section système. */
+export interface ActionEntry {
+  label: string
+  icon: string
+  /** Nom du handler frontend à invoquer (ex: "openModes"). */
+  action: string
+}
+
+/** Paramètres communs à toutes les vues (section système du drawer). */
+export interface SystemMeta {
+  /** Groupes racine toujours visibles (ex: "Systeme", "Affichage"). */
+  groups: string[]
+  /** Entrées d'action affichées en tête de la section système. */
+  actions: Record<string, ActionEntry>
+  /** Groupes utilisant un handler spécial (ex: { "Affichage.moniteurs": "monitors" }). */
+  handlers: Record<string, string>
+}
+
+/** Métadonnées d'une vue applicative. */
+export interface ViewMeta {
+  label: string
+  icon: string
+  /** Catégories (groupes) exposées par cette vue. */
+  groups: string[]
+}
+
+/** Métadonnées d'affichage d'une catégorie (libellé / icône optionnels). */
+export interface GroupMeta {
+  label?: string | null
+  icon?: string | null
+}
+
+/** Organisation complète du drawer, lue depuis la table `_meta` du TOML. */
+export interface SettingsMeta {
+  system: SystemMeta
+  /** Clé = nom de la vue (aligné sur les noms de route). */
+  views: Record<string, ViewMeta>
+  /** Clé = identifiant de groupe (ex: "Carte.Traces"). */
+  groups: Record<string, GroupMeta>
 }
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<SettingDefinition[]>([])
+  const meta = ref<SettingsMeta | null>(null)
   const loading = ref(false)
 
   // Brouillons d'édition locaux (drafts), keyés par path.
@@ -55,6 +101,16 @@ export const useSettingsStore = defineStore('settings', () => {
       settings.value = []
     } finally {
       loading.value = false
+    }
+  }
+
+  /** Charge les métadonnées d'organisation du drawer (table `_meta`). Statique : un seul appel suffit. */
+  async function loadSettingsMeta() {
+    try {
+      meta.value = await invoke<SettingsMeta>('get_settings_meta')
+    } catch (error) {
+      console.error('Failed to load settings meta:', error)
+      meta.value = null
     }
   }
 
@@ -153,10 +209,12 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     // état
     settings,
+    meta,
     loading,
     drafts,
     // persistance basique (conservée pour SettingsEditMonitor & usage interne)
     loadSettings,
+    loadSettingsMeta,
     updateSetting,
     resetSetting,
     getSettingValue,

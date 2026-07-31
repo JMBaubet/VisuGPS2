@@ -249,7 +249,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 18 commandes : voir COMMANDS.md pour le catalogue complet
+            // 20 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
             gestionMode::*, settings::*, import_gpx::*
         ])
@@ -343,11 +343,14 @@ src/
 │   │   ├── Map.vue              # Carte Mapbox GL (clusters, favoris, traces affichées, focus)
 │   │   ├── AppBar.vue
 │   │   ├── ModeExecutionCard.vue
-│   │   └── SettingsDrawer.vue
+│   │   ├── SettingsDrawer.vue   # Drawer de paramètres (dynamique, piloté par [_meta])
+│   │   └── SettingsCategory.vue # Rendu d'une catégorie (accordéon / aplati / handler)
 │   └── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
 │       └── …
+├── composables/      # Logique réutilisable (Composition API)
+│   └── useSettingsTree.ts       # Construit l'arbre catégories/params du drawer (filtré par route)
 ├── assets/           # Ressources statiques
 │   └── styles/
 ├── App.vue          # Layout racine
@@ -678,7 +681,8 @@ L'application intègre un système robuste de gestion des paramètres de configu
 ### Architecture du système de paramètres
 
 1. **Définition (Backend Rust)** :
-   - Les paramètres par défaut sont définis dans `src-tauri/settings.default.toml` (embarqué dans l'exécutable).
+   - Les paramètres par défaut sont définis dans `src-tauri/settings.default.toml` (embarqué dans l'exécutable). Chaque paramètre porte `description`, `documentation` (Markdown), `type`, `default`, et optionnellement `min`/`max`/`step`/`unit`/`choices`/`critical`/`icon` (icône MDI pour le drawer).
+   - Ce même fichier contient une **table spéciale `[_meta]`** qui décrit l'organisation du drawer : vues (associées aux noms de routes), groupes système communs à toutes les vues, actions (entrées non-paramètres comme les modes d'exécution), handlers (catégories à carte dédiée, ex. `Affichage.moniteurs`), et libellés/icônes des catégories. Cette table est **exclue du « flatten »** des paramètres et exposée par la commande `get_settings_meta`.
    - Les paramètres modifiés par l'utilisateur sont sauvegardés dans un fichier `config-dev.toml` (en mode dev) ou `config.toml` (en production) dans le dossier de configuration de l'OS (`Application Support` sur macOS).
 
 2. **Sécurité (Secrets)** :
@@ -686,13 +690,14 @@ L'application intègre un système robuste de gestion des paramètres de configu
    - La clé de chiffrement ("master key") est stockée dans le gestionnaire de mots de passe de l'OS en production (Keyring/Trousseau), ou codée en dur en développement pour éviter les pop-ups macOS incessants lors des recompilations.
 
 3. **Store (Frontend Pinia)** :
-   - `src/stores/settings.ts` charge les paramètres via la commande Tauri `get_settings`.
+   - `src/stores/settings.ts` charge les paramètres via la commande Tauri `get_settings`, et l'organisation du drawer via `get_settings_meta` (état `meta`, chargé une fois).
    - Il maintient l'état réactif de chaque paramètre (`value`, `default`, `is_overridden`, etc.).
+   - L'état d'ouverture du drawer (`isSettingsDrawerOpen`) vit dans le store `app`.
 
 4. **Interface (Vue)** :
    - Une carte d'édition générique ([ParameterCard.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/ParameterCard.vue)) s'appuie sur des composants d'entrée spécifiques par type ([InputBool.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/InputBool.vue), [InputInt.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/parameters/InputInt.vue), etc.) pour modifier, sauvegarder et réinitialiser (undo) les paramètres individuels.
    - Un composant spécifique ([SettingsEditMonitor.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsEditMonitor.vue)) gère la configuration combinée des écrans principal et secondaire.
-   - Le menu des paramètres s'affiche dans un panneau latéral ([SettingsDrawer.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsDrawer.vue)).
+   - Le panneau latéral des paramètres ([SettingsDrawer.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsDrawer.vue)) est **entièrement dynamique** : aucune entrée n'est codée en dur. L'arbre des catégories est construit par le composable [useSettingsTree.ts](file:///Volumes/Externe/Dev/VisuGPS2/src/composables/useSettingsTree.ts) à partir de `[_meta]` et filtré selon la route active ; chaque catégorie est rendue par [SettingsCategory.vue](file:///Volumes/Externe/Dev/VisuGPS2/src/components/Accueil/SettingsCategory.vue). Les indicateurs visuels sont : icône en orange si critique, libellé en bleu si surchargé (remontés au niveau catégorie).
 
 ## Import de traces GPX
 
@@ -761,10 +766,10 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 | `delete_trace` | Supprime le fichier GPX + l'entrée du registre (écriture atomique). |
 | `update_trace` | Mise à jour partielle (PATCH) d'une trace : `favorite` et/ou `is_displayed` (persistés). |
 
-> Référence complète des 18 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 20 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-07-30
+**Dernière mise à jour** : 2026-07-31
