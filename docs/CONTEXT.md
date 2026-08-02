@@ -317,7 +317,7 @@ Si vous modifiez les scripts :
 
 Autres stores existants :
 - `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
-- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`.
+- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `visibleTraceIds` (IDs visibles dans le viewport), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), `visibleTracesByDistance` (filtrage viewport, tri par distance), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`, `setVisibleTraceIds`.
 - `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 
 ## Variables d'environnement
@@ -613,7 +613,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-07-31
+**Dernière mise à jour** : 2026-08-02
 **Version du projet** : 0.0.1
 **Status** : En développement actif
 **Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance)

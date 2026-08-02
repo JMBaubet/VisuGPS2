@@ -25,9 +25,9 @@ function getParam(path: string): any {
 /** Nombre maximum de circuits présentés dans la liste. */
 const maxCircuits = computed(() => getParam('Accueil.nbrCircuits.list') ?? 6)
 
-/** Traces triées par distance, limitées au paramètre nbrCircuits. */
+/** Traces visibles dans le viewport, triées par distance, limitées au paramètre nbrCircuits. */
 const displayedTraces = computed(() =>
-  tracesStore.sortedTracesByDistance.slice(0, maxCircuits.value)
+  tracesStore.visibleTracesByDistance.slice(0, maxCircuits.value)
 )
 
 /**

@@ -77,9 +77,10 @@ icon = "mdi-format-list-numbered"
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
 documentation = """
-Ce paramètre permet de limiter le nombre de circuits présentés dans la liste
-de la page d'accueil. Seuls les circuits les plus proches du centre de la carte
-sont affichés dans la liste (dans l'ordre de proximité).
+Ce paramètre limite le nombre de circuits affichés dans la liste de la page
+d'accueil. Seuls les circuits **visibles dans le viewport** de la carte (points
+individuels et feuilles des clusters) sont pris en compte, puis triés par
+proximité au centre de la carte. Le nombre affiché est plafonné à cette valeur.
 """
 type = "int"
 default = 6

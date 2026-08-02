@@ -357,7 +357,7 @@ Le clic sur le bouton **Info** d'un circuit (`Circuit.vue`) déclenche un **focu
 
 **Points d'attention** :
 - *Anti-race* : un compteur d'epoch évite d'afficher un focus après une fermeture si la géométrie arrive tard (chargement async).
-- *Stabilité du tri* : pendant un focus, `moveend` **ne met pas à jour** `mapCenter` (sinon `sortedTracesByDistance` se recalcule et la liste `CircuitsDrawer` se réordonne). Cf. `Map.vue` `onMapMoveEnd`.
+- *Stabilité du tri* : pendant un focus, `moveend` **ne met pas à jour** `mapCenter` et `refreshVisibleTraceIds()` est court-circuité (sinon `visibleTracesByDistance` se recalcule et la liste `CircuitsDrawer` se réordonne). Cf. `Map.vue` `onMapMoveEnd` et `refreshVisibleTraceIds`.
 - *Multi-cartes* : une seule extension Info ouverte à la fois — la prise d'un nouveau focus ferme automatiquement les autres (watcher dans `Circuit.vue`).
 
 ## 9. Lecture des paramètres côté frontend
@@ -398,6 +398,35 @@ const focusedTraceId = ref<string | null>(null)
 
 État purement frontend (aucune commande Tauri, non persisté), exposé dans le `return` public du store.
 
+### État `visibleTraceIds` et getter `visibleTracesByDistance` (filtrage viewport)
+
+```ts
+/**
+ * Identifiants des traces visibles dans le viewport courant
+ * (feuilles des clusters rendus + points individuels non clusterisés).
+ */
+const visibleTraceIds = ref<Set<string>>(new Set())
+
+/**
+ * Traces visibles, triées par distance croissante au centre.
+ * Filtre sortedTracesByDistance pour ne garder que les traces
+ * dont l'ID figure dans visibleTraceIds.
+ */
+const visibleTracesByDistance = computed(() =>
+  sortedTracesByDistance.value.filter(t => visibleTraceIds.value.has(t.id)),
+)
+
+/**
+ * Met à jour l'ensemble des identifiants visibles.
+ * Appelé par Map.vue après queryRenderedFeatures + getClusterLeaves.
+ */
+function setVisibleTraceIds(ids: Iterable<string>) {
+  visibleTraceIds.value = new Set(ids)
+}
+```
+
+État purement frontend (aucune commande Tauri, non persisté). Mis à jour par `Map.vue` via `refreshVisibleTraceIds()` qui combine `queryRenderedFeatures` sur les couches `unclustered-point` et `clusters`, puis `getClusterLeaves` pour chaque cluster. Le calcul est différé jusqu'à l'état stable de la carte (événement `idle`) pour garantir que les clusters sont rendus.
+
 ## 11. Conventions à respecter
 
 - `<script setup lang="ts">`, imports relatifs, commentaires en français, docstrings JSDoc comme dans les fichiers existants.
@@ -416,5 +445,8 @@ const focusedTraceId = ref<string | null>(null)
 - [x] `stores/traces.ts` : `getTraceGeometry` + cache, état `focusedTraceId`.
 - [x] `Map.vue` : `favorite` dans les features, `clusterProperties.hasFavorite`, couleur cluster conditionnelle, couches `favorites-line` et `displayed-traces-line`, expression `line-gradient`, réactivité (traces + settings), ordre des couches.
 - [x] `Map.vue` : couche `focus-traces-line`, helper `computeBounds`, `watch(focusedTraceId)` (sauvegarde de vue, isolation, `fitBounds`, `flyTo`), `moveend` sans màj du centre pendant le focus.
+- [x] `Map.vue` : filtrage viewport — `refreshVisibleTraceIds()` avec `queryRenderedFeatures` sur `unclustered-point` et `clusters`, `getClusterLeaves` pour extraire les feuilles, dédoublonnage (`Set`), pattern d'epoch (`visibleEpoch`) anti-race. Déclenché par `scheduleVisibleRefresh()` → événement `idle` + handler `moveend` + `load`. Guard `focusedTraceId` pour stabilité du drawer.
+- [x] `stores/traces.ts` : état `visibleTraceIds` (réactif `Set<string>`), action `setVisibleTraceIds()`, getter `visibleTracesByDistance`.
+- [x] `CircuitsDrawer.vue` : consommation de `visibleTracesByDistance` au lieu de `sortedTracesByDistance` (paramètre `nbrCircuits` conservé comme plafond parmi les visibles).
 - [x] `Circuit.vue` : refonte UI (2 lignes d'icônes d'action masquées par opacité, extension Info via `v-expand-transition`, focus via `focusedTraceId`).
 - [x] Vérifier : compilation Rust (`cargo build`), `npm run build` (vue-tsc + vite), test visuel cluster favori + bascule favori/affichage + focus carte.

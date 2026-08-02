@@ -432,16 +432,28 @@ Frontend appelle invoke()
   → Frontend reçoit le résultat
 ```
 
-### 4. Synchronisation carte ↔ liste (clustering)
+### 4. Synchronisation carte ↔ liste (filtrage viewport)
 
 ```
 Utilisateur déplace/zoome la carte
   → Map.vue : événement moveend (debounce 150 ms)
   → tracesStore.updateMapCenter(lat, lng)
-  → Invalidation du getter computed sortedTracesByDistance
-  → CircuitsDrawer.vue : la v-for se réordonne automatiquement
-  → L'utilisateur voit la liste se réorganiser par distance croissante
+  → Map.vue : scheduleVisibleRefresh() (attend l'état stable de la carte)
+  → Map.vue (à l'état stable / idle) : refreshVisibleTraceIds()
+      - queryRenderedFeatures({ layers: ['unclustered-point'] }) → IDs points individuels
+      - queryRenderedFeatures({ layers: ['clusters'] }) → pour chaque cluster
+          → source.getClusterLeaves(clusterId, pointCount, 0) → IDs feuilles
+      - Dédoublonnage (Set) → tracesStore.setVisibleTraceIds(ids)
+  → Invalidation du getter computed visibleTracesByDistance
+  → CircuitsDrawer.vue : la v-for se met à jour automatiquement
+  → L'utilisateur voit uniquement les circuits visibles dans le viewport,
+    triés par distance croissante, plafonnés à nbrCircuits
 ```
+
+**Points clés** :
+- Le calcul utilise l'événement `idle` de Mapbox (carte dans un état stable, clusters rendus) pour garantir que `queryRenderedFeatures` retourne des résultats fiables. Un drapeau `pendingVisibleRefresh` est levé par `scheduleVisibleRefresh()` et consommé par le handler `idle`.
+- Le pattern d'epoch (`visibleEpoch`) annule les résultats périmés si un nouveau `moveend` survient pendant les appels asynchrones à `getClusterLeaves`.
+- Pendant un focus (`focusedTraceId` positionné), `refreshVisibleTraceIds()` est court-circuité pour garder le drawer stable (cohérent avec `moveend`).
 
 ## Patterns architecturaux
 
@@ -721,21 +733,24 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
    - Actions `loadTraces()` et `importerGpx()` passent par des commandes Tauri (le frontend ne connaît pas le mode actif).
    - Types `TraceMetadata`, `TraceStats`, `Point3D` en miroir exact des structs Rust.
    - Getter `sortedTracesByDistance` : trie les traces par distance Haversine croissante au centre courant de la carte (`mapCenter`).
+   - Getter `visibleTracesByDistance` : filtre `sortedTracesByDistance` pour ne garder que les traces dont l'ID figure dans `visibleTraceIds`. Utilisé par `CircuitsDrawer.vue`.
+   - État `visibleTraceIds` (réactif, `Set<string>`) : identifiants des traces visibles dans le viewport courant. Mis à jour par `Map.vue` via l'action `setVisibleTraceIds()`. État UI éphémère, non persisté.
    - Action `updateMapCenter(lat, lon)` : appelée par `Map.vue` sur `moveend` (debounce) pour synchroniser le tri.
+   - Action `setVisibleTraceIds(ids)` : appelée par `Map.vue` après `queryRenderedFeatures` + `getClusterLeaves`.
    - État `focusedTraceId` : id de la trace « focus » temporaire (clic Info dans `Circuit.vue`), observé par `Map.vue` pour isoler et cadrer la trace (cf. §5). État UI éphémère, non persisté.
 
 4. **Composants Vue** :
-   - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, triée par distance (`sortedTracesByDistance`).
+   - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
    - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
    - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).
    - **Sources GeoJSON** : `traces` (clusterisée, points de départ, `cluster: true`, `clusterRadius: 50`, `clusterMaxZoom: 14`), `favorites` (LineString favoris), `displayed-traces` (LineString dégradé, `lineMetrics: true`), `focus-traces` (LineString isolée en mode focus).
    - **Couches** (du bas vers le haut) : `clusters` / `cluster-count` / `unclustered-point` (points de départ) ; `favorites-line` (couleur favori, épaisseur 6) ; `displayed-traces-line` (dégradé bleu→rouge, épaisseur 4) ; `focus-traces-line` (même dégradé, masquée par défaut).
-   - **Synchronisation carte ↔ store** : `moveend` (debounce 150 ms) → `tracesStore.updateMapCenter()` → invalidation du getter `sortedTracesByDistance` → réordonnancement de la liste. Pendant un focus, `moveend` **ne met pas à jour** `mapCenter` (stabilité du tri).
+   - **Synchronisation carte ↔ store** : `moveend` (debounce 150 ms) → `tracesStore.updateMapCenter()` → `scheduleVisibleRefresh()` → à l'état stable (`idle`) : `queryRenderedFeatures` sur les couches `unclustered-point` et `clusters`, `getClusterLeaves` pour extraire les feuilles, dédoublonnage → `tracesStore.setVisibleTraceIds()` → invalidation du getter `visibleTracesByDistance` → mise à jour de la liste. Pendant un focus, le calcul est court-circuité (stabilité du drawer).
    - **Interactions** : clic cluster → `easeTo` vers le centre au zoom d'expansion ; clic point → popup (nom, source, coordonnées) ; curseur `pointer` au survol.
    - **Focus carte** : `watch(tracesStore.focusedTraceId)` → sauvegarde de la vue, masquage des couches favoris/affichées, affichage isolé de la trace dans `focus-traces-line`, cadrage par `fitBounds`, retour par `flyTo` (durée `Carte.Traces.dureeFlyTo`).
-   - **Réactivité** : `watch(traces)` → `setData()` sur les sources pour suivre imports/suppressions/bascules ; `watch(settings)` → `setPaintProperty` pour le style.
+   - **Réactivité** : `watch(traces)` → `setData()` sur les sources + `scheduleVisibleRefresh()` pour recalculer les visibles ; `watch(settings)` → `setPaintProperty` pour le style ; événement `idle` → consomme `pendingVisibleRefresh` pour effectuer le calcul après stabilisation du rendu.
 
 6. **Utilitaire géographique** (`src/utils/geo.ts`) :
    - Fonctions nommées exportées (pattern `format.ts`) : `toRadians()`, `haversineMeters()`.
@@ -772,4 +787,4 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-07-31
+**Dernière mise à jour** : 2026-08-02

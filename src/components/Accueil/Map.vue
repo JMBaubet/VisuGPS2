@@ -702,7 +702,103 @@ function onMapMoveEnd() {
     if (tracesStore.focusedTraceId) return
     const c = map!.getCenter()
     tracesStore.updateMapCenter(c.lat, c.lng)
+    // Mettre a jour la liste des traces visibles dans le viewport.
+    scheduleVisibleRefresh()
   }, MOVE_END_DEBOUNCE_MS)
+}
+
+// --- Identification des traces visibles dans le viewport ---
+
+/**
+ * Jeton d'invalidation pour le calcul des traces visibles.
+ * Incrémenté a chaque nouveau declenchement ; si un calcul en cours
+ * detecte un epoch different, il abandonne ses resultats (anti-race).
+ */
+let visibleEpoch = 0
+
+/**
+ * Promesifie l'appel callback de `source.getClusterLeaves`.
+ * En cas d'erreur, resout avec un tableau vide (ne bloque pas les autres).
+ */
+function getClusterLeavesAsync(
+  source: mapboxgl.GeoJSONSource,
+  clusterId: number,
+  limit: number,
+  offset: number,
+): Promise<GeoJSON.Feature[]> {
+  return new Promise(resolve => {
+    source.getClusterLeaves(clusterId, limit, offset, (err, features) => {
+      if (err || !features) {
+        resolve([])
+      } else {
+        resolve(features)
+      }
+    })
+  })
+}
+
+/**
+ * Recupere les identifiants des traces visibles dans le viewport courant :
+ * - points individuels (couche 'unclustered-point') ;
+ * - feuilles des clusters visibles (couche 'clusters', via getClusterLeaves).
+ *
+ * Le resultat est dedoublonne puis pousse dans le store via
+ * `tracesStore.setVisibleTraceIds`, ce qui declenche le recompute de
+ * `visibleTracesByDistance` et met a jour CircuitsDrawer.
+ *
+ * Un pattern d'epoch (visibleEpoch) est utilise pour annuler les resultats
+ * perimes si un nouveau moveend survient avant la fin du calcul.
+ */
+async function refreshVisibleTraceIds() {
+  if (!map || !mapReady) return
+  // Pendant un focus, le drawer doit rester stable.
+  if (tracesStore.focusedTraceId) return
+
+  const epoch = ++visibleEpoch
+
+  try {
+    // 1. Points individuels visibles
+    const unclustered = map.queryRenderedFeatures({
+      layers: ['unclustered-point'],
+    })
+    const ids = new Set<string>()
+    for (const f of unclustered) {
+      const id = f.properties?.id as string | undefined
+      if (id) ids.add(id)
+    }
+
+    // 2. Clusters visibles — extraire les feuilles de chaque cluster
+    const clusters = map.queryRenderedFeatures({
+      layers: ['clusters'],
+    })
+    const source = map.getSource('traces') as mapboxgl.GeoJSONSource
+
+    // Lancer les getClusterLeaves en parallele (un par cluster).
+    const leafPromises = clusters.map(feature => {
+      const clusterId = feature.properties?.cluster_id as number
+      const pointCount = feature.properties?.point_count as number
+      if (clusterId == null || pointCount == null) return Promise.resolve<GeoJSON.Feature[]>([])
+      return getClusterLeavesAsync(source, clusterId, pointCount, 0)
+    })
+
+    const leavesArrays = await Promise.all(leafPromises)
+
+    // Verifier que l'epoch n'a pas change pendant l'attente asynchrone.
+    if (epoch !== visibleEpoch) return
+
+    for (const leaves of leavesArrays) {
+      for (const leaf of leaves) {
+        const id = leaf.properties?.id as string | undefined
+        if (id) ids.add(id)
+      }
+    }
+
+    // 3. Pousser le resultat dedoublonne dans le store.
+    tracesStore.setVisibleTraceIds(ids)
+  } catch (error) {
+    // Ne pas bloquer l'UI en cas d'erreur inattendue.
+    console.error('Erreur lors du calcul des traces visibles :', error)
+  }
 }
 
 // --- Initialisation ---
@@ -736,6 +832,12 @@ function initializeMap() {
     // Synchroniser le centre initial
     const c = map!.getCenter()
     tracesStore.updateMapCenter(c.lat, c.lng)
+
+    // Demander un recalcul des traces visibles. On force l'attente du
+    // prochain etat stable (idle) car queryRenderedFeatures ne voit les
+    // clusters qu'une fois qu'ils ont ete reellement rendus a l'ecran,
+    // ce qui necessite au moins un cycle de rendu apres addSource.
+    pendingVisibleRefresh = true
   })
 
   map.on('moveend', onMapMoveEnd)
@@ -752,6 +854,37 @@ function initializeMap() {
   map.on('click', () => {
     appStore.isSettingsDrawerOpen = false
   })
+  // Des que la carte atteint un etat stable (rendu termine, clusters
+  // calcules), effectuer un eventuel recalcul en attente des traces visibles.
+  // C'est le seul moyen fiable d'interroger queryRenderedFeatures apres que
+  // les clusters ont ete reellement dessines.
+  map.on('idle', () => {
+    if (pendingVisibleRefresh) {
+      pendingVisibleRefresh = false
+      refreshVisibleTraceIds()
+    }
+  })
+}
+
+/**
+ * True si un recalcul des traces visibles est en attente (demandé mais pas
+ * encore effectué). Le handler 'idle' de la carte le consomme des que la carte
+ * atteint un etat stable, garantissant que les clusters sont rendus.
+ */
+let pendingVisibleRefresh = false
+
+/**
+ * Demande un recalcul des traces visibles. Si la carte est deja stable, le
+ * calcul est effectue immediatement ; sinon il est differe jusqu'au prochain
+ * etat stable (evenement 'idle').
+ */
+function scheduleVisibleRefresh() {
+  if (!map || !mapReady) return
+  if (map.isMoving() || map.isEasing()) {
+    pendingVisibleRefresh = true
+  } else {
+    refreshVisibleTraceIds()
+  }
 }
 
 // --- Réactivité : mise à jour des données sans recréer la carte ---
@@ -782,6 +915,9 @@ watch(
     // 3. Rafraîchir le popup courant (si ouvert) pour rester cohérent avec
     //    l'état modifié depuis n'importe où (Circuit.vue, popup, etc.).
     rebuildCurrentPopup()
+    // 4. Recalculer les traces visibles des que la carte est stable (le
+    //    reclustering apres setData est asynchrone ; on attend l'etat idle).
+    scheduleVisibleRefresh()
   },
   { deep: true },
 )

@@ -73,6 +73,12 @@ export const useTracesStore = defineStore('traces', () => {
    * État UI éphémère observé par Map.vue pour isoler et cadrer la trace.
    */
   const focusedTraceId = ref<string | null>(null)
+  /**
+   * Identifiants des traces actuellement visibles dans le viewport de la carte
+   * (feuilles des clusters rendus + points individuels non clusterises).
+   * Mis a jour par Map.vue via `setVisibleTraceIds` sur moveend / sourcedata.
+   */
+  const visibleTraceIds = ref<Set<string>>(new Set())
   /** Cache des géométries (LineString) déjà chargées depuis le backend, keyé par id. */
   const geometryCache = new Map<string, GeoJSON.Feature>()
 
@@ -93,6 +99,15 @@ export const useTracesStore = defineStore('traces', () => {
       }))
       .sort((a, b) => a.distance - b.distance)
       .map(entry => entry.trace),
+  )
+
+  /**
+   * Traces visibles dans le viewport courant de la carte, triees par distance
+   * croissante au centre. Seules les traces dont l'identifiant figure dans
+   * `visibleTraceIds` (mis a jour par Map.vue) sont retenues.
+   */
+  const visibleTracesByDistance = computed(() =>
+    sortedTracesByDistance.value.filter(t => visibleTraceIds.value.has(t.id)),
   )
 
   /**
@@ -195,6 +210,15 @@ export const useTracesStore = defineStore('traces', () => {
     mapCenter.value = { lat, lon }
   }
 
+  /**
+   * Met à jour l'ensemble des identifiants de traces visibles dans le viewport.
+   * Appelé par Map.vue apres un moveend ou un evenement sourcedata.
+   * Un nouveau Set est créé pour garantir la réactivité de Vue.
+   */
+  function setVisibleTraceIds(ids: Iterable<string>) {
+    visibleTraceIds.value = new Set(ids)
+  }
+
   // Exposition publique
   return {
     // État
@@ -202,9 +226,11 @@ export const useTracesStore = defineStore('traces', () => {
     loading,
     mapCenter,
     focusedTraceId,
+    visibleTraceIds,
     // Getters
     traceCount,
     sortedTracesByDistance,
+    visibleTracesByDistance,
     // Actions
     loadTraces,
     importerGpx,
@@ -212,5 +238,6 @@ export const useTracesStore = defineStore('traces', () => {
     updateTrace,
     getTraceGeometry,
     updateMapCenter,
+    setVisibleTraceIds,
   }
 })
