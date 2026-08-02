@@ -54,8 +54,8 @@ groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Exemple
 label = "Licences"
 icon = "mdi-key-chain"
 
-[_meta.groups."Accueil.nbrCircuits"]
-label = "Circuits affichés"
+[_meta.groups.Accueil]
+label = "Accueil — Circuits"
 icon = "mdi-map-legend"
 
 [_meta.groups."Affichage.moniteurs"]
@@ -75,10 +75,11 @@ label = "Carte — Clusters"
 icon = "mdi-format-list-numbered"
 
 [Accueil.nbrCircuits.list]
-description = "Nombre maximum de circuits affichés."
+description = "Nombre maximum de circuits présentés dans la liste."
 documentation = """
-Ce paramètre permet de gérer le nombre de circuits qui sont affichés dans la liste de la page d'accueil.
-Les circuits affichés sont les plus proches du centre de la carte
+Ce paramètre permet de limiter le nombre de circuits présentés dans la liste
+de la page d'accueil. Seuls les circuits les plus proches du centre de la carte
+sont affichés dans la liste (dans l'ordre de proximité).
 """
 type = "int"
 default = 6

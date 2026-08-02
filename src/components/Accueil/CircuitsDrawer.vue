@@ -6,14 +6,29 @@
  * via la commande Tauri `get_traces`. Le backend résout le dossier approprié
  * en fonction du mode d'exécution actif.
  */
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import Circuit from './Circuit.vue'
 import { useTracesStore } from '../../stores/traces'
 import { useUiStore } from '../../stores/ui'
+import { useSettingsStore } from '../../stores/settings'
 import type { TraceMetadata } from '../../stores/traces'
 
 const tracesStore = useTracesStore()
 const ui = useUiStore()
+const settingsStore = useSettingsStore()
+
+/** Valeur d'un paramètre via son chemin (ex. 'Accueil.nbrCircuits.list'). */
+function getParam(path: string): any {
+  return settingsStore.getParamDef(path)?.value
+}
+
+/** Nombre maximum de circuits présentés dans la liste. */
+const maxCircuits = computed(() => getParam('Accueil.nbrCircuits.list') ?? 6)
+
+/** Traces triées par distance, limitées au paramètre nbrCircuits. */
+const displayedTraces = computed(() =>
+  tracesStore.sortedTracesByDistance.slice(0, maxCircuits.value)
+)
 
 /**
  * Déclenche l'import d'un fichier GPX.
@@ -142,7 +157,7 @@ onMounted(() => {
     <!-- Liste des traces importées -->
     <v-list-item class="pt-4 px-0">
       <Circuit
-        v-for="trace in tracesStore.sortedTracesByDistance"
+        v-for="trace in displayedTraces"
         :key="trace.id"
         :trace="trace"
         @delete="confirmerSuppression"
