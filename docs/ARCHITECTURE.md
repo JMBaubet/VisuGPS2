@@ -80,7 +80,7 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'accueil', component: Accueil },
     { path: '/visualisation', name: 'visualisation', component: Visualisation },
-    { path: '/edition-camera', name: 'editionCamera', component: EditionCamera },
+    { path: '/edition-camera/:traceId', name: 'editionCamera', component: EditionCamera },
     { path: '/screen-bis', name: 'screenBis', component: ScreenBis }
   ]
 })
@@ -89,7 +89,7 @@ const router = createRouter({
 **Stratégie de routing** :
 - `createWebHistory()` : URLs propres sans `#`
 - Navigation par `name` recommandée (plus stable que `path`)
-- 4 routes : `accueil`, `visualisation`, `editionCamera`, `screenBis`
+- 4 routes : `accueil`, `visualisation`, `editionCamera` (paramétrée par `:traceId`), `screenBis`
 
 **Ajout de routes** :
 ```typescript
@@ -249,9 +249,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 20 commandes : voir COMMANDS.md pour le catalogue complet
+            // 26 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
-            gestionMode::*, settings::*, import_gpx::*
+            gestionMode::*, settings::*, import_gpx::*, edition::*
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -266,7 +266,8 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `display.rs` : Détection des écrans (macOS NSScreen, Windows Tauri)
 - `gestionMode.rs` : Gestion des modes d'exécution (CRUD, sélection, fichier `.env`)
 - `settings.rs` : Système de paramètres de configuration (TOML, chiffrement des secrets)
-- `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces)
+- `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces) — expose `pub fn get_mode_dir` réutilisée par `edition.rs`
+- `edition.rs` : Édition caméra (Modes 1 & 2) — persistance des keyframes et overrides dans `{mode_dir}/keyframes/` (6 commandes Tauri : `has_raw_keyframes`, `get_raw_keyframes`, `save_raw_keyframes`, `get_montage_overrides`, `save_montage_overrides`, `delete_keyframes`)
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -327,30 +328,46 @@ src/
 │   ├── app.ts        # Store applicatif (thème, displays, modes d'exécution)
 │   ├── settings.ts   # Store des paramètres de configuration
 │   ├── traces.ts     # Store des traces GPX importées
+│   ├── keyframes.ts  # Store keyframes + overrides de montage (Modes 1 & 2)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── utils/            # Fonctions utilitaires (named exports)
 │   ├── format.ts     # Helpers de formatage (distance, élévation, durée)
-│   └── geo.ts        # Utilitaires géographiques (Haversine, tri par distance)
+│   ├── geo.ts        # Utilitaires géographiques (Haversine, tri par distance)
+│   ├── easing.ts     # Easing + LERP/SLERP (module d'édition)
+│   └── keyframes.ts  # Types TS miroir des keyframes/overrides (module d'édition)
+├── composables/      # Logique réutilisable (Composition API)
+│   ├── useSettingsTree.ts       # Arbre catégories/params du drawer (filtré par route)
+│   ├── useKeyframeEngine.ts     # Pré-calcul + interpolation + fusion (édition)
+│   ├── useLivePreview.ts        # Refusion + jumpTo (édition)
+│   └── usePlayback.ts           # Boucle RAF + marqueur de lecture (édition)
 ├── plugins/          # Plugins Vue (Vuetify, etc.)
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
-│   ├── Home.vue
-│   └── About.vue
+│   ├── Accueil.vue
+│   ├── ScreenBis.vue
+│   ├── EditionCamera.vue    # Atelier d'édition / montage (Modes 1 & 2)
+│   └── Visualisation.vue
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
 │   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits (triée par distance)
-│   │   ├── Circuit.vue          # Carte d'un circuit (2 lignes d'icônes d'action, extension Info, focus carte)
+│   │   ├── Circuit.vue          # Carte d'un circuit (2 lignes d'icônes d'action, extension Info, focus carte, bouton Éditer)
 │   │   ├── Map.vue              # Carte Mapbox GL (clusters, favoris, traces affichées, focus)
 │   │   ├── AppBar.vue
 │   │   ├── ModeExecutionCard.vue
 │   │   ├── SettingsDrawer.vue   # Drawer de paramètres (dynamique, piloté par [_meta])
 │   │   └── SettingsCategory.vue # Rendu d'une catégorie (accordéon / aplati / handler)
+│   ├── EditionCamera/ # Composants de l'atelier d'édition
+│   │   ├── Map3D.vue             # Carte terrain 3D
+│   │   ├── PrecomputeOverlay.vue # Overlay de pré-calcul (Mode 1)
+│   │   ├── Timeline.vue          # Frise temporelle + marqueur de lecture
+│   │   ├── AltitudeProfile.vue   # Profil d'altitude
+│   │   ├── OverridePanel.vue     # Édition d'un override caméra
+│   │   ├── OverrideList.vue      # Liste des overrides de montage (Mode 2)
+│   │   └── EditionSettingsPanel.vue # Paramètres de l'atelier (rendu dédié, pas le drawer générique)
 │   └── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
 │       └── …
-├── composables/      # Logique réutilisable (Composition API)
-│   └── useSettingsTree.ts       # Construit l'arbre catégories/params du drawer (filtré par route)
 ├── assets/           # Ressources statiques
 │   └── styles/
 ├── App.vue          # Layout racine
@@ -372,7 +389,8 @@ src-tauri/
 │   ├── display.rs        # Détection et gestion des écrans
 │   ├── gestionMode.rs    # Gestion des modes d'exécution
 │   ├── settings.rs       # Système de paramètres de configuration
-│   ├── import_gpx.rs     # Import de fichiers GPX
+│   ├── import_gpx.rs     # Import de fichiers GPX (expose pub get_mode_dir)
+│   ├── edition.rs        # Édition caméra : keyframes + overrides (Modes 1 & 2)
 │   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
 │   │   └── default.json  # Permissions pour les fenêtres
@@ -389,7 +407,8 @@ src-tauri/
 - `display.rs` : Détection des moniteurs (macOS NSScreen, Windows Tauri API)
 - `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
-- `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
+- `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces. `get_mode_dir` est exposé en `pub` et réutilisé par `edition.rs` (évite la duplication).
+- `edition.rs` : Persistance des keyframes et overrides de montage de l'atelier d'édition caméra (Modes 1 & 2). Stockage dans `{mode_dir}/keyframes/`. 6 commandes Tauri (`has_raw_keyframes`, `get_raw_keyframes`, `save_raw_keyframes`, `get_montage_overrides`, `save_montage_overrides`, `delete_keyframes`). Voir [SPEC_EDITION.md](./SPEC_EDITION.md).
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -454,6 +473,29 @@ Utilisateur déplace/zoome la carte
 - Le calcul utilise l'événement `idle` de Mapbox (carte dans un état stable, clusters rendus) pour garantir que `queryRenderedFeatures` retourne des résultats fiables. Un drapeau `pendingVisibleRefresh` est levé par `scheduleVisibleRefresh()` et consommé par le handler `idle`.
 - Le pattern d'epoch (`visibleEpoch`) annule les résultats périmés si un nouveau `moveend` survient pendant les appels asynchrones à `getClusterLeaves`.
 - Pendant un focus (`focusedTraceId` positionné), `refreshVisibleTraceIds()` est court-circuité pour garder le drawer stable (cohérent avec `moveend`).
+
+### 5. Atelier d'édition caméra (Modes 1 & 2)
+
+```
+Clic « Éditer » dans Circuit.vue
+  → router.push({ name: 'editionCamera', params: { traceId } })
+  → EditionCamera.vue monte l'atelier
+  → keyframesStore : has_raw_keyframes(traceId) ?
+      ├─ oui → get_raw_keyframes + get_montage_overrides (chargement du cache)
+      └─ non  → useKeyframeEngine : pré-calcul Mode 1
+                 (algorithme zone morte + altitudes Mapbox)
+                 → save_raw_keyframes (persistance {mode_dir}/keyframes/)
+  → useLivePreview : fusion keyframes + overrides → vecteur caméra interpolé
+  → Map3D.vue : rendu terrain 3D + caméra
+  → usePlayback : boucle RAF, déplace le marqueur de Timeline.vue
+  → Édition overrides (OverridePanel/OverrideList) → save_montage_overrides
+  → Suppression de la trace (depuis Accueil) → delete_keyframes en cascade
+```
+
+> Référence complète du module d'édition dans [SPEC_EDITION.md](./SPEC_EDITION.md).
+> Les paramètres de l'atelier (`EditionCamera.*`) sont déclarés dans `settings.default.toml`
+> avec une entrée `[_meta.views.editionCamera]` à `groups = []` : ils sont rendus par le
+> composant dédié `EditionSettingsPanel.vue`, pas par le drawer générique.
 
 ## Patterns architecturaux
 
@@ -768,6 +810,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 └── {active_mode}/           # Ex : OPE, EVAL_essai
     ├── gpx/                 # Fichiers .gpx copiés (nom unique si doublon)
     ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
+    ├── keyframes/           # Caches keyframes + overrides de montage (Modes 1 & 2)
     ├── config-dev.toml      # Surcharges de paramètres (dev)
     └── config.toml          # Surcharges de paramètres (prod)
 ```
@@ -781,10 +824,10 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 | `delete_trace` | Supprime le fichier GPX + l'entrée du registre (écriture atomique). |
 | `update_trace` | Mise à jour partielle (PATCH) d'une trace : `favorite` et/ou `is_displayed` (persistés). |
 
-> Référence complète des 20 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 26 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-08-02
+**Dernière mise à jour** : 2026-08-03

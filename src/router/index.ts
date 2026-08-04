@@ -18,7 +18,7 @@ const router = createRouter({
       component: Visualisation
     },
     {
-      path: '/edition-camera',
+      path: '/edition-camera/:traceId',
       name: 'editionCamera',
       component: EditionCamera
     },

@@ -40,8 +40,8 @@ Plongée approfondie dans l'architecture :
 ### 📡 [COMMANDS.md](./COMMANDS.md)
 **Référence des commandes Tauri**
 
-Catalogue exhaustif des **20 commandes** backend↔frontend :
-- Application, affichage/multi-écrans, modes d'exécution, paramètres, traces GPX
+Catalogue exhaustif des **26 commandes** backend↔frontend :
+- Application, affichage/multi-écrans, modes d'exécution, paramètres, traces GPX, édition/keyframes
 - Signatures Rust, types de retour, règles métier
 - Exemples d'appel côté TypeScript
 - Procédure pour ajouter une nouvelle commande
@@ -109,6 +109,21 @@ Document de référence de l'affichage des traces sur la carte Mapbox :
 
 👉 **Lire ce fichier** pour comprendre l'architecture d'affichage des traces et le mode focus.
 
+### 🎬 [SPEC_EDITION.md](./SPEC_EDITION.md)
+**Spécification — Atelier d'édition / montage (Modes 1 & 2)**
+
+Document de référence du module d'édition caméra :
+- **Mode 1 (Pré-calcul)** : génération automatique des keyframes (algorithme de zone morte + altitudes `queryTerrainElevation`), déclenchée paresseusement au clic « Éditer »
+- **Mode 2 (Édition)** : atelier de montage avec overrides caméra (zoom/pitch/bearing, absolus + offsets relatifs), moteur de fusion (blending) avec lissage easing/damping
+- Résolution canonique de pré-calcul (1920×1080) pour l'indépendance vis-à-vis de l'écran réel (vidéoprojecteur inclus)
+- Live preview (`jumpTo` + SLERP), lecture interne (boucle RAF + marqueur traceur + trace parcourue)
+- Composants `Map3D`, `Timeline`, `AltitudeProfile`, `OverridePanel`, `OverrideList`, `PrecomputeOverlay`
+- Module backend `edition.rs` (6 commandes), paramètres `[EditionCamera.*]`
+
+> ✅ **Statut** : **implémenté** (phase 1). Le Mode 3 (Relecture finale) et les améliorations V2 (§12 : splines, anti-collision, POI auto, export vidéo…) sont hors périmètre.
+
+👉 **Lire ce fichier** pour comprendre l'atelier d'édition et le pipeline keyframes.
+
 ### 🤖 [CLAUDE-CODE-GUIDE.md](./CLAUDE-CODE-GUIDE.md)
 **Guide d'utilisation avec un assistant IA**
 
@@ -149,12 +164,13 @@ docs/
 ├── README.md                  # Ce fichier (index)
 ├── CONTEXT.md                 # Contexte général
 ├── ARCHITECTURE.md            # Architecture technique
-├── COMMANDS.md                # Référence des commandes Tauri (20 commandes)
+├── COMMANDS.md                # Référence des commandes Tauri (26 commandes)
 ├── DATA_STORAGE.md            # Schéma de stockage des données
 ├── CONVENTIONS.md             # Conventions de code
 ├── EXTENDING.md               # Guide d'extension
 ├── SPEC_IMPORT_GPX.md         # Spécification du module GPX
 ├── SPEC_AFFICHAGE_TRACES.md   # Spécification favoris & affichage carte (à implémenter)
+├── SPEC_EDITION.md            # Spécification de l'atelier d'édition (Modes 1 & 2)
 └── CLAUDE-CODE-GUIDE.md       # Guide d'utilisation avec IA
 ```
 

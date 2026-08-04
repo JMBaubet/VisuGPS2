@@ -51,25 +51,34 @@ VisuGPS2 est une **application desktop multiplateformes** basée sur Tauri + Vue
 VisuGPS2/
 ├── src/                       # Code source frontend (Vue 3 + TypeScript)
 │   ├── router/
-│   │   └── index.ts          # Routes (Accueil, Visualisation, EditionCamera, ScreenBis)
+│   │   └── index.ts          # Routes (Accueil, Visualisation, EditionCamera/:traceId, ScreenBis)
 │   ├── stores/
 │   │   ├── index.ts          # Configuration Pinia
 │   │   ├── app.ts            # Store applicatif (thème, displays, modes d'exécution)
 │   │   ├── settings.ts       # Store des paramètres de configuration
 │   │   ├── traces.ts         # Store des traces GPX importées
+│   │   ├── keyframes.ts      # Store keyframes + overrides de montage (Modes 1 & 2)
 │   │   └── ui.ts             # Store des notifications (snackbar)
 │   ├── utils/
 │   │   ├── format.ts         # Helpers de formatage (distance, élévation, durée)
-│   │   └── geo.ts            # Utilitaires géographiques (Haversine, tri par distance)
+│   │   ├── geo.ts            # Utilitaires géographiques (Haversine, tri par distance)
+│   │   ├── easing.ts         # Easing + LERP/SLERP (module d'édition)
+│   │   └── keyframes.ts      # Types TS miroir des keyframes/overrides (module d'édition)
+│   ├── composables/          # Logique réutilisable (Composition API)
+│   │   ├── useSettingsTree.ts     # Arbre catégories/params du drawer (filtré par route)
+│   │   ├── useKeyframeEngine.ts   # Pré-calcul + interpolation + fusion (module d'édition)
+│   │   ├── useLivePreview.ts      # Refusion + jumpTo (module d'édition)
+│   │   └── usePlayback.ts         # Boucle RAF + marqueur de lecture (module d'édition)
 │   ├── plugins/
 │   │   └── vuetify.ts        # Configuration Vuetify
 │   ├── views/                # Pages de l'application
 │   │   ├── Accueil.vue       # Fenêtre principale avec comm. inter-fenêtres
 │   │   ├── ScreenBis.vue     # Fenêtre secondaire
-│   │   ├── EditionCamera.vue # Page caméra
+│   │   ├── EditionCamera.vue # Atelier d'édition / montage caméra (Modes 1 & 2)
 │   │   └── Visualisation.vue # Page visualisation
 │   ├── components/           # Composants réutilisables
 │   │   ├── Accueil/          # Composants de la page d'accueil
+│   │   ├── EditionCamera/    # Composants de l'atelier d'édition (Map3D, Timeline, OverridePanel…)
 │   │   └── parameters/       # Composants d'édition des paramètres
 │   ├── assets/               # Images, styles
 │   ├── App.vue              # Layout racine (détection multi-fenêtres)
@@ -82,6 +91,7 @@ VisuGPS2/
 │   │   ├── gestionMode.rs   # Gestion modes d'exécution (CRUD, .env)
 │   │   ├── settings.rs       # Paramètres de configuration (TOML, secrets)
 │   │   ├── import_gpx.rs     # Import de fichiers GPX (parsing, stats, registre)
+│   │   ├── edition.rs        # Édition caméra : keyframes + overrides (Modes 1 & 2)
 │   │   └── main.rs           # Auto-généré (délègue à lib.rs)
 │   ├── capabilities/
 │   │   └── default.json      # Permissions fenêtres (main, screen-bis)
@@ -96,6 +106,7 @@ VisuGPS2/
 │   ├── EXTENDING.md         # Guide d'extension
 │   ├── SPEC_IMPORT_GPX.md   # Spécification module import GPX
 │   ├── SPEC_AFFICHAGE_TRACES.md # Spécification favoris & affichage carte (à implémenter)
+│   ├── SPEC_EDITION.md      # Spécification atelier d'édition / montage (Modes 1 & 2)
 │   └── …
 │
 ├── Configuration
@@ -242,6 +253,14 @@ await invoke('open_second_window')
 - `update_trace(traceId, favorite?, isDisplayed?)` : Met à jour partiellement une trace (PATCH)
 - `get_trace_geometry(traceId)` : Retourne la géométrie GeoJSON d'une trace (cache, ou régénéré depuis le GPX)
 
+**Édition caméra** (Modes 1 & 2 — voir [SPEC_EDITION.md](./SPEC_EDITION.md)) :
+- `has_raw_keyframes(traceId)` : Indique si un cache de keyframes existe pour la trace
+- `get_raw_keyframes(traceId)` : Lit les keyframes bruts (pré-calcul Mode 1) depuis le disque
+- `save_raw_keyframes(traceId, keyframes)` : Persiste les keyframes bruts (`{mode_dir}/keyframes/`)
+- `get_montage_overrides(traceId)` : Lit les overrides de montage (Mode 2)
+- `save_montage_overrides(traceId, overrides)` : Persiste les overrides de montage
+- `delete_keyframes(traceId)` : Supprime le cache keyframes d'une trace (cascade suppression)
+
 ### 5. Communication inter-fenêtres
 
 Les fenêtres communiquent via les événements Tauri :
@@ -293,7 +312,7 @@ Si vous modifiez les scripts :
 - **Accueil** (`/`) : Fenêtre principale — drawer gauche (liste circuits triée par distance au centre de la carte), carte Mapbox (clusters de points de départ, popups), drawer droit (paramètres)
 - **ScreenBis** (`/screen-bis`) : Fenêtre secondaire pour le dual-screen
 - **Visualisation** (`/visualisation`) : Stub (toolbar Home uniquement, vue réservée à la visualisation 3D)
-- **EditionCamera** (`/edition-camera`) : Stub (toolbar Home uniquement, vue réservée à l'édition caméra)
+- **EditionCamera** (`/edition-camera/:traceId`) : Atelier d'édition / montage caméra — Mode 1 (pré-calcul automatique des keyframes au clic « Éditer ») + Mode 2 (montage par overrides caméra avec live preview et lecture RAF). Voir [SPEC_EDITION.md](./SPEC_EDITION.md).
 
 ### Fonctionnalités
 - Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
@@ -306,6 +325,7 @@ Si vous modifiez les scripts :
 - Gestion des modes d'exécution (OPE / EVAL_*)
 - Système de paramètres TOML avec chiffrement des secrets
 - Détection multi-écrans et placement automatique
+- **Atelier d'édition / montage caméra** (Modes 1 & 2) : pré-calcul automatique des keyframes au clic « Éditer », montage par overrides caméra (zoom/pitch/bearing) avec live preview, lecture RAF, persistance dans `{mode_dir}/keyframes/` (voir [SPEC_EDITION.md](./SPEC_EDITION.md))
 
 ### Store exemple
 `src/stores/app.ts` gère le thème et l'environnement d'exécution :
@@ -317,7 +337,8 @@ Si vous modifiez les scripts :
 
 Autres stores existants :
 - `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
-- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `visibleTraceIds` (IDs visibles dans le viewport), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), `visibleTracesByDistance` (filtrage viewport, tri par distance), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`, `setVisibleTraceIds`.
+- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `visibleTraceIds` (IDs visibles dans le viewport), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), `visibleTracesByDistance` (filtrage viewport, tri par distance), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`, `setVisibleTraceIds`. `supprimerTrace` déclenche en cascade la suppression du cache keyframes (`delete_keyframes`).
+- `src/stores/keyframes.ts` : keyframes + overrides de montage de l'atelier d'édition (Modes 1 & 2). Expose l'état keyframes/overrides et la lecture. Voir [SPEC_EDITION.md](./SPEC_EDITION.md).
 - `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 
 ## Variables d'environnement
@@ -571,6 +592,7 @@ mod display;
 mod gestionMode;
 mod settings;
 mod import_gpx;
+mod edition;
 
 pub fn run() {
     tauri::Builder::default()
@@ -613,7 +635,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-08-02
+**Dernière mise à jour** : 2026-08-03
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance)
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance), atelier d'édition / montage caméra (Modes 1 & 2 — pré-calcul keyframes + overrides montage, live preview, persistance keyframes/)

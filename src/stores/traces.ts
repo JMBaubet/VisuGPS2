@@ -147,13 +147,18 @@ export const useTracesStore = defineStore('traces', () => {
 
   /**
    * Supprime une trace par son identifiant.
-   * Le backend supprime le fichier GPX et l'entrée du registre.
+   * Le backend supprime le fichier GPX et l'entrée du registre, ainsi que les
+   * éventuels fichiers d'édition (keyframes / overrides) en cascade.
    * Après suppression, recharge la liste depuis le backend.
    */
   async function supprimerTrace(traceId: string): Promise<void> {
     loading.value = true
     try {
       await invoke('delete_trace', { traceId })   // camelCase TS → trace_id Rust
+      // Cascade : purger les fichiers keyframes / overrides / final associés.
+      // `delete_keyframes` ignore silencieusement les fichiers manquants, donc
+      // l'appel est sans risque pour une trace jamais éditée.
+      await invoke('delete_keyframes', { traceId })
       geometryCache.delete(traceId)               // invalider le cache de géométrie
       await loadTraces()                           // recharger (source de vérité = backend)
     } finally {

@@ -26,16 +26,18 @@
       </span>
       <v-spacer></v-spacer> <!-- Pousse les icônes à droite (alignées sur la ligne Distance/Dénivelé) -->
       <div class="d-flex align-center">
-        <!-- Éditer : visible au survol uniquement -->
+        <!-- Éditer : vert si un cache de keyframes existe (pré-calcul déjà fait),
+             visible sinon au survol uniquement. Ouvre l'atelier d'édition. -->
         <v-btn
           class="action-btn"
-          :class="{ 'action-btn--hidden': !isHovering }"
+          :class="{ 'action-btn--hidden': !(hasKeyframesCache || isHovering) }"
           icon="mdi-pencil"
+          :color="hasKeyframesCache ? 'green' : ''"
           variant="text"
           density="comfortable"
           size="small"
           title="Éditer"
-          @click=""
+          @click="editerCircuit"
         />
         <!-- Gérer les groupes : visible au survol uniquement -->
         <v-btn
@@ -186,7 +188,7 @@
  * curseur quitte la carte. Le clic Info déclenche en outre un focus carte
  * (état `focusedTraceId` du store traces) : Map.vue isole la trace et la cadre.
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../stores/app'
@@ -218,6 +220,13 @@ const tracesStore = useTracesStore()
 const infoExpanded = ref(false)
 /** true tant que le curseur survole la carte (régit l'affichage des actions). */
 const isHovering = ref(false)
+/**
+ * true si un cache de keyframes bruts existe déjà pour cette trace
+ * (pré-calcul déjà effectué). Met l'icône Éditer en vert (spec §0 : signal que
+ * l'édition est prête). Vérifié au montage ; reste faux silencieusement en cas
+ * d'erreur (le bouton reste simplement gris, cliquable pour lancer le calcul).
+ */
+const hasKeyframesCache = ref(false)
 
 /**
  * Ouvre/ferme la section info et pilote le focus carte correspondant.
@@ -312,7 +321,24 @@ async function ouvrirSource() {
   }
 }
 
-/** Lance la visualisation 3D du circuit. */
+/**
+ * Ouvre l'atelier d'édition / montage (Mode 2) pour cette trace.
+ *
+ * Si aucun pré-calcul n'existe encore, c'est la vue d'édition elle-même qui
+ * le déclenchera au chargement (Variante A' : pré-calcul paresseux au clic
+ * Éditer). L'icône passe en vert une fois le calcul fait (cf. hasKeyframesCache).
+ */
+function editerCircuit() {
+  router.push({ name: 'editionCamera', params: { traceId: props.trace.id } })
+}
+
+/**
+ * Lance la visualisation 3D du circuit.
+ *
+ * NOTE : le Mode 3 (Relecture finale) n'est pas implémenté dans cette phase.
+ * Le bouton ouvre aujourd'hui la seconde fenêtre (comportement historique) ;
+ * il sera rebranché sur la vue de relecture lorsque le Mode 3 sera développé.
+ */
 async function visualiserCircuit() {
   // Recharger les informations des écrans pour détecter en temps réel un branchement
   await appStore.loadDisplays()
@@ -330,6 +356,19 @@ async function visualiserCircuit() {
     router.push({ name: 'screenBis' })
   }
 }
+
+// Vérifier au montage si un cache de pré-calcul existe déjà (icône Éditer en
+// vert le cas échéant). On n'interrompt pas l'UI en cas d'erreur backend : la
+// valeur reste `false` (icône grise, calcul à lancer à l'édition).
+onMounted(async () => {
+  try {
+    hasKeyframesCache.value = await invoke<boolean>('has_raw_keyframes', {
+      traceId: props.trace.id,
+    })
+  } catch (e) {
+    console.error('Vérification du cache de keyframes impossible :', e)
+  }
+})
 </script>
 
 <style scoped>

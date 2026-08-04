@@ -538,6 +538,8 @@ Les fonctions utilitaires sont regroupées dans `src/utils/` par thème. Chaque 
 Fichiers existants :
 - `format.ts` : formatage d'affichage (`formatDistance`, `formatElevation`, `formatDuration`, `formatCoordinate`, `formatAltitude`)
 - `geo.ts` : calculs géographiques (`toRadians`, `haversineMeters`)
+- `keyframes.ts` : types TS miroir des structs Rust `edition.rs` (`RawKeyframesFile`, `MontageOverridesFile`, `Override`, `CamState`, `TraceurState`, `Keyframe`) + factories (`createEmptyOverride`, `generateOverrideId`)
+- `easing.ts` : fonctions d'easing (`linear`, `smoothstep`, `easeInOut`) et interpolations (`lerp`, `slerpAngle` pour le bearing)
 
 **Règles** :
 - Named exports uniquement (pas de `export default`)
@@ -551,6 +553,9 @@ Les composables encapsulent de la **logique réutilisable avec état réactif** 
 
 Fichier existant :
 - `useSettingsTree.ts` : construit l'arbre catégories/paramètres du drawer de paramètres à partir de `[_meta]`, filtré selon la route active, avec calcul des remontées criticité/surcharge.
+- `useKeyframeEngine.ts` : moteur de keyframes (logique pure) — pré-calcul (zone morte + altitudes), interpolation (LERP/SLERP) et fusion (blending) des overrides caméra.
+- `useLivePreview.ts` : live preview de l'atelier d'édition — refusion automatique des keyframes finaux et `jumpTo` sur changement de curseur/overrides.
+- `usePlayback.ts` : boucle de lecture `requestAnimationFrame` + déplacement du marqueur traceur + trace parcourue (Mode 2, preview interne à l'éditeur).
 
 **Règles** :
 - Convention de nommage : `use` + Nom + `Store`/`Tree`/… en PascalCase, fonction `useXxx()` exportée nommée

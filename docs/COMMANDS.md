@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (20 commandes)
+## Catalogue (26 commandes)
 
 ### Application
 
@@ -109,6 +109,52 @@ pub struct TraceMetadata {
 
 > `#[serde(default)]` sur `favorite` et `is_displayed` assure la **rétrocompatibilité** : un `traces.json` antérieur se charge avec `false`/`false` sans erreur.
 
+### Édition / Keyframes (`edition.rs`)
+
+Module dédié à la persistance des keyframes et overrides de montage (Modes 1 & 2).
+Le pré-calcul et la fusion (blending) sont effectués côté frontend (ils nécessitent
+une instance Mapbox avec terrain) ; ce module ne gère que la lecture/écriture
+atomique des fichiers JSON sur disque.
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `has_raw_keyframes` | `(app, trace_id) -> bool` | Vrai si `keyframes/{traceId}_raw_keyframes.json` existe (cache disponible). |
+| `get_raw_keyframes` | `(app, trace_id) -> Result<RawKeyframesFile, String>` | Lit le fichier de keyframes bruts (erreur si absent). |
+| `save_raw_keyframes` | `(app, trace_id, file: RawKeyframesFile) -> Result<(), String>` | Écriture atomique du fichier brut (appelé à la fin du pré-calcul). |
+| `get_montage_overrides` | `(app, trace_id) -> Result<MontageOverridesFile, String>` | Lit les overrides ; renvoie un fichier vierge s'il n'existe pas (sans l'écrire). |
+| `save_montage_overrides` | `(app, trace_id, file: MontageOverridesFile) -> Result<(), String>` | Écriture atomique des overrides (appelé à chaque modification). |
+| `delete_keyframes` | `(app, trace_id) -> Result<(), String>` | Supprime les 3 fichiers `keyframes/{traceId}_*.json` (cascade à la suppression d'une trace). |
+
+**Types** (miroir TS dans `src/utils/keyframes.ts`) :
+```rust
+pub struct RawKeyframesFile {
+    pub trace_id: String,
+    pub total_duration: u64,        // ms
+    pub total_distance: f64,        // m
+    pub reference_viewport: ReferenceViewport,  // résolution canonique du pré-calcul
+    pub sample_rate: u64,           // ms
+    pub keyframes: Vec<Keyframe>,
+}
+
+pub struct Keyframe {
+    pub time: u64,                  // ms depuis le départ
+    pub cam: CamState,              // lng/lat jamais modifié par override (§6.2)
+    pub traceur: TraceurState,
+}
+
+pub struct MontageOverridesFile {
+    pub overrides: Vec<Override>,
+    #[serde(default)]
+    pub messages: Vec<serde_json::Value>,  // anticipé vide (phase 2)
+    #[serde(default)]
+    pub pois: Vec<serde_json::Value>,      // anticipé vide (phase 2)
+}
+```
+
+> Les fichiers vivent dans `{mode_dir}/keyframes/` (voir `DATA_STORAGE.md`).
+> `delete_keyframes` est appelé en cascade par `traces.ts::supprimerTrace`
+> après `delete_trace`.
+
 ## Exemples d'appel côté frontend
 
 ```typescript
@@ -138,4 +184,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-07-31
+**Dernière mise à jour** : 2026-08-03

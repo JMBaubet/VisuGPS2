@@ -1,4 +1,5 @@
 mod display;
+mod edition;
 #[allow(non_snake_case)]
 mod gestionMode;
 mod settings;
@@ -47,7 +48,13 @@ pub fn run() {
             import_gpx::get_traces,
             import_gpx::delete_trace,
             import_gpx::update_trace,
-            import_gpx::get_trace_geometry
+            import_gpx::get_trace_geometry,
+            edition::has_raw_keyframes,
+            edition::get_raw_keyframes,
+            edition::save_raw_keyframes,
+            edition::get_montage_overrides,
+            edition::save_montage_overrides,
+            edition::delete_keyframes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

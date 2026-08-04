@@ -48,6 +48,15 @@ label = "Accueil"
 icon = "mdi-home"
 groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Exemples"]
 
+# Vue d'édition / montage (Mode 2). Ses paramètres (EditionCamera.*) sont
+# délibérément NON référencés dans `groups` : ils sont rendus par un composant
+# dédié (EditionSettingsPanel.vue) et non par le SettingsDrawer générique.
+# Le drawer n'affiche donc que les catégories système sur cette vue.
+[_meta.views.editionCamera]
+label = "Édition caméra"
+icon = "mdi-video-vintage"
+groups = []
+
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
 # Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
 [_meta.groups."Systeme.Key"]
@@ -344,3 +353,277 @@ afin de garantir le respect de la charte.
 """
 type = "material_extended"
 default = "#5C6BC0FF"
+
+# ===========================================================================
+# Paramètres de l'atelier d'édition caméra (Mode 2) et du pré-calcul (Mode 1).
+#
+# Ces paramètres pilotent l'algorithme de zone morte, l'échantillonnage des
+# keyframes, le traceur et la résolution canonique de pré-calcul. Ils sont
+# rendus par le composant dédié EditionSettingsPanel.vue (vue editionCamera),
+# et délibérément absents du SettingsDrawer générique (non listés dans
+# [_meta.views.editionCamera].groups). Ils bénéficient néanmoins de la
+# persistance et de l'isolation par mode d'exécution du système de settings.
+# ===========================================================================
+
+# --- Résolution canonique de pré-calcul ---
+# Le pré-calcul force la map à ces dimensions via map.resize(), afin que les
+# calculs de zone morte (map.project() → pixels) soient indépendants de
+# l'écran réel. À la lecture, jumpTo reproduit le même cadrage géographique
+# sur tout écran (vidéoprojecteur inclus) : un écran plus large révèle plus
+# de contexte périphérique sans décaler le traceur.
+
+[EditionCamera.Viewport.largeurReference]
+description = "Largeur du viewport de référence (px)"
+documentation = """
+Largeur (en pixels) du viewport canonique utilisé lors du pré-calcul.
+Tous les calculs de zone morte se font dans ce repère fixe, indépendamment
+de l'écran réel. 1920 par défaut (Full HD). Ne pas modifier sans raison.
+"""
+type = "int"
+default = 1920
+min = 640
+max = 3840
+step = 16
+unit = "px"
+icon = "mdi-resize"
+
+[EditionCamera.Viewport.hauteurReference]
+description = "Hauteur du viewport de référence (px)"
+documentation = """
+Hauteur (en pixels) du viewport canonique utilisé lors du pré-calcul.
+1080 par défaut (Full HD). Ne pas modifier sans raison.
+"""
+type = "int"
+default = 1080
+min = 360
+max = 2160
+step = 16
+unit = "px"
+icon = "mdi-resize"
+
+# --- Échantillonnage (pré-calcul) ---
+
+[EditionCamera.PreCalcul.sampleRate]
+description = "Fréquence d'échantillonnage des keyframes (ms)"
+documentation = """
+Intervalle de temps (en millisecondes) entre deux keyframes dans le fichier
+brut. Plus la valeur est faible, plus l'animation est fluide mais plus le
+fichier est gros. 100 ms (10 fps) donne un bon compromis pour 2–5 Mo sur
+un trajet de 2 h.
+"""
+type = "int"
+default = 100
+min = 50
+max = 500
+step = 50
+unit = "ms"
+icon = "mdi-timer-outline"
+
+# --- Caméra par défaut ---
+
+[EditionCamera.Cam.defaultZoom]
+description = "Zoom initial et de base"
+documentation = """
+Niveau de zoom Mapbox initial et servant de base aux calculs d'altitude
+(cf. zoomAltitudeFactor). 16 par défaut.
+"""
+type = "float"
+default = 16.0
+min = 8.0
+max = 20.0
+step = 0.5
+icon = "mdi-magnify-plus-outline"
+
+[EditionCamera.Cam.defaultPitch]
+description = "Pitch (inclinaison) initial (°)"
+documentation = """
+Inclinaison initiale de la caméra en degrés (0 = nadir, 85 = quasi horizontale).
+60° par défaut (effet drone).
+"""
+type = "float"
+default = 60.0
+min = 0.0
+max = 85.0
+step = 1.0
+unit = "°"
+icon = "mdi-axis-x-arrow"
+
+[EditionCamera.Cam.defaultBearing]
+description = "Cap initial (°)"
+documentation = "Cap initial de la caméra par rapport au Nord. 0° par défaut."
+type = "float"
+default = 0.0
+min = 0.0
+max = 360.0
+step = 1.0
+unit = "°"
+icon = "mdi-compass"
+
+# --- Zone morte (Dead Zone) ---
+# Tant que le traceur reste dans une zone centrale de l'écran, la caméra
+# reste immobile. Dès qu'il s'en approche des bords, un flyTo de rattrapage
+# est déclenché.
+
+[EditionCamera.ZoneMorte.deadZoneX]
+description = "Zone morte horizontale (fraction de la largeur)"
+documentation = """
+Fraction de la largeur du viewport (0 → 1) définissant la zone centrale
+horizontale dans laquelle le traceur peut se déplacer sans déclencher de
+rattrapage caméra. 0.30 = 30 % de la largeur.
+"""
+type = "float"
+default = 0.30
+min = 0.0
+max = 0.49
+step = 0.05
+icon = "mdi-arrow-expand-horizontal"
+
+[EditionCamera.ZoneMorte.deadZoneY]
+description = "Zone morte verticale (fraction de la hauteur)"
+documentation = """
+Fraction de la hauteur du viewport (0 → 1) définissant la zone centrale
+verticale dans laquelle le traceur peut se déplacer sans déclencher de
+rattrapage caméra. 0.30 = 30 % de la hauteur.
+"""
+type = "float"
+default = 0.30
+min = 0.0
+max = 0.49
+step = 0.05
+icon = "mdi-arrow-expand-vertical"
+
+[EditionCamera.ZoneMorte.anticipationTime]
+description = "Anticipation du bearing (s)"
+documentation = """
+Temps d'anticipation (en secondes) pour le calcul du cap : la caméra regarde
+vers la position du traceur un peu plus loin que sa position courante, afin
+ d'anticiper les virages. 1.5 s par défaut.
+"""
+type = "float"
+default = 1.5
+min = 0.0
+max = 5.0
+step = 0.1
+unit = "s"
+icon = "mdi-eye-arrow-right-outline"
+
+[EditionCamera.ZoneMorte.bearingSmoothThreshold]
+description = "Seuil de lissage du bearing (°)"
+documentation = """
+Écart angulaire (en degrés) en dessous duquel le cap n'est pas recalculé,
+afin d'éviter les micro-oscillations sur les lignes droites. 15° par défaut.
+"""
+type = "float"
+default = 15.0
+min = 0.0
+max = 90.0
+step = 1.0
+unit = "°"
+icon = "mdi-compass-outline"
+
+# --- Vols (FlyTo) lors du pré-calcul ---
+
+[EditionCamera.FlyTo.minFlyDuration]
+description = "Durée minimale d'un vol (ms)"
+documentation = """
+Durée minimale (en millisecondes) d'un flyTo de rattrapage, pour éviter les
+à-coups trop brefs entre deux positions de caméra. 800 ms par défaut.
+"""
+type = "int"
+default = 800
+min = 100
+max = 5000
+step = 100
+unit = "ms"
+icon = "mdi-timer-sand"
+
+[EditionCamera.FlyTo.maxFlyDuration]
+description = "Durée maximale d'un vol (ms)"
+documentation = """
+Durée maximale (en millisecondes) d'un flyTo de rattrapage, pour éviter les
+transitions trop lentes. 12 000 ms (12 s) par défaut.
+"""
+type = "int"
+default = 12000
+min = 1000
+max = 60000
+step = 1000
+unit = "ms"
+icon = "mdi-timer-sand-complete"
+
+[EditionCamera.FlyTo.speedFactor]
+description = "Vitesse de base de l'animation (ms/m)"
+documentation = """
+Temps (en millisecondes) pour parcourir 1 mètre à l'écran. 4 ms/m équivaut
+à 4000 ms/km (soit 4 s par km). Piloté par défaut par cette constante lors
+du calcul des durées de flyTo.
+"""
+type = "float"
+default = 4.0
+min = 1.0
+max = 20.0
+step = 0.5
+unit = "ms/m"
+icon = "mdi-speedometer"
+
+[EditionCamera.FlyTo.zoomAltitudeFactor]
+description = "Facteur d'ajustement du zoom par altitude"
+documentation = """
+Facteur appliqué au zoom par tranche de 1000 m d'altitude, afin d'éviter que
+la caméra ne traverse le relief sur les terrains escarpés. Par défaut :
+zoom = defaultZoom + (altitude / 1000) × 0.5.
+"""
+type = "float"
+default = 0.5
+min = 0.0
+max = 2.0
+step = 0.1
+icon = "mdi-elevation-rise"
+
+# --- Traceur (marqueur de progression) ---
+
+[EditionCamera.Traceur.markerColor]
+description = "Couleur du marqueur traceur"
+documentation = """
+Couleur du marqueur représentant le traceur (point). Rouge vif par défaut
+pour contraster avec le relief.
+"""
+type = "rgba"
+default = "#FF0000FF"
+icon = "mdi-circle"
+
+[EditionCamera.Traceur.markerSize]
+description = "Taille du marqueur traceur (px)"
+documentation = "Taille (en pixels) du marqueur traceur s'il est de type Point. 12 px par défaut."
+type = "int"
+default = 12
+min = 4
+max = 40
+step = 1
+unit = "px"
+icon = "mdi-circle-medium"
+
+[EditionCamera.Traceur.markerAltitudeOffset]
+description = "Décalage vertical du marqueur (m)"
+documentation = """
+Décalage vertical (en mètres) appliqué au marqueur pour le faire flotter
+au-dessus du sol et améliorer la lisibilité sur les terrains accidentés.
+2 m par défaut.
+"""
+type = "float"
+default = 2.0
+min = 0.0
+max = 20.0
+step = 0.5
+unit = "m"
+icon = "mdi-arrow-up"
+
+[EditionCamera.Traceur.showTrail]
+description = "Afficher la trace déjà parcourue"
+documentation = """
+Si activé, la portion déjà parcourue de la trace est dessinée dynamiquement
+jusqu'à la position courante du curseur. Recommandé pour l'effet immersif.
+"""
+type = "bool"
+default = true
+icon = "mdi-map-marker-distance"

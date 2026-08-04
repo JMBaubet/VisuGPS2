@@ -27,15 +27,22 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │   ├── config.toml              # Surcharges utilisateur en PROD
 │   ├── config-dev.toml          # Surcharges utilisateur en DEV
 │   ├── traces.json              # Registre des traces importées (Vec<TraceMetadata>)
-│   └── gpx/                     # Fichiers GPX copiés (nom sanitizé + unique si conflit)
-│       ├── trace1.gpx
-│       └── trace2.gpx
+│   ├── gpx/                     # Fichiers GPX copiés (nom sanitizé + unique si conflit)
+│   │   ├── trace1.gpx
+│   │   └── trace2.gpx
+│   ├── geojson/                 # LineString GeoJSON par trace ({id}.geojson)
+│   └── keyframes/               # Keyframes & overrides de montage (Modes 1 & 2)
+│       ├── {traceId}_raw_keyframes.json
+│       ├── {traceId}_montage_overrides.json
+│       └── {traceId}_final_keyframes.json
 │
 └── EVAL_xxx/                    # Un dossier par mode d'évaluation créé
     ├── config.toml
     ├── config-dev.toml
     ├── traces.json
-    └── gpx/*.gpx
+    ├── gpx/*.gpx
+    ├── geojson/*.geojson
+    └── keyframes/*.json
 ```
 
 ## Détail des fichiers
@@ -104,6 +111,20 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Rétrocompatibilité** : les champs `favorite` et `is_displayed` ont `#[serde(default)]` en Rust. Un `traces.json` antérieur (sans ces champs) se charge avec `false`/`false` sans erreur.
 
+### `keyframes/*.json` — Keyframes et overrides de montage
+
+Trois fichiers par trace (dans `keyframes/`, créés à la première édition). Tous en écriture atomique (tmp + rename), gérés par le module `edition.rs` :
+
+| Fichier | Rôle | Création |
+|---|---|---|
+| `{traceId}_raw_keyframes.json` | Keyframes bruts issus du pré-calcul (zone morte + altitudes). Source de la fusion. | À la fin du pré-calcul (Mode 1). |
+| `{traceId}_montage_overrides.json` | Overrides de montage caméra édités dans l'atelier (Mode 2). | À la première modification d'override. |
+| `{traceId}_final_keyframes.json` | Keyframes finaux (bruts fusionnés avec overrides). Régénéré côté frontend à chaque modification. | Régénéré (non persisté actuellement — le frontend le recalcule en mémoire via `blendKeyframes`). |
+
+> Les types Rust sont définis dans `edition.rs` (`RawKeyframesFile`, `MontageOverridesFile`, `Override`, `CamState`, `TraceurState`, `Keyframe`), en miroir exact des interfaces TS de `src/utils/keyframes.ts`. Voir `SPEC_EDITION.md` pour le schéma complet.
+
+**Cascade de suppression** : `traces.ts::supprimerTrace` appelle `delete_trace` puis `delete_keyframes` — la suppression d'une trace purge aussi ses 3 fichiers keyframes. `delete_keyframes` ignore silencieusement les fichiers manquants (trace jamais éditée).
+
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
 - Ne contiennent **que les valeurs modifiées** par rapport au défaut (pas de recopie intégrale).
@@ -118,12 +139,17 @@ Ce fichier contient également une **table spéciale `[_meta]`** (placée en tê
 
 ## Résolution des chemins (backend)
 
-Les fonctions privées dans `import_gpx.rs` résolvent les chemins en fonction du mode actif :
+Les fonctions privées dans `import_gpx.rs` et `edition.rs` résolvent les chemins en fonction du mode actif :
 
 ```rust
+// import_gpx.rs (get_mode_dir est pub pour être réutilisé par edition.rs)
 get_mode_dir(app)        → {app_data_dir}/{active_mode}     // créé si absent
 get_gpx_dir(mode_dir)    → {mode_dir}/gpx                   // créé si absent
+get_geojson_dir(mode_dir) → {mode_dir}/geojson               // créé si absent
 get_traces_path(mode_dir) → {mode_dir}/traces.json
+
+// edition.rs
+get_keyframes_dir(mode_dir) → {mode_dir}/keyframes           // créé si absent
 ```
 
 Le mode actif est déterminé par `gestionMode::read_active_mode(app_data_dir, is_dev)` qui lit `.env`.
@@ -157,4 +183,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-07-31
+**Dernière mise à jour** : 2026-08-03

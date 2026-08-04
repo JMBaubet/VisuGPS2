@@ -74,7 +74,11 @@ pub struct TraceMetadata {
 
 /// Retourne le dossier racine du mode d'exécution actif.
 /// Exemple : `{app_data_dir}/OPE` ou `{app_data_dir}/EVAL_essai`.
-fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+///
+/// `pub` pour être réutilisé par `edition.rs` (et tout module devant résoudre
+/// le dossier du mode actif), afin d'éviter la duplication de la logique de
+/// résolution `app_data_dir` + mode actif.
+pub fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let is_dev = cfg!(debug_assertions);
     let app_data_dir = app
         .path()
