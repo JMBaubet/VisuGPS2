@@ -1,6 +1,6 @@
 <template>
   <div
-    v-show="editionStore.hasKeyframes"
+    v-show="editionStore.hasKeyframes && !traceLoading"
     ref="graphContainer"
     class="progress-graph"
   >
@@ -151,6 +151,13 @@ const editionStore = useEditionStore()
 const graphContainer = ref<HTMLDivElement | null>(null)
 const viewportEl = ref<HTMLDivElement | null>(null)
 const svgEl = ref<SVGSVGElement | null>(null)
+
+/**
+ * `true` pendant le chargement d'une nouvelle trace (entre selectedTraceId
+ * change et keyframeSet chargé). Masque le graphe pour éviter le flash de
+ * l'ancienne timeline.
+ */
+const traceLoading = ref(true)
 
 let resizeObserver: ResizeObserver | null = null
 
@@ -352,10 +359,22 @@ onMounted(() => {
     resizeObserver.observe(viewportEl.value)
   }
 
+  // Masquer le graphe + réinitialiser le scroll quand la trace sélectionnée
+  // change (évite le flash de l'ancienne timeline pendant le chargement).
+  watch(
+    () => editionStore.selectedTraceId,
+    () => {
+      traceLoading.value = true
+      if (viewportEl.value) viewportEl.value.scrollLeft = 0
+    },
+  )
+
+  // Quand les keyframes arrivent (trace chargée), révéler le graphe.
   watch(
     () => editionStore.hasKeyframes,
     async (visible) => {
       if (visible) {
+        traceLoading.value = false
         await nextTick()
         measure()
         autoScroll()
@@ -386,20 +405,14 @@ onUnmounted(() => {
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.3) transparent;
+  /* Scrollbar masquée (scroll auto conservé) */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-/* Scrollbar visible (WebKit) */
+/* Scrollbar masquée (WebKit) */
 .progress-viewport::-webkit-scrollbar {
-  height: 6px;
-}
-.progress-viewport::-webkit-scrollbar-track {
-  background: rgba(255,255,255,0.05);
-}
-.progress-viewport::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.3);
-  border-radius: 3px;
+  display: none;
 }
 
 .progress-content {
