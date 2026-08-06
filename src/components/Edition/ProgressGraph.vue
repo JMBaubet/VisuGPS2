@@ -205,7 +205,7 @@ const timelineWidthPx = computed(() =>
   Math.ceil(editionStore.totalDistanceM * PX_PER_METER),
 )
 
-// --- Auto-scroll (poursuite lissée par rAF) ---
+// --- Auto-scroll (rAF continue pendant le playback) ---
 
 /**
  * Indique si l'utilisateur est en train de défiler manuellement. Pendant ce
@@ -240,74 +240,54 @@ function onWheel(event: WheelEvent) {
 }
 
 /**
- * Position cible de scrollLeft vers laquelle la poursuite lerp converge.
- * Recalculée à chaque variation de cursorX.
+ * Identifiant de la boucle requestAnimationFrame de scroll, ou null si
+ * inactive. Une seule boucle tourne à la fois, démarrée/arrêtée selon
+ * l'état de lecture du store.
  */
-let scrollTarget = 0
+let scrollRafId: number | null = null
 
 /**
- * Identifiant de la boucle requestAnimationFrame de poursuite, ou null si
- * inactive. Une seule boucle tourne à la fois, démarrée au besoin.
+ * Applique le scroll directement (sans interpolation) : scrollLeft =
+ * max(0, cursorX - viewport*0.3). Le curseur rouge est maintenu à ~30% du
+ * viewport depuis le bord gauche.
+ *
+ * Sans lerp ni epsilon : le scroll suit le curseur **exactement** à chaque
+ * frame, exactement comme applyInterpolatedState fait un jumpTo. C'est le
+ * playback lui-même (rAF du store, ~60 fps) qui pilote la fluidité.
  */
-let rafId: number | null = null
-
-/** Facteur d'inertie : 0 = figé, 1 = instantané (saccadé). ~0.18 = doux. */
-const SCROLL_LERP_FACTOR = 0.18
-
-/** Distance à laquelle on considère la poursuite terminée (px). */
-const SCROLL_EPSILON = 0.5
-
-/**
- * Calcule la position cible de scrollLeft pour maintenir le curseur rouge à
- * ~30% du viewport depuis le bord gauche. Retourne null si le scroll n'est
- * pas applicable (viewport masqué, timeline plus courte que le viewport).
- */
-function computeScrollTarget(): number | null {
-  const vp = viewportEl.value
-  if (!vp || vp.clientWidth <= 0) return null
-  if (timelineWidthPx.value <= vp.clientWidth) return 0
-  const target = cursorX.value - vp.clientWidth * 0.3
-  return Math.max(0, target)
-}
-
-/**
- * Callback d'une frame de la boucle de poursuite : interpole scrollLeft vers
- * scrollTarget, s'arrête de lui-même quand la cible est atteinte.
- */
-function onScrollRaf() {
-  rafId = null
+function applyAutoScroll() {
   const vp = viewportEl.value
   if (!vp || userScrolling) return
-  const current = vp.scrollLeft
-  const delta = scrollTarget - current
-  if (Math.abs(delta) <= SCROLL_EPSILON) {
-    vp.scrollLeft = scrollTarget
-    return // cible atteinte, boucle auto-stop
+  if (vp.clientWidth <= 0) return
+  if (timelineWidthPx.value <= vp.clientWidth) {
+    vp.scrollLeft = 0
+    return
   }
-  vp.scrollLeft = current + delta * SCROLL_LERP_FACTOR
-  // Relancer la frame : la poursuite continue jusqu'à convergence.
-  rafId = requestAnimationFrame(onScrollRaf)
+  const target = cursorX.value - vp.clientWidth * 0.3
+  vp.scrollLeft = Math.max(0, target)
 }
 
-/**
- * Démarre la boucle de poursuite si elle est inactive et met à jour la cible
- * du scroll. Idempotente : sans effet si l'utilisateur scrolle manuellement.
- */
-function autoScroll() {
-  if (userScrolling) return
-  const target = computeScrollTarget()
-  if (target === null) return
-  scrollTarget = target
-  if (rafId === null) {
-    rafId = requestAnimationFrame(onScrollRaf)
+/** Callback d'une frame de la boucle de scroll continue. */
+function onScrollRaf() {
+  scrollRafId = null
+  applyAutoScroll()
+  // Relancer tant que la lecture est en cours.
+  if (editionStore.isPlaying) {
+    scrollRafId = requestAnimationFrame(onScrollRaf)
   }
 }
 
-/** Arrête la boucle de poursuite (si active). */
+/** Démarre la boucle de scroll continue (si inactive). */
+function startScrollLoop() {
+  if (scrollRafId !== null) return
+  scrollRafId = requestAnimationFrame(onScrollRaf)
+}
+
+/** Arrête la boucle de scroll continue (si active). */
 function stopScrollLoop() {
-  if (rafId !== null) {
-    cancelAnimationFrame(rafId)
-    rafId = null
+  if (scrollRafId !== null) {
+    cancelAnimationFrame(scrollRafId)
+    scrollRafId = null
   }
 }
 
@@ -418,10 +398,25 @@ function onTimelineClick(event: MouseEvent) {
 
 // --- Watchers ---
 
-// Auto-scroll quand le curseur avance.
-watch(cursorX, () => {
-  autoScroll()
-})
+// Boucle de scroll : démarre en lecture, s'arrête en pause (comme la boucle
+// applyInterpolatedState du EditionMap). Pendant la pause, un scroll
+// ponctuel est appliqué via le watcher currentTimeMs ci-dessous.
+watch(
+  () => editionStore.isPlaying,
+  (playing) => {
+    if (playing) startScrollLoop()
+    else stopScrollLoop()
+  },
+)
+
+// En pause (seek, positionnement initial) : appliquer le scroll une fois
+// quand le temps change. Pendant la lecture, la boucle rAF s'en charge déjà.
+watch(
+  () => editionStore.currentTimeMs,
+  () => {
+    if (!editionStore.isPlaying) applyAutoScroll()
+  },
+)
 
 // --- Cycle de vie ---
 
@@ -439,12 +434,13 @@ onMounted(() => {
     isCurrentTraceLoaded,
     async (loaded) => {
       if (loaded) {
-        // Nouvelle trace : stopper la poursuite en cours et réinitialiser.
+        // Nouvelle trace : stopper la boucle et réinitialiser le scroll.
         stopScrollLoop()
-        scrollTarget = 0
         if (viewportEl.value) viewportEl.value.scrollLeft = 0
         await nextTick()
-        autoScroll()
+        applyAutoScroll()
+        // Si déjà en lecture, redémarrer la boucle.
+        if (editionStore.isPlaying) startScrollLoop()
       }
     },
     { immediate: true },
