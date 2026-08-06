@@ -255,6 +255,8 @@ export interface PolyVertex {
   lat: number
   /** Distance cumulée depuis le départ de la trace (m). */
   d: number
+  /** Altitude du point (m), `null` si non disponible. */
+  altitude: number | null
 }
 
 /**
@@ -272,16 +274,50 @@ export function buildTracePolyline(feature: GeoJSON.Feature): PolyVertex[] {
 }
 
 /**
- * Échantillonne la position [lng, lat] exacte sur la polyligne à une
- * distance cumulée donnée (interpolation linéaire dans le segment
- * contenant `distanceM`). Clamp aux extrémités.
+ * Construit la polyligne indexée par distance cumulée à partir des points
+ * riches retournés par le backend (`get_trace_points`).
+ *
+ * Contrairement à `buildTracePolyline`, cette fonction porte l'**altitude**
+ * réelle de chaque point. Les distances cumulées sont recalculées en 2D
+ * (Haversine) pour rester cohérentes avec les keyframes (qui utilisent des
+ * distances 2D). L'altitude n'est pas utilisée pour le calcul de distance.
+ *
+ * @param points - Tableau de `TracePoint` (lat, lon, alt, distance_m).
+ */
+export function buildTracePolylineFromPoints(
+  points: { lat: number; lon: number; alt: number | null; distance_m: number }[],
+): PolyVertex[] {
+  if (points.length === 0) return []
+  const poly: PolyVertex[] = []
+  let acc = 0
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]
+    if (i === 0) {
+      poly.push({ lng: p.lon, lat: p.lat, d: 0, altitude: p.alt })
+      continue
+    }
+    const prev = points[i - 1]
+    const seg = haversineMeters(prev.lat, prev.lon, p.lat, p.lon)
+    if (seg <= 0) continue // filtre les doublons
+    acc += seg
+    poly.push({ lng: p.lon, lat: p.lat, d: acc, altitude: p.alt })
+  }
+  return poly
+}
+
+/**
+ * Échantillonne la position exacte sur la polyligne à une distance cumulée
+ * donnée (interpolation linéaire dans le segment contenant `distanceM`).
+ * Clamp aux extrémités. L'altitude est interpolée linéairement entre les
+ * deux sommets encadrants.
  */
 export function samplePolylineAt(
   poly: PolyVertex[],
   distanceM: number,
-): { lng: number; lat: number } | null {
+): { lng: number; lat: number; altitude: number | null } | null {
   if (poly.length === 0) return null
-  if (poly.length === 1) return { lng: poly[0].lng, lat: poly[0].lat }
+  if (poly.length === 1)
+    return { lng: poly[0].lng, lat: poly[0].lat, altitude: poly[0].altitude }
   const total = poly[poly.length - 1].d
   const d = Math.min(Math.max(distanceM, 0), total)
   return pointAtDistance(poly, d)
@@ -310,29 +346,30 @@ function buildPolyline(coords: [number, number][]): PolyVertex[] {
   for (let i = 0; i < coords.length; i++) {
     const [lng, lat] = coords[i]
     if (i === 0) {
-      poly.push({ lng, lat, d: 0 })
+      poly.push({ lng, lat, d: 0, altitude: null })
       continue
     }
     const [prevLng, prevLat] = coords[i - 1]
     const seg = haversineMeters(prevLat, prevLng, lat, lng)
     if (seg <= 0) continue // filtre les doublons
     acc += seg
-    poly.push({ lng, lat, d: acc })
+    poly.push({ lng, lat, d: acc, altitude: null })
   }
   return poly
 }
 
 /**
- * Calcule la position [lng, lat] exacte sur la polyligne à une distance
- * cumulée donnée (interpolation linéaire dans le segment contenant `d`).
+ * Calcule la position exacte sur la polyligne à une distance cumulée donnée
+ * (interpolation linéaire dans le segment contenant `d`).
+ * L'altitude est interpolée linéairement entre les deux sommets.
  */
 function pointAtDistance(
   poly: PolyVertex[],
   d: number,
-): { lng: number; lat: number } {
-  if (d <= 0) return { lng: poly[0].lng, lat: poly[0].lat }
+): { lng: number; lat: number; altitude: number | null } {
+  if (d <= 0) return { lng: poly[0].lng, lat: poly[0].lat, altitude: poly[0].altitude }
   const last = poly[poly.length - 1]
-  if (d >= last.d) return { lng: last.lng, lat: last.lat }
+  if (d >= last.d) return { lng: last.lng, lat: last.lat, altitude: last.altitude }
 
   // Recherche du segment contenant d.
   let lo = 0
@@ -346,9 +383,17 @@ function pointAtDistance(
   const b = poly[hi]
   const span = b.d - a.d
   const ratio = span > 0 ? (d - a.d) / span : 0
+
+  // Interpolation de l'altitude (null si l'un des sommets n'a pas d'altitude).
+  let altitude: number | null = null
+  if (a.altitude !== null && b.altitude !== null) {
+    altitude = a.altitude + (b.altitude - a.altitude) * ratio
+  }
+
   return {
     lng: a.lng + (b.lng - a.lng) * ratio,
     lat: a.lat + (b.lat - a.lat) * ratio,
+    altitude,
   }
 }
 

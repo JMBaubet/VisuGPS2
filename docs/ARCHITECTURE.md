@@ -350,11 +350,11 @@ src/
 │   │   ├── SettingsDrawer.vue   # Drawer de paramètres (dynamique, piloté par [_meta])
 │   │   └── SettingsCategory.vue # Rendu d'une catégorie (accordéon / aplati / handler)
 │   ├── Edition/      # Composants de la vue d'édition caméra
-│   │   ├── EditionMap.vue       # Carte Mapbox GL satellite + terrain (trace, marker, lecture rAF)
+│   │   ├── EditionMap.vue       # Carte Mapbox GL satellite + terrain (trace, curseur GL CircleLayer, lecture rAF)
 │   │   ├── EditionToolbar.vue   # Barre d'outils supérieure (Home, toggle cadre ViewPort)
 │   │   ├── ViewportFrame.vue    # Overlay CSS du cadre ViewPort 16:9 (masque sombre + trait blanc)
 │   │   ├── PlaybackControls.vue # Bandeau bas — Composant A (Play/Pause, vitesse, distance)
-│   │   └── TelemetryHud.vue     # Overlay — Composant C (HUD télémétrie caméra ↔ marqueur)
+│   │   └── TelemetryHud.vue     # Overlay — Composant C (HUD télémétrie caméra ↔ curseur)
 │   └── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
@@ -781,14 +781,14 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
    - Définit les types du format JSON figé (spec §3.4) : `CamState`, `TraceurPoint`, `Keyframe`, `KeyframeSet`.
    - `generateKeyframes(traceId, feature, sampleStepM = 250)` : construit la polyligne indexée par distance cumulée (Haversine), échantillonne un keyframe tous les `KEYFRAME_STEP_M`, interpole la position exacte sur la polyligne à la distance cible, et oriente chaque caméra vers le keyframe suivant (`bearing()`). `time_ms = distance × MS_PER_METER` (vitesse défaut 4000 ms/km).
    - Helpers purs d'interpolation (consommés par la boucle de lecture) : `findSegment` (dichotomie O(log n)), `interpolateCam` (bearing interpolé **sur le cercle** pour éviter une rotation à 360° au wrap), `interpolateTraceur`.
-   - **Polyligne indexée par distance** : `buildTracePolyline(feature)` et `samplePolylineAt(poly, distanceM)` exposent la trace complète (tous les points GPX) indexée par distance cumulée. Le marker les utilise pour avancer **le long de la trace réelle** (et non entre les keyframes échantillonnés), de sorte qu'il épouse les virages au lieu de tirer des cordes droites.
+   - **Polyligne indexée par distance** : `buildTracePolyline(feature)` (fallback GeoJSON 2D) et `buildTracePolylineFromPoints(points)` (depuis `TracePoint[]` backend, distances Haversine 2D recalculées + altitude) construisent un tableau de `PolyVertex { lng, lat, d, altitude }` indexé par distance cumulée. `samplePolylineAt(poly, distanceM)` retourne `{ lng, lat, altitude }` (interpolation linéaire de l'altitude entre sommets encadrants). Le curseur les utilise pour avancer **le long de la trace réelle** (et non entre les keyframes échantillonnés), de sorte qu'il épouse les virages au lieu de tirer des cordes droites.
    - **Algorithme volontairement simple (MVP)** : la caméra suit fidèlement la trace. Il sera remplacé par l'algorithme de frustum (spec §3.3) sans impacter le reste.
 
 2. **Store édition** (`src/stores/edition.ts`) — Pattern Setup Store, état UI éphémère non persisté :
    - **Sélection / cadre** : `selectedTraceId`, `showViewportFrame` ; actions `selectTrace`, `clearSelection`, `toggleViewportFrame`.
    - **Lecture** : `keyframeSet`, `isPlaying`, `speed` (0.5/1/2/4), `currentTimeMs`.
-   - **Getters** : `hasKeyframes`, `totalDistanceM/Km`, `totalDurationMs`, `currentDistanceM/Km`, `progressRatio`, `currentSegment`, `interpolatedCam` (interpolation entre keyframes), `interpolatedTraceur` (échantillonné **le long de la polyligne réelle** à la distance courante — suit les virages), `markerDistanceM` (haversine cam↔traceur), `markerRelativeBearing` (cap relatif normalisé [-180,180]).
-	   - **Actions** : `setKeyframeSet(set, feature)` (reset temps + pause, construit la polyligne depuis la feature), `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)` (avance le temps de `delta × speed`, **pause auto en fin de course**).
+   - **Getters** : `hasKeyframes`, `totalDistanceM/Km`, `totalDurationMs`, `currentDistanceM/Km`, `progressRatio`, `currentSegment`, `interpolatedCam` (interpolation entre keyframes), `interpolatedTraceur` (échantillonné **le long de la polyligne réelle** à la distance courante — suit les virages, inclut `altitude` interpolée), `markerDistanceM` (haversine cam↔traceur), `markerRelativeBearing` (cap relatif normalisé [-180,180]).
+		   - **Actions** : `setKeyframeSet(set, feature, tracePoints?)` (reset temps + pause, construit la polyligne depuis les `tracePoints` backend si fournis, sinon depuis la feature GeoJSON), `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)` (avance le temps de `delta × speed`, **pause auto en fin de course**).
 
 2-bis. **Store keyframes** (`src/stores/keyframes.ts`) — Pattern Setup Store, persistance des keyframes sur disque :
    - Actions `loadKeyframes(traceId)` : charge les keyframes depuis `keyframes/{trace_id}.json` via `get_keyframes`. Retourne `null` si absent ou invalide (validation minimale : `trace_id` + `keyframes` non vide).
@@ -802,14 +802,15 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 4. **Carte + lecture** (`src/components/Edition/EditionMap.vue`) :
    - Carte Mapbox GL **dédiée** (distincte de `Accueil/Map.vue`). Style `standard-satellite` ; **terrain/élévation** via source `raster-dem` (`mapbox-terrain-rgb`) + `setTerrain({ exaggeration: 1.5 })` ; pitch 60° par défaut (spec §7).
-   - Charge la géométrie via `tracesStore.getTraceGeometry` (LineString blanche), pose le **marker jaune bordé de blanc** (`.edition-marker`), cadre sur l'emprise (`fitBounds`), **puis charge les keyframes persistés** via `keyframesStore.loadKeyframes`. Si absents ou invalides, les génère et les sauvegarde (best-effort) via `keyframesStore.saveKeyframes` avant de les pousser dans `editionStore`.
-   - **Boucle d'animation** pilotée par `editionStore.isPlaying` : une `requestAnimationFrame` calcule le delta réel (`performance.now()`), déclenche `tick(delta)`, puis applique l'état interpolé (`map.jumpTo` pour la caméra, `marker.setLngLat` pour le traceur). En pause, un `watch(currentTimeMs)` repositionne (l'utilisateur garde la main sur la carte). Arrêt propre du rAF au démontage.
+   - Charge la géométrie via `tracesStore.getTraceGeometry` (LineString rouge), les points riches via `tracesStore.getTracePoints` (altitude + distance), pose le **curseur jaune bordé de blanc** (CircleLayer WebGL `edition-marker-dot`, source GeoJSON point mise à jour via `source.setData()`), cadre sur l'emprise (`fitBounds`), **puis charge les keyframes persistés** via `keyframesStore.loadKeyframes`. Si absents ou invalides, les génère et les sauvegarde (best-effort) via `keyframesStore.saveKeyframes` avant de les pousser dans `editionStore` avec les `tracePoints` (polyligne enrichie altitude).
+   - **Boucle d'animation** pilotée par `editionStore.isPlaying` : une `requestAnimationFrame` calcule le delta réel (`performance.now()`), déclenche `tick(delta)`, puis applique l'état interpolé (`map.jumpTo` pour la caméra, `source.setData()` pour le curseur). En pause, un `watch(currentTimeMs)` repositionne (l'utilisateur garde la main sur la carte). Arrêt propre du rAF au démontage.
+   - **CircleLayer vs Marker DOM** : le curseur utilise une CircleLayer (pipeline WebGL) au lieu d'un `mapboxgl.Marker` (élément DOM). Cela garantit une synchronisation parfaite avec le terrain 3D pendant les mouvements rapides de caméra (virages serrés, lacets), là où un Marker DOM se désynchronise de la projection WebGL.
 
 5. **Composants** (`src/components/Edition/`) :
    - `EditionToolbar.vue` : `v-app-bar` semi-transparente. Bouton **Home**, titre de la trace, toggle **cadre ViewPort**.
    - `ViewportFrame.vue` : overlay CSS pur (z-index 5, `pointer-events: none`). Rectangle **16:9 centré** (plus grand possible, mesuré au `ResizeObserver`), masque sombre ~70 % via `box-shadow` gigantesque, trait blanc 2 px. Purement informatif.
    - `PlaybackControls.vue` (Composant A, spec §4.3) : bandeau bas. Bouton **Play/Pause**, `v-btn-toggle` vitesse (0.5×/1×/2×/4×), affichage `Distance parcourue : X.XX km / Y.YY km`.
-   - `TelemetryHud.vue` (Composant C, spec §4.5) : overlay coin supérieur droit, fond semi-transparent sombre, texte blanc. Paramètres caméra (Zoom/Pitch/Bearing/Lng/Lat) + relation caméra↔marqueur (Distance/Cap). Masqué sans keyframes.
+   - `TelemetryHud.vue` (Composant C, spec §4.5) : overlay coin supérieur droit, fond semi-transparent sombre, texte blanc. Paramètres caméra (Zoom/Pitch/Bearing/Lng/Lat) + section Traceur (Altitude interpolée depuis la polyligne) + relation caméra↔curseur (Distance/Cap). Masqué sans keyframes.
 
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
    - Le bouton **Éditer** (`mdi-pencil`) appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis `router.push({ name: 'editionCamera' })`.
@@ -823,7 +824,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | Terrain | Non | `raster-dem` `mapbox-terrain-rgb`, exaggeration 1.5 |
 | Pitch | 0 (défaut) | 60° (défaut, spec §7) |
 | Sources | `traces` (clusters), `favorites`, `displayed-traces`, `focus-traces` | `edition-trace` (LineString), `edition-terrain` (DEM) |
-| Marker | Aucun | Marker jaune DOM custom, repositionné à chaque frame |
+| Marker | Aucun | CircleLayer WebGL jaune (`edition-marker-dot`), mis à jour via `source.setData()` |
 | Animation | Aucune | Boucle `requestAnimationFrame` pilotée par `editionStore` |
 
 ### Stockage par mode d'exécution

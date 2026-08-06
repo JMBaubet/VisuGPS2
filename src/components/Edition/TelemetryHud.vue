@@ -12,6 +12,12 @@
       <div class="hud-row"><span>Lat</span><span>{{ cam ? cam.lat.toFixed(4) : '—' }}</span></div>
     </div>
 
+    <!-- Traceur -->
+    <div class="hud-section">
+      <div class="hud-section-title">Traceur</div>
+      <div class="hud-row"><span>Alt</span><span>{{ fmtAlt(editionStore.interpolatedTraceur?.altitude) }}</span></div>
+    </div>
+
     <!-- Relation caméra ↔ marqueur -->
     <div class="hud-section">
       <div class="hud-section-title">Caméra ↔ marqueur</div>
@@ -44,6 +50,13 @@ function fmt(value: number | undefined, decimals: number): string {
   return value === undefined || value === null || Number.isNaN(value)
     ? '—'
     : value.toFixed(decimals)
+}
+
+/** Formate une altitude en mètres arrondis avec séparateur de milliers. */
+function fmtAlt(alt: number | null | undefined): string {
+  return alt === undefined || alt === null || Number.isNaN(alt)
+    ? '—'
+    : `${Math.round(alt).toLocaleString('fr-FR')} m`
 }
 </script>
 

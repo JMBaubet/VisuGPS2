@@ -11,14 +11,20 @@
  *   - style satellite (`mapbox://styles/mapbox/standard-satellite`)
  *   - activation du terrain/élévation (source raster-dem `mapbox-terrain-rgb`)
  *   - tracé de la trace sélectionnée (LineString)
- *   - marqueur jaune bordé de blanc
+ *   - curseur jaune (cercle GL, couche CircleLayer synchronisée avec le terrain)
+ *
+ * Le curseur est un **cercle rendu en WebGL** (CircleLayer) et non un Marker DOM.
+ * Cela garantit qu'il est parfaitement synchronisé avec le terrain et la trace
+ * pendant les transitions de caméra rapides (lacets, virages serrés).
+ * Un Marker DOM 2D peut flotter au-dessus de la trace pendant les mouvements
+ * de caméra car sa projection et le rendu du terrain WebGL sont désynchronisés.
  *
  * Après chargement de la trace, ce composant génère un jeu de keyframes
  * (`generateKeyframes`) et le pousse dans `editionStore`. Il assure ensuite
  * le rendu frame-by-frame piloté par l'état de lecture du store :
  *   - en lecture : une boucle `requestAnimationFrame` déclenche `tick()`
- *     puis applique l'état interpolé (caméra via `jumpTo`, marker via
- *     `setLngLat`) ;
+ *     puis applique l'état interpolé (caméra via `jumpTo`, curseur via
+ *     mise à jour de la source GeoJSON) ;
  *   - en pause : l'état interpolé est appliqué uniquement sur changement
  *     du temps courant (l'utilisateur garde la main sur la carte).
  *
@@ -50,8 +56,8 @@ const mapContainer = ref<HTMLDivElement | null>(null)
 let map: mapboxgl.Map | null = null
 /** Observer du redimensionnement du conteneur. */
 let resizeObserver: ResizeObserver | null = null
-/** Marqueur jaune : créé une fois la trace chargée, détruit au démontage. */
-let marker: mapboxgl.Marker | null = null
+/** Position courante du curseur [lng, lat], pour mise à jour source GeoJSON. */
+let markerCoords: [number, number] = [0, 0]
 
 // --- Animation (lecture) ---
 
@@ -70,6 +76,8 @@ let editionReady = false
 
 const TRACE_SOURCE_ID = 'edition-trace'
 const TRACE_LINE_LAYER_ID = 'edition-trace-line'
+const MARKER_SOURCE_ID = 'edition-marker'
+const MARKER_LAYER_ID = 'edition-marker-dot'
 const TERRAIN_SOURCE_ID = 'edition-terrain'
 
 // --- Initialisation ---
@@ -115,7 +123,7 @@ async function initializeMap(token: string) {
         data: { type: 'FeatureCollection', features: [] },
       })
     }
-    if (!map.getLayer(TRACE_LINE_LAYER_ID)) {
+      if (!map.getLayer(TRACE_LINE_LAYER_ID)) {
       map.addLayer({
         id: TRACE_LINE_LAYER_ID,
         type: 'line',
@@ -128,6 +136,34 @@ async function initializeMap(token: string) {
           'line-color': '#FF0000',
           'line-width': 5,
           'line-opacity': 0.9,
+        },
+      })
+    }
+
+    // 2bis. Curseur (cercle jaune bordé de blanc, rendu WebGL).
+    // Rendu via CircleLayer au lieu d'un Marker DOM pour rester synchronisé
+    // avec le terrain et la trace pendant les transitions rapides de caméra.
+    if (!map.getSource(MARKER_SOURCE_ID)) {
+      map.addSource(MARKER_SOURCE_ID, {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [0, 0] },
+          properties: {},
+        },
+      })
+    }
+    if (!map.getLayer(MARKER_LAYER_ID)) {
+      map.addLayer({
+        id: MARKER_LAYER_ID,
+        type: 'circle',
+        source: MARKER_SOURCE_ID,
+        paint: {
+          'circle-radius': 9,
+          'circle-color': '#FFD600',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#FFFFFF',
+          'circle-opacity': 1,
         },
       })
     }
@@ -186,19 +222,22 @@ async function loadSelectedTrace() {
       console.warn(`[EditionMap] Sauvegarde des keyframes échouée :`, e)
     }
   }
-  editionStore.setKeyframeSet(kf, feature)
 
-  // Marqueur jaune (cercle bordé de blanc, spec §1). On ne l'ajoute à la
-  // carte qu'une fois sa position initiale connue (le premier keyframe),
-  // sinon Mapbox tente de projeter un marqueur sans LngLat à chaque frame
-  // et lève une erreur `LngLatLike`.
+  // Charger les points riches du backend (altitude + distance 3D).
+  let tracePoints: Awaited<ReturnType<typeof tracesStore.getTracePoints>> | null = null
+  try {
+    tracePoints = await tracesStore.getTracePoints(traceId)
+  } catch (e) {
+    console.warn(`[EditionMap] Chargement des points riches échoué :`, e)
+  }
+
+  editionStore.setKeyframeSet(kf, feature, tracePoints ?? null)
+
+  // Curseur jaune (cercle GL). Position initiale au premier keyframe.
   if (kf && kf.keyframes.length > 0) {
     const start = kf.keyframes[0].traceur
-    const el = document.createElement('div')
-    el.className = 'edition-marker'
-    marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
-      .setLngLat([start.lng, start.lat])
-      .addTo(map)
+    markerCoords = [start.lng, start.lat]
+    updateMarkerSource()
     editionReady = true
     applyInterpolatedState()
   }
@@ -222,20 +261,17 @@ function computeBounds(feature: GeoJSON.Feature): mapboxgl.LngLatBounds {
 // --- Application de l'état interpolé (caméra + marker) ---
 
 /**
- * Applique l'état caméra/marker interpolé à l'instant courant du store.
+ * Applique l'état caméra/curseur interpolé à l'instant courant du store.
  *
  * En lecture, appelée à chaque frame par la boucle rAF ; en pause, appelée
  * par le watcher sur `currentTimeMs`. On utilise `jumpTo` (instantané) pour
- * un rendu frame-by-frame cohérent, avec `essential: true` afin que le
- * mouvement ne soit pas désactivé par `prefers-reduced-motion`.
+ * la caméra et mise à jour de la source GeoJSON pour le curseur.
  */
 function applyInterpolatedState() {
   if (!map || !editionReady) return
   const cam = editionStore.interpolatedCam
   const tr = editionStore.interpolatedTraceur
   if (cam) {
-    // jumpTo est instantané (sans animation), donc insensible à
-    // prefers-reduced-motion : pas besoin du flag `essential`.
     map.jumpTo({
       center: [cam.lng, cam.lat],
       zoom: cam.zoom,
@@ -243,8 +279,22 @@ function applyInterpolatedState() {
       pitch: cam.pitch,
     })
   }
-  if (tr && marker) {
-    marker.setLngLat([tr.lng, tr.lat])
+  if (tr) {
+    markerCoords = [tr.lng, tr.lat]
+    updateMarkerSource()
+  }
+}
+
+/** Met à jour la position du curseur via la source GeoJSON. */
+function updateMarkerSource() {
+  if (!map) return
+  const source = map.getSource(MARKER_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+  if (source) {
+    source.setData({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: markerCoords },
+      properties: {},
+    })
   }
 }
 
@@ -330,10 +380,6 @@ onMounted(async () => {
 onUnmounted(() => {
   stopAnimation()
   editionReady = false
-  if (marker) {
-    marker.remove()
-    marker = null
-  }
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
@@ -350,19 +396,5 @@ onUnmounted(() => {
 .edition-map-container {
   width: 100%;
   height: 100%;
-}
-
-/*
- * Marqueur jaune bordé de blanc (spec §1 : cercle jaune bordé de blanc).
- * L'élément est créé en JS et reçoit cette classe ; il n'est pas scoped
- * car il est attaché hors du DOM du composant (enfant du container Mapbox).
- */
-.edition-marker {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background-color: #FFD600;
-  border: 2px solid #FFFFFF;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
 }
 </style>

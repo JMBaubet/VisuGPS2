@@ -23,6 +23,7 @@ import {
   findSegment,
   interpolateCam,
   buildTracePolyline,
+  buildTracePolylineFromPoints,
   samplePolylineAt,
   MS_PER_METER,
 } from '../algorithms/keyframeGenerator'
@@ -114,7 +115,7 @@ export const useEditionStore = defineStore('edition', () => {
     if (tracePolyline.value.length === 0) return null
     const p = samplePolylineAt(tracePolyline.value, currentDistanceM.value)
     if (!p) return null
-    return { lng: p.lng, lat: p.lat, altitude: null }
+    return { lng: p.lng, lat: p.lat, altitude: p.altitude }
   })
 
   /**
@@ -161,16 +162,27 @@ export const useEditionStore = defineStore('edition', () => {
   /**
    * Définit le jeu de keyframes et la polyligne de la trace associée.
    *
-   * La polyligne (`feature`) sert au déplacement du marker le long de la
-   * trace réelle ; elle doit être fournie en même temps que les keyframes.
+   * La polyligne sert au déplacement du marker le long de la trace réelle.
+   * Deux sources possibles :
+   *   - `tracePoints` (priorité) : points riches du backend avec altitude.
+   *     Les distances cumulées sont recalculées en 2D (Haversine) pour
+   *     rester cohérentes avec les keyframes (distances 2D). L'apport
+   *     est l'altitude réelle par point pour le HUD.
+   *   - `feature` (fallback) : GeoJSON LineString 2D → polyligne Haversine 2D,
+   *     sans altitude.
    * Réinitialise le temps courant à 0 et met la lecture en pause.
    */
   function setKeyframeSet(
     set: KeyframeSet | null,
     feature: GeoJSON.Feature | null = null,
+    tracePoints: { lat: number; lon: number; alt: number | null; distance_m: number }[] | null = null,
   ) {
     keyframeSet.value = set
-    tracePolyline.value = feature ? buildTracePolyline(feature) : []
+    if (tracePoints && tracePoints.length > 0) {
+      tracePolyline.value = buildTracePolylineFromPoints(tracePoints)
+    } else {
+      tracePolyline.value = feature ? buildTracePolyline(feature) : []
+    }
     currentTimeMs.value = 0
     isPlaying.value = false
   }
