@@ -4,116 +4,123 @@
     ref="graphContainer"
     class="progress-graph"
   >
-    <!-- Fenêtre viewport (clipping) avec scroll horizontal -->
-    <div
-      class="progress-viewport"
-      ref="viewportEl"
-      @scroll.passive="onManualScroll"
+    <!--
+      SVG unique, dimensions = viewport (conteneur). Tout le contenu de la
+      timeline est enveloppé dans un <g> translaté de -scrollOffset : c'est
+      le SVG qui gère le scroll (translation), pas le DOM. Plus de scrollbar,
+      plus de race condition clientWidth=0.
+    -->
+    <svg
+      ref="svgEl"
+      :viewBox="`0 0 ${viewWidth} ${totalHeight}`"
+      preserveAspectRatio="none"
+      class="progress-graph-svg"
+      @click="onTimelineClick"
+      @mousemove="onMouseMove"
+      @mouseleave="onMouseLeave"
     >
-      <div class="progress-content" :style="{ width: timelineWidthPx + 'px' }">
-        <svg
-          ref="svgEl"
-          :viewBox="`0 0 ${timelineWidthPx} ${totalHeight}`"
-          :style="{ width: timelineWidthPx + 'px' }"
-          class="progress-graph-svg"
-          @click="onTimelineClick"
-          @mousemove="onMouseMove"
-          @mouseleave="onMouseLeave"
-        >
-          <!-- ZONE 1 : Points de RdV (keyframes) — ticks larges cliquables -->
-          <g class="zone-rdv">
-            <rect
-              v-for="kf in keyframeTicks"
-              :key="'rdv-' + kf.distance_from_start_m"
-              :x="kf.x - RDV_WIDTH / 2"
-              :y="rdvZoneY"
-              :width="RDV_WIDTH"
-              :height="rdvZoneHeight"
-              fill="rgba(255, 214, 0, 0.7)"
-              class="rdv-tick"
-            />
-          </g>
+      <!-- Clip pour que le contenu translaté ne déborde pas -->
+      <defs>
+        <clipPath id="timeline-clip">
+          <rect :x="0" :y="0" :width="viewWidth" :height="totalHeight" />
+        </clipPath>
+      </defs>
 
-          <!-- Séparateur fin -->
-          <line
-            :x1="0" :y1="rdvZoneY + rdvZoneHeight"
-            :x2="timelineWidthPx" :y2="rdvZoneY + rdvZoneHeight"
-            stroke="rgba(255,255,255,0.1)" stroke-width="1"
+      <!-- Contenu timeline (translaté horizontalement par scrollOffset) -->
+      <g :transform="`translate(${-scrollOffset}, 0)`" clip-path="url(#timeline-clip)">
+        <!-- ZONE 1 : Points de RdV (keyframes) — ticks larges cliquables -->
+        <g class="zone-rdv">
+          <rect
+            v-for="kf in keyframeTicks"
+            :key="'rdv-' + kf.distance_from_start_m"
+            :x="kf.x - RDV_WIDTH / 2"
+            :y="rdvZoneY"
+            :width="RDV_WIDTH"
+            :height="rdvZoneHeight"
+            fill="rgba(255, 214, 0, 0.7)"
+            class="rdv-tick"
           />
+        </g>
 
-          <!-- ZONE 2 : Avancement -->
-          <g class="zone-advance">
-            <!-- Piste (fond) -->
-            <rect
-              :x="0" :y="advanceZoneY"
-              :width="timelineWidthPx" :height="advanceBarHeight"
-              fill="rgba(255,255,255,0.12)" rx="2"
-            />
-            <!-- Jauge jaune (avancement) — z-index inférieur -->
-            <rect
-              :x="0" :y="advanceZoneY"
-              :width="progressWidthPx" :height="advanceBarHeight"
-              fill="#FFD600" rx="2"
-            />
-            <!-- Repères tous les 10 km — z-index supérieur (rendus après la jauge) -->
-            <g v-for="mark in kmMarks" :key="'km-' + mark.distance" class="km-mark">
-              <line
-                :x1="mark.x" :y1="advanceZoneY"
-                :x2="mark.x" :y2="advanceZoneY + advanceBarHeight"
-                stroke="rgba(255,255,255,0.6)" stroke-width="1"
-              />
-              <!-- Zone de clic élargie autour du repère (invisible mais cliquable) -->
-              <rect
-                :x="mark.x - 5" :y="advanceZoneY"
-                :width="10" :height="advanceBarHeight"
-                fill="transparent" class="km-mark-hit"
-              />
-            </g>
-            <!-- Curseur rouge (3px) — z-index le plus haut dans la zone -->
-            <rect
-              :x="cursorX - CURSOR_WIDTH / 2"
-              :y="advanceZoneY"
-              :width="CURSOR_WIDTH"
-              :height="advanceBarHeight"
-              fill="#FF0000"
-            />
-          </g>
+        <!-- Séparateur fin -->
+        <line
+          :x1="0" :y1="rdvZoneY + rdvZoneHeight"
+          :x2="timelineWidthPx" :y2="rdvZoneY + rdvZoneHeight"
+          stroke="rgba(255,255,255,0.1)" stroke-width="1"
+        />
 
-          <!-- Séparateur fin -->
-          <line
-            :x1="0" :y1="advanceZoneY + advanceZoneHeight"
-            :x2="timelineWidthPx" :y2="advanceZoneY + advanceZoneHeight"
-            stroke="rgba(255,255,255,0.1)" stroke-width="1"
+        <!-- ZONE 2 : Avancement -->
+        <g class="zone-advance">
+          <!-- Piste (fond) -->
+          <rect
+            :x="0" :y="advanceZoneY"
+            :width="timelineWidthPx" :height="advanceBarHeight"
+            fill="rgba(255,255,255,0.12)" rx="2"
           />
-
-          <!-- ZONE 3 : Graduation (libellés tous les 10km, non cliquable) -->
-          <g class="zone-grad">
-            <text
-              v-for="mark in kmMarks"
-              :key="'lbl-' + mark.distance"
-              :x="mark.x"
-              :y="gradZoneY + 14"
-              fill="rgba(255,255,255,0.7)"
-              font-size="10"
-              font-family="monospace"
-              text-anchor="middle"
-            >{{ mark.label }}</text>
-          </g>
-
-          <!-- Tooltip au survol -->
-          <g v-if="tooltip.visible" :transform="`translate(${tooltip.x}, ${advanceZoneY + advanceBarHeight})`">
-            <rect
-              x="-65" y="4" width="130" height="22" rx="4"
-              fill="rgba(0,0,0,0.9)" stroke="rgba(255,255,255,0.2)" stroke-width="1"
+          <!-- Jauge jaune (avancement) — z-index inférieur -->
+          <rect
+            :x="0" :y="advanceZoneY"
+            :width="progressWidthPx" :height="advanceBarHeight"
+            fill="#FFD600" rx="2"
+          />
+          <!-- Repères tous les 10 km — z-index supérieur (rendus après la jauge) -->
+          <g v-for="mark in kmMarks" :key="'km-' + mark.distance" class="km-mark">
+            <line
+              :x1="mark.x" :y1="advanceZoneY"
+              :x2="mark.x" :y2="advanceZoneY + advanceBarHeight"
+              stroke="rgba(255,255,255,0.6)" stroke-width="1"
             />
-            <text
-              x="0" y="19" text-anchor="middle"
-              fill="#FFFFFF" font-size="11" font-family="monospace"
-            >{{ tooltip.text }}</text>
+            <!-- Zone de clic élargie autour du repère (invisible mais cliquable) -->
+            <rect
+              :x="mark.x - 5" :y="advanceZoneY"
+              :width="10" :height="advanceBarHeight"
+              fill="transparent" class="km-mark-hit"
+            />
           </g>
-        </svg>
-      </div>
-    </div>
+          <!-- Curseur rouge (3px) — z-index le plus haut dans la zone -->
+          <rect
+            :x="cursorX - CURSOR_WIDTH / 2"
+            :y="advanceZoneY"
+            :width="CURSOR_WIDTH"
+            :height="advanceBarHeight"
+            fill="#FF0000"
+          />
+        </g>
+
+        <!-- Séparateur fin -->
+        <line
+          :x1="0" :y1="advanceZoneY + advanceZoneHeight"
+          :x2="timelineWidthPx" :y2="advanceZoneY + advanceZoneHeight"
+          stroke="rgba(255,255,255,0.1)" stroke-width="1"
+        />
+
+        <!-- ZONE 3 : Graduation (libellés tous les 10km, non cliquable) -->
+        <g class="zone-grad">
+          <text
+            v-for="mark in kmMarks"
+            :key="'lbl-' + mark.distance"
+            :x="mark.x"
+            :y="gradZoneY + 14"
+            fill="rgba(255,255,255,0.7)"
+            font-size="10"
+            font-family="monospace"
+            text-anchor="middle"
+          >{{ mark.label }}</text>
+        </g>
+
+        <!-- Tooltip au survol -->
+        <g v-if="tooltip.visible" :transform="`translate(${tooltip.x}, ${advanceZoneY + advanceBarHeight})`">
+          <rect
+            x="-65" y="4" width="130" height="22" rx="4"
+            fill="rgba(0,0,0,0.9)" stroke="rgba(255,255,255,0.2)" stroke-width="1"
+          />
+          <text
+            x="0" y="19" text-anchor="middle"
+            fill="#FFFFFF" font-size="11" font-family="monospace"
+          >{{ tooltip.text }}</text>
+        </g>
+      </g>
+    </svg>
   </div>
 </template>
 
@@ -126,9 +133,14 @@
  * largeur de la fenêtre, un mécanisme de **scroll automatique centré sur le
  * curseur** entre en jeu.
  *
+ * **Scroll géré par le SVG** (et non par le DOM) : le viewBox du SVG est fixe
+ * (= dimensions du conteneur), et tout le contenu timeline est enveloppé dans
+ * un <g :transform="translate(-scrollOffset, 0)">. Le scroll devient un simple
+ * décalage de coordonnées — plus de scrollbar, plus de problème clientWidth=0
+ * quand le graphe est masqué.
+ *
  * Trois zones distinctes, de haut en bas :
- *   1. **Points de RdV** (keyframes) — ticks larges (3px) cliquables (clic =
- *      seek pour cette itération ; CRUD à venir avec le Composant B) ;
+ *   1. **Points de RdV** (keyframes) — ticks larges (3px) cliquables ;
  *   2. **Ligne d'avancement** — piste de fond + jauge jaune (progression) +
  *      repères verticaux tous les 10 km (cliquables pour seek direct) +
  *      curseur rouge (3px). z-index : jauge < repères < curseur ;
@@ -141,7 +153,7 @@
  *
  * Échelle : 3 px / 100 m.
  */
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useEditionStore } from '../../stores/edition'
 
 const editionStore = useEditionStore()
@@ -149,8 +161,9 @@ const editionStore = useEditionStore()
 // --- Références ---
 
 const graphContainer = ref<HTMLDivElement | null>(null)
-const viewportEl = ref<HTMLDivElement | null>(null)
 const svgEl = ref<SVGSVGElement | null>(null)
+
+let resizeObserver: ResizeObserver | null = null
 
 /**
  * `true` quand les keyframes affichés correspondent à la trace sélectionnée.
@@ -163,8 +176,6 @@ const isCurrentTraceLoaded = computed(
     !!editionStore.keyframeSet &&
     editionStore.keyframeSet.trace_id === editionStore.selectedTraceId,
 )
-
-let resizeObserver: ResizeObserver | null = null
 
 // --- Constantes de mise en page ---
 
@@ -192,13 +203,84 @@ const gradZoneY = advanceZoneY + advanceZoneHeight
 /** Hauteur totale du SVG. */
 const totalHeight = rdvZoneHeight + advanceZoneHeight + gradZoneHeight
 
-// --- Dimensions du conteneur (viewport) ---
+// --- Dimensions du viewport ---
 
-const viewportWidth = ref(0)
+/** Largeur mesurée du conteneur (px) = largeur visible du SVG. */
+const viewWidth = ref(0)
 /** Largeur totale de la timeline (px, proportionnelle à la trace). */
 const timelineWidthPx = computed(() =>
   Math.ceil(editionStore.totalDistanceM * PX_PER_METER),
 )
+
+// --- Scroll (offset de translation du <g> SVG) ---
+
+/**
+ * Offset de scroll en px. Appliqué comme `translate(-scrollOffset, 0)` sur
+ * le <g> contenant la timeline. 0 = timeline collée à gauche.
+ */
+const scrollOffset = ref(0)
+
+/**
+ * Indique si l'utilisateur est en train de défiler manuellement (roulette /
+ * glisser). Pendant ce temps, l'auto-scroll est suspendu.
+ */
+let userScrolling = false
+let userScrollTimer: ReturnType<typeof setTimeout> | null = null
+
+function suspendAutoScroll() {
+  userScrolling = true
+  if (userScrollTimer) clearTimeout(userScrollTimer)
+  userScrollTimer = setTimeout(() => {
+    userScrolling = false
+  }, 1500)
+}
+
+/**
+ * Offset de scroll maximum (= largeur timeline - largeur viewport), au-delà
+ * duquel on ne peut plus scroller vers la droite.
+ */
+const maxScrollOffset = computed(() =>
+  Math.max(0, timelineWidthPx.value - viewWidth.value),
+)
+
+/**
+ * Recentre le viewport sur le curseur rouge si la timeline dépasse le
+ * viewport. Le curseur est maintenu à ~30% du viewport depuis le bord
+ * gauche, de sorte qu'on voit une longueur de trace devant lui.
+ */
+function autoScroll() {
+  if (userScrolling) return
+  if (viewWidth.value <= 0) return
+  if (timelineWidthPx.value <= viewWidth.value) {
+    // Timeline plus courte que le viewport : pas de scroll.
+    scrollOffset.value = 0
+    return
+  }
+  const target = cursorX.value - viewWidth.value * 0.3
+  scrollOffset.value = Math.max(0, Math.min(maxScrollOffset.value, target))
+}
+
+/** Défilement manuel (delta en px, positif = vers la droite). */
+function manualScroll(deltaPx: number) {
+  suspendAutoScroll()
+  scrollOffset.value = Math.max(
+    0,
+    Math.min(maxScrollOffset.value, scrollOffset.value + deltaPx),
+  )
+}
+
+/** Molette : défiler horizontalement (deltaY converti en delta X). */
+function onWheel(event: WheelEvent) {
+  // On intercepte uniquement la molette verticale pour la convertir en
+  // scroll horizontal.
+  if (event.deltaY !== 0) {
+    event.preventDefault()
+    manualScroll(event.deltaY)
+  } else if (event.deltaX !== 0) {
+    event.preventDefault()
+    manualScroll(event.deltaX)
+  }
+}
 
 // --- Données dérivées du store ---
 
@@ -254,19 +336,25 @@ const kmMarks = computed(() => {
 
 const tooltip = ref({ visible: false, x: 0, text: '' })
 
+/**
+ * Convertit un clientX (écran) en coordonnée X de la timeline (viewBox du
+ * SVG + décalage du scrollOffset). Utilise getScreenCTM pour être robuste
+ * face au scaling responsive.
+ */
 function clientXToTimelineX(clientX: number): number {
   const svg = svgEl.value
   if (!svg) return 0
-  // Utilisation de la matrice de transformation native du SVG : robuste
-  // face au scroll, au scaling, au viewBox et au padding. Convertit un
-  // point écran (clientX/Y) en coordonnée viewBox (timeline X).
   const ctm = svg.getScreenCTM()
   if (!ctm) return 0
   const pt = svg.createSVGPoint()
   pt.x = clientX
   pt.y = 0
   const transformed = pt.matrixTransform(ctm.inverse())
-  return Math.max(0, Math.min(timelineWidthPx.value, transformed.x))
+  // Le viewBox est [0..viewWidth], mais le contenu est translaté de
+  // -scrollOffset : il faut donc ajouter scrollOffset pour obtenir la
+  // coordonnée "timeline" réelle.
+  const tlX = transformed.x + scrollOffset.value
+  return Math.max(0, Math.min(timelineWidthPx.value, tlX))
 }
 
 function timelineXToDistance(x: number): number {
@@ -276,6 +364,7 @@ function timelineXToDistance(x: number): number {
 function onMouseMove(event: MouseEvent) {
   const x = clientXToTimelineX(event.clientX)
   const dist = timelineXToDistance(x)
+  // Position du tooltip en coordonnée timeline (relative au <g> translaté).
   tooltip.value = {
     visible: true,
     x,
@@ -300,8 +389,6 @@ function formatTooltip(distanceM: number): string {
 
 /**
  * Clic sur la timeline → seek à la distance.
- * (Les ticks Points de RdV sont dans le même SVG : un clic sur un tick
- * tombe sur sa distance exacte.)
  */
 function onTimelineClick(event: MouseEvent) {
   const x = clientXToTimelineX(event.clientX)
@@ -309,75 +396,42 @@ function onTimelineClick(event: MouseEvent) {
   editionStore.seekToDistance(dist)
 }
 
-// --- Auto-scroll centré sur le curseur ---
+// --- Watchers ---
 
-/**
- * Indique si l'utilisateur est en train de scroller manuellement.
- * Pendant ce temps, l'auto-scroll est suspendu.
- */
-let userScrolling = false
-let userScrollTimer: ReturnType<typeof setTimeout> | null = null
-
-function onManualScroll() {
-  userScrolling = true
-  if (userScrollTimer) clearTimeout(userScrollTimer)
-  // Réactiver l'auto-scroll après 1.5s sans action utilisateur.
-  userScrollTimer = setTimeout(() => {
-    userScrolling = false
-  }, 1500)
-}
-
-/**
- * Recentre le viewport sur le curseur rouge si :
- *   - la timeline dépasse le viewport (scroll nécessaire) ;
- *   - l'utilisateur ne scrolle pas manuellement.
- *
- * Le curseur est maintenu à ~30% du viewport depuis le bord gauche, de
- * sorte qu'on voit une longueur de trace devant lui (et non juste le passé).
- */
-function autoScroll() {
-  const vp = viewportEl.value
-  if (!vp || userScrolling) return
-  // Ignorer si le viewport n'est pas mesurable (graphe masqué / pas encore
-  // rendu). Sinon target = cursorX - 0 = cursorX, ce qui crée une marge
-  // gauche proportionnelle à la distance de la trace.
-  if (vp.clientWidth <= 0) return
-  if (timelineWidthPx.value <= vp.clientWidth) return // pas de scroll nécessaire
-
-  const target = cursorX.value - vp.clientWidth * 0.3
-  vp.scrollLeft = Math.max(0, target)
-}
-
-// Surveille la position du curseur pour déclencher l'auto-scroll.
+// Auto-scroll quand le curseur avance.
 watch(cursorX, () => {
   autoScroll()
 })
 
-// --- Mesure responsive ---
+// --- Cycle de vie ---
 
 function measure() {
-  if (viewportEl.value) {
-    viewportWidth.value = viewportEl.value.clientWidth
+  if (graphContainer.value) {
+    viewWidth.value = graphContainer.value.clientWidth
   }
 }
 
 onMounted(() => {
-  measure()
-  if (viewportEl.value) {
-    resizeObserver = new ResizeObserver(() => measure())
-    resizeObserver.observe(viewportEl.value)
+  // Brancher la molette sur le conteneur pour le scroll horizontal.
+  if (graphContainer.value) {
+    graphContainer.value.addEventListener('wheel', onWheel, { passive: false })
   }
 
-  // Quand la trace courante est chargée (trace_id correspondant), réinitialiser
-  // le scroll et mesurer. Gère aussi le flash : le graphe est masqué tant que
+  measure()
+  if (graphContainer.value) {
+    resizeObserver = new ResizeObserver(() => measure())
+    resizeObserver.observe(graphContainer.value)
+  }
+
+  // Quand la trace courante est chargée, réinitialiser le scroll et
+  // re-mesurer. Gère aussi le flash : le graphe est masqué tant que
   // isCurrentTraceLoaded est false.
   watch(
     isCurrentTraceLoaded,
     async (loaded) => {
       if (loaded) {
-        // Réinitialiser le scroll à gauche (nouvelle trace).
-        if (viewportEl.value) viewportEl.value.scrollLeft = 0
-        await nextTick()
+        scrollOffset.value = 0
+        await Promise.resolve()
         measure()
         autoScroll()
       }
@@ -391,6 +445,9 @@ onUnmounted(() => {
     resizeObserver.disconnect()
     resizeObserver = null
   }
+  if (graphContainer.value) {
+    graphContainer.value.removeEventListener('wheel', onWheel)
+  }
   if (userScrollTimer) clearTimeout(userScrollTimer)
 })
 </script>
@@ -398,33 +455,14 @@ onUnmounted(() => {
 <style scoped>
 .progress-graph {
   width: 100%;
-  padding: 4px 12px;
+  padding: 0 12px;
   height: 70px;
-}
-
-.progress-viewport {
-  width: 100%;
-  height: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  /* Scrollbar masquée (scroll auto conservé) */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-/* Scrollbar masquée (WebKit) */
-.progress-viewport::-webkit-scrollbar {
-  display: none;
-}
-
-.progress-content {
-  height: 100%;
-  position: relative;
+  overflow: hidden;
 }
 
 .progress-graph-svg {
   display: block;
-  /* width fixée via :style (timelineWidthPx) pour cohérence viewBox/rendu */
+  width: 100%;
   height: 100%;
   cursor: pointer;
 }
