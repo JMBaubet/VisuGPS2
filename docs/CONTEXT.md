@@ -74,7 +74,7 @@ VisuGPS2/
 │   │   └── Visualisation.vue # Page visualisation
 │   ├── components/           # Composants réutilisables
 │   │   ├── Accueil/          # Composants de la page d'accueil
-│   │   ├── Edition/          # Composants de la vue d'édition caméra (carte, toolbar, cadre, lecture, HUD)
+│   │   ├── Edition/          # Composants de la vue d'édition caméra (carte, toolbar, cadre, lecture, HUD, graphe)
 │   │   └── parameters/       # Composants d'édition des paramètres
 │   ├── assets/               # Images, styles
 │   ├── App.vue              # Layout racine (détection multi-fenêtres)
@@ -302,7 +302,7 @@ Si vous modifiez les scripts :
 - **Accueil** (`/`) : Fenêtre principale — drawer gauche (liste circuits triée par distance au centre de la carte), carte Mapbox (clusters de points de départ, popups), drawer droit (paramètres)
 - **ScreenBis** (`/screen-bis`) : Fenêtre secondaire pour le dual-screen
 - **Visualisation** (`/visualisation`) : Stub (toolbar Home uniquement, vue réservée à la visualisation 3D)
-- **EditionCamera** (`/edition-camera`) : Vue d'édition caméra — carte Mapbox satellite + terrain, trace sélectionnée, curseur jaune (CircleLayer WebGL synchronisé terrain), lecture (keyframes générés par échantillonnage, boucle rAF), contrôle de lecture (Play/Pause + vitesse), HUD télémétrie (caméra + altitude traceur + relation caméra↔curseur), cadre ViewPort 16:9 optionnel (overlay CSS). Déclenchée par le bouton Éditer d'un circuit. MVP : graphe SVG, Composant B (édition keyframes) et algorithme de frustum à venir.
+- **EditionCamera** (`/edition-camera`) : Vue d'édition caméra — carte Mapbox satellite + terrain, trace sélectionnée, curseur jaune (CircleLayer WebGL synchronisé terrain), lecture (keyframes générés par échantillonnage, boucle rAF), contrôle de lecture (Play/Pause + vitesse), **graphe SVG d'avancement** (timeline proportionnelle 3px/100m, 3 zones RdV/avancement/graduation, clic seek, tooltip altitude, auto-scroll), HUD télémétrie (caméra + altitude traceur + relation caméra↔curseur), cadre ViewPort 16:9 optionnel (overlay CSS). Déclenchée par le bouton Éditer d'un circuit. Reste à venir : Composant B (édition keyframes) et algorithme de frustum.
 
 ### Fonctionnalités
 - Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
@@ -328,7 +328,7 @@ Autres stores existants :
 - `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
 - `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `visibleTraceIds` (IDs visibles dans le viewport), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), `visibleTracesByDistance` (filtrage viewport, tri par distance), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `getTraceGeometry`, `getTracePoints` (points avec altitude + distance cumulée 3D), `updateMapCenter`, `setVisibleTraceIds`.
 - `src/stores/keyframes.ts` : persistance des keyframes sur disque (pattern Setup Store). Actions `loadKeyframes(traceId)` (charge depuis `keyframes/{trace_id}.json`, retourne `null` si absent/invalide), `saveKeyframes(set)` (sauvegarde via écriture atomique), `clearKeyframes(traceId)` (supprime le fichier, tolérant si absent).
-- `src/stores/edition.ts` : état de la vue d'édition caméra (pattern Setup Store). Côté sélection : `selectedTraceId`, `showViewportFrame` + actions `selectTrace`/`clearSelection`/`toggleViewportFrame`. Côté lecture : `keyframeSet`, `isPlaying`, `speed`, `currentTimeMs` ; getters `interpolatedCam`/`interpolatedTraceur` (interpolation caméra/curseur avec altitude), `currentDistanceKm`, `totalDistanceKm`, `markerDistanceM`, `markerRelativeBearing` ; actions `setKeyframeSet(set, feature, tracePoints?)` (construit la polyligne enrichie altitude depuis les points backend), `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)`. État UI éphémère non persisté.
+- `src/stores/edition.ts` : état de la vue d'édition caméra (pattern Setup Store). Côté sélection : `selectedTraceId`, `showViewportFrame` + actions `selectTrace`/`clearSelection`/`toggleViewportFrame`. Côté lecture : `keyframeSet`, `isPlaying`, `speed`, `currentTimeMs` ; getters `interpolatedCam`/`interpolatedTraceur` (interpolation caméra/curseur avec altitude), `currentDistanceKm`, `totalDistanceKm`, `markerDistanceM`, `markerRelativeBearing`, `altitudeAtDistance(m)` (closure capturant la polyligne — altitude interpolée à une distance donnée, utilisée par le tooltip du ProgressGraph) ; actions `setKeyframeSet(set, feature, tracePoints?)` (construit la polyligne enrichie altitude depuis les points backend), `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)`. État UI éphémère non persisté.
 - `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 
 ## Variables d'environnement
@@ -627,4 +627,4 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 **Dernière mise à jour** : 2026-08-05
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance), vue d'édition caméra (carte satellite + terrain, curseur jaune CircleLayer WebGL, lecture par keyframes + boucle rAF, contrôle Play/Pause et vitesse, HUD télémétrie caméra + altitude traceur, cadre ViewPort 16:9)
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance), vue d'édition caméra (carte satellite + terrain, curseur jaune CircleLayer WebGL, lecture par keyframes + boucle rAF, contrôle Play/Pause et vitesse, graphe SVG d'avancement timeline proportionnelle, HUD télémétrie caméra + altitude traceur, cadre ViewPort 16:9)
