@@ -214,6 +214,15 @@ const timelineWidthPx = computed(() =>
 let userScrolling = false
 let userScrollTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * `true` pendant un assignation programmatique de scrollLeft (notre rAF).
+ * Permet à onManualScroll d'ignorer les événements `scroll` que NOUS
+ * déclenchons nous-mêmes — sinon chaque scroll auto serait confondu avec un
+ * scroll utilisateur et suspendrait l'auto-scroll (cycle d'environ 1.5s
+ * « scroll une fois puis attendre »).
+ */
+let programmaticScroll = false
+
 function suspendAutoScroll() {
   userScrolling = true
   if (userScrollTimer) clearTimeout(userScrollTimer)
@@ -222,8 +231,13 @@ function suspendAutoScroll() {
   }, 1500)
 }
 
-/** Défilement manuel détecté (scroll natif du viewport). */
+/**
+ * Défilement natif détecté sur le viewport. Ignore les scrolls que NOUS
+ * déclenchons (programmaticScroll) — seul un vrai scroll utilisateur
+ * (molette via onWheel, touch-drag) suspend l'auto-scroll.
+ */
 function onManualScroll() {
+  if (programmaticScroll) return
   suspendAutoScroll()
 }
 
@@ -259,12 +273,24 @@ function applyAutoScroll() {
   const vp = viewportEl.value
   if (!vp || userScrolling) return
   if (vp.clientWidth <= 0) return
+  let target: number
   if (timelineWidthPx.value <= vp.clientWidth) {
-    vp.scrollLeft = 0
-    return
+    target = 0
+  } else {
+    target = Math.max(0, cursorX.value - vp.clientWidth * 0.3)
   }
-  const target = cursorX.value - vp.clientWidth * 0.3
-  vp.scrollLeft = Math.max(0, target)
+  // Marquer ce scroll comme programmatique pour que l'événement `scroll`
+  // qu'il déclenche ne soit pas confondu avec un scroll utilisateur.
+  // Comparaison rapide avant affectation pour éviter de re-déclencher des
+  // events scroll inutiles quand la position n'a pas bougé.
+  if (vp.scrollLeft !== target) {
+    programmaticScroll = true
+    try {
+      vp.scrollLeft = target
+    } finally {
+      programmaticScroll = false
+    }
+  }
 }
 
 /** Callback d'une frame de la boucle de scroll continue. */
