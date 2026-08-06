@@ -124,7 +124,7 @@ export function generateKeyframes(
 
   // 3. Construire les keyframes (position + temps). Le bearing est calculé
   //    dans une seconde passe car il dépend du keyframe suivant.
-  const rawKf: { p: { lng: number; lat: number }; d: number; t: number }[] =
+  const rawKf: { p: { lng: number; lat: number; altitude: number | null }; d: number; t: number }[] =
     sampleDistances.map(d => ({
       p: pointAtDistance(poly, d),
       d,
@@ -144,7 +144,7 @@ export function generateKeyframes(
         bearing: b,
         pitch: DEFAULT_CAM_PITCH,
       },
-      traceur: { lng: k.p.lng, lat: k.p.lat, altitude: null },
+      traceur: { lng: k.p.lng, lat: k.p.lat, altitude: k.p.altitude },
     }
   })
 
@@ -230,8 +230,8 @@ export function interpolateCam(segment: {
 /**
  * Interpole la position du traceur entre deux keyframes.
  *
- * L'altitude est renvoyée à `null` (données non exposées côté frontend
- * dans cette itération).
+ * L'altitude est interpolée linéairement si disponible aux deux extrémités,
+ * sinon renvoyée à `null`.
  */
 export function interpolateTraceur(segment: {
   prev: Keyframe
@@ -240,10 +240,14 @@ export function interpolateTraceur(segment: {
 }): TraceurPoint {
   const { prev, next, ratio } = segment
   const lerp = (a: number, b: number) => a + (b - a) * ratio
+  let altitude: number | null = null
+  if (prev.traceur.altitude !== null && next.traceur.altitude !== null) {
+    altitude = lerp(prev.traceur.altitude, next.traceur.altitude)
+  }
   return {
     lng: lerp(prev.traceur.lng, next.traceur.lng),
     lat: lerp(prev.traceur.lat, next.traceur.lat),
-    altitude: null,
+    altitude,
   }
 }
 
