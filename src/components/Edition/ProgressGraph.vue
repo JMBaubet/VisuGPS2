@@ -205,7 +205,7 @@ const timelineWidthPx = computed(() =>
   Math.ceil(editionStore.totalDistanceM * PX_PER_METER),
 )
 
-// --- Auto-scroll ---
+// --- Auto-scroll (poursuite lissée par rAF) ---
 
 /**
  * Indique si l'utilisateur est en train de défiler manuellement. Pendant ce
@@ -240,22 +240,75 @@ function onWheel(event: WheelEvent) {
 }
 
 /**
- * Recentre le viewport sur le curseur rouge si la timeline dépasse le
- * viewport. Le curseur est maintenu à ~30% du viewport depuis le bord
- * gauche, de sorte qu'on voit une longueur de trace devant lui.
+ * Position cible de scrollLeft vers laquelle la poursuite lerp converge.
+ * Recalculée à chaque variation de cursorX.
  */
-function autoScroll() {
+let scrollTarget = 0
+
+/**
+ * Identifiant de la boucle requestAnimationFrame de poursuite, ou null si
+ * inactive. Une seule boucle tourne à la fois, démarrée au besoin.
+ */
+let rafId: number | null = null
+
+/** Facteur d'inertie : 0 = figé, 1 = instantané (saccadé). ~0.18 = doux. */
+const SCROLL_LERP_FACTOR = 0.18
+
+/** Distance à laquelle on considère la poursuite terminée (px). */
+const SCROLL_EPSILON = 0.5
+
+/**
+ * Calcule la position cible de scrollLeft pour maintenir le curseur rouge à
+ * ~30% du viewport depuis le bord gauche. Retourne null si le scroll n'est
+ * pas applicable (viewport masqué, timeline plus courte que le viewport).
+ */
+function computeScrollTarget(): number | null {
+  const vp = viewportEl.value
+  if (!vp || vp.clientWidth <= 0) return null
+  if (timelineWidthPx.value <= vp.clientWidth) return 0
+  const target = cursorX.value - vp.clientWidth * 0.3
+  return Math.max(0, target)
+}
+
+/**
+ * Callback d'une frame de la boucle de poursuite : interpole scrollLeft vers
+ * scrollTarget, s'arrête de lui-même quand la cible est atteinte.
+ */
+function onScrollRaf() {
+  rafId = null
   const vp = viewportEl.value
   if (!vp || userScrolling) return
-  // Ignorer si le viewport n'est pas mesurable (graphe masqué). Sinon le
-  // calcul de scrollLeft est faussé et crée une marge gauche fantôme.
-  if (vp.clientWidth <= 0) return
-  if (timelineWidthPx.value <= vp.clientWidth) {
-    vp.scrollLeft = 0
-    return
+  const current = vp.scrollLeft
+  const delta = scrollTarget - current
+  if (Math.abs(delta) <= SCROLL_EPSILON) {
+    vp.scrollLeft = scrollTarget
+    return // cible atteinte, boucle auto-stop
   }
-  const target = cursorX.value - vp.clientWidth * 0.3
-  vp.scrollLeft = Math.max(0, target)
+  vp.scrollLeft = current + delta * SCROLL_LERP_FACTOR
+  // Relancer la frame : la poursuite continue jusqu'à convergence.
+  rafId = requestAnimationFrame(onScrollRaf)
+}
+
+/**
+ * Démarre la boucle de poursuite si elle est inactive et met à jour la cible
+ * du scroll. Idempotente : sans effet si l'utilisateur scrolle manuellement.
+ */
+function autoScroll() {
+  if (userScrolling) return
+  const target = computeScrollTarget()
+  if (target === null) return
+  scrollTarget = target
+  if (rafId === null) {
+    rafId = requestAnimationFrame(onScrollRaf)
+  }
+}
+
+/** Arrête la boucle de poursuite (si active). */
+function stopScrollLoop() {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
 }
 
 // --- Données dérivées du store ---
@@ -386,7 +439,9 @@ onMounted(() => {
     isCurrentTraceLoaded,
     async (loaded) => {
       if (loaded) {
-        // Réinitialiser le scroll à gauche (nouvelle trace).
+        // Nouvelle trace : stopper la poursuite en cours et réinitialiser.
+        stopScrollLoop()
+        scrollTarget = 0
         if (viewportEl.value) viewportEl.value.scrollLeft = 0
         await nextTick()
         autoScroll()
@@ -397,6 +452,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopScrollLoop()
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
