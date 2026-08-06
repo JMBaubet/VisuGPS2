@@ -327,10 +327,13 @@ src/
 │   ├── app.ts        # Store applicatif (thème, displays, modes d'exécution)
 │   ├── settings.ts   # Store des paramètres de configuration
 │   ├── traces.ts     # Store des traces GPX importées
+│   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
 │   └── ui.ts         # Store des notifications (snackbar)
+├── algorithms/       # Logique métier isolée, sans dépendance UI
+│   └── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra
 ├── utils/            # Fonctions utilitaires (named exports)
 │   ├── format.ts     # Helpers de formatage (distance, élévation, durée)
-│   └── geo.ts        # Utilitaires géographiques (Haversine, tri par distance)
+│   └── geo.ts        # Utilitaires géographiques (Haversine, bearing, cap)
 ├── plugins/          # Plugins Vue (Vuetify, etc.)
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
@@ -339,12 +342,18 @@ src/
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
 │   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits (triée par distance)
-│   │   ├── Circuit.vue          # Carte d'un circuit (2 lignes d'icônes d'action, extension Info, focus carte)
+│   │   ├── Circuit.vue          # Carte d'un circuit (2 lignes d'icônes d'action, extension Info, focus carte, édition caméra)
 │   │   ├── Map.vue              # Carte Mapbox GL (clusters, favoris, traces affichées, focus)
 │   │   ├── AppBar.vue
 │   │   ├── ModeExecutionCard.vue
 │   │   ├── SettingsDrawer.vue   # Drawer de paramètres (dynamique, piloté par [_meta])
 │   │   └── SettingsCategory.vue # Rendu d'une catégorie (accordéon / aplati / handler)
+│   ├── Edition/      # Composants de la vue d'édition caméra
+│   │   ├── EditionMap.vue       # Carte Mapbox GL satellite + terrain (trace, marker, lecture rAF)
+│   │   ├── EditionToolbar.vue   # Barre d'outils supérieure (Home, toggle cadre ViewPort)
+│   │   ├── ViewportFrame.vue    # Overlay CSS du cadre ViewPort 16:9 (masque sombre + trait blanc)
+│   │   ├── PlaybackControls.vue # Bandeau bas — Composant A (Play/Pause, vitesse, distance)
+│   │   └── TelemetryHud.vue     # Overlay — Composant C (HUD télémétrie caméra ↔ marqueur)
 │   └── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
@@ -741,7 +750,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
-   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`.
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. Le bouton **Éditer** (`mdi-pencil`) sélectionne la trace (`editionStore.selectTrace`) puis navigue vers la vue `editionCamera` (cf. § « Vue d'édition caméra » ci-dessous). Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
    - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).
@@ -758,6 +767,56 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 5. **Notifications** (`src/stores/ui.ts`) :
    - Store mutualisé pour les snackbars Vuetify (succès, erreur, avertissement, info).
+
+## Vue d'édition caméra (`/edition-camera`)
+
+La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox ») est l'interface de réglage de la caméra qui suit une trace. Elle dispose désormais d'un **playback fonctionnel** : génération de keyframes, boucle d'animation `requestAnimationFrame`, contrôles de lecture (Composant A) et HUD de télémétrie (Composant C). Reste à venir : le graphe SVG d'avancement (§4.6), le Composant B (édition fine des keyframes) et l'algorithme intelligent de frustum Phase 1.
+
+### Architecture
+
+1. **Génération des keyframes** (`src/algorithms/keyframeGenerator.ts`) :
+   - Module isolé **sans dépendance UI** (spec §3.2) — ne dépend que de `utils/geo`. Remplaçable sans impacter le reste de l'application.
+   - Définit les types du format JSON figé (spec §3.4) : `CamState`, `TraceurPoint`, `Keyframe`, `KeyframeSet`.
+   - `generateKeyframes(traceId, feature, sampleStepM = 250)` : construit la polyligne indexée par distance cumulée (Haversine), échantillonne un keyframe tous les `KEYFRAME_STEP_M`, interpole la position exacte sur la polyligne à la distance cible, et oriente chaque caméra vers le keyframe suivant (`bearing()`). `time_ms = distance × MS_PER_METER` (vitesse défaut 4000 ms/km).
+   - Helpers purs d'interpolation (consommés par la boucle de lecture) : `findSegment` (dichotomie O(log n)), `interpolateCam` (bearing interpolé **sur le cercle** pour éviter une rotation à 360° au wrap), `interpolateTraceur`.
+   - **Polyligne indexée par distance** : `buildTracePolyline(feature)` et `samplePolylineAt(poly, distanceM)` exposent la trace complète (tous les points GPX) indexée par distance cumulée. Le marker les utilise pour avancer **le long de la trace réelle** (et non entre les keyframes échantillonnés), de sorte qu'il épouse les virages au lieu de tirer des cordes droites.
+   - **Algorithme volontairement simple (MVP)** : la caméra suit fidèlement la trace. Il sera remplacé par l'algorithme de frustum (spec §3.3) sans impacter le reste.
+
+2. **Store** (`src/stores/edition.ts`) — Pattern Setup Store, état UI éphémère non persisté :
+   - **Sélection / cadre** : `selectedTraceId`, `showViewportFrame` ; actions `selectTrace`, `clearSelection`, `toggleViewportFrame`.
+   - **Lecture** : `keyframeSet`, `isPlaying`, `speed` (0.5/1/2/4), `currentTimeMs`.
+   - **Getters** : `hasKeyframes`, `totalDistanceM/Km`, `totalDurationMs`, `currentDistanceM/Km`, `progressRatio`, `currentSegment`, `interpolatedCam` (interpolation entre keyframes), `interpolatedTraceur` (échantillonné **le long de la polyligne réelle** à la distance courante — suit les virages), `markerDistanceM` (haversine cam↔traceur), `markerRelativeBearing` (cap relatif normalisé [-180,180]).
+   - **Actions** : `setKeyframeSet(set, feature)` (reset temps + pause, construit la polyligne depuis la feature), `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)` (avance le temps de `delta × speed`, **pause auto en fin de course**).
+
+3. **Vue** (`src/views/EditionCamera.vue`) :
+   - `v-main` en **colonne flex** : un wrapper carte (`position: relative`, `flex: 1`) contenant `EditionMap` + overlays `ViewportFrame` et `TelemetryHud`, puis `PlaybackControls` en bandeau bas fixe.
+   - Au montage : précharge `appStore`, `settingsStore`, `tracesStore`. **Garde-fou** : si `selectedTraceId` est `null` (rechargement direct), `router.replace({ name: 'accueil' })`.
+
+4. **Carte + lecture** (`src/components/Edition/EditionMap.vue`) :
+   - Carte Mapbox GL **dédiée** (distincte de `Accueil/Map.vue`). Style `standard-satellite` ; **terrain/élévation** via source `raster-dem` (`mapbox-terrain-rgb`) + `setTerrain({ exaggeration: 1.5 })` ; pitch 60° par défaut (spec §7).
+   - Charge la géométrie via `tracesStore.getTraceGeometry` (LineString blanche), pose le **marker jaune bordé de blanc** (`.edition-marker`), cadre sur l'emprise (`fitBounds`), **puis génère les keyframes** et les pousse dans `editionStore`.
+   - **Boucle d'animation** pilotée par `editionStore.isPlaying` : une `requestAnimationFrame` calcule le delta réel (`performance.now()`), déclenche `tick(delta)`, puis applique l'état interpolé (`map.jumpTo` pour la caméra, `marker.setLngLat` pour le traceur). En pause, un `watch(currentTimeMs)` repositionne (l'utilisateur garde la main sur la carte). Arrêt propre du rAF au démontage.
+
+5. **Composants** (`src/components/Edition/`) :
+   - `EditionToolbar.vue` : `v-app-bar` semi-transparente. Bouton **Home**, titre de la trace, toggle **cadre ViewPort**.
+   - `ViewportFrame.vue` : overlay CSS pur (z-index 5, `pointer-events: none`). Rectangle **16:9 centré** (plus grand possible, mesuré au `ResizeObserver`), masque sombre ~70 % via `box-shadow` gigantesque, trait blanc 2 px. Purement informatif.
+   - `PlaybackControls.vue` (Composant A, spec §4.3) : bandeau bas. Bouton **Play/Pause**, `v-btn-toggle` vitesse (0.5×/1×/2×/4×), affichage `Distance parcourue : X.XX km / Y.YY km`.
+   - `TelemetryHud.vue` (Composant C, spec §4.5) : overlay coin supérieur droit, fond semi-transparent sombre, texte blanc. Paramètres caméra (Zoom/Pitch/Bearing/Lng/Lat) + relation caméra↔marqueur (Distance/Cap). Masqué sans keyframes.
+
+6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
+   - Le bouton **Éditer** (`mdi-pencil`) appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis `router.push({ name: 'editionCamera' })`.
+
+### Carte satellite + terrain (vs. Accueil/Map.vue)
+
+| Aspect | `Accueil/Map.vue` | `Edition/EditionMap.vue` |
+|---|---|---|
+| Rôle | Navigation, clustering, favoris | Rendu « cinematic » + lecture d'une trace |
+| Style | `mapbox://styles/mapbox/standard` | `mapbox://styles/mapbox/standard-satellite` |
+| Terrain | Non | `raster-dem` `mapbox-terrain-rgb`, exaggeration 1.5 |
+| Pitch | 0 (défaut) | 60° (défaut, spec §7) |
+| Sources | `traces` (clusters), `favorites`, `displayed-traces`, `focus-traces` | `edition-trace` (LineString), `edition-terrain` (DEM) |
+| Marker | Aucun | Marker jaune DOM custom, repositionné à chaque frame |
+| Animation | Aucune | Boucle `requestAnimationFrame` pilotée par `editionStore` |
 
 ### Stockage par mode d'exécution
 
@@ -787,4 +846,4 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-08-02
+**Dernière mise à jour** : 2026-08-05

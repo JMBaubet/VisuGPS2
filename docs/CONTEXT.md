@@ -57,7 +57,10 @@ VisuGPS2/
 │   │   ├── app.ts            # Store applicatif (thème, displays, modes d'exécution)
 │   │   ├── settings.ts       # Store des paramètres de configuration
 │   │   ├── traces.ts         # Store des traces GPX importées
+│   │   ├── edition.ts        # Store de la vue d'édition caméra (trace, lecture, keyframes)
 │   │   └── ui.ts             # Store des notifications (snackbar)
+│   ├── algorithms/           # Logique métier isolée, sans dépendance UI
+│   │   └── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra
 │   ├── utils/
 │   │   ├── format.ts         # Helpers de formatage (distance, élévation, durée)
 │   │   └── geo.ts            # Utilitaires géographiques (Haversine, tri par distance)
@@ -66,10 +69,11 @@ VisuGPS2/
 │   ├── views/                # Pages de l'application
 │   │   ├── Accueil.vue       # Fenêtre principale avec comm. inter-fenêtres
 │   │   ├── ScreenBis.vue     # Fenêtre secondaire
-│   │   ├── EditionCamera.vue # Page caméra
+│   │   ├── EditionCamera.vue # Édition caméra (carte satellite+terrain, cadre ViewPort)
 │   │   └── Visualisation.vue # Page visualisation
 │   ├── components/           # Composants réutilisables
 │   │   ├── Accueil/          # Composants de la page d'accueil
+│   │   ├── Edition/          # Composants de la vue d'édition caméra (carte, toolbar, cadre, lecture, HUD)
 │   │   └── parameters/       # Composants d'édition des paramètres
 │   ├── assets/               # Images, styles
 │   ├── App.vue              # Layout racine (détection multi-fenêtres)
@@ -293,7 +297,7 @@ Si vous modifiez les scripts :
 - **Accueil** (`/`) : Fenêtre principale — drawer gauche (liste circuits triée par distance au centre de la carte), carte Mapbox (clusters de points de départ, popups), drawer droit (paramètres)
 - **ScreenBis** (`/screen-bis`) : Fenêtre secondaire pour le dual-screen
 - **Visualisation** (`/visualisation`) : Stub (toolbar Home uniquement, vue réservée à la visualisation 3D)
-- **EditionCamera** (`/edition-camera`) : Stub (toolbar Home uniquement, vue réservée à l'édition caméra)
+- **EditionCamera** (`/edition-camera`) : Vue d'édition caméra — carte Mapbox satellite + terrain, trace sélectionnée, marker jaune, lecture (keyframes générés par échantillonnage, boucle rAF), contrôle de lecture (Play/Pause + vitesse), HUD télémétrie, cadre ViewPort 16:9 optionnel (overlay CSS). Déclenchée par le bouton Éditer d'un circuit. MVP : graphe SVG, Composant B (édition keyframes) et algorithme de frustum à venir.
 
 ### Fonctionnalités
 - Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
@@ -318,6 +322,7 @@ Si vous modifiez les scripts :
 Autres stores existants :
 - `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
 - `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `visibleTraceIds` (IDs visibles dans le viewport), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), `visibleTracesByDistance` (filtrage viewport, tri par distance), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`, `setVisibleTraceIds`.
+- `src/stores/edition.ts` : état de la vue d'édition caméra (pattern Setup Store). Côté sélection : `selectedTraceId`, `showViewportFrame` + actions `selectTrace`/`clearSelection`/`toggleViewportFrame`. Côté lecture : `keyframeSet`, `isPlaying`, `speed`, `currentTimeMs` ; getters `interpolatedCam`/`interpolatedTraceur` (interpolation caméra/marqueur), `currentDistanceKm`, `totalDistanceKm`, `markerDistanceM`, `markerRelativeBearing` ; actions `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)`. État UI éphémère non persisté.
 - `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 
 ## Variables d'environnement
@@ -613,7 +618,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-08-02
+**Dernière mise à jour** : 2026-08-05
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance)
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance), vue d'édition caméra (carte satellite + terrain, marker jaune, lecture par keyframes + boucle rAF, contrôle Play/Pause et vitesse, HUD télémétrie, cadre ViewPort 16:9)

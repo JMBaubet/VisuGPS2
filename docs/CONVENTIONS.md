@@ -537,7 +537,7 @@ Les fonctions utilitaires sont regroupées dans `src/utils/` par thème. Chaque 
 
 Fichiers existants :
 - `format.ts` : formatage d'affichage (`formatDistance`, `formatElevation`, `formatDuration`, `formatCoordinate`, `formatAltitude`)
-- `geo.ts` : calculs géographiques (`toRadians`, `haversineMeters`)
+- `geo.ts` : calculs géographiques (`toRadians`, `haversineMeters`, `bearing`, `bearingDelta`)
 
 **Règles** :
 - Named exports uniquement (pas de `export default`)
@@ -571,6 +571,20 @@ export function useSettingsTree() {
   return { viewCategories }
 }
 ```
+
+### Algorithmes (`src/algorithms/`)
+
+Les algorithmes encapsulent de la **logique métier isolée, sans aucune dépendance UI** (ni Vue, ni Vuetify, ni Mapbox) ni d'état réactif. Contrairement aux composables (réactifs) et aux utilitaires (petites fonctions pures), un algorithme est un module à part entière qui peut être repensé ou remplacé sans impacter le reste de l'application (spec §3.2). Il ne reçoit que des données brutes en paramètres.
+
+Fichier existant :
+- `keyframeGenerator.ts` : génération et interpolation des keyframes de la caméra d'édition. Définit les types du format JSON figé (`Keyframe`, `KeyframeSet`, `CamState`, `TraceurPoint`), expose `generateKeyframes(traceId, feature, sampleStepM)` et les helpers purs `findSegment`, `interpolateCam`, `interpolateTraceur`. Ne dépend que de `utils/geo`.
+
+**Règles** :
+- **Aucune dépendance UI** : pas d'import Vue/Vuetify/Mapbox, pas de `ref`/`computed` (la réactivité est du ressort des stores/composables).
+- **Fonctions nommées exportées** (pas de `export default`) ; les types publics sont aussi exportés.
+- **Typage strict** : paramètres et retours typés, JSDoc pour les fonctions publiques.
+- **Imports relatifs** depuis le consommateur (pas d'alias `@/`). Si l'algorithme ne donne pas satisfaction, il doit pouvoir être entièrement repensé sans impact sur le reste de l'application.
+- **Regroupement par domaine** : un fichier = un algorithme (`keyframeGenerator.ts`, etc.).
 
 ### Ordre des imports
 

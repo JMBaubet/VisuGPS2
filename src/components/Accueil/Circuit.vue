@@ -35,7 +35,7 @@
           density="comfortable"
           size="small"
           title="Éditer"
-          @click=""
+          @click="editerCircuit"
         />
         <!-- Gérer les groupes : visible au survol uniquement -->
         <v-btn
@@ -192,6 +192,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '../../stores/app'
 import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
+import { useEditionStore } from '../../stores/edition'
 import { formatDistance, formatElevation } from '../../utils/format'
 
 const emit = defineEmits<{
@@ -213,6 +214,7 @@ const props = defineProps<{
 const appStore = useAppStore()
 const router = useRouter()
 const tracesStore = useTracesStore()
+const editionStore = useEditionStore()
 
 /** État d'ouverture de la section info déroulante. */
 const infoExpanded = ref(false)
@@ -310,6 +312,16 @@ async function ouvrirSource() {
       console.error("Erreur lors de l'ouverture de l'URL source :", e)
     }
   }
+}
+
+/**
+ * Sélectionne la trace pour l'édition caméra puis navigue vers la vue
+ * dédiée. La trace est positionnée dans `editionStore.selectedTraceId`
+ * avant la navigation afin que `EditionCamera` puisse la charger.
+ */
+function editerCircuit() {
+  editionStore.selectTrace(props.trace.id)
+  router.push({ name: 'editionCamera' })
 }
 
 /** Lance la visualisation 3D du circuit. */

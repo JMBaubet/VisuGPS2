@@ -15,6 +15,7 @@
 9. [Notifications système](#notifications-système)
 10. [Gestion des formulaires](#gestion-des-formulaires)
 11. [Ajouter un paramètre de configuration](#ajouter-un-paramètre-de-configuration)
+12. [Ajouter un algorithme (`src/algorithms/`)](#ajouter-un-algorithme-srcalgorithms)
 
 ---
 
@@ -797,6 +798,62 @@ export function haversineMeters(
 - **Typage strict** : paramètres et retour typés, JSDoc pour les fonctions publiques
 - **Regroupement par thème** : un fichier = un domaine (format.ts, geo.ts, etc.)
 - **Imports relatifs** depuis le consommateur : `import { haversineMeters } from '../../utils/geo'`
+
+---
+
+## Ajouter un algorithme (`src/algorithms/`)
+
+Un algorithme est un module de **logique métier isolée, sans dépendance UI** (ni Vue, ni Vuetify, ni Mapbox) ni d'état réactif. Contrairement aux utilitaires (petites fonctions pures), un algorithme est un module à part entière qui peut être **repensé ou remplacé sans impacter le reste de l'application** (spec §3.2). Il reçoit des données brutes en paramètres et produit un résultat typé.
+
+Exemple : `src/algorithms/keyframeGenerator.ts` génère un jeu de keyframes caméra à partir d'une Feature LineString. Il a été conçu pour être remplaçable : l'algorithme actuel (échantillonnage régulier) pourra céder la place à l'algorithme de frustum (spec §3.3) sans que les stores, la carte ou le HUD n'aient à changer.
+
+### Étape 1 : Créer le module
+
+```typescript
+// src/algorithms/monAlgo.ts
+import { haversineMeters } from '../utils/geo'
+
+/** Résultat typé exporté (consommé par les stores/composables). */
+export interface MonResultat {
+  total: number
+  points: { lat: number; lon: number }[]
+}
+
+/**
+ * Algorithme ... (JSDoc : ce qu'il fait, ses entrées/sorties, ses limites).
+ *
+ * Rester sans dépendance UI : pas d'import vue/vuetify/mapbox-gl, pas de
+ * ref/computed (la réactivité est l'affaire des stores/composables).
+ */
+export function monAlgo(
+  feature: GeoJSON.Feature,
+  options?: { seuil?: number },
+): MonResultat | null {
+  // ...
+  return { total: 0, points: [] }
+}
+```
+
+### Étape 2 : Consommer depuis un store
+
+```typescript
+// src/stores/edition.ts
+import { monAlgo, type MonResultat } from '../algorithms/monAlgo'
+
+const resultat = ref<MonResultat | null>(null)
+
+function setFeature(feature: GeoJSON.Feature | null) {
+  resultat.value = feature ? monAlgo(feature, { seuil: 50 }) : null
+}
+```
+
+### Règles pour les algorithmes
+
+- **Aucune dépendance UI** : pas d'import Vue/Vuetify/Mapbox, pas de `ref`/`computed` (la réactivité est du ressort des stores/composables).
+- **Named exports** (pas de `export default`) ; les types publics (`MonResultat`) sont aussi exportés.
+- **Typage strict** : paramètres et retours typés, JSDoc pour les fonctions publiques.
+- **Imports relatifs** depuis le consommateur (pas d'alias `@/`).
+- **Repensable sans impact** : l'algorithme doit pouvoir être entièrement remplacé sans modifier ses consommateurs (stabilité de la signature publique).
 
 ---
 
