@@ -14,6 +14,7 @@
         <svg
           ref="svgEl"
           :viewBox="`0 0 ${timelineWidthPx} ${totalHeight}`"
+          :style="{ width: timelineWidthPx + 'px' }"
           class="progress-graph-svg"
           @click="onTimelineClick"
           @mousemove="onMouseMove"
@@ -242,12 +243,18 @@ const kmMarks = computed(() => {
 const tooltip = ref({ visible: false, x: 0, text: '' })
 
 function clientXToTimelineX(clientX: number): number {
-  if (!svgEl.value) return 0
-  const rect = svgEl.value.getBoundingClientRect()
-  if (rect.width <= 0) return 0
-  // Le viewBox = timelineWidthPx, mais la largeur rendue peut différer si
-  // scroll / responsive. On mappe le clientX relatif au SVG rendu.
-  return ((clientX - rect.left) / rect.width) * timelineWidthPx.value
+  const svg = svgEl.value
+  if (!svg) return 0
+  // Utilisation de la matrice de transformation native du SVG : robuste
+  // face au scroll, au scaling, au viewBox et au padding. Convertit un
+  // point écran (clientX/Y) en coordonnée viewBox (timeline X).
+  const ctm = svg.getScreenCTM()
+  if (!ctm) return 0
+  const pt = svg.createSVGPoint()
+  pt.x = clientX
+  pt.y = 0
+  const transformed = pt.matrixTransform(ctm.inverse())
+  return Math.max(0, Math.min(timelineWidthPx.value, transformed.x))
 }
 
 function timelineXToDistance(x: number): number {
@@ -402,7 +409,7 @@ onUnmounted(() => {
 
 .progress-graph-svg {
   display: block;
-  width: 100%;
+  /* width fixée via :style (timelineWidthPx) pour cohérence viewBox/rendu */
   height: 100%;
   cursor: pointer;
 }
