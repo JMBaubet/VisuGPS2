@@ -1,6 +1,6 @@
 <template>
   <div
-    v-show="editionStore.hasKeyframes && !traceLoading"
+    v-show="isCurrentTraceLoaded"
     ref="graphContainer"
     class="progress-graph"
   >
@@ -153,11 +153,16 @@ const viewportEl = ref<HTMLDivElement | null>(null)
 const svgEl = ref<SVGSVGElement | null>(null)
 
 /**
- * `true` pendant le chargement d'une nouvelle trace (entre selectedTraceId
- * change et keyframeSet chargé). Masque le graphe pour éviter le flash de
- * l'ancienne timeline.
+ * `true` quand les keyframes affichés correspondent à la trace sélectionnée.
+ * Évite le flash de l'ancienne timeline : tant que keyframeSet.trace_id ne
+ * correspond pas à selectedTraceId (chargement en cours), le graphe est
+ * masqué.
  */
-const traceLoading = ref(true)
+const isCurrentTraceLoaded = computed(
+  () =>
+    !!editionStore.keyframeSet &&
+    editionStore.keyframeSet.trace_id === editionStore.selectedTraceId,
+)
 
 let resizeObserver: ResizeObserver | null = null
 
@@ -333,6 +338,10 @@ function onManualScroll() {
 function autoScroll() {
   const vp = viewportEl.value
   if (!vp || userScrolling) return
+  // Ignorer si le viewport n'est pas mesurable (graphe masqué / pas encore
+  // rendu). Sinon target = cursorX - 0 = cursorX, ce qui crée une marge
+  // gauche proportionnelle à la distance de la trace.
+  if (vp.clientWidth <= 0) return
   if (timelineWidthPx.value <= vp.clientWidth) return // pas de scroll nécessaire
 
   const target = cursorX.value - vp.clientWidth * 0.3
@@ -359,22 +368,15 @@ onMounted(() => {
     resizeObserver.observe(viewportEl.value)
   }
 
-  // Masquer le graphe + réinitialiser le scroll quand la trace sélectionnée
-  // change (évite le flash de l'ancienne timeline pendant le chargement).
+  // Quand la trace courante est chargée (trace_id correspondant), réinitialiser
+  // le scroll et mesurer. Gère aussi le flash : le graphe est masqué tant que
+  // isCurrentTraceLoaded est false.
   watch(
-    () => editionStore.selectedTraceId,
-    () => {
-      traceLoading.value = true
-      if (viewportEl.value) viewportEl.value.scrollLeft = 0
-    },
-  )
-
-  // Quand les keyframes arrivent (trace chargée), révéler le graphe.
-  watch(
-    () => editionStore.hasKeyframes,
-    async (visible) => {
-      if (visible) {
-        traceLoading.value = false
+    isCurrentTraceLoaded,
+    async (loaded) => {
+      if (loaded) {
+        // Réinitialiser le scroll à gauche (nouvelle trace).
+        if (viewportEl.value) viewportEl.value.scrollLeft = 0
         await nextTick()
         measure()
         autoScroll()
