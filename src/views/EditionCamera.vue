@@ -7,9 +7,9 @@
  *   - zone centrale : carte MapBox satellite + terrain (EditionMap) avec,
  *     en overlays absolus, le cadre ViewPort 16:9 (ViewportFrame) et le HUD
  *     de télémétrie (TelemetryHud) ;
- *   - bandeau inférieur fixe : contrôle de lecture (PlaybackControls),
- *     qui accueillera aussi le graphe SVG d'avancement (spec §4.6) dans une
- *     prochaine itération.
+ *   - bandeau inférieur fixe : contrôle de lecture (PlaybackControls) avec
+ *     graphe SVG d'avancement (spec §4.6), bouton Play/Pause, sélecteur
+ *     de vitesse et distance parcourue.
  *
  * Garde-fou : si aucune trace n'est sélectionnée (par exemple après un
  * rechargement direct de /edition-camera), on redirige vers l'accueil.

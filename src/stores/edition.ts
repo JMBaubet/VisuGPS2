@@ -143,6 +143,24 @@ export const useEditionStore = defineStore('edition', () => {
     return bearingDelta(cam.bearing, capToMarker)
   })
 
+  /**
+   * Fonction retournant l'altitude (m) à une distance donnée le long de la
+   * polyligne réelle, ou `null` si non disponible.
+   *
+   * Exposée comme computed (closure) plutôt que getter paramétré, car Pinia
+   * ne supporte pas les getters à arguments. La closure capture la
+   * tracePolyline réactive : le résultat se met à jour automatiquement quand
+   * la polyligne change (nouvelle trace chargée).
+   */
+  const altitudeAtDistance = computed<(m: number) => number | null>(() => {
+    const poly = tracePolyline.value
+    return (distanceM: number): number | null => {
+      if (poly.length === 0) return null
+      const p = samplePolylineAt(poly, distanceM)
+      return p?.altitude ?? null
+    }
+  })
+
   // --- Actions : sélection / cadre ViewPort ---
 
   function selectTrace(traceId: string) {
@@ -255,6 +273,7 @@ export const useEditionStore = defineStore('edition', () => {
     interpolatedTraceur,
     markerDistanceM,
     markerRelativeBearing,
+    altitudeAtDistance,
     // Actions : sélection / cadre
     selectTrace,
     clearSelection,

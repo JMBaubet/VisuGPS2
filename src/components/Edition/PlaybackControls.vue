@@ -1,5 +1,6 @@
 <template>
   <v-sheet class="playback-controls" color="rgba(0,0,0,0.75)" tile>
+    <ProgressGraph />
     <div class="d-flex align-center px-4 py-2 gap-3">
       <!-- Lecture / Pause -->
       <v-btn
@@ -44,17 +45,16 @@
 /**
  * Composant A — Contrôle de lecture (spec §4.3).
  *
- * Bandeau inférieur de la vue d'édition. Pour ce MVP il fournit :
+ * Bandeau inférieur de la vue d'édition. Il contient :
+ *   - le graphe SVG d'avancement (spec §4.6) : timeline, ticks keyframes,
+ *     curseur de progression, tooltip distance+altitude, clic pour seek ;
  *   - un bouton Play / Pause ;
  *   - un sélecteur de vitesse (0.5× / 1× / 2× / 4×) ;
  *   - l'affichage « Distance parcourue : X.XX km / Y.YY km ».
- *
- * Tout l'état vit dans `editionStore` ; ce composant ne fait que lire et
- * déclencher des actions. Il sera enrichi lors de l'arrivée du graphe SVG
- * d'avancement (spec §4.6), qui prendra place dans ce même bandeau.
  */
 import { computed } from 'vue'
 import { useEditionStore } from '../../stores/edition'
+import ProgressGraph from './ProgressGraph.vue'
 
 const editionStore = useEditionStore()
 
@@ -70,8 +70,8 @@ function onSpeedChange(value: unknown) {
 
 <style scoped>
 .playback-controls {
-  /* Bandeau bas fixe, hauteur modeste (le graphe viendra l'agrandir). */
-  min-height: 56px;
+  /* Bandeau bas fixe : graphe SVG (~48px) + contrôles Play/Pause (~56px). */
+  min-height: 104px;
 }
 
 .gap-3 {
