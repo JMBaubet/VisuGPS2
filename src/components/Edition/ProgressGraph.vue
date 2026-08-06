@@ -1,9 +1,8 @@
 <template>
-  <div v-if="editionStore.hasKeyframes" ref="graphContainer" class="progress-graph">
+  <div v-show="editionStore.hasKeyframes" ref="graphContainer" class="progress-graph">
     <svg
       ref="svgEl"
       :viewBox="viewBox"
-      preserveAspectRatio="none"
       class="progress-graph-svg"
       @mousemove="onMouseMove"
       @mouseleave="tooltipVisible = false"
@@ -116,7 +115,7 @@
  * Responsive : le viewBox SVG est recalculé via ResizeObserver quand la
  * largeur du conteneur change.
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useEditionStore } from '../../stores/edition'
 
 const editionStore = useEditionStore()
@@ -262,11 +261,27 @@ function measure() {
 }
 
 onMounted(() => {
+  // Le composant utilise v-show, donc le DOM existe dès le mount parent.
+  // Cependant, si le conteneur a width=0 (layout pas encore calculé),
+  // on retente après le prochain tick.
   measure()
   if (graphContainer.value) {
     resizeObserver = new ResizeObserver(() => measure())
     resizeObserver.observe(graphContainer.value)
   }
+
+  // Re-mesurer quand les keyframes arrivent (le parent PlaybackControls
+  // rend le graphe visible via v-show → le layout se calcule).
+  watch(
+    () => editionStore.hasKeyframes,
+    async (visible) => {
+      if (visible) {
+        await nextTick()
+        measure()
+      }
+    },
+    { immediate: true },
+  )
 })
 
 onUnmounted(() => {
