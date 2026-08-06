@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (20 commandes)
+## Catalogue (24 commandes)
 
 ### Application
 
@@ -84,9 +84,28 @@ pub struct ModeInfo {
 |---|---|---|
 | `import_gpx_file` | `async (app) -> Result<TraceMetadata, String>` | Sélecteur natif, parse, hash, copie, stats, màj registre. |
 | `get_traces` | `async (app) -> Result<Vec<TraceMetadata>, String>` | Liste les traces du mode actif depuis `traces.json`. |
-| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + l'entrée du registre (écriture atomique). |
+| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les keyframes + l'entrée du registre (écriture atomique). |
 | `update_trace` | `async (app, trace_id, favorite: Option<bool>, is_displayed: Option<bool>) -> Result<(), String>` | Mise à jour partielle (PATCH) d'une trace. Seuls les champs `Some(...)` sont modifiés. |
 | `get_trace_geometry` | `async (app, trace_id) -> Result<TraceGeometry, String>` | Géométrie GeoJSON d'une trace (lu depuis le cache, ou régénéré depuis le GPX en cas de migration). |
+| `get_trace_points` | `async (app, trace_id) -> Result<TracePoints, String>` | Points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX original à la demande). |
+| `save_keyframes` | `async (app, trace_id, keyframes_json: Value) -> Result<(), String>` | Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}.json` (écriture atomique tmp + rename). |
+| `get_keyframes` | `async (app, trace_id) -> Result<Option<Value>, String>` | Charge les keyframes persistés d'une trace. Retourne `None` si le fichier est absent. |
+| `delete_keyframes` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier `keyframes/{trace_id}.json` (tolérant si absent). |
+
+**Types `TracePoint` et `TracePoints`** (miroir TS `TracePoint` dans `src/stores/traces.ts`) :
+```rust
+pub struct TracePoint {
+    pub lat: f64,
+    pub lon: f64,
+    pub alt: Option<f64>,       // altitude (peut être None)
+    pub distance_m: f64,        // distance cumulée 3D depuis le départ (mètres)
+}
+
+pub struct TracePoints {
+    pub id: String,             // UUID de la trace
+    pub points: Vec<TracePoint>,
+}
+```
 
 **Type `TraceMetadata`** (miroir TS dans `src/stores/traces.ts`) :
 ```rust
@@ -138,4 +157,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-07-31
+**Dernière mise à jour** : 2026-08-05

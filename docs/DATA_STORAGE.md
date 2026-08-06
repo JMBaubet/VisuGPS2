@@ -27,15 +27,23 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │   ├── config.toml              # Surcharges utilisateur en PROD
 │   ├── config-dev.toml          # Surcharges utilisateur en DEV
 │   ├── traces.json              # Registre des traces importées (Vec<TraceMetadata>)
-│   └── gpx/                     # Fichiers GPX copiés (nom sanitizé + unique si conflit)
-│       ├── trace1.gpx
-│       └── trace2.gpx
+│   ├── gpx/                     # Fichiers GPX copiés (nom sanitizé + unique si conflit)
+│   │   ├── trace1.gpx
+│   │   └── trace2.gpx
+│   ├── geojson/                 # LineString GeoJSON (un fichier par trace)
+│   │   ├── {uuid}.geojson
+│   │   └── ...
+│   └── keyframes/               # Keyframes persistés (vue d'édition caméra)
+│       ├── {uuid}.json
+│       └── ...
 │
 └── EVAL_xxx/                    # Un dossier par mode d'évaluation créé
     ├── config.toml
     ├── config-dev.toml
     ├── traces.json
-    └── gpx/*.gpx
+    ├── gpx/*.gpx
+    ├── geojson/{uuid}.geojson
+    └── keyframes/{uuid}.json
 ```
 
 ## Détail des fichiers
@@ -104,6 +112,24 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Rétrocompatibilité** : les champs `favorite` et `is_displayed` ont `#[serde(default)]` en Rust. Un `traces.json` antérieur (sans ces champs) se charge avec `false`/`false` sans erreur.
 
+### `geojson/{uuid}.geojson` — LineString GeoJSON
+
+Feature GeoJSON (LineString) d'une trace, générée à l'import et mise en cache.
+Le fichier est nommé d'après l'UUID de la trace (`{id}.geojson`).
+`properties.id` contient l'UUID pour la liaison avec `TraceMetadata`.
+Écriture atomique (tmp + rename).
+
+### `keyframes/{uuid}.json` — Keyframes persistés (édition caméra)
+
+Jeux de keyframes sérialisés en JSON pour la vue d'édition caméra.
+Un fichier par trace, nommé d'après l'UUID de la trace (`{trace_id}.json`).
+Le contenu est un `KeyframeSet` (type TS, sérialisé par le frontend) :
+`trace_id`, `total_distance_m`, `total_duration_ms`, `viewport`, `sample_rate_m`, `keyframes[]`.
+Le backend traite le JSON de manière transparente (`serde_json::Value`), sans validation structurelle côté Rust.
+Écriture atomique (tmp + rename). Le dossier `keyframes/` est créé automatiquement à la première sauvegarde.
+
+> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), le fichier `keyframes/{uuid}.json` associé est supprimé en même temps que le `.gpx` et le `.geojson`.
+
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
 - Ne contiennent **que les valeurs modifiées** par rapport au défaut (pas de recopie intégrale).
@@ -121,9 +147,13 @@ Ce fichier contient également une **table spéciale `[_meta]`** (placée en tê
 Les fonctions privées dans `import_gpx.rs` résolvent les chemins en fonction du mode actif :
 
 ```rust
-get_mode_dir(app)        → {app_data_dir}/{active_mode}     // créé si absent
-get_gpx_dir(mode_dir)    → {mode_dir}/gpx                   // créé si absent
-get_traces_path(mode_dir) → {mode_dir}/traces.json
+get_mode_dir(app)          → {app_data_dir}/{active_mode}     // créé si absent
+get_gpx_dir(mode_dir)      → {mode_dir}/gpx                   // créé si absent
+get_geojson_dir(mode_dir)  → {mode_dir}/geojson               // créé si absent
+get_geojson_path(mode_dir, trace_id) → {mode_dir}/geojson/{trace_id}.geojson
+get_keyframes_dir(mode_dir) → {mode_dir}/keyframes             // créé si absent
+get_keyframes_path(mode_dir, trace_id) → {mode_dir}/keyframes/{trace_id}.json
+get_traces_path(mode_dir)  → {mode_dir}/traces.json
 ```
 
 Le mode actif est déterminé par `gestionMode::read_active_mode(app_data_dir, is_dev)` qui lit `.env`.
@@ -144,7 +174,7 @@ Côté frontend, les secrets arrivent toujours masqués (`********`) via `get_se
 ## Isolation par mode
 
 Changer de mode d'exécution isole **complètement** les données :
-- `traces.json` et `gpx/` sont propres à chaque mode.
+- `traces.json`, `gpx/`, `geojson/` et `keyframes/` sont propres à chaque mode.
 - `config.toml` et `config-dev.toml` sont propres à chaque mode.
 
 Cela permet de tester/démontrer sans polluer l'environnement de production (`OPE`).
@@ -157,4 +187,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-07-31
+**Dernière mise à jour** : 2026-08-05

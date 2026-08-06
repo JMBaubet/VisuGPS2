@@ -249,7 +249,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 20 commandes : voir COMMANDS.md pour le catalogue complet
+            // 24 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
             gestionMode::*, settings::*, import_gpx::*
         ])
@@ -266,7 +266,7 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `display.rs` : Détection des écrans (macOS NSScreen, Windows Tauri)
 - `gestionMode.rs` : Gestion des modes d'exécution (CRUD, sélection, fichier `.env`)
 - `settings.rs` : Système de paramètres de configuration (TOML, chiffrement des secrets)
-- `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces)
+- `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces, points avec distance cumulée, persistance des keyframes)
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -327,6 +327,7 @@ src/
 │   ├── app.ts        # Store applicatif (thème, displays, modes d'exécution)
 │   ├── settings.ts   # Store des paramètres de configuration
 │   ├── traces.ts     # Store des traces GPX importées
+│   ├── keyframes.ts  # Store de persistance des keyframes (loadKeyframes, saveKeyframes, clearKeyframes)
 │   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
@@ -740,7 +741,8 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 3. **Store Frontend** (`src/stores/traces.ts`) :
    - Pattern Setup Store (comme `app.ts` et `settings.ts`).
    - Actions `loadTraces()` et `importerGpx()` passent par des commandes Tauri (le frontend ne connaît pas le mode actif).
-   - Types `TraceMetadata`, `TraceStats`, `Point3D` en miroir exact des structs Rust.
+   - Types `TraceMetadata`, `TraceStats`, `Point3D`, `TracePoint` en miroir exact des structs Rust.
+   - Action `getTracePoints(traceId)` : appelle `get_trace_points` pour récupérer les points enrichis (altitude + distance cumulée 3D). Utilisé par la vue d'édition caméra.
    - Getter `sortedTracesByDistance` : trie les traces par distance Haversine croissante au centre courant de la carte (`mapCenter`).
    - Getter `visibleTracesByDistance` : filtre `sortedTracesByDistance` pour ne garder que les traces dont l'ID figure dans `visibleTraceIds`. Utilisé par `CircuitsDrawer.vue`.
    - État `visibleTraceIds` (réactif, `Set<string>`) : identifiants des traces visibles dans le viewport courant. Mis à jour par `Map.vue` via l'action `setVisibleTraceIds()`. État UI éphémère, non persisté.
@@ -782,11 +784,17 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
    - **Polyligne indexée par distance** : `buildTracePolyline(feature)` et `samplePolylineAt(poly, distanceM)` exposent la trace complète (tous les points GPX) indexée par distance cumulée. Le marker les utilise pour avancer **le long de la trace réelle** (et non entre les keyframes échantillonnés), de sorte qu'il épouse les virages au lieu de tirer des cordes droites.
    - **Algorithme volontairement simple (MVP)** : la caméra suit fidèlement la trace. Il sera remplacé par l'algorithme de frustum (spec §3.3) sans impacter le reste.
 
-2. **Store** (`src/stores/edition.ts`) — Pattern Setup Store, état UI éphémère non persisté :
+2. **Store édition** (`src/stores/edition.ts`) — Pattern Setup Store, état UI éphémère non persisté :
    - **Sélection / cadre** : `selectedTraceId`, `showViewportFrame` ; actions `selectTrace`, `clearSelection`, `toggleViewportFrame`.
    - **Lecture** : `keyframeSet`, `isPlaying`, `speed` (0.5/1/2/4), `currentTimeMs`.
    - **Getters** : `hasKeyframes`, `totalDistanceM/Km`, `totalDurationMs`, `currentDistanceM/Km`, `progressRatio`, `currentSegment`, `interpolatedCam` (interpolation entre keyframes), `interpolatedTraceur` (échantillonné **le long de la polyligne réelle** à la distance courante — suit les virages), `markerDistanceM` (haversine cam↔traceur), `markerRelativeBearing` (cap relatif normalisé [-180,180]).
-   - **Actions** : `setKeyframeSet(set, feature)` (reset temps + pause, construit la polyligne depuis la feature), `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)` (avance le temps de `delta × speed`, **pause auto en fin de course**).
+	   - **Actions** : `setKeyframeSet(set, feature)` (reset temps + pause, construit la polyligne depuis la feature), `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)` (avance le temps de `delta × speed`, **pause auto en fin de course**).
+
+2-bis. **Store keyframes** (`src/stores/keyframes.ts`) — Pattern Setup Store, persistance des keyframes sur disque :
+   - Actions `loadKeyframes(traceId)` : charge les keyframes depuis `keyframes/{trace_id}.json` via `get_keyframes`. Retourne `null` si absent ou invalide (validation minimale : `trace_id` + `keyframes` non vide).
+   - Actions `saveKeyframes(set)` : sauvegarde un `KeyframeSet` via `save_keyframes` (écriture atomique côté Rust).
+   - Actions `clearKeyframes(traceId)` : supprime le fichier via `delete_keyframes` (tolérant si absent).
+   - Utilisé par `EditionMap.vue` : charge les keyframes persistés en priorité, sinon génère et sauvegarde (best-effort).
 
 3. **Vue** (`src/views/EditionCamera.vue`) :
    - `v-main` en **colonne flex** : un wrapper carte (`position: relative`, `flex: 1`) contenant `EditionMap` + overlays `ViewportFrame` et `TelemetryHud`, puis `PlaybackControls` en bandeau bas fixe.
@@ -794,7 +802,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 4. **Carte + lecture** (`src/components/Edition/EditionMap.vue`) :
    - Carte Mapbox GL **dédiée** (distincte de `Accueil/Map.vue`). Style `standard-satellite` ; **terrain/élévation** via source `raster-dem` (`mapbox-terrain-rgb`) + `setTerrain({ exaggeration: 1.5 })` ; pitch 60° par défaut (spec §7).
-   - Charge la géométrie via `tracesStore.getTraceGeometry` (LineString blanche), pose le **marker jaune bordé de blanc** (`.edition-marker`), cadre sur l'emprise (`fitBounds`), **puis génère les keyframes** et les pousse dans `editionStore`.
+   - Charge la géométrie via `tracesStore.getTraceGeometry` (LineString blanche), pose le **marker jaune bordé de blanc** (`.edition-marker`), cadre sur l'emprise (`fitBounds`), **puis charge les keyframes persistés** via `keyframesStore.loadKeyframes`. Si absents ou invalides, les génère et les sauvegarde (best-effort) via `keyframesStore.saveKeyframes` avant de les pousser dans `editionStore`.
    - **Boucle d'animation** pilotée par `editionStore.isPlaying` : une `requestAnimationFrame` calcule le delta réel (`performance.now()`), déclenche `tick(delta)`, puis applique l'état interpolé (`map.jumpTo` pour la caméra, `marker.setLngLat` pour le traceur). En pause, un `watch(currentTimeMs)` repositionne (l'utilisateur garde la main sur la carte). Arrêt propre du rAF au démontage.
 
 5. **Composants** (`src/components/Edition/`) :
@@ -827,6 +835,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 └── {active_mode}/           # Ex : OPE, EVAL_essai
     ├── gpx/                 # Fichiers .gpx copiés (nom unique si doublon)
     ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
+    ├── keyframes/           # Keyframes persistés (un {trace_id}.json par trace)
     ├── config-dev.toml      # Surcharges de paramètres (dev)
     └── config.toml          # Surcharges de paramètres (prod)
 ```
@@ -837,10 +846,15 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 |----------|-------------|
 | `import_gpx_file` | Ouvre le sélecteur natif, parse le GPX, copie le fichier, met à jour le registre. Retourne `TraceMetadata`. |
 | `get_traces` | Retourne `Vec<TraceMetadata>` pour le mode d'exécution actif. |
-| `delete_trace` | Supprime le fichier GPX + l'entrée du registre (écriture atomique). |
+| `delete_trace` | Supprime le fichier GPX + le GeoJSON + les keyframes + l'entrée du registre (écriture atomique). |
 | `update_trace` | Mise à jour partielle (PATCH) d'une trace : `favorite` et/ou `is_displayed` (persistés). |
+| `get_trace_geometry` | Retourne la géométrie GeoJSON d'une trace (cache, ou régénéré depuis le GPX). |
+| `get_trace_points` | Retourne les points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX). |
+| `save_keyframes` | Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}.json` (écriture atomique). |
+| `get_keyframes` | Charge les keyframes persistés d'une trace (`None` si absent). |
+| `delete_keyframes` | Supprime le fichier keyframes d'une trace (tolérant si absent). |
 
-> Référence complète des 20 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 24 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 

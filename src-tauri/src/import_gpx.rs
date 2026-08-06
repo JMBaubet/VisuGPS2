@@ -1,9 +1,13 @@
 //! Module d'import de fichiers GPX pour VisuGPS2.
 //!
-//! Ce module expose deux commandes Tauri :
+//! Ce module expose les commandes Tauri suivantes :
 //! - `import_gpx_file` : ouvre un sélecteur natif, parse le fichier, calcule les stats,
 //!   stocke le fichier et les métadonnées dans le dossier du mode d'exécution actif.
 //! - `get_traces` : retourne la liste des traces déjà importées pour le mode actif.
+//! - `get_trace_points` : retourne les points d'une trace avec altitude et distance
+//!   cumulée (re-parse le GPX original à la demande).
+//! - `save_keyframes` / `get_keyframes` / `delete_keyframes` : persistance JSON des
+//!   keyframes de la vue d'édition caméra (un fichier par trace).
 //!
 //! Les données sont stockées dans `{app_data_dir}/{active_mode}/gpx/` et
 //! `{app_data_dir}/{active_mode}/traces.json`, conformément au pattern établi
@@ -23,6 +27,25 @@ pub struct Point3D {
     pub lat: f64,
     pub lon: f64,
     pub alt: Option<f64>,
+}
+
+/// Point de trace enrichi (latitude, longitude, altitude, distance cumulée).
+///
+/// Miroir exact de l'interface TS `TracePoint` (stores/traces.ts).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TracePoint {
+    pub lat: f64,
+    pub lon: f64,
+    pub alt: Option<f64>,
+    /// Distance cumulée 3D depuis le départ (mètres).
+    pub distance_m: f64,
+}
+
+/// Réponse de la commande `get_trace_points`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TracePoints {
+    pub id: String,
+    pub points: Vec<TracePoint>,
 }
 
 /// Statistiques calculées à partir des points de la trace.
@@ -117,6 +140,20 @@ fn get_geojson_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
 /// Retourne le chemin du registre traces.json du mode actif.
 fn get_traces_path(mode_dir: &Path) -> PathBuf {
     mode_dir.join("traces.json")
+}
+
+/// Retourne le dossier keyframes/ à l'intérieur du mode actif.
+/// Contient les jeux de keyframes (un fichier `{id}.json` par trace).
+fn get_keyframes_dir(mode_dir: &Path) -> Result<PathBuf, String> {
+    let dir = mode_dir.join("keyframes");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Impossible de créer le dossier keyframes : {}", e))?;
+    Ok(dir)
+}
+
+/// Retourne le chemin du fichier keyframes d'une trace, d'après son UUID.
+fn get_keyframes_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
+    mode_dir.join("keyframes").join(format!("{}.json", trace_id))
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +564,58 @@ fn build_geojson_feature(coords: Vec<[f64; 2]>, id: &str, name: &str) -> serde_j
 }
 
 // ---------------------------------------------------------------------------
+// Extraction des points avec distance cumulée (pour la vue d'édition caméra)
+// ---------------------------------------------------------------------------
+
+/// Extrait tous les points d'un GPX avec altitude et distance cumulée 3D.
+///
+/// Réutilise le même pattern d'itération et la formule Haversine que
+/// `compute_stats`. Le premier point a `distance_m = 0`. La distance
+/// cumulée est calculée en 3D (Haversine + delta_alt).
+fn extract_points_with_distance(gpx: &gpx::Gpx) -> Result<Vec<TracePoint>, String> {
+    let mut points: Vec<TracePoint> = Vec::new();
+    let mut cumulated_distance = 0.0_f64;
+    let mut prev: Option<(f64, f64, Option<f64>)> = None; // (lat, lon, alt)
+
+    for track in &gpx.tracks {
+        for segment in &track.segments {
+            for wp in &segment.points {
+                let pt = wp.point();
+                let lat = pt.y();
+                let lon = pt.x();
+                let alt = wp.elevation;
+
+                // Calculer la distance 3D par rapport au point précédent.
+                if let Some((prev_lat, prev_lon, prev_alt)) = prev {
+                    let dist_2d = haversine(prev_lat, prev_lon, lat, lon);
+                    let delta_alt = match (prev_alt, alt) {
+                        (Some(a1), Some(a2)) => a2 - a1,
+                        _ => 0.0,
+                    };
+                    let dist_3d = (dist_2d.powi(2) + delta_alt.powi(2)).sqrt();
+                    cumulated_distance += dist_3d;
+                }
+
+                points.push(TracePoint {
+                    lat,
+                    lon,
+                    alt,
+                    distance_m: cumulated_distance,
+                });
+
+                prev = Some((lat, lon, alt));
+            }
+        }
+    }
+
+    if points.is_empty() {
+        return Err("Le fichier GPX ne contient aucun point.".to_string());
+    }
+
+    Ok(points)
+}
+
+// ---------------------------------------------------------------------------
 // Gestion du registre traces.json
 // ---------------------------------------------------------------------------
 
@@ -739,6 +828,12 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
             .map_err(|e| format!("Suppression du fichier GeoJSON : {}", e))?;
     }
 
+    // 2bis) Supprimer le fichier keyframes associé (tolérant si absent)
+    let keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned);
+    if keyframes_file.exists() {
+        let _ = std::fs::remove_file(&keyframes_file);
+    }
+
     // 3) Retirer l'entrée du registre en mémoire
     registry.remove(idx);
 
@@ -880,4 +975,121 @@ pub async fn get_trace_geometry(
         id: trace_id,
         geometry,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Commande Tauri : get_trace_points
+// ---------------------------------------------------------------------------
+
+/// Retourne les points d'une trace avec altitude et distance cumulée 3D.
+///
+/// Re-parse le fichier GPX original à la demande (pas de persistance
+/// intermédiaire). La distance cumulée est calculée via Haversine + delta_alt,
+/// cohérente avec `compute_stats`.
+#[tauri::command]
+pub async fn get_trace_points(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<TracePoints, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let gpx_dir = get_gpx_dir(&mode_dir)?;
+    let traces_path = get_traces_path(&mode_dir);
+    let registry = load_registry(&traces_path);
+
+    // Trouver le nom de fichier GPX de la trace.
+    let trace = registry
+        .iter()
+        .find(|t| t.id == trace_id)
+        .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
+
+    // Re-parser le GPX original.
+    let gpx_file = gpx_dir.join(&trace.filename);
+    if !gpx_file.exists() {
+        return Err(format!(
+            "Fichier GPX source introuvable pour la trace (id={}, fichier={:?})",
+            trace_id, gpx_file
+        ));
+    }
+
+    let file = std::fs::File::open(&gpx_file)
+        .map_err(|e| format!("Ouverture du fichier GPX : {}", e))?;
+    let reader = BufReader::new(file);
+    let gpx = gpx::read(reader).map_err(|e| format!("Fichier GPX invalide : {}", e))?;
+
+    let points = extract_points_with_distance(&gpx)?;
+
+    Ok(TracePoints {
+        id: trace_id,
+        points,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Commandes Tauri : persistance des keyframes
+// ---------------------------------------------------------------------------
+
+/// Sauvegarde un jeu de keyframes (sérialisé en JSON par le frontend).
+///
+/// Le JSON est écrit dans `{mode_dir}/keyframes/{trace_id}.json` avec une
+/// écriture atomique (fichier tmp + rename), cohérente avec `save_registry`.
+#[tauri::command]
+pub async fn save_keyframes(
+    app: tauri::AppHandle,
+    trace_id: String,
+    keyframes_json: serde_json::Value,
+) -> Result<(), String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let _dir = get_keyframes_dir(&mode_dir)?; // crée le dossier si nécessaire
+    let path = get_keyframes_path(&mode_dir, &trace_id);
+
+    let tmp_path = path.with_extension("json.tmp");
+    let content = serde_json::to_string_pretty(&keyframes_json)
+        .map_err(|e| format!("Sérialisation keyframes : {}", e))?;
+    std::fs::write(&tmp_path, content)
+        .map_err(|e| format!("Écriture du fichier keyframes temporaire : {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Renommage du fichier keyframes : {}", e))?;
+
+    Ok(())
+}
+
+/// Charge les keyframes persistés d'une trace.
+///
+/// Retourne `Some(serde_json::Value)` si le fichier existe, `None` sinon.
+/// Le frontend est responsable du typage (cast vers `KeyframeSet`).
+#[tauri::command]
+pub async fn get_keyframes(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let path = get_keyframes_path(&mode_dir, &trace_id);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Lecture du fichier keyframes : {}", e))?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Fichier keyframes invalide : {}", e))?;
+
+    Ok(Some(value))
+}
+
+/// Supprime le fichier keyframes d'une trace (tolérant si absent).
+#[tauri::command]
+pub async fn delete_keyframes(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<(), String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let path = get_keyframes_path(&mode_dir, &trace_id);
+
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Suppression du fichier keyframes : {}", e))?;
+    }
+
+    Ok(())
 }

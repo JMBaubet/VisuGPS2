@@ -34,6 +34,14 @@ export interface TraceStats {
   duration_s: number | null
 }
 
+/** Point de trace enrichi (lat, lon, altitude, distance cumulée). */
+export interface TracePoint {
+  lat: number
+  lon: number
+  alt: number | null
+  distance_m: number
+}
+
 /** Métadonnées complètes d'une trace importée. */
 export interface TraceMetadata {
   /** Identifiant unique (UUID v4). */
@@ -203,6 +211,21 @@ export const useTracesStore = defineStore('traces', () => {
   }
 
   /**
+   * Récupère les points enrichis d'une trace (altitude + distance cumulée).
+   *
+   * Le backend re-parse le GPX original à la demande et calcule la distance
+   * 3D cumulée (Haversine + delta_alt). Pas de cache côté frontend (les
+   * points ne sont chargés qu'une fois à l'entrée en édition).
+   */
+  async function getTracePoints(traceId: string): Promise<TracePoint[]> {
+    const result = await invoke<{ id: string; points: TracePoint[] }>(
+      'get_trace_points',
+      { traceId },
+    )
+    return result.points
+  }
+
+  /**
    * Met à jour le centre de la carte.
    * Appelé par Map.vue sur moveend pour synchroniser le tri par distance.
    */
@@ -237,6 +260,7 @@ export const useTracesStore = defineStore('traces', () => {
     supprimerTrace,
     updateTrace,
     getTraceGeometry,
+    getTracePoints,
     updateMapCenter,
     setVisibleTraceIds,
   }

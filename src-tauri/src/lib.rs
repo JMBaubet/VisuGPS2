@@ -47,7 +47,11 @@ pub fn run() {
             import_gpx::get_traces,
             import_gpx::delete_trace,
             import_gpx::update_trace,
-            import_gpx::get_trace_geometry
+            import_gpx::get_trace_geometry,
+            import_gpx::get_trace_points,
+            import_gpx::save_keyframes,
+            import_gpx::get_keyframes,
+            import_gpx::delete_keyframes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

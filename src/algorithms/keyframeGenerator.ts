@@ -63,7 +63,7 @@ export interface KeyframeSet {
 // --- Paramètres ---
 
 /** Pas d'échantillonnage des keyframes le long de la trace (m). */
-export const KEYFRAME_STEP_M = 250
+export const KEYFRAME_STEP_M = 1000
 
 /** Vitesse par défaut : 4000 ms/km, soit 4 ms par mètre (spec §7). */
 export const MS_PER_METER = 4

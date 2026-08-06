@@ -57,6 +57,7 @@ VisuGPS2/
 │   │   ├── app.ts            # Store applicatif (thème, displays, modes d'exécution)
 │   │   ├── settings.ts       # Store des paramètres de configuration
 │   │   ├── traces.ts         # Store des traces GPX importées
+│   │   ├── keyframes.ts      # Store de persistance des keyframes (loadKeyframes, saveKeyframes, clearKeyframes)
 │   │   ├── edition.ts        # Store de la vue d'édition caméra (trace, lecture, keyframes)
 │   │   └── ui.ts             # Store des notifications (snackbar)
 │   ├── algorithms/           # Logique métier isolée, sans dépendance UI
@@ -245,6 +246,10 @@ await invoke('open_second_window')
 - `delete_trace(traceId)` : Supprime une trace (fichier GPX + entrée du registre)
 - `update_trace(traceId, favorite?, isDisplayed?)` : Met à jour partiellement une trace (PATCH)
 - `get_trace_geometry(traceId)` : Retourne la géométrie GeoJSON d'une trace (cache, ou régénéré depuis le GPX)
+- `get_trace_points(traceId)` : Retourne les points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX)
+- `save_keyframes(traceId, keyframesJson)` : Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}.json` (écriture atomique)
+- `get_keyframes(traceId)` : Charge les keyframes persistés d'une trace (`null` si absent)
+- `delete_keyframes(traceId)` : Supprime le fichier keyframes d'une trace (tolérant si absent)
 
 ### 5. Communication inter-fenêtres
 
@@ -321,7 +326,8 @@ Si vous modifiez les scripts :
 
 Autres stores existants :
 - `src/stores/settings.ts` : paramètres de configuration (pattern Setup Store)
-- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `visibleTraceIds` (IDs visibles dans le viewport), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), `visibleTracesByDistance` (filtrage viewport, tri par distance), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `updateMapCenter`, `setVisibleTraceIds`.
+- `src/stores/traces.ts` : traces GPX importées (pattern Setup Store). Expose `traces`, `loading`, `mapCenter`, `focusedTraceId` (trace « focus » temporaire, clic Info), `visibleTraceIds` (IDs visibles dans le viewport), `traceCount`, `sortedTracesByDistance` (tri Haversine par rapport au centre de la carte), `visibleTracesByDistance` (filtrage viewport, tri par distance), et les actions `loadTraces`, `importerGpx`, `supprimerTrace`, `updateTrace`, `getTraceGeometry`, `getTracePoints` (points avec altitude + distance cumulée 3D), `updateMapCenter`, `setVisibleTraceIds`.
+- `src/stores/keyframes.ts` : persistance des keyframes sur disque (pattern Setup Store). Actions `loadKeyframes(traceId)` (charge depuis `keyframes/{trace_id}.json`, retourne `null` si absent/invalide), `saveKeyframes(set)` (sauvegarde via écriture atomique), `clearKeyframes(traceId)` (supprime le fichier, tolérant si absent).
 - `src/stores/edition.ts` : état de la vue d'édition caméra (pattern Setup Store). Côté sélection : `selectedTraceId`, `showViewportFrame` + actions `selectTrace`/`clearSelection`/`toggleViewportFrame`. Côté lecture : `keyframeSet`, `isPlaying`, `speed`, `currentTimeMs` ; getters `interpolatedCam`/`interpolatedTraceur` (interpolation caméra/marqueur), `currentDistanceKm`, `totalDistanceKm`, `markerDistanceM`, `markerRelativeBearing` ; actions `play`/`pause`/`togglePlay`, `setSpeed`, `seekToDistance`, `tick(deltaMs)`. État UI éphémère non persisté.
 - `src/stores/ui.ts` : notifications snackbar mutualisées (pattern Setup Store)
 

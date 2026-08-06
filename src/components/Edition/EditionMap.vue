@@ -34,6 +34,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import { useSettingsStore } from '../../stores/settings'
 import { useTracesStore } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
+import { useKeyframesStore } from '../../stores/keyframes'
 import { generateKeyframes } from '../../algorithms/keyframeGenerator'
 
 // --- Stores ---
@@ -41,6 +42,7 @@ import { generateKeyframes } from '../../algorithms/keyframeGenerator'
 const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const editionStore = useEditionStore()
+const keyframesStore = useKeyframesStore()
 
 // --- Références ---
 
@@ -139,6 +141,10 @@ async function initializeMap(token: string) {
  * Charge la géométrie de la trace sélectionnée depuis le store, l'affiche
  * dans la couche LineString, pose le marqueur jaune au départ et cadre la
  * carte sur l'emprise de la trace.
+ *
+ * Tente de charger les keyframes persistés sur disque ; si absents ou
+ * invalides, les génère puis les sauvegarde pour les entrées futures
+ * (spec §3.1 : déclenchement Phase 1).
  */
 async function loadSelectedTrace() {
   const traceId = editionStore.selectedTraceId
@@ -164,10 +170,22 @@ async function loadSelectedTrace() {
     map.fitBounds(bounds, { padding: 80, duration: 0 })
   }
 
-  // Générer le jeu de keyframes et le pousser dans le store. Le watcher
-  // sur `currentTimeMs` ci-dessous positionnera caméra + marker sur le
-  // keyframe initial (currentTimeMs = 0 après setKeyframeSet).
-  const kf = generateKeyframes(traceId, feature)
+  // Charger les keyframes persistés ; sinon générer + sauvegarder.
+  let kf = await keyframesStore.loadKeyframes(traceId)
+  if (!kf) {
+    const generated = generateKeyframes(traceId, feature)
+    if (!generated) {
+      console.error(`[EditionMap] Impossible de générer les keyframes pour ${traceId}`)
+      return
+    }
+    kf = generated
+    // Sauvegarder pour les entrées futures (best-effort, ne bloque pas).
+    try {
+      await keyframesStore.saveKeyframes(kf)
+    } catch (e) {
+      console.warn(`[EditionMap] Sauvegarde des keyframes échouée :`, e)
+    }
+  }
   editionStore.setKeyframeSet(kf, feature)
 
   // Marqueur jaune (cercle bordé de blanc, spec §1). On ne l'ajoute à la
