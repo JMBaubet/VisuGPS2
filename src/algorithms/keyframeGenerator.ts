@@ -102,12 +102,20 @@ export function generateKeyframes(
   traceId: string,
   feature: GeoJSON.Feature,
   sampleStepM: number = KEYFRAME_STEP_M,
+  tracePoints?: { lat: number; lon: number; alt: number | null; distance_m: number }[] | null,
 ): KeyframeSet | null {
-  const coords = extractLineCoordinates(feature)
-  if (coords.length === 0) return null
-
   // 1. Construire la polyligne indexée par distance cumulée.
-  const poly = buildPolyline(coords)
+  //    Si les points riches (altitude) sont fournis, les utiliser pour
+  //    construire une polyligne avec altitude. Sinon, fallback sur la
+  //    Feature GeoJSON 2D (altitude = null).
+  let poly: PolyVertex[]
+  if (tracePoints && tracePoints.length > 0) {
+    poly = buildTracePolylineFromPoints(tracePoints)
+  } else {
+    const coords = extractLineCoordinates(feature)
+    if (coords.length === 0) return null
+    poly = buildPolyline(coords)
+  }
   if (poly.length === 0) return null
 
   const totalDistance = poly[poly.length - 1].d

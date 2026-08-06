@@ -41,7 +41,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useTracesStore } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
 import { useKeyframesStore } from '../../stores/keyframes'
-import { generateKeyframes } from '../../algorithms/keyframeGenerator'
+import { generateKeyframes, KEYFRAME_STEP_M } from '../../algorithms/keyframeGenerator'
 
 // --- Stores ---
 
@@ -206,10 +206,20 @@ async function loadSelectedTrace() {
     map.fitBounds(bounds, { padding: 80, duration: 0 })
   }
 
+  // Charger les points riches du backend (altitude + distance 3D).
+  // Fait avant la génération des keyframes pour que l'altitude soit
+  // disponible dans les TraceurPoint.
+  let tracePoints: Awaited<ReturnType<typeof tracesStore.getTracePoints>> | null = null
+  try {
+    tracePoints = await tracesStore.getTracePoints(traceId)
+  } catch (e) {
+    console.warn(`[EditionMap] Chargement des points riches échoué :`, e)
+  }
+
   // Charger les keyframes persistés ; sinon générer + sauvegarder.
   let kf = await keyframesStore.loadKeyframes(traceId)
   if (!kf) {
-    const generated = generateKeyframes(traceId, feature)
+    const generated = generateKeyframes(traceId, feature, KEYFRAME_STEP_M, tracePoints)
     if (!generated) {
       console.error(`[EditionMap] Impossible de générer les keyframes pour ${traceId}`)
       return
@@ -221,14 +231,6 @@ async function loadSelectedTrace() {
     } catch (e) {
       console.warn(`[EditionMap] Sauvegarde des keyframes échouée :`, e)
     }
-  }
-
-  // Charger les points riches du backend (altitude + distance 3D).
-  let tracePoints: Awaited<ReturnType<typeof tracesStore.getTracePoints>> | null = null
-  try {
-    tracePoints = await tracesStore.getTracePoints(traceId)
-  } catch (e) {
-    console.warn(`[EditionMap] Chargement des points riches échoué :`, e)
   }
 
   editionStore.setKeyframeSet(kf, feature, tracePoints ?? null)
