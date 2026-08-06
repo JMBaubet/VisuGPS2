@@ -215,13 +215,15 @@ let userScrolling = false
 let userScrollTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
- * `true` pendant un assignation programmatique de scrollLeft (notre rAF).
- * Permet à onManualScroll d'ignorer les événements `scroll` que NOUS
- * déclenchons nous-mêmes — sinon chaque scroll auto serait confondu avec un
- * scroll utilisateur et suspendrait l'auto-scroll (cycle d'environ 1.5s
- * « scroll une fois puis attendre »).
+ * Dernière valeur de scrollLeft que NOUS avons assignée programmatiquement.
+ * Permet de distinguer un event `scroll` déclenché par notre rAF (valeur
+ * identique) d'un scroll utilisateur réel (valeur différente).
+ *
+ * On ne peut pas utiliser un simple flag booléen levé autour de l'assignation
+ * car l'event `scroll` est différé (asynchrone) : il se déclenche APRÈS la
+ * frame courante, quand le flag est déjà revenu à false.
  */
-let programmaticScroll = false
+let lastProgrammaticScrollLeft = -1
 
 function suspendAutoScroll() {
   userScrolling = true
@@ -233,11 +235,12 @@ function suspendAutoScroll() {
 
 /**
  * Défilement natif détecté sur le viewport. Ignore les scrolls que NOUS
- * déclenchons (programmaticScroll) — seul un vrai scroll utilisateur
- * (molette via onWheel, touch-drag) suspend l'auto-scroll.
+ * déclenchons en comparant scrollLeft à la dernière valeur programmatique.
+ * Seul un scroll utilisateur réel (valeur différente) suspend l'auto-scroll.
  */
 function onManualScroll() {
-  if (programmaticScroll) return
+  const vp = viewportEl.value
+  if (vp && Math.abs(vp.scrollLeft - lastProgrammaticScrollLeft) < 1) return
   suspendAutoScroll()
 }
 
@@ -279,17 +282,13 @@ function applyAutoScroll() {
   } else {
     target = Math.max(0, cursorX.value - vp.clientWidth * 0.3)
   }
-  // Marquer ce scroll comme programmatique pour que l'événement `scroll`
-  // qu'il déclenche ne soit pas confondu avec un scroll utilisateur.
-  // Comparaison rapide avant affectation pour éviter de re-déclencher des
-  // events scroll inutiles quand la position n'a pas bougé.
-  if (vp.scrollLeft !== target) {
-    programmaticScroll = true
-    try {
-      vp.scrollLeft = target
-    } finally {
-      programmaticScroll = false
-    }
+  // Comparaison avant affectation pour éviter des events scroll inutiles
+  // quand la position n'a pas bougé.
+  if (Math.abs(vp.scrollLeft - target) >= 1) {
+    vp.scrollLeft = target
+    // Mémoriser la valeur assignée pour que l'event `scroll` différé qui
+    // en découle soit reconnu comme programmatique par onManualScroll.
+    lastProgrammaticScrollLeft = target
   }
 }
 
