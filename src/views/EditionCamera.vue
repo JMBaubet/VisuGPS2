@@ -25,6 +25,7 @@ import EditionToolbar from '../components/Edition/EditionToolbar.vue'
 import ViewportFrame from '../components/Edition/ViewportFrame.vue'
 import PlaybackControls from '../components/Edition/PlaybackControls.vue'
 import TelemetryHud from '../components/Edition/TelemetryHud.vue'
+import DistanceHud from '../components/Edition/DistanceHud.vue'
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -63,6 +64,7 @@ onMounted(async () => {
           <EditionMap />
           <ViewportFrame />
           <TelemetryHud />
+          <DistanceHud />
         </div>
         <PlaybackControls />
       </v-main>

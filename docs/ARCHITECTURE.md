@@ -353,9 +353,10 @@ src/
    │   │   ├── EditionMap.vue       # Carte Mapbox GL satellite + terrain (trace, curseur GL CircleLayer, lecture rAF)
    │   │   ├── EditionToolbar.vue   # Barre d'outils supérieure (Home, toggle cadre ViewPort)
    │   │   ├── ViewportFrame.vue    # Overlay CSS du cadre ViewPort 16:9 (masque sombre + trait blanc)
-   │   │   ├── PlaybackControls.vue # Bandeau bas — Composant A (graphe §4.6 + Play/Pause, vitesse, distance)
+   │   │   ├── PlaybackControls.vue # Bandeau bas — Composant A (colonne boutons + graphe §4.6)
    │   │   ├── ProgressGraph.vue    # Graphe SVG d'avancement (§4.6) — timeline proportionnelle, 3 zones, auto-scroll
-   │   │   └── TelemetryHud.vue     # Overlay — Composant C (HUD télémétrie caméra ↔ curseur)
+   │   │   ├── TelemetryHud.vue     # Overlay — Composant C (HUD télémétrie caméra ↔ curseur)
+   │   │   └── DistanceHud.vue      # Overlay — HUD distance parcourue/total (haut centre, orange)
 │   └── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
@@ -798,7 +799,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
    - Utilisé par `EditionMap.vue` : charge les keyframes persistés en priorité, sinon génère et sauvegarde (best-effort).
 
 3. **Vue** (`src/views/EditionCamera.vue`) :
-   - `v-main` en **colonne flex** : un wrapper carte (`position: relative`, `flex: 1`) contenant `EditionMap` + overlays `ViewportFrame` et `TelemetryHud`, puis `PlaybackControls` en bandeau bas fixe.
+   - `v-main` en **colonne flex** : un wrapper carte (`position: relative`, `flex: 1`) contenant `EditionMap` + overlays `ViewportFrame`, `TelemetryHud` et `DistanceHud`, puis `PlaybackControls` en bandeau bas fixe.
    - Au montage : précharge `appStore`, `settingsStore`, `tracesStore`. **Garde-fou** : si `selectedTraceId` est `null` (rechargement direct), `router.replace({ name: 'accueil' })`.
 
 4. **Carte + lecture** (`src/components/Edition/EditionMap.vue`) :
@@ -810,9 +811,10 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 5. **Composants** (`src/components/Edition/`) :
    - `EditionToolbar.vue` : `v-app-bar` semi-transparente. Bouton **Home**, titre de la trace, toggle **cadre ViewPort**.
    - `ViewportFrame.vue` : overlay CSS pur (z-index 5, `pointer-events: none`). Rectangle **16:9 centré** (plus grand possible, mesuré au `ResizeObserver`), masque sombre ~70 % via `box-shadow` gigantesque, trait blanc 2 px. Purement informatif.
-   - `PlaybackControls.vue` (Composant A, spec §4.3) : bandeau bas. Intègre le **graphe SVG d'avancement** (`ProgressGraph.vue`, spec §4.6), puis un bouton **Play/Pause**, `v-btn-toggle` vitesse (0.5×/1×/2×/4×), affichage `Distance parcourue : X.XX km / Y.YY km`.
-   - `ProgressGraph.vue` (spec §4.6) : graphe SVG d'avancement inséré dans `PlaybackControls`. Timeline horizontale **proportionnelle à la trace** (3 px / 100 m). Trois zones de haut en bas : **Points de RdV** (ticks jaunes cliquables, keyframes), **Avancement** (piste + jauge jaune + repères 10 km cliquables + curseur rouge 3 px), **Graduation** (libellés « X km »). Tooltip au survol (distance + altitude via `altitudeAtDistance`). Clic → `seekToDistance`. **Scroll DOM natif** (viewport `overflow-x: auto`, scrollbar masquée en CSS) pour un rendu fiable sur les traces longues (contrairement à une translation SVG, cullée par le moteur de rendu). **Auto-scroll** centré sur le curseur (~30 % du viewport) pendant la lecture : boucle `requestAnimationFrame` dédiée, détection du scroll utilisateur par **comparaison de valeur** (`lastProgrammaticScrollLeft`) et non par un flag booléen (les events `scroll` sont asynchrones — un flag levé autour de `scrollLeft` serait déjà réinitialisé quand l'event se déclenche). Suspendu 1,5 s après un scroll manuel (molette ou drag).
+   - `PlaybackControls.vue` (Composant A, spec §4.3) : bandeau bas compact (~82 px), en **layout horizontal** — une colonne de boutons à gauche (2 rangées alignées sur les zones du graphe : RdV précédent/suivant en bleu au-dessus, km0 / Play-Pause / dernier point en dessous) + le graphe SVG d'avancement à droite. **Vitesse fixe à 1×** (le contrôle de vitesse a été retiré). La navigation entre RdV se calcule côté composant (précédent/suivant via `seekToDistance`, avec un epsilon de 0,5 m pour gérer le cas « déjà sur un RdV »).
+   - `ProgressGraph.vue` (spec §4.6) : graphe SVG d'avancement inséré dans `PlaybackControls`. Timeline horizontale **proportionnelle à la trace** (3 px / 100 m). Trois zones de haut en bas : **Points de RdV** (ticks **bleus** cliquables, keyframes, hauteur limitée et centrés), **Avancement** (piste + jauge jaune + repères 10 km cliquables + curseur **orange** 3 px), **Graduation** (libellés « X km » + tooltip de survol blanc, distance + altitude via `altitudeAtDistance`). Clic → `seekToDistance`. **Scroll DOM natif** (viewport `overflow-x: auto`, scrollbar masquée en CSS) pour un rendu fiable sur les traces longues (contrairement à une translation SVG, cullée par le moteur de rendu). **Auto-scroll** centré sur le curseur (~30 % du viewport) pendant la lecture : boucle `requestAnimationFrame` dédiée, détection du scroll utilisateur par **comparaison de valeur** (`lastProgrammaticScrollLeft`) et non par un flag booléen (les events `scroll` sont asynchrones — un flag levé autour de `scrollLeft` serait déjà réinitialisé quand l'event se déclenche). Suspendu 1,5 s après un scroll manuel (molette ou drag).
    - `TelemetryHud.vue` (Composant C, spec §4.5) : overlay coin supérieur droit, fond semi-transparent sombre, texte blanc. Paramètres caméra (Zoom/Pitch/Bearing/Lng/Lat) + section Traceur (Altitude interpolée depuis la polyligne) + relation caméra↔curseur (Distance/Cap). Masqué sans keyframes.
+   - `DistanceHud.vue` : overlay **haut centre**, fond semi-transparent sombre, affiche `X.XX / Y.YY km` (distance parcourue en **orange** `#FF9800`, distance totale en blanc atténué). Masqué sans keyframes.
 
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
    - Le bouton **Éditer** (`mdi-pencil`) appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis `router.push({ name: 'editionCamera' })`.
@@ -863,4 +865,4 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-08-05
+**Dernière mise à jour** : 2026-08-07

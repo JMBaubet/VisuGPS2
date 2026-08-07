@@ -74,7 +74,7 @@ VisuGPS2/
 │   │   └── Visualisation.vue # Page visualisation
 │   ├── components/           # Composants réutilisables
 │   │   ├── Accueil/          # Composants de la page d'accueil
-│   │   ├── Edition/          # Composants de la vue d'édition caméra (carte, toolbar, cadre, lecture, HUD, graphe)
+│   │   ├── Edition/          # Composants de la vue d'édition caméra (carte, toolbar, cadre, lecture, HUD télémétrie/distance, graphe)
 │   │   └── parameters/       # Composants d'édition des paramètres
 │   ├── assets/               # Images, styles
 │   ├── App.vue              # Layout racine (détection multi-fenêtres)
@@ -302,7 +302,7 @@ Si vous modifiez les scripts :
 - **Accueil** (`/`) : Fenêtre principale — drawer gauche (liste circuits triée par distance au centre de la carte), carte Mapbox (clusters de points de départ, popups), drawer droit (paramètres)
 - **ScreenBis** (`/screen-bis`) : Fenêtre secondaire pour le dual-screen
 - **Visualisation** (`/visualisation`) : Stub (toolbar Home uniquement, vue réservée à la visualisation 3D)
-- **EditionCamera** (`/edition-camera`) : Vue d'édition caméra — carte Mapbox satellite + terrain, trace sélectionnée, curseur jaune (CircleLayer WebGL synchronisé terrain), lecture (keyframes générés par échantillonnage, boucle rAF), contrôle de lecture (Play/Pause + vitesse), **graphe SVG d'avancement** (timeline proportionnelle 3px/100m, 3 zones RdV/avancement/graduation, clic seek, tooltip altitude, auto-scroll), HUD télémétrie (caméra + altitude traceur + relation caméra↔curseur), cadre ViewPort 16:9 optionnel (overlay CSS). Déclenchée par le bouton Éditer d'un circuit. Reste à venir : Composant B (édition keyframes) et algorithme de frustum.
+- **EditionCamera** (`/edition-camera`) : Vue d'édition caméra — carte Mapbox satellite + terrain, trace sélectionnée, curseur jaune (CircleLayer WebGL synchronisé terrain), lecture (keyframes générés par échantillonnage, boucle rAF), contrôle de lecture compact (colonne boutons à gauche : RdV précédent/suivant bleus, km0 / Play-Pause / dernier point ; vitesse fixe 1×), **graphe SVG d'avancement** (timeline proportionnelle 3px/100m, 3 zones RdV bleus/avancement/graduation, curseur orange, clic seek, tooltip survol altitude, auto-scroll), HUD télémétrie (caméra + altitude traceur + relation caméra↔curseur), **HUD distance** (haut centre, distance parcourue orange / totale), cadre ViewPort 16:9 optionnel (overlay CSS). Déclenchée par le bouton Éditer d'un circuit. Reste à venir : Composant B (édition keyframes) et algorithme de frustum.
 
 ### Fonctionnalités
 - Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
@@ -624,7 +624,7 @@ L'application intègre un système robuste de gestion des modes d'exécution (d�
 
 ---
 
-**Dernière mise à jour** : 2026-08-05
+**Dernière mise à jour** : 2026-08-07
 **Version du projet** : 0.0.1
 **Status** : En développement actif
-**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance), vue d'édition caméra (carte satellite + terrain, curseur jaune CircleLayer WebGL, lecture par keyframes + boucle rAF, contrôle Play/Pause et vitesse, graphe SVG d'avancement timeline proportionnelle, HUD télémétrie caméra + altitude traceur, cadre ViewPort 16:9)
+**Fonctionnalités** : Dual-screen, inter-window communication, theme sync, display detection, multi-env execution modes, settings management (TOML + secrets chiffrés), import/suppression/mise à jour de traces GPX (favoris/affichage persistés), carte Mapbox (clustering points de départ, traces favorites/affichées dégradé, focus carte sur clic Info, synchronisation liste triée par distance), vue d'édition caméra (carte satellite + terrain, curseur jaune CircleLayer WebGL, lecture par keyframes + boucle rAF, contrôle compact Play/Pause + navigation RdV/km0/dernier, graphe SVG d'avancement timeline proportionnelle curseur orange, HUD télémétrie caméra + altitude traceur, HUD distance parcourue/total, cadre ViewPort 16:9)

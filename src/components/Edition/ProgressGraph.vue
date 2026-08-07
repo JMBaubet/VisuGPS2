@@ -25,16 +25,16 @@
           @mousemove="onMouseMove"
           @mouseleave="onMouseLeave"
         >
-          <!-- ZONE 1 : Points de RdV (keyframes) — ticks larges cliquables -->
+          <!-- ZONE 1 : Points de RdV (keyframes) — ticks bleus (hauteur limitée, centrés) -->
           <g class="zone-rdv">
             <rect
               v-for="kf in keyframeTicks"
               :key="'rdv-' + kf.distance_from_start_m"
               :x="kf.x - RDV_WIDTH / 2"
-              :y="rdvZoneY"
+              :y="rdvTickY"
               :width="RDV_WIDTH"
-              :height="rdvZoneHeight"
-              fill="rgba(255, 214, 0, 0.7)"
+              :height="rdvTickHeight"
+              fill="rgba(33, 150, 243, 0.7)"
               class="rdv-tick"
             />
           </g>
@@ -50,37 +50,37 @@
           <g class="zone-advance">
             <!-- Piste (fond) -->
             <rect
-              :x="0" :y="advanceZoneY"
+              :x="0" :y="advanceBarY"
               :width="timelineWidthPx" :height="advanceBarHeight"
               fill="rgba(255,255,255,0.12)" rx="2"
             />
             <!-- Jauge jaune (avancement) — z-index inférieur -->
             <rect
-              :x="0" :y="advanceZoneY"
+              :x="0" :y="advanceBarY"
               :width="progressWidthPx" :height="advanceBarHeight"
               fill="#FFD600" rx="2"
             />
             <!-- Repères tous les 10 km — z-index supérieur (rendus après la jauge) -->
             <g v-for="mark in kmMarks" :key="'km-' + mark.distance" class="km-mark">
               <line
-                :x1="mark.x" :y1="advanceZoneY"
-                :x2="mark.x" :y2="advanceZoneY + advanceBarHeight"
+                :x1="mark.x" :y1="advanceBarY"
+                :x2="mark.x" :y2="advanceBarY + advanceBarHeight"
                 stroke="rgba(255,255,255,0.6)" stroke-width="1"
               />
               <!-- Zone de clic élargie autour du repère (invisible mais cliquable) -->
               <rect
-                :x="mark.x - 5" :y="advanceZoneY"
+                :x="mark.x - 5" :y="advanceBarY"
                 :width="10" :height="advanceBarHeight"
                 fill="transparent" class="km-mark-hit"
               />
             </g>
-            <!-- Curseur rouge (3px) — z-index le plus haut dans la zone -->
+            <!-- Curseur orange (3px) — z-index le plus haut dans la zone -->
             <rect
               :x="cursorX - CURSOR_WIDTH / 2"
-              :y="advanceZoneY"
+              :y="advanceBarY"
               :width="CURSOR_WIDTH"
               :height="advanceBarHeight"
-              fill="#FF0000"
+              fill="#FF9800"
             />
           </g>
 
@@ -91,13 +91,13 @@
             stroke="rgba(255,255,255,0.1)" stroke-width="1"
           />
 
-          <!-- ZONE 3 : Graduation (libellés tous les 10km, non cliquable) -->
+          <!-- ZONE 3 : Graduation (libellés « X km » tous les 10 km) -->
           <g class="zone-grad">
             <text
               v-for="mark in kmMarks"
               :key="'lbl-' + mark.distance"
               :x="mark.x"
-              :y="gradZoneY + 14"
+              :y="gradZoneY + 12"
               fill="rgba(255,255,255,0.7)"
               font-size="10"
               font-family="monospace"
@@ -105,15 +105,18 @@
             >{{ mark.label }}</text>
           </g>
 
-          <!-- Tooltip au survol -->
-          <g v-if="tooltip.visible" :transform="`translate(${tooltip.x}, ${advanceZoneY + advanceBarHeight})`">
+          <!--
+            Tooltip de survol, positionné au niveau de la zone graduation.
+            Suivant la souris horizontalement. Texte blanc.
+          -->
+          <g v-if="tooltip.visible" :transform="`translate(${tooltip.x}, ${gradZoneY})`">
             <rect
-              x="-65" y="4" width="130" height="22" rx="4"
+              x="-58" y="2" width="116" height="16" rx="3"
               fill="rgba(0,0,0,0.9)" stroke="rgba(255,255,255,0.2)" stroke-width="1"
             />
             <text
-              x="0" y="19" text-anchor="middle"
-              fill="#FFFFFF" font-size="11" font-family="monospace"
+              x="0" y="14" text-anchor="middle"
+              fill="#FFFFFF" font-size="10" font-family="monospace"
             >{{ tooltip.text }}</text>
           </g>
         </svg>
@@ -138,14 +141,16 @@
  * grandes largeurs, contrairement à une translation SVG qui est « cullée »
  * par le moteur de rendu). La scrollbar est masquée en CSS.
  *
- * Trois zones distinctes, de haut en bas :
+ * Trois zones, de haut en bas :
  *   1. **Points de RdV** (keyframes) — ticks larges (3px) cliquables ;
  *   2. **Ligne d'avancement** — piste de fond + jauge jaune (progression) +
  *      repères verticaux tous les 10 km (cliquables pour seek direct) +
  *      curseur rouge (3px). z-index : jauge < repères < curseur ;
- *   3. **Graduation** — libellés « X km » tous les 10 km (non cliquable).
+ *   3. **Graduation** — libellés « X km » tous les 10 km (non cliquable) +
+ *      tooltip de survol (blanc) qui suit la souris horizontalement et affiche
+ *      distance + altitude au point survolé.
  *
- * Hauteur confortable (~70px). Échelle : 3 px / 100 m.
+ * Hauteur compacte (~58px). Échelle : 3 px / 100 m.
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useEditionStore } from '../../stores/edition'
@@ -184,16 +189,27 @@ const CURSOR_WIDTH = 3
 /** Pas des repères / graduation (m). */
 const KM_MARK_STEP_M = 10000 // 10 km
 
-// Hauteurs des zones
-const rdvZoneHeight = 22
+// Hauteurs des zones (alignées avec les rangées de boutons de PlaybackControls).
+// Rangée 1 (RdV) et rangée 2 (avancement) ont la même hauteur (28px),
+// alignée sur les boutons (size="small"). La graduation fait 18px.
+const rdvZoneHeight = 28
 const advanceZoneHeight = 28
 const advanceBarHeight = 16
-const gradZoneHeight = 20
+const gradZoneHeight = 18
 
 /** Ordonnées de chaque zone. */
 const rdvZoneY = 0
 const advanceZoneY = rdvZoneY + rdvZoneHeight
 const gradZoneY = advanceZoneY + advanceZoneHeight
+
+// Les ticks RdV ne font pas toute la hauteur de la zone : ils sont limités et
+// centrés verticalement.
+const rdvTickHeight = 20
+const rdvTickY = rdvZoneY + (rdvZoneHeight - rdvTickHeight) / 2
+
+// La barre d'avancement est centrée verticalement dans sa zone (réduit la
+// zone neutre entre la barre et l'axe des abscisses).
+const advanceBarY = advanceZoneY + (advanceZoneHeight - advanceBarHeight) / 2
 
 /** Hauteur totale du SVG. */
 const totalHeight = rdvZoneHeight + advanceZoneHeight + gradZoneHeight
@@ -340,7 +356,7 @@ const keyframeTicks = computed(() => {
 })
 
 /**
- * Repères tous les 10 km (pour la zone avancement + la graduation).
+ * Repères tous les 10 km (ligne verticale dans la barre + libellé graduation).
  * Chaque repère est cliquable pour seek direct.
  */
 const kmMarks = computed(() => {
@@ -365,7 +381,7 @@ const kmMarks = computed(() => {
   return marks
 })
 
-// --- Tooltip ---
+// --- Tooltip de survol + clic ---
 
 const tooltip = ref({ visible: false, x: 0, text: '' })
 
@@ -393,11 +409,7 @@ function timelineXToDistance(x: number): number {
 function onMouseMove(event: MouseEvent) {
   const x = clientXToTimelineX(event.clientX)
   const dist = timelineXToDistance(x)
-  tooltip.value = {
-    visible: true,
-    x,
-    text: formatTooltip(dist),
-  }
+  tooltip.value = { visible: true, x, text: formatTooltip(dist) }
 }
 
 function onMouseLeave() {
@@ -489,7 +501,8 @@ onUnmounted(() => {
 .progress-graph {
   width: 100%;
   padding: 0 12px;
-  height: 70px;
+  /* Hauteur = SVG (78px) + petit padding vertical. */
+  height: 82px;
 }
 
 .progress-viewport {
@@ -522,7 +535,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .rdv-tick:hover {
-  fill: #FFD600;
+  fill: #2196F3;
 }
 
 /* Repères 10 km : zone de clic élargie + curseur pointer */
