@@ -29,6 +29,15 @@
           @mousemove="onMouseMove"
           @mouseleave="onMouseLeave"
         >
+          <!-- Curseur orange (3px) — en premier pour rester sous les ticks RdV -->
+          <rect
+            :x="cursorX - CURSOR_WIDTH / 2"
+            :y="rdvZoneY"
+            :width="CURSOR_WIDTH"
+            :height="advanceBarY + advanceBarHeight - rdvZoneY"
+            fill="#FF9800"
+          />
+
           <!-- ZONE 1 : Points de RdV (keyframes) — ticks bleus (hauteur limitée, centrés) -->
           <g class="zone-rdv">
             <rect
@@ -78,14 +87,6 @@
                 fill="transparent" class="km-mark-hit"
               />
             </g>
-            <!-- Curseur orange (3px) — z-index le plus haut dans la zone -->
-            <rect
-              :x="cursorX - CURSOR_WIDTH / 2"
-              :y="advanceBarY"
-              :width="CURSOR_WIDTH"
-              :height="advanceBarHeight"
-              fill="#FF9800"
-            />
           </g>
 
           <!-- Séparateur fin -->
@@ -105,7 +106,7 @@
               fill="rgba(255,255,255,0.7)"
               font-size="10"
               font-family="monospace"
-              text-anchor="middle"
+              :text-anchor="mark.anchor"
             >{{ mark.label }}</text>
           </g>
 
@@ -381,12 +382,13 @@ const keyframeTicks = computed(() => {
 const kmMarks = computed(() => {
   const total = totalDistanceM.value
   if (total <= 0) return []
-  const marks: { distance: number; x: number; label: string }[] = []
+  const marks: { distance: number; x: number; label: string; anchor: string }[] = []
   for (let d = 0; d <= total; d += KM_MARK_STEP_M) {
     marks.push({
       distance: d,
       x: d * PX_PER_METER,
       label: `${Math.round(d / 1000)} km`,
+      anchor: 'middle',
     })
   }
   const last = marks[marks.length - 1]
@@ -395,7 +397,24 @@ const kmMarks = computed(() => {
       distance: total,
       x: total * PX_PER_METER,
       label: `${(total / 1000).toFixed(1)} km`,
+      anchor: 'end',
     })
+  }
+  // Premier repère (km 0, en bordure gauche) : aligné à gauche pour rester visible.
+  if (marks.length > 0) marks[0].anchor = 'start'
+  // Dernier repère (bordure droite) : aligné à droite pour rester visible.
+  const lastMark = marks[marks.length - 1]
+  if (lastMark) lastMark.anchor = 'end'
+
+  // Éviter le chevauchement en fin de timeline : si le total est à moins de
+  // 2,5 km (KM_MARK_STEP_M / 4) de la dernière dizaine (hors km 0), on retire
+  // cette dernière dizaine (son libellé chevaucherait celui du total).
+  if (marks.length >= 2) {
+    const penultimate = marks[marks.length - 2]
+    if (penultimate && penultimate.distance > 0 &&
+        total - penultimate.distance < KM_MARK_STEP_M / 4) {
+      marks.splice(marks.length - 2, 1)
+    }
   }
   return marks
 })

@@ -29,12 +29,21 @@
             <div
               ref="pitchTrackEl"
               class="vs-track"
+              :class="{ 'vs-default': isPitchDefault }"
               @mousedown="onSliderStart($event, 'pitch')"
+              @dblclick="resetPitch"
             >
               <div class="vs-fill" :style="{ height: pitchFillPct + '%' }" />
               <div class="vs-thumb" :style="{ bottom: pitchFillPct + '%' }" />
             </div>
-            <span class="slider-value">{{ pitchModel?.toFixed(0) }}°</span>
+            <span
+              class="slider-value"
+              :class="{ 'value-modified': !isPitchDefault }"
+              :title="isPitchDefault ? undefined : 'Clic pour remettre 60°'"
+              @click="!isPitchDefault && resetPitch()"
+            >
+              {{ pitchModel?.toFixed(0) }}°
+            </span>
           </div>
           <div
             class="slider-col"
@@ -44,12 +53,21 @@
             <div
               ref="zoomTrackEl"
               class="vs-track"
+              :class="{ 'vs-default': isZoomDefault }"
               @mousedown="onSliderStart($event, 'zoom')"
+              @dblclick="resetZoom"
             >
               <div class="vs-fill" :style="{ height: zoomFillPct + '%' }" />
               <div class="vs-thumb" :style="{ bottom: zoomFillPct + '%' }" />
             </div>
-            <span class="slider-value">{{ zoomModel?.toFixed(1) }}</span>
+            <span
+              class="slider-value"
+              :class="{ 'value-modified': !isZoomDefault }"
+              :title="isZoomDefault ? undefined : 'Clic pour remettre 16.0'"
+              @click="!isZoomDefault && resetZoom()"
+            >
+              {{ zoomModel?.toFixed(1) }}
+            </span>
           </div>
         </div>
       </div>
@@ -114,7 +132,8 @@
           size="small"
           color="error"
           variant="text"
-          title="Supprimer ce point de RdV"
+          :disabled="isStartKeyframe"
+          :title="isStartKeyframe ? 'Le point de départ (km 0) ne peut pas être supprimé' : 'Supprimer ce point de RdV'"
           @click="removeKeyframeHere"
         >
           <v-icon>mdi-delete</v-icon>
@@ -161,7 +180,11 @@
  * (`saveKeyframes`), le bouton Undo restaure l'état précédent.
  */
 import { computed, ref, watch, onUnmounted } from 'vue'
-import type { CamState } from '../../algorithms/keyframeGenerator'
+import {
+  type CamState,
+  DEFAULT_CAM_PITCH,
+  DEFAULT_CAM_ZOOM,
+} from '../../algorithms/keyframeGenerator'
 import { useEditionStore } from '../../stores/edition'
 import { useEditionMap } from '../../composables/useEditionMap'
 import DistanceHud from './DistanceHud.vue'
@@ -176,6 +199,12 @@ const isOnRdv = computed(() => !!currentKeyframe.value)
 
 /** Distance (m) du point de RdV courant, ou null hors RdV. */
 const kfDistance = computed(() => currentKeyframe.value?.distance_from_start_m ?? null)
+
+/** `true` si le point de RdV courant est le départ (km 0, non supprimable). */
+const isStartKeyframe = computed(() => {
+  const kfs = editionStore.keyframeSet?.keyframes ?? []
+  return kfDistance.value !== null && kfDistance.value === kfs[0]?.distance_from_start_m
+})
 
 // --- Sliders Pitch / Zoom ---
 
@@ -244,6 +273,21 @@ function applyCamToMap(cam: CamState) {
 /** Ratio 0-100 (height %) du remplissage pour le slider custom. */
 const pitchFillPct = computed(() => (pitchModel.value / 85) * 100)
 const zoomFillPct = computed(() => (zoomModel.value / 22) * 100)
+
+/** `true` si le pitch est sur sa valeur par défaut (60°). */
+const isPitchDefault = computed(() => pitchModel.value === DEFAULT_CAM_PITCH)
+/** `true` si le zoom est sur sa valeur par défaut (16.0). */
+const isZoomDefault = computed(() => zoomModel.value === DEFAULT_CAM_ZOOM)
+
+/** Remet le pitch à sa valeur par défaut (60°). */
+function resetPitch() {
+  applySliderValue('pitch', DEFAULT_CAM_PITCH)
+}
+
+/** Remet le zoom à sa valeur par défaut (16.0). */
+function resetZoom() {
+  applySliderValue('zoom', DEFAULT_CAM_ZOOM)
+}
 
 // --- Sliders verticaux customs (Pitch / Zoom) ---
 
@@ -441,14 +485,30 @@ function compassLabel(deg: number): string {
 }
 
 /**
+ * Cap « affiché » non normalisé, utilisé pour le défilement **continu** de la
+ * bande. Alors que le keyframe stocke un bearing normalisé [0, 360), cette
+ * valeur évolue au-delà de 360 pour que le wrapping au franchissement du 0°
+ * soit fluide (pas de saut de translateX).
+ */
+const displayBearing = ref(0)
+
+/** Au changement de point de RdV, initialise le cap d'affichage. */
+watch(
+  currentKeyframe,
+  () => {
+    const kf = currentKeyframe.value
+    if (kf) displayBearing.value = kf.cam.bearing
+  },
+  { immediate: true },
+)
+
+/**
  * Translation X de la bande pour garder le cap courant sur le repère central.
- * On centre la copie du milieu (offset +360°) : le cap est toujours au milieu.
+ * On centre la copie du milieu (offset +360°) ; displayBearing peut dépasser
+ * 360 ou descendre sous 0 pour assurer le défilement infini continu.
  */
 const compassTranslateX = computed(() => {
-  const kf = currentKeyframe.value
-  if (!kf) return 0
-  const bearing = ((kf.cam.bearing % 360) + 360) % 360
-  return CENTER_PX - (bearing + STRIP_CENTER_OFFSET_DEG) * PX_PER_DEG
+  return CENTER_PX - (displayBearing.value + STRIP_CENTER_OFFSET_DEG) * PX_PER_DEG
 })
 
 let compassDragging = false
@@ -459,7 +519,7 @@ function onCompassDragStart(event: MouseEvent) {
   if (!map.value) return
   compassDragging = true
   compassStartX = event.clientX
-  compassStartBearing = map.value.getBearing()
+  compassStartBearing = displayBearing.value // capturé avant défilement
   map.value.dragPan.disable()
   window.addEventListener('mousemove', onCompassDragMove)
   window.addEventListener('mouseup', onCompassDragEnd)
@@ -480,14 +540,17 @@ function onCompassDragEnd() {
 
 function onCompassWheel(event: WheelEvent) {
   const delta = event.deltaY > 0 ? 1 : -1
-  applyBearing((map.value?.getBearing() ?? 0) + delta)
+  applyBearing(displayBearing.value + delta)
 }
 
-/** Applique un bearing (modulo 360) à la carte et au keyframe sélectionné. */
+/** Applique un bearing à la carte et au keyframe. Le keyframe reçoit la
+ * valeur normalisée [0,360), mais `displayBearing` garde la valeur continue
+ * (peut dépasser 360) pour le défilement fluide du bandeau. */
 function applyBearing(raw: number) {
   const m = map.value
   const kfDist = kfDistance.value
   if (!m || kfDist === null) return
+  displayBearing.value = raw // continu, non normalisé → bandeau fluide
   const bearingVal = ((raw % 360) + 360) % 360
   m.setBearing(bearingVal)
   editionStore.updateKeyframe(kfDist, { bearing: bearingVal })
@@ -695,6 +758,20 @@ onUnmounted(() => {
   border-radius: 50%;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
+/* Valeur par défaut → remplissage et pouce en vert (sinon bleu primary). */
+.vs-track.vs-default .vs-fill,
+.vs-track.vs-default .vs-thumb {
+  background: #4caf50;
+}
+
+/* Valeur hors défaut : orange + cliquable (clic = remise à la valeur par défaut). */
+.slider-value.value-modified {
+  color: #ff9800;
+  cursor: pointer;
+}
+.slider-value.value-modified:hover {
+  color: #ffb74d;
+}
 
 /* --- CompassBandeau (coin inférieur droit) --- */
 .compass-bandeau {
@@ -708,6 +785,8 @@ onUnmounted(() => {
   border-radius: 6px;
   pointer-events: auto;
   cursor: ew-resize;
+  user-select: none;
+  -webkit-user-select: none;
 }
 /* Repère central fixe (trait rouge). */
 .compass-tick {

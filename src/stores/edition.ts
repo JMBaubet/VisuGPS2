@@ -362,12 +362,15 @@ export const useEditionStore = defineStore('edition', () => {
 
   /**
    * Supprime un keyframe identifié par sa distance.
+   * Le point de départ (km 0, premier keyframe) ne peut pas être supprimé.
    * Au minimum 2 keyframes sont conservés (début + fin de trace).
    * Si le keyframe supprimé était sélectionné, la sélection est effacée.
    */
   function removeKeyframe(distanceM: number) {
     const set = keyframeSet.value
     if (!set || set.keyframes.length <= 2) return
+    // Le point de départ (km 0) est intouchable.
+    if (distanceM === set.keyframes[0].distance_from_start_m) return
     const index = set.keyframes.findIndex(k => k.distance_from_start_m === distanceM)
     if (index === -1) return
     set.keyframes.splice(index, 1)
