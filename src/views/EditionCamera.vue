@@ -25,7 +25,6 @@ import EditionToolbar from '../components/Edition/EditionToolbar.vue'
 import ViewportFrame from '../components/Edition/ViewportFrame.vue'
 import PlaybackControls from '../components/Edition/PlaybackControls.vue'
 import TelemetryHud from '../components/Edition/TelemetryHud.vue'
-import DistanceHud from '../components/Edition/DistanceHud.vue'
 import CameraEditor from '../components/Edition/CameraEditor.vue'
 
 const router = useRouter()
@@ -110,7 +109,6 @@ onUnmounted(() => {
           <EditionMap />
           <ViewportFrame />
           <TelemetryHud />
-          <DistanceHud />
           <CameraEditor />
         </div>
         <PlaybackControls />

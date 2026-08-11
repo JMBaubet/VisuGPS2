@@ -1,20 +1,7 @@
 <template>
   <div v-if="editionStore.hasKeyframes" class="camera-editor">
-    <!-- Mode 1 : le curseur n'est PAS sur un point de RdV → bouton Ajouter. -->
-    <div v-if="!isOnRdv" class="add-rdv">
-      <v-btn
-        size="small"
-        color="primary"
-        variant="flat"
-        prepend-icon="mdi-plus"
-        @click="addKeyframeHere"
-      >
-        Ajouter un point de RdV
-      </v-btn>
-    </div>
-
-    <!-- Mode 2 : le curseur est sur un point de RdV → widgets + actions. -->
-    <template v-else>
+    <!-- Mode 2 : le curseur est sur un point de RdV → widgets d'édition. -->
+    <template v-if="isOnRdv">
       <!-- Croix de visée bleue au centre de l'écran (visible en mode cible). -->
       <div v-if="targetingMode" class="crosshair" />
 
@@ -90,9 +77,28 @@
           </template>
         </div>
       </div>
+    </template>
 
-      <!-- Barre d'actions du point de RdV -->
-      <div class="kf-actions">
+    <!--
+      Barre du bas (droite) : HUD distance à gauche + boutons d'action à
+      droite. Visible dans les deux modes (sur RdV et hors RdV).
+    -->
+    <div class="bottom-bar">
+      <DistanceHud />
+      <!-- Mode 1 : hors RdV → bouton Ajouter -->
+      <div v-if="!isOnRdv" class="add-rdv">
+        <v-btn
+          size="small"
+          color="primary"
+          variant="flat"
+          prepend-icon="mdi-plus"
+          @click="addKeyframeHere"
+        >
+          Ajouter un point de RdV
+        </v-btn>
+      </div>
+      <!-- Mode 2 : sur RdV → Undo / Supprimer / Sauvegarder -->
+      <div v-else class="kf-actions">
         <v-btn
           size="small"
           variant="text"
@@ -126,7 +132,7 @@
           <span class="action-label">Sauvegarder</span>
         </v-btn>
       </div>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -158,6 +164,7 @@ import { computed, ref, watch, onUnmounted } from 'vue'
 import type { CamState } from '../../algorithms/keyframeGenerator'
 import { useEditionStore } from '../../stores/edition'
 import { useEditionMap } from '../../composables/useEditionMap'
+import DistanceHud from './DistanceHud.vue'
 
 const editionStore = useEditionStore()
 const { map } = useEditionMap()
@@ -392,43 +399,56 @@ watch(
 
 /** Largeur du bandeau (px) — champ visible de ±90°. */
 const COMPASS_WIDTH_PX = 360
-/** Échelle de défilement : 2 px par degré (bande totale 720 px pour 360°). */
+/** Échelle de défilement : 2 px par degré. */
 const PX_PER_DEG = 2
 /** Position (px dans la bande) du repère central. */
 const CENTER_PX = COMPASS_WIDTH_PX / 2
 
-/** Génère une graduation tous les 15° (majeure tous les 45°), absolue 0..345°. */
+/** Offset de copie (deg) utilisé pour centrer le cap sur la bande. */
+const STRIP_CENTER_OFFSET_DEG = 360
+
+/**
+ * Génère 3 copies de la bande 0..360° (une à gauche, une au centre, une à
+ * droite) pour obtenir un défilement infini : les graduations du côté
+ * « wrapping » (270°…360°…90°) sont toujours visibles près de 0°/360°.
+ *
+ * La bande couvre -360°…720° (1080° → 2160 px).
+ */
 const compassMarks = computed(() => {
   const marks: { deg: number; x: number; label: string; major: boolean }[] = []
-  for (let deg = 0; deg < 360; deg += 15) {
-    marks.push({
-      deg,
-      x: deg * PX_PER_DEG,
-      label: compassLabel(deg),
-      major: deg % 45 === 0,
-    })
+  for (let copy = -1; copy <= 1; copy++) {
+    for (let deg = 0; deg < 360; deg += 15) {
+      const absoluteDeg = deg + copy * 360
+      marks.push({
+        deg: absoluteDeg,
+        x: absoluteDeg * PX_PER_DEG,
+        label: compassLabel(deg),
+        major: deg % 45 === 0,
+      })
+    }
   }
   return marks
 })
 
 /** Libellé d'une graduation : point cardinal si multiple de 45°, sinon « deg° ». */
 function compassLabel(deg: number): string {
+  const d = ((deg % 360) + 360) % 360
   const cardinals: Record<number, string> = {
     0: 'N', 45: 'NE', 90: 'E', 135: 'SE',
     180: 'S', 225: 'SO', 270: 'O', 315: 'NO',
   }
-  return cardinals[deg] ?? `${deg}°`
+  return cardinals[d] ?? `${d}°`
 }
 
 /**
- * Translation X de la bande pour garder le cap courant sur le repère central :
- * la graduation absolue `deg = cap` doit tomber à `CENTER_PX` px.
+ * Translation X de la bande pour garder le cap courant sur le repère central.
+ * On centre la copie du milieu (offset +360°) : le cap est toujours au milieu.
  */
 const compassTranslateX = computed(() => {
   const kf = currentKeyframe.value
   if (!kf) return 0
   const bearing = ((kf.cam.bearing % 360) + 360) % 360
-  return CENTER_PX - bearing * PX_PER_DEG
+  return CENTER_PX - (bearing + STRIP_CENTER_OFFSET_DEG) * PX_PER_DEG
 })
 
 let compassDragging = false
@@ -507,19 +527,29 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-/* --- Mode hors RdV : bouton « Ajouter un point de RdV » (sous le compas) --- */
-.add-rdv {
+/* --- Barre du bas (droite) : HUD distance + boutons d'action --- */
+.bottom-bar {
   position: absolute;
   right: 12px;
-  bottom: 12px; /* sous le compas, à la place des boutons d'action */
+  bottom: 12px; /* tout en bas */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+}
+/* Le HUD distance est intégré au flux de la barre (position relative). */
+.bottom-bar :deep(.distance-hud) {
+  position: static;
+  transform: none;
+}
+
+/* --- Mode hors RdV : bouton « Ajouter un point de RdV » --- */
+.add-rdv {
   pointer-events: auto;
 }
 
-/* --- Barre d'actions du point de RdV (bas droite, à gauche du compas) --- */
+/* --- Barre d'actions du point de RdV --- */
 .kf-actions {
-  position: absolute;
-  right: 12px;
-  bottom: 12px; /* tout en bas, sous le compas */
   display: flex;
   gap: 8px;
   padding: 6px 10px;
@@ -695,7 +725,7 @@ onUnmounted(() => {
   position: absolute;
   top: 0;
   left: 0;
-  width: 720px;
+  width: 2160px; /* 3 copies de 360° × 2 px/deg */
   height: 100%;
 }
 .compass-mark {

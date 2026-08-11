@@ -15,7 +15,11 @@
       class="progress-viewport"
       @wheel.passive="onWheel"
     >
-      <div class="progress-content" :style="{ width: timelineWidthPx + 'px' }">
+      <div
+        class="progress-content"
+        :class="{ 'content-right': alignRight }"
+        :style="{ width: timelineWidthPx + 'px' }"
+      >
         <svg
           ref="svgEl"
           :viewBox="`0 0 ${timelineWidthPx} ${totalHeight}`"
@@ -219,6 +223,21 @@ const totalHeight = rdvZoneHeight + advanceZoneHeight + gradZoneHeight
 /** Largeur totale de la timeline (px, proportionnelle à la trace). */
 const timelineWidthPx = computed(() =>
   Math.ceil(editionStore.totalDistanceM * PX_PER_METER),
+)
+
+/**
+ * Largeur visible du viewport (px), mesurée au ResizeObserver.
+ * Sert à décider si la timeline remplit toute la largeur ou doit être
+ * alignée à droite (trace courte).
+ */
+const viewportWidthPx = ref(0)
+
+/**
+ * `true` si la timeline est plus courte que le viewport : on l'aligne alors
+ * à droite (au lieu de la laisser collée à gauche).
+ */
+const alignRight = computed(
+  () => viewportWidthPx.value > 0 && timelineWidthPx.value < viewportWidthPx.value,
 )
 
 // --- Auto-scroll (rAF continue pendant le playback) ---
@@ -484,7 +503,11 @@ onMounted(() => {
   }
 
   if (viewportEl.value) {
-    resizeObserver = new ResizeObserver(() => {})
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        viewportWidthPx.value = entry.contentRect.width
+      }
+    })
     resizeObserver.observe(viewportEl.value)
   }
 
@@ -531,6 +554,8 @@ onUnmounted(() => {
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  /* Flex pour permettre l'alignement à droite du contenu court (margin auto). */
+  display: flex;
   /* Scrollbar masquée (scroll auto + molette conservés) */
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -544,6 +569,12 @@ onUnmounted(() => {
 .progress-content {
   height: 100%;
   position: relative;
+  flex-shrink: 0; /* ne pas compresser la timeline dans le flex */
+}
+
+/* Timeline plus courte que le viewport : alignée à droite. */
+.progress-content.content-right {
+  margin-left: auto;
 }
 
 .progress-graph-svg {
