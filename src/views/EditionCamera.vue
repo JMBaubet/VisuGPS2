@@ -14,7 +14,7 @@
  * Garde-fou : si aucune trace n'est sélectionnée (par exemple après un
  * rechargement direct de /edition-camera), on redirige vers l'accueil.
  */
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useSettingsStore } from '../stores/settings'
@@ -26,6 +26,7 @@ import ViewportFrame from '../components/Edition/ViewportFrame.vue'
 import PlaybackControls from '../components/Edition/PlaybackControls.vue'
 import TelemetryHud from '../components/Edition/TelemetryHud.vue'
 import DistanceHud from '../components/Edition/DistanceHud.vue'
+import CameraEditor from '../components/Edition/CameraEditor.vue'
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -46,6 +47,51 @@ onMounted(async () => {
   await settingsStore.loadSettings()
   await tracesStore.loadTraces()
 })
+
+// --- Raccourcis clavier ---
+//   Espace        → Play/Pause ;
+//   Flèche droite → pause (si lecture) + point de RdV suivant ;
+//   Flèche gauche → pause (si lecture) + point de RdV précédent.
+
+/**
+ * `true` si le focus est dans un champ de saisie (on laisse alors le clavier
+ * faire son travail, sans interférer avec la frappe).
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  return (
+    el?.tagName === 'INPUT' ||
+    el?.tagName === 'TEXTAREA' ||
+    !!el?.isContentEditable
+  )
+}
+
+function onEditionKeydown(event: KeyboardEvent) {
+  if (isEditableTarget(event.target)) return
+
+  switch (event.code) {
+    case 'Space':
+      event.preventDefault()
+      if (editionStore.hasKeyframes) editionStore.togglePlay()
+      break
+    case 'ArrowRight':
+      event.preventDefault()
+      editionStore.goToNextRdv()
+      break
+    case 'ArrowLeft':
+      event.preventDefault()
+      editionStore.goToPrevRdv()
+      break
+  }
+}
+
+// Phase de capture : intercepte les touches avant les handlers du canvas
+// Mapbox (qui, lui, capte les flèches en premier sinon).
+window.addEventListener('keydown', onEditionKeydown, true)
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onEditionKeydown, true)
+})
 </script>
 
 <template>
@@ -65,6 +111,7 @@ onMounted(async () => {
           <ViewportFrame />
           <TelemetryHud />
           <DistanceHud />
+          <CameraEditor />
         </div>
         <PlaybackControls />
       </v-main>

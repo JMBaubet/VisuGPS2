@@ -1,11 +1,15 @@
 <template>
   <v-sheet class="playback-controls" color="rgba(0,0,0,0.75)" tile>
     <!--
-      Layout horizontal : colonne de boutons à gauche + graphe à droite.
+      Layout horizontal : graphe à gauche + colonne de boutons à droite
+      (regroupés du même côté que les widgets d'édition de la carte).
       La colonne fait 2 rangées :
         - rangée 1 (alignée avec la zone RdV) : RdV précédent / suivant ;
         - rangée 2 (alignée avec la zone avancement) : km0 / Play-Pause / dernier point.
     -->
+    <!-- Graphe SVG d'avancement (occupe le reste de la largeur) -->
+    <ProgressGraph class="graph-flex" />
+
     <div class="controls-col">
       <!-- Rangée 1 : navigation entre Points de RdV (icônes bleues) -->
       <div class="rdv-row">
@@ -14,9 +18,9 @@
           size="small"
           variant="text"
           color="info"
-          :disabled="!canGoPrev"
+          :disabled="!editionStore.canGoPrevRdv"
           title="Point de RdV précédent"
-          @click="goToPrevRdv"
+          @click="editionStore.goToPrevRdv()"
         >
           <v-icon>mdi-chevron-left</v-icon>
         </v-btn>
@@ -25,9 +29,9 @@
           size="small"
           variant="text"
           color="info"
-          :disabled="!canGoNext"
+          :disabled="!editionStore.canGoNextRdv"
           title="Point de RdV suivant"
-          @click="goToNextRdv"
+          @click="editionStore.goToNextRdv()"
         >
           <v-icon>mdi-chevron-right</v-icon>
         </v-btn>
@@ -70,9 +74,6 @@
         </v-btn>
       </div>
     </div>
-
-    <!-- Graphe SVG d'avancement (occupe le reste de la largeur) -->
-    <ProgressGraph class="graph-flex" />
   </v-sheet>
 </template>
 
@@ -81,10 +82,11 @@
  * Composant A — Contrôle de lecture (spec §4.3).
  *
  * Bandeau inférieur de la vue d'édition, en **layout horizontal compact** :
- *   - à gauche, une colonne de boutons sur 2 rangées :
+ *   - à gauche, le graphe SVG d'avancement (spec §4.6) ;
+ *   - à droite, une colonne de boutons sur 2 rangées (regroupés du même
+ *     côté que les widgets d'édition de la carte) :
  *     • rangée 1 (alignée zone RdV) : Points de RdV précédent / suivant ;
  *     • rangée 2 (alignée zone avancement) : km0 / Play-Pause / dernier point ;
- *   - à droite, le graphe SVG d'avancement (spec §4.6).
  *
  * La distance parcourue est affichée en permanence sous le curseur rouge du
  * graphe (tooltip jaune), complétée par le tooltip de survol (distance +
@@ -101,35 +103,6 @@ const editionStore = useEditionStore()
 /** Distance en dessous de laquelle on considère qu'on est sur un RdV (m). */
 const ROLLOVER_EPSILON_M = 0.5
 
-const keyframes = computed(() => editionStore.keyframeSet?.keyframes ?? [])
-
-/** Index du prochain RdV strictement après la position courante, ou -1. */
-function nextKeyframeIndex(): number {
-  const cur = editionStore.currentDistanceM
-  return keyframes.value.findIndex(k => k.distance_from_start_m > cur + ROLLOVER_EPSILON_M)
-}
-
-/** Index du dernier RdV strictement avant la position courante, ou -1. */
-function prevKeyframeIndex(): number {
-  const cur = editionStore.currentDistanceM
-  for (let i = keyframes.value.length - 1; i >= 0; i--) {
-    if (keyframes.value[i].distance_from_start_m < cur - ROLLOVER_EPSILON_M) return i
-  }
-  return -1
-}
-
-function goToPrevRdv() {
-  const i = prevKeyframeIndex()
-  if (i >= 0) editionStore.seekToDistance(keyframes.value[i].distance_from_start_m)
-}
-
-function goToNextRdv() {
-  const i = nextKeyframeIndex()
-  if (i >= 0) editionStore.seekToDistance(keyframes.value[i].distance_from_start_m)
-}
-
-const canGoPrev = computed(() => prevKeyframeIndex() >= 0)
-const canGoNext = computed(() => nextKeyframeIndex() >= 0)
 const canGoStart = computed(() => editionStore.currentDistanceM > ROLLOVER_EPSILON_M)
 const canGoEnd = computed(
   () => editionStore.currentDistanceM < editionStore.totalDistanceM - ROLLOVER_EPSILON_M,

@@ -17,6 +17,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import {
   type KeyframeSet,
+  type Keyframe,
   type CamState,
   type TraceurPoint,
   type PolyVertex,
@@ -28,9 +29,13 @@ import {
   MS_PER_METER,
 } from '../algorithms/keyframeGenerator'
 import { bearing, bearingDelta, haversineMeters } from '../utils/geo'
+import { useKeyframesStore } from './keyframes'
 
 /** Vitesse par défaut : 4000 ms/km (spec §7). Exposé pour l'affichage UI. */
 export const DEFAULT_SPEED_MS_PER_KM = 4000
+
+/** Tolérance (m) pour considérer le curseur « sur » un point de RdV. */
+export const ON_KEYFRAME_EPSILON_M = 1
 
 export const useEditionStore = defineStore('edition', () => {
   /**
@@ -71,6 +76,13 @@ export const useEditionStore = defineStore('edition', () => {
 
   /** Temps absolu courant depuis le départ (ms), dans [0, total_duration_ms]. */
   const currentTimeMs = ref(0)
+
+  /**
+   * Distance (m) du keyframe sélectionné pour l'édition (Composant B), ou
+   * `null` si aucun keyframe n'est en cours d'édition. Alimenté par le clic
+   * sur un tick RdV de la timeline ou par les boutons RdV précédent/suivant.
+   */
+  const selectedKeyframeDistance = ref<number | null>(null)
 
   // --- Getters ---
 
@@ -161,6 +173,35 @@ export const useEditionStore = defineStore('edition', () => {
     }
   })
 
+  /**
+   * Keyframe sélectionné pour l'édition (Composant B), ou `null`.
+   * Résolu par `selectedKeyframeDistance` contre le jeu de keyframes courant.
+   */
+  const selectedKeyframe = computed(() => {
+    if (selectedKeyframeDistance.value === null) return null
+    const kfs = keyframeSet.value?.keyframes ?? []
+    return (
+      kfs.find(k => k.distance_from_start_m === selectedKeyframeDistance.value) ?? null
+    )
+  })
+
+  /**
+   * Keyframe situé à la position courante du curseur (dans une tolérance),
+   * ou `null` si le curseur n'est pas sur un point de RdV.
+   *
+   * C'est ce getter qui pilote le mode du CameraEditor : sur un RdV on
+   * affiche les widgets d'édition ; hors RdV on affiche le bouton « Ajouter
+   * un point de RdV ».
+   */
+  const currentKeyframe = computed(() => {
+    const kfs = keyframeSet.value?.keyframes ?? []
+    const dist = currentDistanceM.value
+    return (
+      kfs.find(k => Math.abs(k.distance_from_start_m - dist) <= ON_KEYFRAME_EPSILON_M) ??
+      null
+    )
+  })
+
   // --- Actions : sélection / cadre ViewPort ---
 
   function selectTrace(traceId: string) {
@@ -203,6 +244,137 @@ export const useEditionStore = defineStore('edition', () => {
     }
     currentTimeMs.value = 0
     isPlaying.value = false
+    // Sélectionner le premier keyframe pour rendre l'éditeur (Composant B)
+    // immédiatement utilisable au chargement.
+    selectedKeyframeDistance.value = set?.keyframes[0]?.distance_from_start_m ?? null
+  }
+
+  // --- Actions : édition des keyframes (Composant B) ---
+
+  /** Timer de debounce de la sauvegarde automatique. */
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Sauvegarde le jeu de keyframes courant sur disque (best-effort, debounce). */
+  function scheduleSave() {
+    const set = keyframeSet.value
+    if (!set) return
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      void useKeyframesStore().saveKeyframes(set).catch(() => {
+        // Échec best-effort : silencieux (la sauvegarde initiale l'est aussi).
+      })
+    }, 300)
+  }
+
+  /** Sélectionne un keyframe (par sa distance) pour l'édition. */
+  function selectKeyframe(distanceM: number) {
+    const exists = keyframeSet.value?.keyframes.some(
+      k => k.distance_from_start_m === distanceM,
+    )
+    selectedKeyframeDistance.value = exists ? distanceM : null
+  }
+
+  /**
+   * Met à jour les champs `cam` d'un keyframe identifié par sa distance.
+   * Les champs fournis sont écrasés (Partial), les autres conservés.
+   *
+   * La sauvegarde est **explicite** (bouton Sauvegarder du CameraEditor) :
+   * cette action ne persiste pas elle-même, elle marque seulement l'état en
+   * mémoire (le bouton Sauvegarder est dégrisé dès qu'une modification
+   * intervient).
+   */
+  function updateKeyframe(distanceM: number, updates: Partial<CamState>) {
+    const kf = keyframeSet.value?.keyframes.find(
+      k => k.distance_from_start_m === distanceM,
+    )
+    if (!kf) return
+    Object.assign(kf.cam, updates)
+  }
+
+  /**
+   * Sauvegarde **immédiate** du jeu de keyframes courant sur disque
+   * (best-effort). Appelée par le bouton Sauvegarder du CameraEditor.
+   */
+  function saveKeyframes() {
+    const set = keyframeSet.value
+    if (!set) return
+    void useKeyframesStore().saveKeyframes(set).catch(() => {
+      // Échec best-effort : silencieux.
+    })
+  }
+
+  /**
+   * Insère un keyframe à la distance donnée.
+   *
+   * Si `cam`/`traceur` ne sont pas fournis, ils sont interpolés depuis les
+   * keyframes voisins (l'insertion ne modifie donc pas la trajectoire).
+   * Si un keyframe existe déjà à cette distance, la demande est ignorée.
+   */
+  function addKeyframe(
+    distanceM: number,
+    cam?: CamState,
+    traceur?: TraceurPoint,
+  ) {
+    const set = keyframeSet.value
+    if (!set) return
+    const kfs = set.keyframes
+    if (kfs.some(k => k.distance_from_start_m === distanceM)) return
+
+    // Interpolation depuis les voisins si valeurs non fournies.
+    let resolvedCam = cam
+    let resolvedTraceur = traceur
+    if (!resolvedCam || !resolvedTraceur) {
+      const time = distanceM * MS_PER_METER
+      const seg = findSegment(kfs, time)
+      if (!resolvedCam) resolvedCam = interpolateCam(seg)
+      if (!resolvedTraceur) {
+        const prev = seg.prev.traceur
+        const next = seg.next.traceur
+        resolvedTraceur = {
+          lng: prev.lng + (next.lng - prev.lng) * seg.ratio,
+          lat: prev.lat + (next.lat - prev.lat) * seg.ratio,
+          altitude:
+            prev.altitude !== null && next.altitude !== null
+              ? prev.altitude + (next.altitude - prev.altitude) * seg.ratio
+              : null,
+        }
+      }
+    }
+
+    const kf = {
+      time_ms: distanceM * MS_PER_METER,
+      distance_from_start_m: distanceM,
+      cam: resolvedCam,
+      traceur: resolvedTraceur!,
+    }
+    // Insérer en conservant le tri par distance croissante.
+    const index = kfs.findIndex(k => k.distance_from_start_m > distanceM)
+    if (index === -1) kfs.push(kf)
+    else kfs.splice(index, 0, kf)
+
+    // Bornes mises à jour si le keyframe est en extrémité.
+    set.total_distance_m = Math.max(set.total_distance_m, distanceM)
+    set.total_duration_ms = Math.max(set.total_duration_ms, kf.time_ms)
+
+    selectKeyframe(distanceM)
+    scheduleSave()
+  }
+
+  /**
+   * Supprime un keyframe identifié par sa distance.
+   * Au minimum 2 keyframes sont conservés (début + fin de trace).
+   * Si le keyframe supprimé était sélectionné, la sélection est effacée.
+   */
+  function removeKeyframe(distanceM: number) {
+    const set = keyframeSet.value
+    if (!set || set.keyframes.length <= 2) return
+    const index = set.keyframes.findIndex(k => k.distance_from_start_m === distanceM)
+    if (index === -1) return
+    set.keyframes.splice(index, 1)
+    if (selectedKeyframeDistance.value === distanceM) {
+      selectedKeyframeDistance.value = null
+    }
+    scheduleSave()
   }
 
   function play() {
@@ -232,6 +404,63 @@ export const useEditionStore = defineStore('edition', () => {
       totalDurationMs.value,
       Math.max(0, t),
     )
+  }
+
+  // --- Navigation entre points de RdV ---
+
+  /**
+   * Distance en dessous de laquelle on considère qu'on est déjà sur un RdV
+   * (pour passer au RdV précédent/suivant **de ce point**).
+   */
+  const RDV_EPSILON_M = 0.5
+
+  /** Point de RdV suivant (strictement après la position courante), ou null. */
+  const nextRdv = computed(() => {
+    const kfs = keyframeSet.value?.keyframes ?? []
+    const cur = currentDistanceM.value
+    return kfs.find(k => k.distance_from_start_m > cur + RDV_EPSILON_M) ?? null
+  })
+
+  /** Point de RdV précédent (strictement avant la position courante), ou null. */
+  const prevRdv = computed(() => {
+    const kfs = keyframeSet.value?.keyframes ?? []
+    const cur = currentDistanceM.value
+    let prev: Keyframe | undefined
+    for (const k of kfs) {
+      if (k.distance_from_start_m < cur - RDV_EPSILON_M) prev = k
+      else break
+    }
+    return prev ?? null
+  })
+
+  /** `true` si un point de RdV suivant existe (grise le bouton sinon). */
+  const canGoNextRdv = computed(() => nextRdv.value !== null)
+
+  /** `true` si un point de RdV précédent existe (grise le bouton sinon). */
+  const canGoPrevRdv = computed(() => prevRdv.value !== null)
+
+  /**
+   * Va au point de RdV suivant et le sélectionne pour l'édition.
+   * **Met en pause** si la lecture est active.
+   */
+  function goToNextRdv() {
+    const next = nextRdv.value
+    if (!next) return
+    if (isPlaying.value) pause()
+    seekToDistance(next.distance_from_start_m)
+    selectKeyframe(next.distance_from_start_m)
+  }
+
+  /**
+   * Va au point de RdV précédent et le sélectionne pour l'édition.
+   * **Met en pause** si la lecture est active.
+   */
+  function goToPrevRdv() {
+    const prev = prevRdv.value
+    if (!prev) return
+    if (isPlaying.value) pause()
+    seekToDistance(prev.distance_from_start_m)
+    selectKeyframe(prev.distance_from_start_m)
   }
 
   /**
@@ -274,10 +503,20 @@ export const useEditionStore = defineStore('edition', () => {
     markerDistanceM,
     markerRelativeBearing,
     altitudeAtDistance,
+    selectedKeyframe,
+    currentKeyframe,
+    // État : édition keyframes
+    selectedKeyframeDistance,
     // Actions : sélection / cadre
     selectTrace,
     clearSelection,
     toggleViewportFrame,
+    // Actions : édition keyframes
+    selectKeyframe,
+    updateKeyframe,
+    saveKeyframes,
+    addKeyframe,
+    removeKeyframe,
     // Actions : lecture
     setKeyframeSet,
     play,
@@ -286,5 +525,10 @@ export const useEditionStore = defineStore('edition', () => {
     setSpeed,
     seekToDistance,
     tick,
+    // Navigation entre points de RdV
+    canGoNextRdv,
+    canGoPrevRdv,
+    goToNextRdv,
+    goToPrevRdv,
   }
 })

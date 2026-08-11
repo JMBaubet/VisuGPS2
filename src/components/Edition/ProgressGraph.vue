@@ -427,10 +427,31 @@ function formatTooltip(distanceM: number): string {
 
 // --- Interactions clic ---
 
+/**
+ * Distance en dessous de laquelle un clic est considéré comme « sur » un
+ * keyframe (moitié du pas d'échantillonnage). Au-delà, simple seek.
+ */
+const KEYFRAME_HIT_TOLERANCE_M = 500
+
 function onTimelineClick(event: MouseEvent) {
   const x = clientXToTimelineX(event.clientX)
   const dist = timelineXToDistance(x)
   editionStore.seekToDistance(dist)
+
+  // Sélectionner le keyframe le plus proche si le clic tombe dessus.
+  const kfs = editionStore.keyframeSet?.keyframes ?? []
+  let nearest: (typeof kfs)[number] | null = null
+  let nearestGap = Infinity
+  for (const kf of kfs) {
+    const gap = Math.abs(kf.distance_from_start_m - dist)
+    if (gap < nearestGap) {
+      nearestGap = gap
+      nearest = kf
+    }
+  }
+  if (nearest && nearestGap <= KEYFRAME_HIT_TOLERANCE_M) {
+    editionStore.selectKeyframe(nearest.distance_from_start_m)
+  }
 }
 
 // --- Watchers ---

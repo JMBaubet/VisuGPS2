@@ -35,6 +35,7 @@
  * - ResizeObserver pour resynchroniser le canvas au redimensionnement
  */
 import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { useEditionMap } from '../../composables/useEditionMap'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { useSettingsStore } from '../../stores/settings'
@@ -49,6 +50,9 @@ const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const editionStore = useEditionStore()
 const keyframesStore = useKeyframesStore()
+
+// Instance Mapbox partagée avec les widgets d'édition (CameraEditor).
+const { map: mapRef } = useEditionMap()
 
 // --- Références ---
 
@@ -97,7 +101,15 @@ async function initializeMap(token: string) {
     zoom: 5,
     center: [2.0, 43.7], // [lon, lat] — France, recentré sur la trace ensuite
     pitch: 60, // pitch par défaut de la spec (§7)
+    attributionControl: false, // ajouté manuellement plus bas (position top-left)
   })
+  // Copyright Mapbox repositionné en haut à gauche (au lieu du bas droit).
+  map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'top-left')
+  // Les flèches clavier sont réservées à la navigation entre RdV (vue) :
+  // on désactive le pan clavier natif de Mapbox pour éviter le conflit.
+  map.keyboard.disable()
+  // Partager l'instance pour les widgets d'édition (CameraEditor).
+  mapRef.value = map
 
   map.on('load', async () => {
     if (!map) return
@@ -389,6 +401,7 @@ onUnmounted(() => {
   if (map) {
     map.remove()
     map = null
+    mapRef.value = null
   }
 })
 </script>
