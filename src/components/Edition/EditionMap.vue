@@ -42,7 +42,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useTracesStore } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
 import { useKeyframesStore } from '../../stores/keyframes'
-import { generateKeyframes, KEYFRAME_STEP_M } from '../../algorithms/keyframeGenerator'
+import { generateKeyframes, KEYFRAME_STEP_M, type KeyframeSet } from '../../algorithms/keyframeGenerator'
 
 // --- Stores ---
 
@@ -62,6 +62,216 @@ let map: mapboxgl.Map | null = null
 let resizeObserver: ResizeObserver | null = null
 /** Position courante du curseur [lng, lat], pour mise à jour source GeoJSON. */
 let markerCoords: [number, number] = [0, 0]
+
+// Géométrie et points riches de la trace chargée, mémorisés pour permettre
+// la régénération des keyframes quand l'algorithme ou le gap min change.
+let loadedFeature: GeoJSON.Feature | null = null
+let loadedTracePoints: Awaited<ReturnType<typeof tracesStore.getTracePoints>> | null = null
+
+// --- Échantillonnage du terrain (DEM Mapbox) pour l'occlusion par le relief ---
+
+/**
+ * Cache des altitudes terrain interrogées via `queryTerrainElevation` (avant
+ * que la grille fine soit construite). Les lignes de visée de l'algorithme se
+ * chevauchent fortement : le cache évite de re-interroger Mapbox pour des
+ * points déjà demandés. Clé arrondie à ~11 m.
+ */
+const terrainElevCache = new Map<string, number | null>()
+
+/**
+ * Grille d'altitude terrain **fine** (~100 m) couvrant l'emprise de la trace.
+ * La carte est à zoom ~10 (fitBounds) au moment de la génération :
+ * `queryTerrainElevation` y renvoie un terrain ~60 m/px, trop grossier pour les
+ * buttes côtières étroites qui masquent le curseur. On construit donc une
+ * grille fine une seule fois en téléchargeant les tuiles `mapbox.terrain-rgb`
+ * à zoom 13 (~7 m/px), puis on la restaure — elle persiste en mémoire et est
+ * indépendante du zoom courant.
+ */
+const TERRAIN_GRID_STEP_DEG = 0.001 // ~100 m à ces latitudes
+/** Zoom de téléchargement des tuiles terrain-rgb (≈7 m/px, nb de tuiles réduit). */
+const TERRAIN_TILE_ZOOM = 13
+const terrainGrid = new Map<string, number>()
+let terrainGridReady = false
+
+/** Clé de cellule de la grille fine pour un point (lng, lat). */
+function gridKey(lng: number, lat: number): string {
+  const step = TERRAIN_GRID_STEP_DEG
+  return `${Math.round(lng / step)},${Math.round(lat / step)}`
+}
+
+/**
+ * Renvoie l'altitude du terrain (m, exagération appliquée pour coller au
+ * rendu) au point (lng, lat), ou `null` si indisponible. Fourni à
+ * `generateKeyframes` comme `terrainSampler`. Utilise la grille fine dès
+ * qu'elle est prête, sinon interroge Mapbox directement.
+ */
+function sampleTerrain(lng: number, lat: number): number | null {
+  if (terrainGridReady) return terrainGrid.get(gridKey(lng, lat)) ?? null
+  if (!map) return null
+  const key = `${lng.toFixed(4)},${lat.toFixed(4)}`
+  const cached = terrainElevCache.get(key)
+  if (cached != null) return cached
+  let value: number | null = null
+  try {
+    value = map.queryTerrainElevation([lng, lat], { exaggerated: true }) ?? null
+  } catch {
+    value = null
+  }
+  if (value != null) terrainElevCache.set(key, value)
+  return value
+}
+
+/** Latitude (degrés) → radians. */
+function toRad(deg: number): number {
+  return (deg * Math.PI) / 180
+}
+
+/** Web Mercator : index X de la tuile contenant une longitude. */
+function lngToTileX(lng: number, z: number): number {
+  return Math.floor(((lng + 180) / 360) * Math.pow(2, z))
+}
+
+/** Web Mercator : index Y de la tuile contenant une latitude. */
+function latToTileY(lat: number, z: number): number {
+  const r = toRad(lat)
+  return Math.floor(
+    ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * Math.pow(2, z),
+  )
+}
+
+/**
+ * Construit la grille fine du terrain sur l'emprise de la trace (pad ~2,5 km
+ * pour couvrir la ligne de visée, la caméra étant jusqu'à ~2,4 km en arrière du
+ * centre).
+ *
+ * On **télécharge les tuiles `mapbox.terrain-rgb` à zoom 13** (~7 m/px) et on
+ * décode l'altitude RGB→m : cela contourne la limite de `queryTerrainElevation`,
+ * qui ne lit que les tuiles chargées pour la caméra courante (zoom ~10 = ~60
+ * m/px au moment de la génération, trop grossier pour les buttes côtières).
+ * Le résultat est stocké dans `terrainGrid` (clé = cellule ~100 m), indépendant
+ * du zoom de la carte. `onDone` est appelé une fois la grille complète.
+ */
+async function buildTerrainGrid(onDone: () => void): Promise<void> {
+  if (!map || !loadedFeature) { onDone(); return }
+  const coords = (loadedFeature.geometry as GeoJSON.LineString)?.coordinates
+  if (!coords || coords.length === 0) { onDone(); return }
+
+  let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90
+  for (const c of coords) {
+    const [lng, lat] = c as [number, number]
+    if (lng < minLng) minLng = lng
+    if (lng > maxLng) maxLng = lng
+    if (lat < minLat) minLat = lat
+    if (lat > maxLat) maxLat = lat
+  }
+  const pad = 0.025 // ~2,5 km
+  minLng -= pad; maxLng += pad; minLat -= pad; maxLat += pad
+
+  const token = mapboxgl.accessToken
+  if (!token) {
+    console.warn('[EditionMap] pas de token Mapbox pour la grille terrain')
+    onDone()
+    return
+  }
+
+  const z = TERRAIN_TILE_ZOOM
+  const x0 = lngToTileX(minLng, z)
+  const x1 = lngToTileX(maxLng, z)
+  const y0 = latToTileY(maxLat, z)
+  const y1 = latToTileY(minLat, z)
+
+  // 1. Télécharger et décoder toutes les tuiles DEM en parallèle.
+  const tileImages = new Map<string, ImageData>()
+  const requests: Promise<void>[] = []
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      const key = `${z}/${x}/${y}`
+      requests.push(
+        (async () => {
+          try {
+            const resp = await fetch(
+              `https://api.mapbox.com/v4/mapbox.terrain-rgb/${key}@2x.pngraw?access_token=${token}`,
+            )
+            if (!resp.ok) return
+            const bmp = await createImageBitmap(await resp.blob())
+            const canvas = document.createElement('canvas')
+            canvas.width = bmp.width
+            canvas.height = bmp.height
+            const ctx = canvas.getContext('2d', { willReadFrequently: true })
+            if (!ctx) { bmp.close(); return }
+            ctx.drawImage(bmp, 0, 0)
+            bmp.close()
+            tileImages.set(key, ctx.getImageData(0, 0, canvas.width, canvas.height))
+          } catch {
+            // tuile indisponible → simplement ignorée
+          }
+        })(),
+      )
+    }
+  }
+  await Promise.all(requests)
+  if (tileImages.size === 0) {
+    console.warn('[EditionMap] aucune tuile terrain téléchargée')
+    onDone()
+    return
+  }
+
+  // 2. Échantillonner la grille (~100 m) depuis les tuiles décodées.
+  terrainGrid.clear()
+  const n = Math.pow(2, z)
+  for (let lat = minLat; lat <= maxLat; lat += TERRAIN_GRID_STEP_DEG) {
+    for (let lng = minLng; lng <= maxLng; lng += TERRAIN_GRID_STEP_DEG) {
+      const x = lngToTileX(lng, z)
+      const y = latToTileY(lat, z)
+      const img = tileImages.get(`${z}/${x}/${y}`)
+      if (!img) continue
+      const worldX = ((lng + 180) / 360) * n - x
+      const r = toRad(lat)
+      const worldY =
+        ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n - y
+      const px = Math.min(img.width - 1, Math.floor(worldX * img.width))
+      const py = Math.min(img.height - 1, Math.floor(worldY * img.height))
+      const i = (py * img.width + px) * 4
+      const red = img.data[i]
+      const green = img.data[i + 1]
+      const blue = img.data[i + 2]
+      const elev = -10000 + ((red * 256 * 256 + green * 256 + blue) * 0.1)
+      if (elev > -5000) terrainGrid.set(gridKey(lng, lat), elev * 1.5)
+    }
+  }
+  if (terrainGrid.size > 0) {
+    terrainGridReady = true
+  } else {
+    console.warn('[EditionMap] grille terrain vide — occlusion par relief désactivée')
+  }
+  onDone()
+}
+
+/** Mémorise si la dernière génération a bénéficié du DEM (pour ne pas
+ * régénérer inutilement, ni ignorer un jeu persisté d'une version antérieure). */
+let lastGenerationHadTerrain = false
+
+/**
+ * Régénère les keyframes dès que la grille fine du terrain est disponible, si ce
+ * n'était pas le cas lors de la dernière génération.
+ *
+ * La grille est construite une seule fois (téléchargement des tuiles
+ * `terrain-rgb`, indépendant du zoom de la carte) ; les régénérations suivantes
+ * (changement d'algorithme / gap) l'utilisent en mémoire.
+ */
+function scheduleTerrainRegeneration(): void {
+  if (!map || !loadedFeature || editionStore.keyframeAlgorithm !== 'frustum') return
+  if (lastGenerationHadTerrain) return // déjà généré avec la grille
+  if (terrainGridReady) {
+    void generateAndSetKeyframes()
+    return
+  }
+  void buildTerrainGrid(() => {
+    if (editionStore.keyframeAlgorithm === 'frustum') {
+      void generateAndSetKeyframes()
+    }
+  })
+}
 
 // --- Animation (lecture) ---
 
@@ -198,6 +408,11 @@ async function loadSelectedTrace() {
   const traceId = editionStore.selectedTraceId
   if (!map || !traceId) return
 
+  // Réinitialiser l'état terrain : la grille fine est propre à chaque trace.
+  terrainGrid.clear()
+  terrainGridReady = false
+  lastGenerationHadTerrain = false
+
   let feature: GeoJSON.Feature
   try {
     feature = await tracesStore.getTraceGeometry(traceId)
@@ -206,6 +421,7 @@ async function loadSelectedTrace() {
     return
   }
   if (!map) return // démontage pendant l'attente asynchrone
+  loadedFeature = feature
 
   const source = map.getSource(TRACE_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
   if (source) {
@@ -221,9 +437,9 @@ async function loadSelectedTrace() {
   // Charger les points riches du backend (altitude + distance 3D).
   // Fait avant la génération des keyframes pour que l'altitude soit
   // disponible dans les TraceurPoint.
-  let tracePoints: Awaited<ReturnType<typeof tracesStore.getTracePoints>> | null = null
+  loadedTracePoints = null
   try {
-    tracePoints = await tracesStore.getTracePoints(traceId)
+    loadedTracePoints = await tracesStore.getTracePoints(traceId)
   } catch (e) {
     console.warn(`[EditionMap] Chargement des points riches échoué :`, e)
   }
@@ -231,21 +447,14 @@ async function loadSelectedTrace() {
   // Charger les keyframes persistés ; sinon générer + sauvegarder.
   let kf = await keyframesStore.loadKeyframes(traceId)
   if (!kf) {
-    const generated = generateKeyframes(traceId, feature, KEYFRAME_STEP_M, tracePoints)
-    if (!generated) {
-      console.error(`[EditionMap] Impossible de générer les keyframes pour ${traceId}`)
-      return
-    }
-    kf = generated
-    // Sauvegarder pour les entrées futures (best-effort, ne bloque pas).
-    try {
-      await keyframesStore.saveKeyframes(kf)
-    } catch (e) {
-      console.warn(`[EditionMap] Sauvegarde des keyframes échouée :`, e)
-    }
+    kf = await generateAndSetKeyframes()
+    if (!kf) return
+  } else {
+    editionStore.setKeyframeSet(kf, feature, loadedTracePoints ?? null)
+    // Jeu persisté (éventuellement d'une version antérieure sans occlusion
+    // par le relief) : on force une régénération dès que la grille est prête.
+    lastGenerationHadTerrain = terrainGridReady
   }
-
-  editionStore.setKeyframeSet(kf, feature, tracePoints ?? null)
 
   // Curseur jaune (cercle GL). Position initiale au premier keyframe.
   if (kf && kf.keyframes.length > 0) {
@@ -255,7 +464,67 @@ async function loadSelectedTrace() {
     editionReady = true
     applyInterpolatedState()
   }
+
+  // L'occlusion par le relief (frustum) dépend du DEM Mapbox : régénérer si
+  // la dernière génération n'a pas encore bénéficié du terrain.
+  scheduleTerrainRegeneration()
 }
+
+/**
+ * Génère les keyframes selon l'algorithme sélectionné (frustum ou simple),
+ * les sauvegarde sur disque (best-effort) et les pousse dans le store.
+ *
+ * Réutilise la géométrie et les points riches déjà chargés par
+ * `loadSelectedTrace` (`loadedFeature` / `loadedTracePoints`).
+ *
+ * @returns Le jeu généré, ou `null` en cas d'échec.
+ */
+async function generateAndSetKeyframes(): Promise<KeyframeSet | null> {
+  const traceId = editionStore.selectedTraceId
+  if (!map || !traceId || !loadedFeature) return null
+
+  // Ne fournir le sampler terrain que si la grille fine est prête : sinon
+  // l'algorithme retombe sur les points de trace, et `scheduleTerrainRegeneration`
+  // régénèrera avec la grille dès qu'elle sera construite.
+  const sampler = terrainGridReady ? sampleTerrain : null
+
+  const generated = generateKeyframes(
+    traceId,
+    loadedFeature,
+    KEYFRAME_STEP_M,
+    loadedTracePoints ?? null,
+    editionStore.keyframeAlgorithm,
+    editionStore.minKeyframeGapM,
+    sampler,
+  )
+  if (!generated) {
+    console.error(`[EditionMap] Impossible de générer les keyframes pour ${traceId}`)
+    return null
+  }
+
+  // Sauvegarder pour les entrées futures (best-effort, ne bloque pas).
+  try {
+    await keyframesStore.saveKeyframes(generated)
+  } catch (e) {
+    console.warn(`[EditionMap] Sauvegarde des keyframes échouée :`, e)
+  }
+
+  editionStore.setKeyframeSet(generated, loadedFeature, loadedTracePoints ?? null)
+  lastGenerationHadTerrain = terrainGridReady
+  return generated
+}
+
+/**
+ * Régénère les keyframes quand l'algorithme ou la distance minimale change
+ * (sélecteur « Algorithme » / « Gap min » de la toolbar).
+ */
+watch(
+  [() => editionStore.keyframeAlgorithm, () => editionStore.minKeyframeGapM],
+  () => {
+    if (!editionReady || !loadedFeature) return
+    void generateAndSetKeyframes()
+  },
+)
 
 /**
  * Calcule les bounds (LngLatBounds) d'une Feature LineString en

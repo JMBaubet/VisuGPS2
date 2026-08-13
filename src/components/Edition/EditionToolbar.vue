@@ -11,6 +11,33 @@
 
     <v-spacer />
 
+    <!-- Sélecteur de l'algorithme de génération des keyframes -->
+    <v-select
+      :model-value="editionStore.keyframeAlgorithm"
+      :items="algorithmItems"
+      density="compact"
+      hide-details
+      variant="outlined"
+      class="algo-select"
+      label="Algorithme"
+      @update:model-value="onAlgorithmChange"
+    />
+
+    <!-- Distance minimale entre keyframes (frustum) -->
+    <v-text-field
+      :model-value="String(editionStore.minKeyframeGapM)"
+      density="compact"
+      hide-details
+      variant="outlined"
+      type="number"
+      min="200"
+      max="5000"
+      step="50"
+      label="Gap min (m)"
+      class="gap-field"
+      @change="onGapChange"
+    />
+
     <!-- Bascule du cadre ViewPort 16:9 -->
     <v-btn
       icon
@@ -27,13 +54,13 @@
 /**
  * Barre d'outils supérieure de la vue d'édition caméra.
  *
- * Semi-transparente par-dessus la carte, elle expose pour le MVP :
+ * Semi-transparente par-dessus la carte, elle expose :
  *   - un bouton Home (retour à l'accueil)
  *   - le titre de la trace éditée
+ *   - le sélecteur de l'algorithme de génération des keyframes
+ *     (`'frustum'` — placement par visibilité — ou `'simple'` — MVP)
+ *   - la distance minimale entre keyframes (frustum, 200–5000 m, pas 50)
  *   - un toggle d'affichage du cadre ViewPort 16:9 (overlay CSS)
- *
- * Elle s'enrichira dans les prochaines itérations : bouton « + » d'ajout
- * de keyframe (spec §4.7), toggles globaux, etc.
  */
 import { computed } from 'vue'
 import { useEditionStore } from '../../stores/edition'
@@ -48,6 +75,24 @@ const traceName = computed(() => {
   if (!id) return 'Édition caméra'
   return tracesStore.traces.find(t => t.id === id)?.name ?? 'Édition caméra'
 })
+
+/** Options du sélecteur d'algorithme. */
+const algorithmItems = [
+  { title: 'Frustum', value: 'frustum' },
+  { title: 'Simple', value: 'simple' },
+]
+
+function onAlgorithmChange(value: unknown) {
+  if (value === 'frustum' || value === 'simple') {
+    editionStore.setKeyframeAlgorithm(value)
+  }
+}
+
+function onGapChange(event: Event) {
+  const input = (event.target as HTMLInputElement)?.value
+  const n = input !== undefined && input !== '' ? Number(input) : NaN
+  if (!Number.isNaN(n)) editionStore.setMinKeyframeGapM(n)
+}
 </script>
 
 <style scoped>
@@ -56,4 +101,13 @@ const traceName = computed(() => {
   background-color: rgba(var(--v-theme-surface), 0.82);
   backdrop-filter: blur(4px);
 }
+
+/* Largeurs des champs Algorithme / Gap min. */
+.algo-select {
+  max-width: 150px;
+}
+.gap-field {
+  max-width: 130px;
+}
+
 </style>

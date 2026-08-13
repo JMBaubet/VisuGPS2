@@ -78,6 +78,19 @@ export const useEditionStore = defineStore('edition', () => {
   const currentTimeMs = ref(0)
 
   /**
+   * Algorithme de génération des keyframes : `'frustum'` (placement récursif
+   * par visibilité, spec §3.3) ou `'simple'` (échantillonnage régulier MVP).
+   * Défaut : frustum. Un changement force la régénération du jeu.
+   */
+  const keyframeAlgorithm = ref<'frustum' | 'simple'>('frustum')
+
+  /**
+   * Distance minimale entre keyframes (m) pour l'algorithme frustum
+   * (anti-surabondance). Bornes 200–5000, pas de 50. Défaut : 1000.
+   */
+  const minKeyframeGapM = ref(1000)
+
+  /**
    * Distance (m) du keyframe sélectionné pour l'édition (Composant B), ou
    * `null` si aucun keyframe n'est en cours d'édition. Alimenté par le clic
    * sur un tick RdV de la timeline ou par les boutons RdV précédent/suivant.
@@ -400,6 +413,29 @@ export const useEditionStore = defineStore('edition', () => {
     speed.value = s
   }
 
+  /**
+   * Change l'algorithme de génération des keyframes et force la régénération
+   * (EditionMap écoute ce changement). La sélection du keyframe est remise à
+   * zéro car le jeu de keyframes va être reconstruit.
+   */
+  function setKeyframeAlgorithm(algo: 'frustum' | 'simple') {
+    if (keyframeAlgorithm.value === algo) return
+    keyframeAlgorithm.value = algo
+    selectedKeyframeDistance.value = null
+  }
+
+  /**
+   * Change la distance minimale entre keyframes (m) pour l'algorithme frustum.
+   * Clampée à [200, 5000] et arrondie au pas de 50. Force la régénération.
+   */
+  function setMinKeyframeGapM(m: number) {
+    const clamped = Math.min(5000, Math.max(200, m))
+    const stepped = Math.round(clamped / 50) * 50
+    if (minKeyframeGapM.value === stepped) return
+    minKeyframeGapM.value = stepped
+    selectedKeyframeDistance.value = null
+  }
+
   /** Se positionne à une distance cumulée donnée (m), clampée à la trace. */
   function seekToDistance(distanceM: number) {
     const t = distanceM * MS_PER_METER
@@ -510,6 +546,9 @@ export const useEditionStore = defineStore('edition', () => {
     currentKeyframe,
     // État : édition keyframes
     selectedKeyframeDistance,
+    // État : algorithme de génération
+    keyframeAlgorithm,
+    minKeyframeGapM,
     // Actions : sélection / cadre
     selectTrace,
     clearSelection,
@@ -526,6 +565,8 @@ export const useEditionStore = defineStore('edition', () => {
     pause,
     togglePlay,
     setSpeed,
+    setKeyframeAlgorithm,
+    setMinKeyframeGapM,
     seekToDistance,
     tick,
     // Navigation entre points de RdV

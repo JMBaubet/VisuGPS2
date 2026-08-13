@@ -1,18 +1,23 @@
 # Roadmap — Vue d'édition caméra
 
-> État au 2026-08-07 (branche `EditonCamera2`)
+> État au 2026-08-13 (branche `EditonCamera2`)
 
 ## ✅ Déjà réalisé
 
 | Feature | Détail |
 |---------|--------|
-| **Génération de keyframes** (`keyframeGenerator.ts`) | Polyligne indexée par distance, échantillonnage régulier (1 km), types JSON figés, helpers purs d'interpolation |
+| **Génération de keyframes** (`keyframeGenerator.ts`) | Deux algorithmes au même format JSON figé : `simple` (échantillonnage régulier 1 km, MVP) et `frustum` (spec §3.3, cf. plus bas). Types JSON figés, helpers purs d'interpolation |
+| **Algorithme de frustum — Phase 1** (spec §3.3, `frustum.ts`) | Placement **récursif par visibilité** : la caméra vole la corde A→Z, le traceur suit la trace ; chaque point est testé par **projection frustum perspective** (FOV ~36,87°, marge 0.85) + **ligne de visée contre le relief**. Échec latéral → insertion d'un keyframe au point de **moindre courbure** ; échec par le relief → **réorientation oblique** du cap (30°/45°/60°, jamais à 90°) ; anti-surabondance par `minKeyframeGapM` ; affinage en re-validant les segments avec le cap **interpolé** réel de la lecture |
+| **Occlusion par le relief** | Grille terrain **fine** (`terrain-rgb` zoom 13 ≈ 7 m/px, décodée en canvas, pas ~100 m, exagérée ×1.5) sur l'emprise de la trace — `queryTerrainElevation` seul (~60 m/px au zoom de génération) ratait les buttes côtières. LOS tracée depuis la **position au sol de la caméra** (et non du centre de la corde). Module frustum indépendant de Mapbox via `TerrainSampler` |
+| **Lissage du cap entre RdV** | `interpolateCam` interpole le bearing **sur le cercle** (`lerpAngle`, chemin le plus court) — la caméra tourne en douceur d'un point de RdV au suivant, sans à-coup |
+| **Sélecteur d'algorithme + Gap min** | `EditionToolbar` : sélecteur Frustum / Simple et champ « Gap min (m) » (200–5000, pas 50) → store `keyframeAlgorithm` / `minKeyframeGapM` → **régénération + re-persistance automatiques** |
 | **Altitude dans les keyframes** | Propagation depuis les `tracePoints` backend → polyligne → keyframes → interpolation linéaire → HUD + tooltip |
 | **Polyligne réelle** | Le curseur avance le long de la trace (et non entre les keyframes), suit les virages |
 | **Carte satellite + terrain** (`EditionMap.vue`) | Style `standard-satellite`, DEM, pitch 60°, CircleLayer WebGL (synchronisé terrain) |
 | **Boucle de lecture rAF** | `requestAnimationFrame`, delta réel, `tick()`, pause auto en fin de course |
 | **Contrôles de lecture** — Composant A (`PlaybackControls.vue`) | Play/Pause, vitesse (0.5×/1×/2×/4×), distance parcourue |
 | **Graphe SVG d'avancement** — §4.6 (`ProgressGraph.vue`) | Timeline proportionnelle (3px/100m), 3 zones (RdV / avancement / graduation), curseur rouge, repères 10km, clic→seek, tooltip distance+altitude, auto-scroll fluide (scroll DOM + détection par valeur) |
+| **Composant B — Édition fine des keyframes** (`CameraEditor.vue`) | Édition d'un keyframe sélectionné : switch **Cible**, sliders **Pitch / Zoom** (valeurs défaut 60° / 16.0, double-clic pour réinitialiser), **compas** (réglage du bearing), **Undo / Supprimer / Sauvegarder**, km 0 non supprimable. Alimenté par `currentKeyframe` + actions du store édition (`updateKeyframe`, `addKeyframe`, `removeKeyframe`, `saveKeyframes`) |
 | **HUD télémétrie** — Composant C (`TelemetryHud.vue`) | Cam (Zoom/Pitch/Bearing/Lng/Lat) + Traceur (altitude interpolée) + Relation (distance/cap) |
 | **Cadre ViewPort 16:9** (`ViewportFrame.vue`) | Overlay CSS, rectangle maximal, masque sombre |
 | **Persistance des keyframes** (`keyframesStore`) | Sauvegarde/chargement/suppression JSON sur disque (écriture atomique) |
@@ -21,33 +26,19 @@
 
 ## 🔲 Reste à faire
 
-### 1. Composant B — Édition fine des keyframes
+### 1. Frustum — Phase 2 (relief complet & paramètres dynamiques)
 
-**Aucune spec détaillée dans le repo** (la spec externe §4.4 n'a pas été enregistrée).
+L'algorithme de frustum Phase 1 est fonctionnel (visibilité + occlusion relief + réorientation oblique). Améliorations envisagées ensuite :
+- **Zoom / pitch dynamiques** : zoom out dans les virages serrés, zoom in dans les lignes droites (zoom/pitch fixes 16/60° en Phase 1)
+- **Gestion de la vitesse** : ralentir dans les sections complexes, accélérer dans les sections simples
+- **Anticipation des virages** : la caméra « regarde vers l'avant » et ajuste le cadrage aux virages à venir
 
-D'après les références dans le code et la doc :
-- Ajouter/supprimer/déplacer des keyframes sur la timeline
-- Édition des propriétés d'un keyframe individuel (position caméra, zoom, pitch, bearing, temps/distance)
-- Interaction avec le `ProgressGraph` (drag de ticks, insertion par clic long, suppression par menu contextuel ?)
-- Panneau de propriétés latéral ou popup pour éditer un keyframe sélectionné
-- Synchronisation avec le store edition et la persistance JSON
+### 2. Composant B — Éditions complémentaires
 
-**Questions à clarifier avant de commencer :**
-- Quel UX exact ? (drag sur la timeline, panneau dédié, les deux ?)
-- Quelle granularité d'édition ? (position only, ou cam state complet ?)
-- Annulation/restauration possible ? (undo/redo)
-
-### 2. Algorithme de frustum — Phase 1 (spec §3.3)
-
-**Aucune spec détaillée dans le repo non plus.** L'algorithme MVP actuel est un suivi fidèle de la trace. L'algorithme de frustum remplacerait :
-- Anticipation des virages : la caméra « regarde vers l'avant » et ajuste le zoom/pitch pour prendre en compte les virages à venir
-- Ajustement dynamique zoom/pitch : zoom out dans les virages serrés, zoom in dans les lignes droites
-- Gestion de la vitesse : ralentir dans les sections complexes, accélérer dans les sections simples
-
-Le code est déjà conçu pour être **remplaçable sans impacter le reste** :
-- `keyframeGenerator.ts` est un module isolé (pas de dépendance UI)
-- Les stores, la carte et le HUD consomment le `KeyframeSet` généré — ils n'ont pas à changer
-- `EXTENDING.md` et `CONVENTIONS.md` documentent cette remplaçabilité
+Le CameraEditor couvre l'édition d'un keyframe (pitch/zoom/bearing). Reste à étudier :
+- **Manipulation sur la timeline** : drag des ticks du ProgressGraph, insertion par clic long, suppression par menu contextuel
+- **Panneau de propriétés** latéral ou popup pour un keyframe sélectionné
+- **Annulation / restauration** multi-étapes (undo/redo au-delà de l'annulation simple actuelle)
 
 ## ⚡ Améliorations possibles (non planifiées)
 
@@ -61,4 +52,4 @@ Le code est déjà conçu pour être **remplaçable sans impacter le reste** :
 
 ---
 
-**Dernière mise à jour** : 2026-08-07
+**Dernière mise à jour** : 2026-08-13

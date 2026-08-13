@@ -805,7 +805,7 @@ export function haversineMeters(
 
 Un algorithme est un module de **logique métier isolée, sans dépendance UI** (ni Vue, ni Vuetify, ni Mapbox) ni d'état réactif. Contrairement aux utilitaires (petites fonctions pures), un algorithme est un module à part entière qui peut être **repensé ou remplacé sans impacter le reste de l'application** (spec §3.2). Il reçoit des données brutes en paramètres et produit un résultat typé.
 
-Exemple : `src/algorithms/keyframeGenerator.ts` génère un jeu de keyframes caméra à partir d'une Feature LineString. Il a été conçu pour être remplaçable : l'algorithme actuel (échantillonnage régulier) pourra céder la place à l'algorithme de frustum (spec §3.3) sans que les stores, la carte ou le HUD n'aient à changer.
+Exemple : `src/algorithms/keyframeGenerator.ts` génère un jeu de keyframes caméra à partir d'une Feature LineString. Il est conçu pour être remplaçable : l'algorithme **`simple`** (échantillonnage régulier) et l'algorithme **`frustum`** (spec §3.3, `src/algorithms/frustum.ts` — placement récursif par visibilité) coexistent et produisent le même format de sortie ; les stores, la carte ou le HUD n'ont pas à changer quand on en ajoute un nouveau. Les dépendances externes (comme l'échantillonnage du relief Mapbox) sont injectées via des types porteurs (`TerrainSampler`), ce qui maintient le module pur (spec §3.2).
 
 ### Étape 1 : Créer le module
 

@@ -19,6 +19,7 @@
  */
 
 import { bearing, haversineMeters } from '../utils/geo'
+import { generateFrustumKeyframes, type TerrainSampler } from './frustum'
 
 // --- Types (miroir du format JSON figé, spec §3.4) ---
 
@@ -78,24 +79,28 @@ const REFERENCE_VIEWPORT = { width: 1920, height: 1080 }
 // --- Génération ---
 
 /**
- * Génère un jeu de keyframes par échantillonnage régulier le long d'une
- * trace LineString.
+ * Génère un jeu de keyframes le long d'une trace LineString.
  *
- * Principe :
- *   - calcul de la distance cumulée point à point (Haversine) ;
- *   - échantillonnage d'un keyframe tous les `sampleStepM` (interpolation
- *     exacte de la position sur la polyligne à la distance cible) ;
- *   - la caméra est placée sur la trace (cam = traceur), avec le cap
- *     orienté vers le keyframe suivant (le dernier reprend le cap précédent).
+ * Deux algorithmes disponibles :
+ *   - `'simple'` (MVP) : échantillonnage régulier tous les `sampleStepM`, la
+ *     caméra est placée sur la trace (cam = traceur), cap vers le keyframe
+ *     suivant. Le marqueur reste au centre aux keyframes.
+ *   - `'frustum'` (spec §3.3) : placement récursif par visibilité — la caméra
+ *     vole la corde A→Z, le traceur suit la trace ; on insère des keyframes
+ *     aux points de moindre courbure tant que des points sont hors champ ou
+ *     masqués par le relief, avec réorientation oblique face au versant.
+ *     `minKeyframeGapM` borne la densité (anti-surabondance).
  *
- * Algorithme volontairement simple (MVP) : il garantit que la caméra suit
- * fidèlement la trace pendant la lecture, le marqueur restant au centre
- * aux keyframes. Il sera remplacé à terme par l'algorithme de frustum
- * (spec §3.3) sans impacter le reste de l'application.
+ * Format de sortie identique (JSON figé spec §3.4) pour les deux.
  *
- * @param traceId     - Identifiant de la trace (reporté dans le jeu).
- * @param feature     - Feature GeoJSON LineString `[lon, lat]` de la trace.
- * @param sampleStepM - Pas d'échantillonnage en mètres (défaut 250 m).
+ * @param traceId       - Identifiant de la trace (reporté dans le jeu).
+ * @param feature       - Feature GeoJSON LineString `[lon, lat]` de la trace.
+ * @param sampleStepM   - Pas d'échantillonnage en mètres (algorithme simple).
+ * @param tracePoints   - Points riches backend (altitude) — priorité si fournis.
+ * @param algorithm     - Algorithme de génération (`'frustum'` | `'simple'`).
+ * @param minKeyframeGapM - Distance minimale entre keyframes (frustum).
+ * @param terrainSampler - Échantillonneur d'altitude terrain (DEM) pour
+ *                         l'occlusion par le relief (algorithme frustum).
  * @returns Le jeu de keyframes, ou `null` si la trace est vide.
  */
 export function generateKeyframes(
@@ -103,7 +108,16 @@ export function generateKeyframes(
   feature: GeoJSON.Feature,
   sampleStepM: number = KEYFRAME_STEP_M,
   tracePoints?: { lat: number; lon: number; alt: number | null; distance_m: number }[] | null,
+  algorithm: 'frustum' | 'simple' = 'frustum',
+  minKeyframeGapM: number = 1000,
+  terrainSampler?: TerrainSampler | null,
 ): KeyframeSet | null {
+  // Algorithme frustum : placement récursif par visibilité.
+  if (algorithm === 'frustum') {
+    return generateFrustumKeyframes(traceId, feature, REFERENCE_VIEWPORT, minKeyframeGapM, tracePoints, terrainSampler)
+  }
+
+  // Algorithme simple (MVP) : échantillonnage régulier.
   // 1. Construire la polyligne indexée par distance cumulée.
   //    Si les points riches (altitude) sont fournis, les utiliser pour
   //    construire une polyligne avec altitude. Sinon, fallback sur la
@@ -214,8 +228,9 @@ export function findSegment(
 /**
  * Interpole l'état de la caméra entre deux keyframes.
  *
- * Le bearing est interpolé sur le cercle (gestion du wrap 360°) pour
- * éviter une rotation complète quand le cap passe de 359° à 1°.
+ * Le bearing est interpolé linéairement entre les deux keyframes (chemin le
+ * plus court, gestion du wrap 360°) : la caméra tourne **en douceur** d'un
+ * point de RdV au suivant, sans à-coup.
  *
  * @param segment - Segment renvoyé par `findSegment`.
  */
@@ -408,6 +423,7 @@ function pointAtDistance(
     altitude,
   }
 }
+
 
 /** Interpolation linéaire d'angles (degrés) avec gestion du wrap 360°. */
 function lerpAngle(a: number, b: number, t: number): number {
