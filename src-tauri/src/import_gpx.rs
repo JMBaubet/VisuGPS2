@@ -143,7 +143,7 @@ fn get_traces_path(mode_dir: &Path) -> PathBuf {
 }
 
 /// Retourne le dossier keyframes/ à l'intérieur du mode actif.
-/// Contient les jeux de keyframes (un fichier `{id}.json` par trace).
+/// Contient les jeux de keyframes (un fichier `{id}_{ratio}.json` par trace).
 fn get_keyframes_dir(mode_dir: &Path) -> Result<PathBuf, String> {
     let dir = mode_dir.join("keyframes");
     std::fs::create_dir_all(&dir)
@@ -151,9 +151,26 @@ fn get_keyframes_dir(mode_dir: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Retourne le chemin du fichier keyframes d'une trace, d'après son UUID.
-fn get_keyframes_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
-    mode_dir.join("keyframes").join(format!("{}.json", trace_id))
+/// Nom de fichier keyframes d'une trace pour un ratio d'écran donné.
+///
+/// Nommage **explicite par ratio** : `{trace_id}_169.json` (16:9) et
+/// `{trace_id}_43.json` (4:3). Tout ratio inconnu retombe sur le nom non
+/// suffixé (`{trace_id}.json`), qui sert aussi de filet de sécurité.
+fn keyframes_file_name(trace_id: &str, viewport_aspect: &str) -> String {
+    let stem = match viewport_aspect {
+        "16:9" => format!("{trace_id}_169"),
+        "4:3" => format!("{trace_id}_43"),
+        _ => trace_id.to_string(),
+    };
+    format!("{stem}.json")
+}
+
+/// Retourne le chemin du fichier keyframes d'une trace, d'après son UUID et le
+/// ratio d'écran (`16:9` ou `4:3`) — un fichier distinct par ratio.
+fn get_keyframes_path(mode_dir: &Path, trace_id: &str, viewport_aspect: &str) -> PathBuf {
+    mode_dir
+        .join("keyframes")
+        .join(keyframes_file_name(trace_id, viewport_aspect))
 }
 
 // ---------------------------------------------------------------------------
@@ -828,10 +845,20 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
             .map_err(|e| format!("Suppression du fichier GeoJSON : {}", e))?;
     }
 
-    // 2bis) Supprimer le fichier keyframes associé (tolérant si absent)
-    let keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned);
+    // 2bis) Supprimer les fichiers keyframes associés (tolérant si absent) :
+    //       un fichier par ratio d'écran, plus l'ancien nom non suffixé
+    //       (versions antérieures au nommage par ratio).
+    let keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned, "16:9");
     if keyframes_file.exists() {
         let _ = std::fs::remove_file(&keyframes_file);
+    }
+    let keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned, "4:3");
+    if keyframes_file.exists() {
+        let _ = std::fs::remove_file(&keyframes_file);
+    }
+    let legacy_keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned, "");
+    if legacy_keyframes_file.exists() {
+        let _ = std::fs::remove_file(&legacy_keyframes_file);
     }
 
     // 3) Retirer l'entrée du registre en mémoire
@@ -1030,17 +1057,18 @@ pub async fn get_trace_points(
 
 /// Sauvegarde un jeu de keyframes (sérialisé en JSON par le frontend).
 ///
-/// Le JSON est écrit dans `{mode_dir}/keyframes/{trace_id}.json` avec une
+/// Le JSON est écrit dans `{mode_dir}/keyframes/{trace_id}_{ratio}.json` avec une
 /// écriture atomique (fichier tmp + rename), cohérente avec `save_registry`.
 #[tauri::command]
 pub async fn save_keyframes(
     app: tauri::AppHandle,
     trace_id: String,
+    viewport_aspect: String,
     keyframes_json: serde_json::Value,
 ) -> Result<(), String> {
     let mode_dir = get_mode_dir(&app)?;
     let _dir = get_keyframes_dir(&mode_dir)?; // crée le dossier si nécessaire
-    let path = get_keyframes_path(&mode_dir, &trace_id);
+    let path = get_keyframes_path(&mode_dir, &trace_id, &viewport_aspect);
 
     let tmp_path = path.with_extension("json.tmp");
     let content = serde_json::to_string_pretty(&keyframes_json)
@@ -1053,7 +1081,7 @@ pub async fn save_keyframes(
     Ok(())
 }
 
-/// Charge les keyframes persistés d'une trace.
+/// Charge les keyframes persistés d'une trace pour un ratio d'écran donné.
 ///
 /// Retourne `Some(serde_json::Value)` si le fichier existe, `None` sinon.
 /// Le frontend est responsable du typage (cast vers `KeyframeSet`).
@@ -1061,9 +1089,10 @@ pub async fn save_keyframes(
 pub async fn get_keyframes(
     app: tauri::AppHandle,
     trace_id: String,
+    viewport_aspect: String,
 ) -> Result<Option<serde_json::Value>, String> {
     let mode_dir = get_mode_dir(&app)?;
-    let path = get_keyframes_path(&mode_dir, &trace_id);
+    let path = get_keyframes_path(&mode_dir, &trace_id, &viewport_aspect);
 
     if !path.exists() {
         return Ok(None);
@@ -1077,14 +1106,16 @@ pub async fn get_keyframes(
     Ok(Some(value))
 }
 
-/// Supprime le fichier keyframes d'une trace (tolérant si absent).
+/// Supprime le fichier keyframes d'une trace pour un ratio donné (tolérant si
+/// absent).
 #[tauri::command]
 pub async fn delete_keyframes(
     app: tauri::AppHandle,
     trace_id: String,
+    viewport_aspect: String,
 ) -> Result<(), String> {
     let mode_dir = get_mode_dir(&app)?;
-    let path = get_keyframes_path(&mode_dir, &trace_id);
+    let path = get_keyframes_path(&mode_dir, &trace_id, &viewport_aspect);
 
     if path.exists() {
         std::fs::remove_file(&path)

@@ -84,13 +84,13 @@ pub struct ModeInfo {
 |---|---|---|
 | `import_gpx_file` | `async (app) -> Result<TraceMetadata, String>` | Sélecteur natif, parse, hash, copie, stats, màj registre. |
 | `get_traces` | `async (app) -> Result<Vec<TraceMetadata>, String>` | Liste les traces du mode actif depuis `traces.json`. |
-| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les keyframes + l'entrée du registre (écriture atomique). |
+| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les **deux** fichiers keyframes (`_169`/`_43`, + l'ancien non suffixé) + l'entrée du registre (écriture atomique). |
 | `update_trace` | `async (app, trace_id, favorite: Option<bool>, is_displayed: Option<bool>) -> Result<(), String>` | Mise à jour partielle (PATCH) d'une trace. Seuls les champs `Some(...)` sont modifiés. |
 | `get_trace_geometry` | `async (app, trace_id) -> Result<TraceGeometry, String>` | Géométrie GeoJSON d'une trace (lu depuis le cache, ou régénéré depuis le GPX en cas de migration). |
 | `get_trace_points` | `async (app, trace_id) -> Result<TracePoints, String>` | Points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX original à la demande). |
-| `save_keyframes` | `async (app, trace_id, keyframes_json: Value) -> Result<(), String>` | Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}.json` (écriture atomique tmp + rename). |
-| `get_keyframes` | `async (app, trace_id) -> Result<Option<Value>, String>` | Charge les keyframes persistés d'une trace. Retourne `None` si le fichier est absent. |
-| `delete_keyframes` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier `keyframes/{trace_id}.json` (tolérant si absent). |
+| `save_keyframes` | `async (app, trace_id, viewport_aspect: String, keyframes_json: Value) -> Result<(), String>` | Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}_{ratio}.json` (`_169` pour `"16:9"`, `_43` pour `"4:3"` ; écriture atomique tmp + rename). |
+| `get_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<Option<Value>, String>` | Charge les keyframes persistés d'une trace **pour un ratio donné** (`"16:9"`/`"4:3"`). Retourne `None` si le fichier est absent. |
+| `delete_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<(), String>` | Supprime le fichier `keyframes/{trace_id}_{ratio}.json` d'un ratio donné (tolérant si absent). |
 
 **Types `TracePoint` et `TracePoints`** (miroir TS `TracePoint` dans `src/stores/traces.ts`) :
 ```rust
@@ -157,4 +157,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-08-05
+**Dernière mise à jour** : 2026-08-13

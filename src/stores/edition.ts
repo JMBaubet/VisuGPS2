@@ -4,7 +4,8 @@
  * Pattern Setup Store (cf. app.ts, traces.ts).
  *
  * Porte l'état de la phase d'édition (Phase 2 de la spec) :
- *   - trace sélectionnée et visibilité du cadre ViewPort 16:9 (MVP initial) ;
+ *   - trace sélectionnée, ratio d'écran de destination (16:9 / 4:3) et
+ *     visibilité du cadre ViewPort ;
  *   - lecture (playback) : jeu de keyframes, lecture/pause, vitesse, temps
  *     courant, et getters d'interpolation caméra/marqueur consommés par la
  *     boucle d'animation (`EditionMap`) et le HUD (`TelemetryHud`).
@@ -21,6 +22,7 @@ import {
   type CamState,
   type TraceurPoint,
   type PolyVertex,
+  type ViewportAspect,
   findSegment,
   interpolateCam,
   buildTracePolyline,
@@ -46,11 +48,19 @@ export const useEditionStore = defineStore('edition', () => {
   const selectedTraceId = ref<string | null>(null)
 
   /**
-   * Visibilité du cadre ViewPort 16:9 (overlay CSS pur).
+   * Visibilité du cadre ViewPort (overlay CSS pur).
    * Le cadre représente la zone de rendu finale (export vidéo) ; il est
-   * purement informatif et ne modifie pas le rendu MapBox.
+   * purement informatif et ne modifie pas le rendu MapBox. Affiché par défaut
+   * (16:9).
    */
-  const showViewportFrame = ref(false)
+  const showViewportFrame = ref(true)
+
+  /**
+   * Ratio d'écran de destination : détermine le fichier keyframes exploité
+   * (`{trace_id}_169.json` / `{trace_id}_43.json`) **et** le cadre ViewPort
+   * affiché. Défaut : 16:9. Un changement charge/génère le jeu du ratio choisi.
+   */
+  const viewportAspect = ref<ViewportAspect>('16:9')
 
   // --- Lecture (playback) ---
 
@@ -227,6 +237,19 @@ export const useEditionStore = defineStore('edition', () => {
 
   function toggleViewportFrame() {
     showViewportFrame.value = !showViewportFrame.value
+  }
+
+  /**
+   * Change le ratio d'écran de destination et **affiche le cadre ViewPort**
+   * (choisir un ratio, c'est vouloir le voir). La sélection du keyframe en
+   * cours est remise à zéro car le jeu de keyframes va être rechargé/généré
+   * pour le nouveau ratio (EditionMap écoute ce changement).
+   */
+  function setViewportAspect(aspect: ViewportAspect) {
+    if (viewportAspect.value === aspect) return
+    viewportAspect.value = aspect
+    showViewportFrame.value = true
+    selectedKeyframeDistance.value = null
   }
 
   // --- Actions : lecture ---
@@ -523,6 +546,7 @@ export const useEditionStore = defineStore('edition', () => {
     // État : sélection / cadre
     selectedTraceId,
     showViewportFrame,
+    viewportAspect,
     // État : lecture
     keyframeSet,
     isPlaying,
@@ -553,6 +577,7 @@ export const useEditionStore = defineStore('edition', () => {
     selectTrace,
     clearSelection,
     toggleViewportFrame,
+    setViewportAspect,
     // Actions : édition keyframes
     selectKeyframe,
     updateKeyframe,

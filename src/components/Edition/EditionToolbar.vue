@@ -38,15 +38,46 @@
       @change="onGapChange"
     />
 
-    <!-- Bascule du cadre ViewPort 16:9 -->
-    <v-btn
-      icon
-      :color="editionStore.showViewportFrame ? 'primary' : ''"
-      title="Afficher / masquer le cadre ViewPort 16:9"
-      @click="editionStore.toggleViewportFrame()"
+    <!-- Cadre ViewPort : sélection du ratio d'écran + affichage/masquage -->
+    <v-menu
+      v-model="viewportMenuOpen"
+      location="bottom end"
+      :close-on-content-click="true"
     >
-      <v-icon>{{ editionStore.showViewportFrame ? 'mdi-monitor' : 'mdi-monitor-off' }}</v-icon>
-    </v-btn>
+      <template #activator="{ props }">
+        <v-btn
+          icon
+          v-bind="props"
+          :color="editionStore.showViewportFrame ? 'primary' : ''"
+          :title="
+            editionStore.showViewportFrame
+              ? `Cadre ViewPort · ${editionStore.viewportAspect}`
+              : 'Cadre ViewPort masqué'
+          "
+        >
+          <v-icon>{{ editionStore.showViewportFrame ? 'mdi-monitor' : 'mdi-monitor-off' }}</v-icon>
+        </v-btn>
+      </template>
+      <v-list density="compact" class="viewport-menu">
+        <v-list-item
+          v-for="item in aspectItems"
+          :key="item.value"
+          :active="editionStore.viewportAspect === item.value"
+          @click="onAspectSelect(item.value)"
+        >
+          <v-list-item-title>{{ item.title }}</v-list-item-title>
+          <v-list-item-append-icon v-if="editionStore.viewportAspect === item.value">
+            mdi-check
+          </v-list-item-append-icon>
+        </v-list-item>
+        <v-divider />
+        <v-list-item @click="editionStore.toggleViewportFrame()">
+          <v-list-item-title>
+            {{ editionStore.showViewportFrame ? 'Masquer le cadre' : 'Afficher le cadre' }}
+          </v-list-item-title>
+        </v-list-item>
+      </v-list>
+    </v-menu>
   </v-app-bar>
 </template>
 
@@ -60,11 +91,17 @@
  *   - le sélecteur de l'algorithme de génération des keyframes
  *     (`'frustum'` — placement par visibilité — ou `'simple'` — MVP)
  *   - la distance minimale entre keyframes (frustum, 200–5000 m, pas 50)
- *   - un toggle d'affichage du cadre ViewPort 16:9 (overlay CSS)
+ *   - le menu **ViewPort** : sélection du ratio d'écran (16:9 / 4:3 — chaque
+ *     ratio exploite son propre fichier keyframes) et affichage/masquage du
+ *     cadre (overlay CSS)
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useEditionStore } from '../../stores/edition'
 import { useTracesStore } from '../../stores/traces'
+import {
+  VIEWPORTS_BY_ASPECT,
+  type ViewportAspect,
+} from '../../algorithms/keyframeGenerator'
 
 const editionStore = useEditionStore()
 const tracesStore = useTracesStore()
@@ -93,6 +130,23 @@ function onGapChange(event: Event) {
   const n = input !== undefined && input !== '' ? Number(input) : NaN
   if (!Number.isNaN(n)) editionStore.setMinKeyframeGapM(n)
 }
+
+// --- Menu ViewPort (ratio d'écran + visibilité du cadre) ---
+
+/** Ouverture du menu ViewPort. */
+const viewportMenuOpen = ref(false)
+
+/** Ratios proposés, avec leurs dimensions de référence. */
+const aspectItems = (['16:9', '4:3'] as ViewportAspect[]).map(a => ({
+  value: a,
+  title: `ViewPort ${a} · ${VIEWPORTS_BY_ASPECT[a].width}×${VIEWPORTS_BY_ASPECT[a].height}`,
+}))
+
+/** Sélectionne un ratio : affiche son cadre et exploite son fichier keyframes. */
+function onAspectSelect(aspect: ViewportAspect) {
+  viewportMenuOpen.value = false
+  editionStore.setViewportAspect(aspect)
+}
 </script>
 
 <style scoped>
@@ -108,6 +162,11 @@ function onGapChange(event: Event) {
 }
 .gap-field {
   max-width: 130px;
+}
+
+/* Menu ViewPort (sélection du ratio d'écran). */
+.viewport-menu {
+  min-width: 200px;
 }
 
 </style>

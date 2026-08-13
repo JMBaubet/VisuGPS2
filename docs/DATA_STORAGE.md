@@ -34,7 +34,8 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │   │   ├── {uuid}.geojson
 │   │   └── ...
 │   └── keyframes/               # Keyframes persistés (vue d'édition caméra)
-│       ├── {uuid}.json
+│       ├── {uuid}_169.json      #   ratio 16:9
+│       ├── {uuid}_43.json       #   ratio 4:3
 │       └── ...
 │
 └── EVAL_xxx/                    # Un dossier par mode d'évaluation créé
@@ -43,7 +44,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
     ├── traces.json
     ├── gpx/*.gpx
     ├── geojson/{uuid}.geojson
-    └── keyframes/{uuid}.json
+    └── keyframes/{uuid}_169.json / {uuid}_43.json
 ```
 
 ## Détail des fichiers
@@ -119,16 +120,20 @@ Le fichier est nommé d'après l'UUID de la trace (`{id}.geojson`).
 `properties.id` contient l'UUID pour la liaison avec `TraceMetadata`.
 Écriture atomique (tmp + rename).
 
-### `keyframes/{uuid}.json` — Keyframes persistés (édition caméra)
+### `keyframes/{uuid}_169.json` / `{uuid}_43.json` — Keyframes persistés (édition caméra)
 
 Jeux de keyframes sérialisés en JSON pour la vue d'édition caméra.
-Un fichier par trace, nommé d'après l'UUID de la trace (`{trace_id}.json`).
+**Un fichier par trace et par ratio d'écran** : `{trace_id}_169.json` (16:9) et
+`{trace_id}_43.json` (4:3) — chaque ratio dispose de son propre cadrage
+(les viewports de référence sont 1920×1080 et 1440×1080, même hauteur, seul le
+champ horizontal diffère). Le ratio d'un jeu sauvegardé est déduit de son champ
+`viewport` côté frontend (`saveKeyframes`).
 Le contenu est un `KeyframeSet` (type TS, sérialisé par le frontend) :
 `trace_id`, `total_distance_m`, `total_duration_ms`, `viewport`, `sample_rate_m`, `keyframes[]`.
 Le backend traite le JSON de manière transparente (`serde_json::Value`), sans validation structurelle côté Rust.
 Écriture atomique (tmp + rename). Le dossier `keyframes/` est créé automatiquement à la première sauvegarde.
 
-> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), le fichier `keyframes/{uuid}.json` associé est supprimé en même temps que le `.gpx` et le `.geojson`.
+> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), les deux fichiers keyframes (`{uuid}_169.json` et `{uuid}_43.json`, plus l'ancien `{uuid}.json` non suffixé des versions antérieures) sont supprimés en même temps que le `.gpx` et le `.geojson`.
 
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
@@ -152,7 +157,7 @@ get_gpx_dir(mode_dir)      → {mode_dir}/gpx                   // créé si abs
 get_geojson_dir(mode_dir)  → {mode_dir}/geojson               // créé si absent
 get_geojson_path(mode_dir, trace_id) → {mode_dir}/geojson/{trace_id}.geojson
 get_keyframes_dir(mode_dir) → {mode_dir}/keyframes             // créé si absent
-get_keyframes_path(mode_dir, trace_id) → {mode_dir}/keyframes/{trace_id}.json
+get_keyframes_path(mode_dir, trace_id, viewport_aspect) → {mode_dir}/keyframes/{trace_id}_169.json | {trace_id}_43.json
 get_traces_path(mode_dir)  → {mode_dir}/traces.json
 ```
 
@@ -187,4 +192,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-08-05
+**Dernière mise à jour** : 2026-08-13

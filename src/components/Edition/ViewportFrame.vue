@@ -1,22 +1,24 @@
 <template>
   <div v-if="editionStore.showViewportFrame" ref="overlay" class="viewport-overlay">
     <!--
-      Rectangle 16:9 centré. Sa box-shadow gigantesque (spread 100vmax) crée
-      le masque sombre autour de la zone de rendu, sans avoir à gérer quatre
-      bandeaux. pointer-events: none pour ne pas bloquer la carte en dessous.
+      Rectangle aux dimensions du ratio sélectionné (16:9 / 4:3), centré.
+      Sa box-shadow gigantesque (spread 100vmax) crée le masque sombre autour
+      de la zone de rendu, sans avoir à gérer quatre bandeaux.
+      pointer-events: none pour ne pas bloquer la carte en dessous.
     -->
     <div class="viewport-rect" :style="rectStyle">
-      <span class="viewport-label">ViewPort · 16:9 · 1920×1080</span>
+      <span class="viewport-label">{{ viewportLabel }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * Cadre ViewPort 16:9 (overlay CSS pur).
+ * Cadre ViewPort (overlay CSS pur) — ratio 16:9 ou 4:3 selon la sélection.
  *
  * Représente la zone de rendu finale de l'export vidéo (spec §4.2) :
- *   - rectangle au ratio 16/9, le plus grand possible, centré
+ *   - rectangle au ratio sélectionné (`editionStore.viewportAspect`), le plus
+ *     grand possible, centré
  *   - calque semi-transparent noir (~70 %) à l'extérieur du rectangle
  *   - trait blanc fin (2 px) sur les bords
  *
@@ -26,12 +28,13 @@
  * manipulation de la carte.
  *
  * Le rectangle est calculé en JS à partir des dimensions réelles du
- * conteneur (ResizeObserver) : on détermine le plus grand rectangle de
- * ratio 16/9 tenant dans la zone disponible, ce qui gère correctement les
+ * conteneur (ResizeObserver) : on détermine le plus grand rectangle du ratio
+ * sélectionné tenant dans la zone disponible, ce qui gère correctement les
  * ratios d'écran très larges ou très étroits.
  */
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useEditionStore } from '../../stores/edition'
+import { VIEWPORTS_BY_ASPECT } from '../../algorithms/keyframeGenerator'
 
 const editionStore = useEditionStore()
 
@@ -41,29 +44,41 @@ const containerHeight = ref(0)
 
 let resizeObserver: ResizeObserver | null = null
 
+/** Ratio d'écran sélectionné (16:9 ou 4:3) — pilote le cadre affiché. */
+const targetRatio = computed(() => {
+  const vp = VIEWPORTS_BY_ASPECT[editionStore.viewportAspect]
+  return vp.width / vp.height
+})
+
+/** Libellé du cadre (ratio + dimensions de référence). */
+const viewportLabel = computed(() => {
+  const vp = VIEWPORTS_BY_ASPECT[editionStore.viewportAspect]
+  return `ViewPort · ${editionStore.viewportAspect} · ${vp.width}×${vp.height}`
+})
+
 /**
- * Dimensions du rectangle 16:9 le plus grand tenant dans le conteneur.
- * Si le conteneur est plus « large » que 16:9, on est limité par la
- * hauteur ; sinon par la largeur.
+ * Dimensions du rectangle (ratio sélectionné) le plus grand tenant dans le
+ * conteneur. Si le conteneur est plus « large » que le ratio, on est limité par
+ * la hauteur ; sinon par la largeur.
  */
 const rectStyle = computed(() => {
   const w = containerWidth.value
   const h = containerHeight.value
   if (!w || !h) return { width: '0px', height: '0px' }
 
-  const targetRatio = 16 / 9
+  const ratio = targetRatio.value
   const containerRatio = w / h
 
   let rectW: number
   let rectH: number
-  if (containerRatio > targetRatio) {
+  if (containerRatio > ratio) {
     // Limité par la hauteur.
     rectH = h
-    rectW = rectH * targetRatio
+    rectW = rectH * ratio
   } else {
     // Limité par la largeur.
     rectW = w
-    rectH = rectW / targetRatio
+    rectH = rectW / ratio
   }
 
   return {

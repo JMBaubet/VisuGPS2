@@ -73,8 +73,22 @@ export const MS_PER_METER = 4
 export const DEFAULT_CAM_ZOOM = 16
 export const DEFAULT_CAM_PITCH = 60
 
-/** Viewport de référence pour l'export vidéo (spec §3.4). */
-const REFERENCE_VIEWPORT = { width: 1920, height: 1080 }
+/** Ratio de l'écran de destination du jeu de keyframes (le FOV horizontal de
+ * la caméra Mapbox en dépend, le FOV vertical étant fixe). */
+export type ViewportAspect = '16:9' | '4:3'
+
+/**
+ * Viewports de référence pour l'export vidéo par ratio (spec §3.4).
+ *
+ * Même hauteur (1080) pour les deux ratios : le modèle caméra (focale
+ * verticale, distance) est donc identique — seul le **champ horizontal**
+ * change, ce qui est exactement le paramètre du ratio. Le fichier keyframes
+ * d'une trace est distinct par ratio (`{trace_id}_169.json` / `{trace_id}_43.json`).
+ */
+export const VIEWPORTS_BY_ASPECT: Record<ViewportAspect, { width: number; height: number }> = {
+  '16:9': { width: 1920, height: 1080 },
+  '4:3': { width: 1440, height: 1080 },
+}
 
 // --- Génération ---
 
@@ -101,6 +115,8 @@ const REFERENCE_VIEWPORT = { width: 1920, height: 1080 }
  * @param minKeyframeGapM - Distance minimale entre keyframes (frustum).
  * @param terrainSampler - Échantillonneur d'altitude terrain (DEM) pour
  *                         l'occlusion par le relief (algorithme frustum).
+ * @param viewport       - Viewport de référence pour la visibilité et le champ
+ *                         `viewport` du JSON (spec §3.4). Défaut : 16:9.
  * @returns Le jeu de keyframes, ou `null` si la trace est vide.
  */
 export function generateKeyframes(
@@ -111,10 +127,11 @@ export function generateKeyframes(
   algorithm: 'frustum' | 'simple' = 'frustum',
   minKeyframeGapM: number = 1000,
   terrainSampler?: TerrainSampler | null,
+  viewport: { width: number; height: number } = VIEWPORTS_BY_ASPECT['16:9'],
 ): KeyframeSet | null {
   // Algorithme frustum : placement récursif par visibilité.
   if (algorithm === 'frustum') {
-    return generateFrustumKeyframes(traceId, feature, REFERENCE_VIEWPORT, minKeyframeGapM, tracePoints, terrainSampler)
+    return generateFrustumKeyframes(traceId, feature, viewport, minKeyframeGapM, tracePoints, terrainSampler)
   }
 
   // Algorithme simple (MVP) : échantillonnage régulier.
@@ -180,7 +197,7 @@ export function generateKeyframes(
     trace_id: traceId,
     total_distance_m: totalDistance,
     total_duration_ms: totalDistance * MS_PER_METER,
-    viewport: { ...REFERENCE_VIEWPORT },
+    viewport: { ...viewport },
     sample_rate_m: sampleStepM,
     keyframes,
   }

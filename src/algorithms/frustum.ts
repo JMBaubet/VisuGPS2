@@ -515,7 +515,8 @@ function resolveSegment(
  *
  * @param traceId        - Identifiant de la trace (reporté dans le jeu).
  * @param feature        - Feature GeoJSON LineString de la trace.
- * @param viewport       - Viewport de référence pour la visibilité (1920×1080).
+ * @param viewport       - Viewport de référence pour la visibilité (par ratio :
+ *                         1920×1080 en 16:9, 1440×1080 en 4:3).
  * @param minKeyframeGapM - Distance minimale entre keyframes (anti-surabondance).
  * @param tracePoints    - Points riches backend (altitude) — priorité si fournis.
  * @param terrainSampler - Échantillonneur d'altitude terrain (DEM) pour

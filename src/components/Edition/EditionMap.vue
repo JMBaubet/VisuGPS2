@@ -42,7 +42,13 @@ import { useSettingsStore } from '../../stores/settings'
 import { useTracesStore } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
 import { useKeyframesStore } from '../../stores/keyframes'
-import { generateKeyframes, KEYFRAME_STEP_M, type KeyframeSet } from '../../algorithms/keyframeGenerator'
+import {
+  generateKeyframes,
+  KEYFRAME_STEP_M,
+  VIEWPORTS_BY_ASPECT,
+  type KeyframeSet,
+  type ViewportAspect,
+} from '../../algorithms/keyframeGenerator'
 
 // --- Stores ---
 
@@ -247,30 +253,55 @@ async function buildTerrainGrid(onDone: () => void): Promise<void> {
   onDone()
 }
 
-/** Mémorise si la dernière génération a bénéficié du DEM (pour ne pas
- * régénérer inutilement, ni ignorer un jeu persisté d'une version antérieure). */
-let lastGenerationHadTerrain = false
+/** Ratios dont une **génération effectuée pendant la session courante** n'a pas
+ * bénéficié du DEM (grille fine indisponible à ce moment). Ils sont régénérés
+ * dès que la grille est prête. Un fichier **existant chargé du disque n'y est
+ * jamais ajouté** : s'il existe, on ne le régénère pas. */
+const aspectsPendingTerrain = new Set<ViewportAspect>()
+
+/** Retourne le ratio « autre » (16:9 ↔ 4:3). */
+function otherAspect(aspect: ViewportAspect): ViewportAspect {
+  return aspect === '16:9' ? '4:3' : '16:9'
+}
+
+/** `true` pendant le téléchargement/décodage de la grille fine (évite de
+ * lancer plusieurs constructions concurrentes). */
+let terrainGridBuilding = false
 
 /**
- * Régénère les keyframes dès que la grille fine du terrain est disponible, si ce
- * n'était pas le cas lors de la dernière génération.
+ * S'assure que la grille fine du terrain est (ou sera) construite, puis régénère
+ * les ratios dont la génération de session n'a pas pu en bénéficier.
  *
  * La grille est construite une seule fois (téléchargement des tuiles
  * `terrain-rgb`, indépendant du zoom de la carte) ; les régénérations suivantes
- * (changement d'algorithme / gap) l'utilisent en mémoire.
+ * (changement d'algorithme / gap / ratio) l'utilisent en mémoire.
  */
 function scheduleTerrainRegeneration(): void {
   if (!map || !loadedFeature || editionStore.keyframeAlgorithm !== 'frustum') return
-  if (lastGenerationHadTerrain) return // déjà généré avec la grille
   if (terrainGridReady) {
-    void generateAndSetKeyframes()
+    regeneratePendingAspects()
     return
   }
+  if (terrainGridBuilding) return // déjà en cours — le callback purgera les attentes
+  terrainGridBuilding = true
   void buildTerrainGrid(() => {
+    terrainGridBuilding = false
     if (editionStore.keyframeAlgorithm === 'frustum') {
-      void generateAndSetKeyframes()
+      regeneratePendingAspects()
     }
   })
+}
+
+/** (Re)génère les ratios en attente de la grille fine, puis les purge. */
+function regeneratePendingAspects(): void {
+  const pending = [...aspectsPendingTerrain]
+  aspectsPendingTerrain.clear()
+  for (const aspect of pending) {
+    void ensureAspectKeyframes(aspect, {
+      active: aspect === editionStore.viewportAspect,
+      force: true,
+    })
+  }
 }
 
 // --- Animation (lecture) ---
@@ -411,7 +442,8 @@ async function loadSelectedTrace() {
   // Réinitialiser l'état terrain : la grille fine est propre à chaque trace.
   terrainGrid.clear()
   terrainGridReady = false
-  lastGenerationHadTerrain = false
+  terrainGridBuilding = false
+  aspectsPendingTerrain.clear()
 
   let feature: GeoJSON.Feature
   try {
@@ -444,20 +476,15 @@ async function loadSelectedTrace() {
     console.warn(`[EditionMap] Chargement des points riches échoué :`, e)
   }
 
-  // Charger les keyframes persistés ; sinon générer + sauvegarder.
-  let kf = await keyframesStore.loadKeyframes(traceId)
-  if (!kf) {
-    kf = await generateAndSetKeyframes()
-    if (!kf) return
-  } else {
-    editionStore.setKeyframeSet(kf, feature, loadedTracePoints ?? null)
-    // Jeu persisté (éventuellement d'une version antérieure sans occlusion
-    // par le relief) : on force une régénération dès que la grille est prête.
-    lastGenerationHadTerrain = terrainGridReady
-  }
+  // Charger les keyframes persistés du ratio actif ; sinon générer + sauvegarder.
+  // L'autre ratio est garanti en arrière-plan (les deux fichiers existent).
+  const activeAspect = editionStore.viewportAspect
+  const kf = await ensureAspectKeyframes(activeAspect, { active: true })
+  if (!kf) return
+  void ensureAspectKeyframes(otherAspect(activeAspect), { active: false })
 
   // Curseur jaune (cercle GL). Position initiale au premier keyframe.
-  if (kf && kf.keyframes.length > 0) {
+  if (kf.keyframes.length > 0) {
     const start = kf.keyframes[0].traceur
     markerCoords = [start.lng, start.lat]
     updateMarkerSource()
@@ -465,27 +492,29 @@ async function loadSelectedTrace() {
     applyInterpolatedState()
   }
 
-  // L'occlusion par le relief (frustum) dépend du DEM Mapbox : régénérer si
-  // la dernière génération n'a pas encore bénéficié du terrain.
+  // L'occlusion par le relief (frustum) dépend du DEM Mapbox : régénérer les
+  // ratios dont la génération n'a pas encore bénéficié du terrain.
   scheduleTerrainRegeneration()
 }
 
 /**
- * Génère les keyframes selon l'algorithme sélectionné (frustum ou simple),
- * les sauvegarde sur disque (best-effort) et les pousse dans le store.
+ * Génère les keyframes pour un ratio d'écran donné, les sauvegarde sur disque
+ * (best-effort) — **sans toucher au store** (le jeu n'est poussé dans
+ * `editionStore` que par `ensureAspectKeyframes`, uniquement pour le ratio
+ * actif).
  *
  * Réutilise la géométrie et les points riches déjà chargés par
  * `loadSelectedTrace` (`loadedFeature` / `loadedTracePoints`).
  *
  * @returns Le jeu généré, ou `null` en cas d'échec.
  */
-async function generateAndSetKeyframes(): Promise<KeyframeSet | null> {
+async function generateKeyframesFor(aspect: ViewportAspect): Promise<KeyframeSet | null> {
   const traceId = editionStore.selectedTraceId
   if (!map || !traceId || !loadedFeature) return null
 
   // Ne fournir le sampler terrain que si la grille fine est prête : sinon
   // l'algorithme retombe sur les points de trace, et `scheduleTerrainRegeneration`
-  // régénèrera avec la grille dès qu'elle sera construite.
+  // régénèrera ce ratio avec la grille dès qu'elle sera construite.
   const sampler = terrainGridReady ? sampleTerrain : null
 
   const generated = generateKeyframes(
@@ -496,10 +525,16 @@ async function generateAndSetKeyframes(): Promise<KeyframeSet | null> {
     editionStore.keyframeAlgorithm,
     editionStore.minKeyframeGapM,
     sampler,
+    VIEWPORTS_BY_ASPECT[aspect],
   )
   if (!generated) {
-    console.error(`[EditionMap] Impossible de générer les keyframes pour ${traceId}`)
+    console.error(`[EditionMap] Impossible de générer les keyframes pour ${traceId} (${aspect})`)
     return null
+  }
+
+  // Généré sans le relief : le ratio sera régénéré quand la grille sera prête.
+  if (!terrainGridReady && editionStore.keyframeAlgorithm === 'frustum') {
+    aspectsPendingTerrain.add(aspect)
   }
 
   // Sauvegarder pour les entrées futures (best-effort, ne bloque pas).
@@ -509,20 +544,74 @@ async function generateAndSetKeyframes(): Promise<KeyframeSet | null> {
     console.warn(`[EditionMap] Sauvegarde des keyframes échouée :`, e)
   }
 
-  editionStore.setKeyframeSet(generated, loadedFeature, loadedTracePoints ?? null)
-  lastGenerationHadTerrain = terrainGridReady
+  return generated
+}
+
+/**
+ * Garantit l'existence d'un jeu de keyframes pour un ratio : charge le fichier
+ * persisté si présent, sinon le génère et le sauvegarde. Ne pousse le jeu dans
+ * `editionStore` que pour le **ratio actif** (`active`).
+ *
+ * @param force - Vrai pour régénérer même si un fichier persisté existe
+ *                (changement d'algorithme / gap, ou rattrapage du relief).
+ */
+async function ensureAspectKeyframes(
+  aspect: ViewportAspect,
+  opts: { active: boolean; force?: boolean },
+): Promise<KeyframeSet | null> {
+  const traceId = editionStore.selectedTraceId
+  if (!map || !traceId || !loadedFeature) return null
+
+  if (!opts.force) {
+    const existing = await keyframesStore.loadKeyframes(traceId, aspect)
+    if (existing) {
+      // Fichier existant : on l'utilise tel quel, on ne le régénère jamais.
+      // (Seule une génération effectuée pendant la session sans le relief est
+      // rattrapée via `aspectsPendingTerrain`.)
+      if (opts.active) {
+        editionStore.setKeyframeSet(existing, loadedFeature, loadedTracePoints ?? null)
+      }
+      return existing
+    }
+  }
+
+  const generated = await generateKeyframesFor(aspect)
+  if (generated && opts.active) {
+    editionStore.setKeyframeSet(generated, loadedFeature, loadedTracePoints ?? null)
+  }
   return generated
 }
 
 /**
  * Régénère les keyframes quand l'algorithme ou la distance minimale change
- * (sélecteur « Algorithme » / « Gap min » de la toolbar).
+ * (sélecteur « Algorithme » / « Gap min » de la toolbar) — **pour les deux
+ * ratios** : les fichiers persistés sont désormais périmés.
  */
 watch(
   [() => editionStore.keyframeAlgorithm, () => editionStore.minKeyframeGapM],
   () => {
     if (!editionReady || !loadedFeature) return
-    void generateAndSetKeyframes()
+    const active = editionStore.viewportAspect
+    void ensureAspectKeyframes(active, { active: true, force: true })
+    void ensureAspectKeyframes(otherAspect(active), { active: false, force: true })
+    // Si la grille fine n'est pas (encore) prête, ces régénérations auront eu
+    // lieu sans le relief : les rattraper quand elle le sera.
+    scheduleTerrainRegeneration()
+  },
+)
+
+/**
+ * Change de fichier keyframes quand le ratio d'écran est modifié dans la
+ * toolbar : charge le jeu du ratio sélectionné (s'il existe), sinon le génère,
+ * et garantit l'existence de l'autre ratio en arrière-plan.
+ */
+watch(
+  () => editionStore.viewportAspect,
+  (aspect, previous) => {
+    if (!editionReady || !loadedFeature || aspect === previous) return
+    void ensureAspectKeyframes(aspect, { active: true })
+    void ensureAspectKeyframes(otherAspect(aspect), { active: false })
+    scheduleTerrainRegeneration()
   },
 )
 
