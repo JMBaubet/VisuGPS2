@@ -150,6 +150,8 @@ Situé dans `src-tauri/settings.default.toml`, **embarqué dans l'exécutable** 
 
 Ce fichier contient également une **table spéciale `[_meta]`** (placée en tête, avant les tables de paramètres) qui décrit l'organisation du drawer : vues (associées aux noms de routes Vue Router), groupes système communs à toutes les vues, actions (entrées non-paramètres), handlers (catégories à carte dédiée) et libellés/icônes des catégories. Cette table est **exclue du « flatten »** des paramètres (`flatten_settings` ignore la clé `_meta`) et n'est lue que par la commande `get_settings_meta`.
 
+> **Paramètres « cachés »** : un paramètre n'apparaît pas dans le drawer s'il n'est listé dans **aucun** groupe `_meta` (`system.groups` ou `views.<route>.groups`). C'est le cas du groupe `Carte.Vue.*` (centreLat / centreLng / zoom), écrit automatiquement par la carte Accueil à chaque déplacement/zoom et lu à son montage pour restaurer la dernière vue.
+
 ## Résolution des chemins (backend)
 
 Les fonctions privées dans `import_gpx.rs` résolvent les chemins en fonction du mode actif :

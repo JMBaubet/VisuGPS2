@@ -54,6 +54,7 @@ const SETTING_PITCH_DEFAULT = 'Edition.Camera.pitchDefaut'
 const SETTING_VIEWPORT_DEFAULT = 'Edition.Camera.viewportDefaut'
 const SETTING_TRACE_COLOR = 'Edition.Couleurs.trace'
 const SETTING_CURSOR_COLOR = 'Edition.Couleurs.curseur'
+const SETTING_TRACE_WIDTH = 'Edition.Couleurs.epaisseurTrace'
 
 export const useEditionStore = defineStore('edition', () => {
   /**
@@ -149,6 +150,12 @@ export const useEditionStore = defineStore('edition', () => {
    * marqueur carte + curseur timeline. Format #RRGGBBAA. Défaut : jaune A400.
    */
   const cursorColor = ref('#FFD600FF')
+
+  /**
+   * Épaisseur de la LineString de la trace (paramètre
+   * `Edition.Couleurs.epaisseurTrace`), en pixels. Bornes 1–20. Défaut : 4.
+   */
+  const traceWidth = ref(4)
 
   /** Visibilité du panneau « Changements de cap brutaux » (tableau à la demande). */
   const showHeadingChangesPanel = ref(false)
@@ -614,6 +621,9 @@ export const useEditionStore = defineStore('edition', () => {
     const cursor = read(SETTING_CURSOR_COLOR, '#FFD600FF')
     if (typeof cursor === 'string' && isValidHexAlpha(cursor)) cursorColor.value = cursor
 
+    const width = Number(read(SETTING_TRACE_WIDTH, 4))
+    if (!Number.isNaN(width)) traceWidth.value = Math.min(20, Math.max(1, width))
+
     if (includeViewport) {
       const vp = read(SETTING_VIEWPORT_DEFAULT, '16:9')
       if (vp === '16:9' || vp === '4:3') viewportAspect.value = vp
@@ -823,6 +833,7 @@ export const useEditionStore = defineStore('edition', () => {
     defaultPitch,
     traceColor,
     cursorColor,
+    traceWidth,
     // Actions : sélection / cadre
     selectTrace,
     clearSelection,

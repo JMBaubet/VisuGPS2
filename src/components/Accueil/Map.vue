@@ -691,6 +691,36 @@ function addCursorHandlers() {
 
 // --- Synchronisation centre → store ---
 
+/** Dernière vue sauvegardée (centre/zoom), pour n'écrire que les changements. */
+let lastSavedView: { lat: number; lng: number; zoom: number } | null = null
+
+/**
+ * Persiste le centrage/zoom courant dans les paramètres cachés `Carte.Vue.*`
+ * (best-effort, non bloquant). N'écrit que ce qui a réellement changé depuis
+ * la dernière sauvegarde pour éviter les écritures redondantes.
+ */
+function persistMapView() {
+  if (!map) return
+  const c = map.getCenter()
+  const zoom = map.getZoom()
+  if (
+    lastSavedView &&
+    lastSavedView.lat === c.lat &&
+    lastSavedView.lng === c.lng &&
+    lastSavedView.zoom === zoom
+  ) {
+    return
+  }
+  lastSavedView = { lat: c.lat, lng: c.lng, zoom }
+  const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
+  const lat = clamp(c.lat, -90, 90)
+  const lng = clamp(c.lng, -180, 180)
+  const warn = (e: unknown) => console.warn('[Map] Échec de la sauvegarde de la vue carte :', e)
+  settingsStore.updateSetting('Carte.Vue.centreLat', lat).catch(warn)
+  settingsStore.updateSetting('Carte.Vue.centreLng', lng).catch(warn)
+  settingsStore.updateSetting('Carte.Vue.zoom', zoom).catch(warn)
+}
+
 /** Met à jour le centre dans le store (avec debounce). */
 function onMapMoveEnd() {
   if (!map) return
@@ -702,6 +732,8 @@ function onMapMoveEnd() {
     if (tracesStore.focusedTraceId) return
     const c = map!.getCenter()
     tracesStore.updateMapCenter(c.lat, c.lng)
+    // Mémoriser la vue (centrage/zoom) pour le prochain affichage.
+    persistMapView()
     // Mettre a jour la liste des traces visibles dans le viewport.
     scheduleVisibleRefresh()
   }, MOVE_END_DEBOUNCE_MS)
@@ -803,14 +835,46 @@ async function refreshVisibleTraceIds() {
 
 // --- Initialisation ---
 
-function initializeMap() {
+/** Vue par défaut de la carte Accueil (France / Espagne). */
+const DEFAULT_VIEW = { center: [2.0, 43.7] as [number, number], zoom: 5.15 }
+
+/**
+ * Charge la dernière vue mémorisée (centre/zoom) depuis les paramètres cachés
+ * `Carte.Vue.*`. Repli sur la vue par défaut si les paramètres sont absents,
+ * invalides ou inaccessibles.
+ */
+async function loadPersistedView(): Promise<{ center: [number, number]; zoom: number }> {
+  try {
+    const [lat, lng, zoom] = await Promise.all([
+      settingsStore.getSettingValue('Carte.Vue.centreLat'),
+      settingsStore.getSettingValue('Carte.Vue.centreLng'),
+      settingsStore.getSettingValue('Carte.Vue.zoom'),
+    ])
+    const latN = Number(lat)
+    const lngN = Number(lng)
+    const zoomN = Number(zoom)
+    if (
+      Number.isFinite(latN) && latN >= -90 && latN <= 90 &&
+      Number.isFinite(lngN) && lngN >= -180 && lngN <= 180 &&
+      Number.isFinite(zoomN) && zoomN >= 0 && zoomN <= 22
+    ) {
+      return { center: [lngN, latN], zoom: zoomN }
+    }
+    return DEFAULT_VIEW
+  } catch (e) {
+    console.warn('[Map] Vue mémorisée indisponible, vue par défaut :', e)
+    return DEFAULT_VIEW
+  }
+}
+
+function initializeMap(initialView: { center: [number, number]; zoom: number }) {
   if (!mapContainer.value) return
 
   map = new mapboxgl.Map({
     container: mapContainer.value,
     style: 'mapbox://styles/mapbox/standard',
-    zoom: 5.15,
-    center: [2.0, 43.7], // [lon, lat] — France
+    zoom: initialView.zoom,
+    center: initialView.center,
   })
 
   map.on('load', () => {
@@ -1049,8 +1113,11 @@ onMounted(async () => {
 
   mapboxgl.accessToken = token || ''
 
+  // Restaurer la dernière vue mémorisée (centrage/zoom) avant l'initialisation.
+  const initialView = await loadPersistedView()
+
   // Initialiser la carte
-  initializeMap()
+  initializeMap(initialView)
 
   // Surveiller le redimensionnement du conteneur pour recalculer le canvas.
   // Un changement de thème recalcule la mise en page Vuetify (variables CSS),

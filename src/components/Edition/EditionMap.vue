@@ -391,9 +391,10 @@ async function initializeMap(token: string) {
           'line-join': 'round',
         },
         paint: {
-          // Couleur de la trace pilotée par le paramètre Edition.Couleurs.trace.
+          // Couleur et épaisseur de la trace pilotées par les paramètres
+          // Edition.Couleurs.trace / Edition.Couleurs.epaisseurTrace.
           'line-color': hexToRgbaString(editionStore.traceColor) || '#FF0000',
-          'line-width': 5,
+          'line-width': editionStore.traceWidth,
           'line-opacity': 0.9,
         },
       })
@@ -633,6 +634,17 @@ watch(
   color => {
     const rgba = hexToRgbaString(color)
     if (rgba) map?.setPaintProperty(TRACE_LINE_LAYER_ID, 'line-color', rgba)
+  },
+)
+
+/**
+ * Épaisseur de la trace (LineString) : appliquée en direct sur la couche
+ * Mapbox quand le paramètre Edition.Couleurs.epaisseurTrace change.
+ */
+watch(
+  () => editionStore.traceWidth,
+  width => {
+    map?.setPaintProperty(TRACE_LINE_LAYER_ID, 'line-width', width)
   },
 )
 

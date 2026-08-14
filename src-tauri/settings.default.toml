@@ -271,6 +271,47 @@ step = 100
 unit = "ms"
 icon = "mdi-timer-outline"
 
+# --- Vue carte mémorisée (centrage / zoom) ---
+# Paramètres **cachés** du drawer : le groupe `Carte.Vue` n'est listé dans
+# aucune catégorie `_meta` — ils sont écrits automatiquement par la carte
+# Accueil à chaque déplacement/zoom et lus à son montage pour restaurer la
+# dernière vue (lancement ou retour sur la vue).
+
+[Carte.Vue.centreLat]
+description = "Latitude du centre de la carte (mémorisée)"
+documentation = """
+Latitude du centre de la carte de l'accueil, mémorisée automatiquement au
+dernier déplacement/zoom de l'utilisateur et restituée au prochain affichage
+de la vue (lancement ou retour depuis une autre vue).
+"""
+type = "float"
+default = 43.7
+min = -90.0
+max = 90.0
+
+[Carte.Vue.centreLng]
+description = "Longitude du centre de la carte (mémorisée)"
+documentation = """
+Longitude du centre de la carte de l'accueil, mémorisée automatiquement au
+dernier déplacement/zoom de l'utilisateur et restituée au prochain affichage
+de la vue.
+"""
+type = "float"
+default = 2.0
+min = -180.0
+max = 180.0
+
+[Carte.Vue.zoom]
+description = "Zoom de la carte (mémorisé)"
+documentation = """
+Zoom de la carte de l'accueil, mémorisé automatiquement au dernier
+déplacement/zoom de l'utilisateur et restitué au prochain affichage de la vue.
+"""
+type = "float"
+default = 5.15
+min = 0.0
+max = 22.0
+
 # ---------------------------------------------------------------------------
 # Paramètres de la vue d'édition caméra (route `editionCamera`).
 # Accessibles via le bouton Paramètres (`mdi-cog-outline`) de la toolbar
@@ -368,6 +409,20 @@ par défaut.
 type = "material_extended"
 default = "#FFD600FF"
 icon = "mdi-play-circle-outline"
+
+[Edition.Couleurs.epaisseurTrace]
+description = "Épaisseur de la trace (px)"
+documentation = """
+Épaisseur de la LineString représentant la trace sur la carte satellite de
+l'édition, en pixels. Appliquée en direct.
+"""
+type = "int"
+default = 4
+min = 1
+max = 20
+step = 1
+unit = "px"
+icon = "mdi-format-line-weight"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.
