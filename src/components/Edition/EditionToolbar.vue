@@ -38,6 +38,21 @@
       @change="onGapChange"
     />
 
+    <!-- Seuil de détection des changements de cap brutaux (°/km) -->
+    <v-text-field
+      :model-value="String(editionStore.headingChangeThresholdDegPerKm)"
+      density="compact"
+      hide-details
+      variant="outlined"
+      type="number"
+      min="10"
+      max="1000"
+      step="5"
+      label="Seuil cap (°/km)"
+      class="threshold-field"
+      @change="onThresholdChange"
+    />
+
     <!-- Cadre ViewPort : sélection du ratio d'écran + affichage/masquage -->
     <v-menu
       v-model="viewportMenuOpen"
@@ -78,6 +93,23 @@
         </v-list-item>
       </v-list>
     </v-menu>
+
+    <!-- Panneau « Changements de cap brutaux » (tableau à la demande) -->
+    <v-btn
+      icon
+      :color="editionStore.showHeadingChangesPanel ? 'primary' : ''"
+      title="Changements de cap brutaux"
+      @click="editionStore.toggleHeadingChangesPanel()"
+    >
+      <v-icon>mdi-rotate-3d</v-icon>
+      <v-badge
+        v-if="brutalCount > 0"
+        :content="String(brutalCount)"
+        color="error"
+        offset-x="-6"
+        offset-y="-6"
+      />
+    </v-btn>
   </v-app-bar>
 </template>
 
@@ -91,9 +123,13 @@
  *   - le sélecteur de l'algorithme de génération des keyframes
  *     (`'frustum'` — placement par visibilité — ou `'simple'` — MVP)
  *   - la distance minimale entre keyframes (frustum, 200–5000 m, pas 50)
+ *   - le seuil de détection des **changements de cap brutaux** (°/km,
+ *     10–1000, pas 5 — filtre d'affichage, sans régénération)
  *   - le menu **ViewPort** : sélection du ratio d'écran (16:9 / 4:3 — chaque
  *     ratio exploite son propre fichier keyframes) et affichage/masquage du
  *     cadre (overlay CSS)
+ *   - le bouton **Cap brutaux** (badge du nombre de virages détectés) :
+ *     affiche/masque le tableau des changements de cap brutaux
  */
 import { computed, ref } from 'vue'
 import { useEditionStore } from '../../stores/edition'
@@ -113,6 +149,9 @@ const traceName = computed(() => {
   return tracesStore.traces.find(t => t.id === id)?.name ?? 'Édition caméra'
 })
 
+/** Nombre de changements de cap brutaux (badge du bouton). */
+const brutalCount = computed(() => editionStore.brutalHeadingChanges.length)
+
 /** Options du sélecteur d'algorithme. */
 const algorithmItems = [
   { title: 'Frustum', value: 'frustum' },
@@ -129,6 +168,13 @@ function onGapChange(event: Event) {
   const input = (event.target as HTMLInputElement)?.value
   const n = input !== undefined && input !== '' ? Number(input) : NaN
   if (!Number.isNaN(n)) editionStore.setMinKeyframeGapM(n)
+}
+
+/** Change le seuil de détection des changements de cap brutaux (°/km). */
+function onThresholdChange(event: Event) {
+  const input = (event.target as HTMLInputElement)?.value
+  const n = input !== undefined && input !== '' ? Number(input) : NaN
+  if (!Number.isNaN(n)) editionStore.setHeadingChangeThreshold(n)
 }
 
 // --- Menu ViewPort (ratio d'écran + visibilité du cadre) ---
@@ -156,11 +202,14 @@ function onAspectSelect(aspect: ViewportAspect) {
   backdrop-filter: blur(4px);
 }
 
-/* Largeurs des champs Algorithme / Gap min. */
+/* Largeurs des champs Algorithme / Gap min / Seuil cap. */
 .algo-select {
   max-width: 150px;
 }
 .gap-field {
+  max-width: 130px;
+}
+.threshold-field {
   max-width: 130px;
 }
 

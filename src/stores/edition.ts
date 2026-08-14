@@ -30,6 +30,10 @@ import {
   samplePolylineAt,
   MS_PER_METER,
 } from '../algorithms/keyframeGenerator'
+import {
+  computeHeadingChanges,
+  type HeadingChange,
+} from '../algorithms/headingChanges'
 import { bearing, bearingDelta, haversineMeters } from '../utils/geo'
 import { useKeyframesStore } from './keyframes'
 
@@ -99,6 +103,16 @@ export const useEditionStore = defineStore('edition', () => {
    * (anti-surabondance). Bornes 200–5000, pas de 50. Défaut : 1000.
    */
   const minKeyframeGapM = ref(1000)
+
+  /**
+   * Seuil de détection des changements de cap « brutaux » (taux de rotation en
+   * °/km). Bornes 10–1000, pas de 5. Défaut : 45. Simple **filtre d'affichage**
+   * (timeline + tableau) : ne régénère pas les keyframes.
+   */
+  const headingChangeThresholdDegPerKm = ref(45)
+
+  /** Visibilité du panneau « Changements de cap brutaux » (tableau à la demande). */
+  const showHeadingChangesPanel = ref(false)
 
   /**
    * Distance (m) du keyframe sélectionné pour l'édition (Composant B), ou
@@ -224,6 +238,20 @@ export const useEditionStore = defineStore('edition', () => {
       null
     )
   })
+
+  // --- Changements de cap (analyse des virages entre keyframes consécutifs) ---
+
+  /** Tous les changements de cap (un par segment entre keyframes consécutifs). */
+  const headingChanges = computed<HeadingChange[]>(() =>
+    computeHeadingChanges(keyframeSet.value?.keyframes ?? []),
+  )
+
+  /** Sous-ensemble « brutal » : taux de rotation ≥ seuil réglable. */
+  const brutalHeadingChanges = computed(() =>
+    headingChanges.value.filter(
+      h => h.rateDegPerKm >= headingChangeThresholdDegPerKm.value,
+    ),
+  )
 
   // --- Actions : sélection / cadre ViewPort ---
 
@@ -459,6 +487,23 @@ export const useEditionStore = defineStore('edition', () => {
     selectedKeyframeDistance.value = null
   }
 
+  /**
+   * Change le seuil de détection des changements de cap « brutaux » (°/km).
+   * Clampé à [10, 1000] et arrondi au pas de 5. Simple filtre d'affichage :
+   * aucune régénération des keyframes.
+   */
+  function setHeadingChangeThreshold(rate: number) {
+    const clamped = Math.min(1000, Math.max(10, rate))
+    const stepped = Math.round(clamped / 5) * 5
+    if (headingChangeThresholdDegPerKm.value === stepped) return
+    headingChangeThresholdDegPerKm.value = stepped
+  }
+
+  /** Affiche / masque le panneau « Changements de cap brutaux ». */
+  function toggleHeadingChangesPanel() {
+    showHeadingChangesPanel.value = !showHeadingChangesPanel.value
+  }
+
   /** Se positionne à une distance cumulée donnée (m), clampée à la trace. */
   function seekToDistance(distanceM: number) {
     const t = distanceM * MS_PER_METER
@@ -568,6 +613,11 @@ export const useEditionStore = defineStore('edition', () => {
     altitudeAtDistance,
     selectedKeyframe,
     currentKeyframe,
+    // État : analyse des changements de cap
+    headingChanges,
+    brutalHeadingChanges,
+    headingChangeThresholdDegPerKm,
+    showHeadingChangesPanel,
     // État : édition keyframes
     selectedKeyframeDistance,
     // État : algorithme de génération
@@ -578,6 +628,9 @@ export const useEditionStore = defineStore('edition', () => {
     clearSelection,
     toggleViewportFrame,
     setViewportAspect,
+    // Actions : analyse des changements de cap
+    setHeadingChangeThreshold,
+    toggleHeadingChangesPanel,
     // Actions : édition keyframes
     selectKeyframe,
     updateKeyframe,

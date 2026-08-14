@@ -29,7 +29,28 @@
           @mousemove="onMouseMove"
           @mouseleave="onMouseLeave"
         >
-          <!-- Curseur orange (3px) — en premier pour rester sous les ticks RdV -->
+          <!--
+            Changements de cap : bande colorée **entre deux ticks consécutifs**,
+            pour **tous** les segments. Couleur = sens (teal horaire /
+            deep-purple anti-horaire) ; **épaisseur** = intensité du taux
+            (trait 2 px sous le seuil, puis +2 px par bande de 30 °/km :
+            45, 75, 105, 135…). Sous le curseur orange pour ne pas le masquer.
+          -->
+          <g class="zone-rdv-heading">
+            <rect
+              v-for="(h, idx) in headingChangeRects"
+              :key="'hdc-' + idx"
+              :x="h.x"
+              :y="h.y"
+              :width="h.width"
+              :height="h.height"
+              :fill="h.color"
+            >
+              <title>{{ h.title }}</title>
+            </rect>
+          </g>
+
+          <!-- Curseur orange (3px) — au-dessus des bandes, sous les ticks RdV -->
           <rect
             :x="cursorX - CURSOR_WIDTH / 2"
             :y="rdvZoneY"
@@ -159,6 +180,10 @@
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useEditionStore } from '../../stores/edition'
+import {
+  headingChangeThickness,
+  ROTATION_BASE_COLORS,
+} from '../../algorithms/headingChanges'
 
 const editionStore = useEditionStore()
 
@@ -373,6 +398,36 @@ const keyframeTicks = computed(() => {
     distance_from_start_m: k.distance_from_start_m,
     x: k.distance_from_start_m * PX_PER_METER,
   }))
+})
+
+/**
+ * Rectangles de changement de cap **entre deux ticks RdV consécutifs** (du bord
+ * droit du tick de départ au bord gauche du tick d'arrivée), pour **tous** les
+ * segments. Couleur = sens (teal horaire / deep-purple anti-horaire) ;
+ * **épaisseur** (hauteur, ancrée au bas de la zone RdV) = intensité : trait
+ * 2 px sous le seuil, puis +2 px par bande de 30 °/km. Tooltip SVG au survol.
+ */
+const headingChangeRects = computed(() => {
+  const threshold = editionStore.headingChangeThresholdDegPerKm
+  return editionStore.headingChanges.map(h => {
+    const height = headingChangeThickness(h.rateDegPerKm, threshold)
+    const delta = h.deltaDeg
+    const sign = delta > 0 ? '+' : ''
+    return {
+      x: h.fromDistanceM * PX_PER_METER + RDV_WIDTH / 2,
+      width: Math.max(
+        0,
+        (h.toDistanceM - h.fromDistanceM) * PX_PER_METER - RDV_WIDTH,
+      ),
+      height,
+      y: rdvZoneY + rdvZoneHeight - height,
+      color: ROTATION_BASE_COLORS[h.direction],
+      title:
+        `Δcap ${sign}${delta.toFixed(0)}° · ${(h.distM / 1000).toFixed(2)} km · ` +
+        `${h.rateDegPerKm.toFixed(0)} °/km ` +
+        `(${h.direction === 'horaire' ? 'horaire' : 'anti-horaire'})`,
+    }
+  })
 })
 
 /**
