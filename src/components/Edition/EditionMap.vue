@@ -352,6 +352,10 @@ async function initializeMap(token: string) {
   // Partager l'instance pour les widgets d'édition (CameraEditor).
   mapRef.value = map
 
+  // Mode validation : un clic sur la carte signale un « problème » sur le
+  // segment courant (il reste déverrouillé). Inactif hors validation.
+  map.on('click', () => editionStore.markValidationClick())
+
   map.on('load', async () => {
     if (!map) return
 

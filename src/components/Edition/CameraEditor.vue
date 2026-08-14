@@ -7,6 +7,15 @@
 
       <!-- Bloc droit : switch Cible (à gauche) + sliders Pitch/Zoom (à droite) -->
       <div class="right-stack">
+        <!-- Badge verrou : le keyframe borde un segment verrouillé (non modifiable) -->
+        <div
+          v-if="isCurrentKeyframeLocked"
+          class="lock-badge"
+          title="Keyframe verrouillé (segment validé) — non modifiable"
+        >
+          <v-icon size="small">mdi-lock</v-icon>
+        </div>
+
         <!-- Switch mode visée (hors du bloc sliders pour ne pas être étiré) -->
         <div class="switch-col">
           <span class="slider-label">Cible</span>
@@ -16,6 +25,7 @@
             hide-details
             density="compact"
             class="target-switch"
+            :disabled="isCurrentKeyframeLocked"
           />
           <span class="slider-value">{{ targetingMode ? 'ON' : 'OFF' }}</span>
         </div>
@@ -23,15 +33,15 @@
         <div class="sliders-block">
           <div
             class="slider-col"
-            @wheel.prevent="onSliderWheel($event, 'pitch')"
+            @wheel.prevent="!isCurrentKeyframeLocked && onSliderWheel($event, 'pitch')"
           >
             <span class="slider-label">Pitch</span>
             <div
               ref="pitchTrackEl"
               class="vs-track"
-              :class="{ 'vs-default': isPitchDefault }"
-              @mousedown="onSliderStart($event, 'pitch')"
-              @dblclick="resetPitch"
+              :class="{ 'vs-default': isPitchDefault, 'vs-locked': isCurrentKeyframeLocked }"
+              @mousedown="!isCurrentKeyframeLocked && onSliderStart($event, 'pitch')"
+              @dblclick="!isCurrentKeyframeLocked && resetPitch()"
             >
               <div class="vs-fill" :style="{ height: pitchFillPct + '%' }" />
               <div class="vs-thumb" :style="{ bottom: pitchFillPct + '%' }" />
@@ -40,22 +50,22 @@
               class="slider-value"
               :class="{ 'value-modified': !isPitchDefault }"
               :title="isPitchDefault ? undefined : 'Clic pour remettre 60°'"
-              @click="!isPitchDefault && resetPitch()"
+              @click="!isPitchDefault && !isCurrentKeyframeLocked && resetPitch()"
             >
               {{ pitchModel?.toFixed(0) }}°
             </span>
           </div>
           <div
             class="slider-col"
-            @wheel.prevent="onSliderWheel($event, 'zoom')"
+            @wheel.prevent="!isCurrentKeyframeLocked && onSliderWheel($event, 'zoom')"
           >
             <span class="slider-label">Zoom</span>
             <div
               ref="zoomTrackEl"
               class="vs-track"
-              :class="{ 'vs-default': isZoomDefault }"
-              @mousedown="onSliderStart($event, 'zoom')"
-              @dblclick="resetZoom"
+              :class="{ 'vs-default': isZoomDefault, 'vs-locked': isCurrentKeyframeLocked }"
+              @mousedown="!isCurrentKeyframeLocked && onSliderStart($event, 'zoom')"
+              @dblclick="!isCurrentKeyframeLocked && resetZoom()"
             >
               <div class="vs-fill" :style="{ height: zoomFillPct + '%' }" />
               <div class="vs-thumb" :style="{ bottom: zoomFillPct + '%' }" />
@@ -64,7 +74,7 @@
               class="slider-value"
               :class="{ 'value-modified': !isZoomDefault }"
               :title="isZoomDefault ? undefined : 'Clic pour remettre 16.0'"
-              @click="!isZoomDefault && resetZoom()"
+              @click="!isZoomDefault && !isCurrentKeyframeLocked && resetZoom()"
             >
               {{ zoomModel?.toFixed(1) }}
             </span>
@@ -76,8 +86,9 @@
       <div
         ref="compassEl"
         class="compass-bandeau"
-        @mousedown="onCompassDragStart"
-        @wheel.prevent="onCompassWheel"
+        :class="{ 'vs-locked': isCurrentKeyframeLocked }"
+        @mousedown="!isCurrentKeyframeLocked && onCompassDragStart($event)"
+        @wheel.prevent="!isCurrentKeyframeLocked && onCompassWheel($event)"
       >
         <div class="compass-tick" />
         <div
@@ -110,6 +121,12 @@
           color="primary"
           variant="flat"
           prepend-icon="mdi-plus"
+          :disabled="isCurrentSegmentLocked"
+          :title="
+            isCurrentSegmentLocked
+              ? 'Segment verrouillé — ajout de keyframe impossible'
+              : 'Ajouter un point de RdV'
+          "
           @click="addKeyframeHere"
         >
           Ajouter un point de RdV
@@ -121,7 +138,7 @@
           size="small"
           variant="text"
           color="white"
-          :disabled="!dirty"
+          :disabled="!dirty || isCurrentKeyframeLocked"
           title="Annuler les modifications"
           @click="undoKeyframe"
         >
@@ -132,8 +149,14 @@
           size="small"
           color="error"
           variant="text"
-          :disabled="isStartKeyframe"
-          :title="isStartKeyframe ? 'Le point de départ (km 0) ne peut pas être supprimé' : 'Supprimer ce point de RdV'"
+          :disabled="isStartKeyframe || isCurrentKeyframeLocked"
+          :title="
+            isStartKeyframe
+              ? 'Le point de départ (km 0) ne peut pas être supprimé'
+              : isCurrentKeyframeLocked
+                ? 'Keyframe verrouillé — suppression impossible'
+                : 'Supprimer ce point de RdV'
+          "
           @click="removeKeyframeHere"
         >
           <v-icon>mdi-delete</v-icon>
@@ -204,6 +227,21 @@ const kfDistance = computed(() => currentKeyframe.value?.distance_from_start_m ?
 const isStartKeyframe = computed(() => {
   const kfs = editionStore.keyframeSet?.keyframes ?? []
   return kfDistance.value !== null && kfDistance.value === kfs[0]?.distance_from_start_m
+})
+
+/**
+ * `true` si le keyframe courant borde un segment **verrouillé** : il n'est pas
+ * modifiable (sliders, compas, mode Cible, Undo/Supprimer désactivés).
+ */
+const isCurrentKeyframeLocked = computed(() => {
+  const kf = currentKeyframe.value
+  return kf ? editionStore.isKeyframeLocked(kf.distance_from_start_m) : false
+})
+
+/** `true` si le segment courant (hors RdV) est verrouillé : ajout bloqué. */
+const isCurrentSegmentLocked = computed(() => {
+  const from = editionStore.currentSegmentFromDistance
+  return from !== null && editionStore.isSegmentLocked(from)
 })
 
 // --- Sliders Pitch / Zoom ---
@@ -737,6 +775,19 @@ onUnmounted(() => {
   border-radius: 4px;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+/* Keyframe verrouillé : widgets grisés, non interactifs. */
+.vs-locked {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* Badge cadenas (keyframe verrouillé — non modifiable). */
+.lock-badge {
+  align-self: flex-start;
+  color: #ffd600;
+  opacity: 0.9;
 }
 .vs-fill {
   position: absolute;

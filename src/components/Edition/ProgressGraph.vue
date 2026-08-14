@@ -26,9 +26,27 @@
           :style="{ width: timelineWidthPx + 'px', height: totalHeight + 'px' }"
           class="progress-graph-svg"
           @click="onTimelineClick"
+          @dblclick="onTimelineDblClick"
           @mousemove="onMouseMove"
           @mouseleave="onMouseLeave"
         >
+          <!--
+            Segments NON verrouillés : trait rouge en haut de la zone RdV
+            (état par défaut). Disparaît quand un segment est verrouillé
+            (mode validation ou bascule manuelle).
+          -->
+          <g class="zone-rdv-locks">
+            <rect
+              v-for="(s, idx) in unlockedSegmentRects"
+              :key="'lock-' + idx"
+              :x="s.x"
+              :y="lockBarY"
+              :width="s.width"
+              :height="lockBarHeight"
+              fill="#FF5252"
+            />
+          </g>
+
           <!--
             Changements de cap : bande colorée **entre deux ticks consécutifs**,
             pour **tous** les segments. Couleur = sens (teal horaire /
@@ -237,6 +255,10 @@ const gradZoneY = advanceZoneY + advanceZoneHeight
 const rdvTickHeight = 20
 const rdvTickY = rdvZoneY + (rdvZoneHeight - rdvTickHeight) / 2
 
+// Trait rouge des segments NON verrouillés : fin, ancré en haut de la zone RdV.
+const lockBarHeight = 3
+const lockBarY = rdvZoneY
+
 // La barre d'avancement est centrée verticalement dans sa zone (réduit la
 // zone neutre entre la barre et l'axe des abscisses).
 const advanceBarY = advanceZoneY + (advanceZoneHeight - advanceBarHeight) / 2
@@ -431,6 +453,24 @@ const headingChangeRects = computed(() => {
 })
 
 /**
+ * Trait rouge des segments **non verrouillés** (état par défaut, modifiables),
+ * en haut de la zone RdV. Un segment verrouillé (validation ou bascule
+ * manuelle) n'a plus de trait rouge.
+ */
+const unlockedSegmentRects = computed(() => {
+  const locked = editionStore.lockedSegmentFromDistances
+  return editionStore.headingChanges
+    .filter(h => !locked.has(h.fromDistanceM))
+    .map(h => ({
+      x: h.fromDistanceM * PX_PER_METER + RDV_WIDTH / 2,
+      width: Math.max(
+        0,
+        (h.toDistanceM - h.fromDistanceM) * PX_PER_METER - RDV_WIDTH,
+      ),
+    }))
+})
+
+/**
  * Repères tous les 10 km (ligne verticale dans la barre + libellé graduation).
  * Chaque repère est cliquable pour seek direct.
  */
@@ -545,6 +585,35 @@ function onTimelineClick(event: MouseEvent) {
   if (nearest && nearestGap <= KEYFRAME_HIT_TOLERANCE_M) {
     editionStore.selectKeyframe(nearest.distance_from_start_m)
   }
+}
+
+// --- Double-clic : bascule du verrou d'un segment ---
+
+/** Segment (bornes de distance) contenant `dist`, ou null. */
+function findSegmentAt(dist: number): { fromDistanceM: number } | null {
+  const changes = editionStore.headingChanges
+  for (const h of changes) {
+    if (dist >= h.fromDistanceM && dist < h.toDistanceM) {
+      return { fromDistanceM: h.fromDistanceM }
+    }
+  }
+  // Fin de trace : clamp au dernier segment.
+  const last = changes[changes.length - 1]
+  if (last && dist >= last.toDistanceM) return { fromDistanceM: last.fromDistanceM }
+  return null
+}
+
+/**
+ * Double-clic sur un segment de la timeline : **bascule** l'état du verrou
+ * (Verrouiller si déverrouillé, Déverrouiller si verrouillé), sans passer par
+ * un menu.
+ */
+function onTimelineDblClick(event: MouseEvent) {
+  const x = clientXToTimelineX(event.clientX)
+  const dist = timelineXToDistance(x)
+  const seg = findSegmentAt(dist)
+  if (!seg) return
+  editionStore.toggleSegmentLock(seg.fromDistanceM)
 }
 
 // --- Watchers ---

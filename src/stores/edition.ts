@@ -15,7 +15,7 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
   type KeyframeSet,
   type Keyframe,
@@ -113,6 +113,14 @@ export const useEditionStore = defineStore('edition', () => {
 
   /** Visibilité du panneau « Changements de cap brutaux » (tableau à la demande). */
   const showHeadingChangesPanel = ref(false)
+
+  /**
+   * Mode **validation** : pendant la lecture, un clic sur la carte signale un
+   * « problème » sur le segment courant (il reste déverrouillé) ; les segments
+   * traversés sans clic sont **verrouillés** automatiquement. Bascule via le
+   * bouton `mdi-camera-lock` de la toolbar.
+   */
+  const validationMode = ref(false)
 
   /**
    * Distance (m) du keyframe sélectionné pour l'édition (Composant B), ou
@@ -253,6 +261,42 @@ export const useEditionStore = defineStore('edition', () => {
     ),
   )
 
+  // --- Verrous de segments (mode validation) ---
+
+  /** Distances (m) du keyframe de départ des segments **verrouillés**. */
+  const lockedSegmentFromDistances = computed<Set<number>>(
+    () => new Set(keyframeSet.value?.locked_segments ?? []),
+  )
+
+  /** Distance (m) du keyframe de départ du segment courant (ou null). */
+  const currentSegmentFromDistance = computed<number | null>(() => {
+    const seg = currentSegment.value
+    return seg ? seg.prev.distance_from_start_m : null
+  })
+
+  /** `true` si le segment partant de `fromDistanceM` est verrouillé. */
+  function isSegmentLocked(fromDistanceM: number): boolean {
+    return lockedSegmentFromDistances.value.has(fromDistanceM)
+  }
+
+  /**
+   * `true` si le keyframe à `distanceM` **borde** un segment verrouillé (il est
+   * le `from` d'un segment verrouillé, ou le `to` du segment précédent). Un tel
+   * keyframe n'est pas modifiable.
+   */
+  function isKeyframeLocked(distanceM: number): boolean {
+    const kfs = keyframeSet.value?.keyframes ?? []
+    const idx = kfs.findIndex(k => k.distance_from_start_m === distanceM)
+    if (idx === -1) return false
+    const locked = lockedSegmentFromDistances.value
+    const prevFrom = idx > 0 ? kfs[idx - 1].distance_from_start_m : null
+    const thisFrom = idx < kfs.length - 1 ? kfs[idx].distance_from_start_m : null
+    return (
+      (prevFrom !== null && locked.has(prevFrom)) ||
+      (thisFrom !== null && locked.has(thisFrom))
+    )
+  }
+
   // --- Actions : sélection / cadre ViewPort ---
 
   function selectTrace(traceId: string) {
@@ -352,6 +396,8 @@ export const useEditionStore = defineStore('edition', () => {
       k => k.distance_from_start_m === distanceM,
     )
     if (!kf) return
+    // Verrouillage : un keyframe bordant un segment verrouillé n'est pas modifiable.
+    if (isKeyframeLocked(distanceM)) return
     Object.assign(kf.cam, updates)
   }
 
@@ -383,6 +429,10 @@ export const useEditionStore = defineStore('edition', () => {
     if (!set) return
     const kfs = set.keyframes
     if (kfs.some(k => k.distance_from_start_m === distanceM)) return
+    // Verrouillage : on ne peut pas insérer un keyframe dans un segment verrouillé.
+    if (distanceM < kfs[0].distance_from_start_m) return
+    const insertSeg = findSegment(kfs, distanceM * MS_PER_METER)
+    if (isSegmentLocked(insertSeg.prev.distance_from_start_m)) return
 
     // Interpolation depuis les voisins si valeurs non fournies.
     let resolvedCam = cam
@@ -435,6 +485,8 @@ export const useEditionStore = defineStore('edition', () => {
     if (!set || set.keyframes.length <= 2) return
     // Le point de départ (km 0) est intouchable.
     if (distanceM === set.keyframes[0].distance_from_start_m) return
+    // Verrouillage : un keyframe bordant un segment verrouillé n'est pas supprimable.
+    if (isKeyframeLocked(distanceM)) return
     const index = set.keyframes.findIndex(k => k.distance_from_start_m === distanceM)
     if (index === -1) return
     set.keyframes.splice(index, 1)
@@ -503,6 +555,64 @@ export const useEditionStore = defineStore('edition', () => {
   function toggleHeadingChangesPanel() {
     showHeadingChangesPanel.value = !showHeadingChangesPanel.value
   }
+
+  // --- Mode validation & verrous de segments ---
+
+  /** Segments (distance du keyframe de départ) signalés « problème » par un clic. */
+  const validationClicks = new Set<number>()
+  /** Dernier segment parcouru (pour verrouiller à la sortie). */
+  let previousSegmentFromDistance: number | null = null
+
+  /** Bascule le mode validation (réinitialise l'état transitoire). */
+  function toggleValidationMode() {
+    validationMode.value = !validationMode.value
+    validationClicks.clear()
+    previousSegmentFromDistance = currentSegmentFromDistance.value
+  }
+
+  /**
+   * En mode validation : signale un « problème » sur le segment courant (il
+   * reste donc déverrouillé). Appelé par un clic sur la carte.
+   */
+  function markValidationClick() {
+    if (!validationMode.value) return
+    const d = currentSegmentFromDistance.value
+    if (d !== null) validationClicks.add(d)
+  }
+
+  /** Verrouille le segment partant de `fromDistanceM` et persiste. */
+  function lockSegment(fromDistanceM: number) {
+    const set = keyframeSet.value
+    if (!set || isSegmentLocked(fromDistanceM)) return
+    if (!set.locked_segments) set.locked_segments = []
+    set.locked_segments.push(fromDistanceM)
+    saveKeyframes()
+  }
+
+  /** Déverrouille le segment partant de `fromDistanceM` et persiste. */
+  function unlockSegment(fromDistanceM: number) {
+    const set = keyframeSet.value
+    if (!set?.locked_segments || !isSegmentLocked(fromDistanceM)) return
+    set.locked_segments = set.locked_segments.filter(d => d !== fromDistanceM)
+    saveKeyframes()
+  }
+
+  /** Bascule l'état du verrou d'un segment (appui long sur la timeline RdV). */
+  function toggleSegmentLock(fromDistanceM: number) {
+    if (isSegmentLocked(fromDistanceM)) unlockSegment(fromDistanceM)
+    else lockSegment(fromDistanceM)
+  }
+
+  // En validation : quand le curseur quitte un segment sans qu'un clic
+  // « problème » n'y ait été posé, le segment est verrouillé.
+  watch(currentSegmentFromDistance, (newFrom) => {
+    if (!validationMode.value) return
+    const prev = previousSegmentFromDistance
+    previousSegmentFromDistance = newFrom
+    if (prev !== null && prev !== newFrom && !validationClicks.has(prev)) {
+      lockSegment(prev)
+    }
+  })
 
   /** Se positionne à une distance cumulée donnée (m), clampée à la trace. */
   function seekToDistance(distanceM: number) {
@@ -618,6 +728,10 @@ export const useEditionStore = defineStore('edition', () => {
     brutalHeadingChanges,
     headingChangeThresholdDegPerKm,
     showHeadingChangesPanel,
+    // État : verrous de segments (mode validation)
+    validationMode,
+    lockedSegmentFromDistances,
+    currentSegmentFromDistance,
     // État : édition keyframes
     selectedKeyframeDistance,
     // État : algorithme de génération
@@ -631,6 +745,12 @@ export const useEditionStore = defineStore('edition', () => {
     // Actions : analyse des changements de cap
     setHeadingChangeThreshold,
     toggleHeadingChangesPanel,
+    // Actions : mode validation & verrous
+    toggleValidationMode,
+    markValidationClick,
+    toggleSegmentLock,
+    isSegmentLocked,
+    isKeyframeLocked,
     // Actions : édition keyframes
     selectKeyframe,
     updateKeyframe,

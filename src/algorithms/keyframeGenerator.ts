@@ -59,6 +59,13 @@ export interface KeyframeSet {
   viewport: { width: number; height: number }
   sample_rate_m: number
   keyframes: Keyframe[]
+  /**
+   * Segments **verrouillés** (mode validation) : distances (m) du keyframe de
+   * départ de chaque segment verrouillé. Un segment = `[keyframe i, i+1]`.
+   * Champ optionnel et rétro-compatible (absent = aucun verrou). Réinitialisé
+   * quand le jeu est régénéré.
+   */
+  locked_segments?: number[]
 }
 
 // --- Paramètres ---

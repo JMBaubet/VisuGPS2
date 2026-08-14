@@ -110,6 +110,20 @@
         offset-y="-6"
       />
     </v-btn>
+
+    <!-- Mode validation : verrouillage automatique des segments sans clic -->
+    <v-btn
+      icon
+      :color="editionStore.validationMode ? 'primary' : ''"
+      :title="
+        editionStore.validationMode
+          ? 'Mode validation actif — clic sur la carte = problème, segments sans clic verrouillés'
+          : 'Mode validation (verrouille les segments sans clic)'
+      "
+      @click="editionStore.toggleValidationMode()"
+    >
+      <v-icon>mdi-camera-lock</v-icon>
+    </v-btn>
   </v-app-bar>
 </template>
 
@@ -130,6 +144,9 @@
  *     cadre (overlay CSS)
  *   - le bouton **Cap brutaux** (badge du nombre de virages détectés) :
  *     affiche/masque le tableau des changements de cap brutaux
+ *   - le bouton **Mode validation** (`mdi-camera-lock`) : pendant la lecture,
+ *     un clic carte signale un problème (segment déverrouillé), les segments
+ *     sans clic sont verrouillés
  */
 import { computed, ref } from 'vue'
 import { useEditionStore } from '../../stores/edition'
