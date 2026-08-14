@@ -36,12 +36,24 @@ import {
 } from '../algorithms/headingChanges'
 import { bearing, bearingDelta, haversineMeters } from '../utils/geo'
 import { useKeyframesStore } from './keyframes'
+import { useSettingsStore } from './settings'
+import { isValidHexAlpha } from '../utils/materialColors'
 
 /** Vitesse par défaut : 4000 ms/km (spec §7). Exposé pour l'affichage UI. */
 export const DEFAULT_SPEED_MS_PER_KM = 4000
 
 /** Tolérance (m) pour considérer le curseur « sur » un point de RdV. */
 export const ON_KEYFRAME_EPSILON_M = 1
+
+// --- Chemins des paramètres d'édition (panneau Paramètres, settings.default.toml) ---
+
+const SETTING_ALGORITHM = 'Edition.Generation.algorithme'
+const SETTING_GAP_MIN = 'Edition.Generation.gapMin'
+const SETTING_ZOOM_DEFAULT = 'Edition.Camera.zoomDefaut'
+const SETTING_PITCH_DEFAULT = 'Edition.Camera.pitchDefaut'
+const SETTING_VIEWPORT_DEFAULT = 'Edition.Camera.viewportDefaut'
+const SETTING_TRACE_COLOR = 'Edition.Couleurs.trace'
+const SETTING_CURSOR_COLOR = 'Edition.Couleurs.curseur'
 
 export const useEditionStore = defineStore('edition', () => {
   /**
@@ -110,6 +122,33 @@ export const useEditionStore = defineStore('edition', () => {
    * (timeline + tableau) : ne régénère pas les keyframes.
    */
   const headingChangeThresholdDegPerKm = ref(45)
+
+  // --- Paramètres d'édition (panneau Paramètres de la vue) ---
+
+  /**
+   * Zoom par défaut de la caméra (paramètre `Edition.Camera.zoomDefaut`).
+   * Appliqué aux nouveaux keyframes générés et valeur de référence du reset des
+   * sliders du CameraEditor. Défaut : 16.0.
+   */
+  const defaultZoom = ref(16)
+
+  /**
+   * Pitch par défaut de la caméra (paramètre `Edition.Camera.pitchDefaut`).
+   * Même usage que `defaultZoom`. Défaut : 60.
+   */
+  const defaultPitch = ref(60)
+
+  /**
+   * Couleur de la LineString de la trace (paramètre `Edition.Couleurs.trace`),
+   * au format #RRGGBBAA. Défaut : rouge Material 500.
+   */
+  const traceColor = ref('#F44336FF')
+
+  /**
+   * Couleur du curseur d'avancement (paramètre `Edition.Couleurs.curseur`) —
+   * marqueur carte + curseur timeline. Format #RRGGBBAA. Défaut : jaune A400.
+   */
+  const cursorColor = ref('#FFD600FF')
 
   /** Visibilité du panneau « Changements de cap brutaux » (tableau à la demande). */
   const showHeadingChangesPanel = ref(false)
@@ -540,6 +579,48 @@ export const useEditionStore = defineStore('edition', () => {
   }
 
   /**
+   * Applique les paramètres d'édition du panneau Paramètres au store.
+   *
+   * Lit les valeurs par dotted path dans `settingsStore.settings` (avec repli
+   * sur les défauts) et les répercute sur l'état. `includeViewport` ne vaut
+   * `true` qu'à **l'ouverture** de la vue : le « viewport par défaut » fixe
+   * alors le ratio initial. En cours de session, on appelle avec `false` pour
+   * ne pas écraser le flip-flop ViewPort à chaque sauvegarde d'un autre
+   * paramètre.
+   *
+   * Algorithme / gap min : les watchers d'EditionMap déclenchent la
+   * régénération. Couleurs / zoom / pitch : consommés réactivement.
+   */
+  function applySettings(includeViewport: boolean) {
+    const settings = useSettingsStore()
+    const read = (path: string, fallback: unknown) =>
+      settings.settings.find(d => d.path === path)?.value ?? fallback
+
+    const algo = read(SETTING_ALGORITHM, 'frustum')
+    if (algo === 'frustum' || algo === 'simple') keyframeAlgorithm.value = algo
+
+    const gap = Number(read(SETTING_GAP_MIN, 1000))
+    if (!Number.isNaN(gap)) minKeyframeGapM.value = Math.min(5000, Math.max(200, gap))
+
+    const zoom = Number(read(SETTING_ZOOM_DEFAULT, 16))
+    if (!Number.isNaN(zoom)) defaultZoom.value = Math.min(22, Math.max(1, zoom))
+
+    const pitch = Number(read(SETTING_PITCH_DEFAULT, 60))
+    if (!Number.isNaN(pitch)) defaultPitch.value = Math.min(85, Math.max(0, pitch))
+
+    const trace = read(SETTING_TRACE_COLOR, '#F44336FF')
+    if (typeof trace === 'string' && isValidHexAlpha(trace)) traceColor.value = trace
+
+    const cursor = read(SETTING_CURSOR_COLOR, '#FFD600FF')
+    if (typeof cursor === 'string' && isValidHexAlpha(cursor)) cursorColor.value = cursor
+
+    if (includeViewport) {
+      const vp = read(SETTING_VIEWPORT_DEFAULT, '16:9')
+      if (vp === '16:9' || vp === '4:3') viewportAspect.value = vp
+    }
+  }
+
+  /**
    * Change le seuil de détection des changements de cap « brutaux » (°/km).
    * Clampé à [10, 1000] et arrondi au pas de 5. Simple filtre d'affichage :
    * aucune régénération des keyframes.
@@ -737,11 +818,18 @@ export const useEditionStore = defineStore('edition', () => {
     // État : algorithme de génération
     keyframeAlgorithm,
     minKeyframeGapM,
+    // État : paramètres d'édition (panneau Paramètres)
+    defaultZoom,
+    defaultPitch,
+    traceColor,
+    cursorColor,
     // Actions : sélection / cadre
     selectTrace,
     clearSelection,
     toggleViewportFrame,
     setViewportAspect,
+    // Actions : paramètres d'édition
+    applySettings,
     // Actions : analyse des changements de cap
     setHeadingChangeThreshold,
     toggleHeadingChangesPanel,

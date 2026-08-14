@@ -66,6 +66,8 @@ onUnmounted(() => {
     <v-btn
       icon="mdi-cog-outline"
       slim
+      :color="appStore.isSettingsDrawerOpen ? 'primary' : ''"
+      :title="appStore.isSettingsDrawerOpen ? 'Fermer les paramètres' : 'Paramètres'"
       @click="emit('open-settings')"
     ></v-btn>
     <v-btn

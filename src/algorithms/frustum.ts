@@ -397,6 +397,8 @@ function evaluateBearing(
   viewport: { width: number; height: number },
   bearingToDeg?: number,
   terrainSampler: TerrainSampler | null = null,
+  camZoom: number = DEFAULT_CAM_ZOOM,
+  camPitch: number = DEFAULT_CAM_PITCH,
 ): SegmentEval {
   const a = poly[fromIdx]
   const z = poly[toIdx]
@@ -421,7 +423,7 @@ function evaluateBearing(
     // (validation de résolution), sinon interpolé linéairement (chemin le
     // plus court) entre les deux caps des keyframes du segment.
     const b = bearingToDeg === undefined ? bearingDeg : lerpAngle(bearingDeg, bearingToDeg, ratio)
-    const pose = cameraPose(camLng, camLat, camAlt, DEFAULT_CAM_ZOOM, DEFAULT_CAM_PITCH, b, viewport)
+    const pose = cameraPose(camLng, camLat, camAlt, camZoom, camPitch, b, viewport)
 
     // Altitude du traceur = terrain réel si disponible (le marker est posé sur
     // le terrain rendu), sinon altitude GPX.
@@ -472,11 +474,13 @@ function resolveSegment(
   toIdx: number,
   viewport: { width: number; height: number },
   terrainSampler: TerrainSampler | null,
+  camZoom: number = DEFAULT_CAM_ZOOM,
+  camPitch: number = DEFAULT_CAM_PITCH,
 ): { bearing: number; allVisible: boolean; firstFailIndex: number } {
   const a = poly[fromIdx]
   const z = poly[toIdx]
   const direct = bearing(a.lat, a.lng, z.lat, z.lng)
-  const directEval = evaluateBearing(poly, world, fromIdx, toIdx, direct, viewport, undefined, terrainSampler)
+  const directEval = evaluateBearing(poly, world, fromIdx, toIdx, direct, viewport, undefined, terrainSampler, camZoom, camPitch)
 
   const allVisible = directEval.total === 0 || directEval.visible === directEval.total
   if (allVisible) return { bearing: direct, allVisible: true, firstFailIndex: -1 }
@@ -489,7 +493,7 @@ function resolveSegment(
     for (const angle of [OBLIQUE_MIN_DEG, OBLIQUE_BEARING_DEG, OBLIQUE_MAX_DEG]) {
       for (const side of [1, -1]) {
         const cand = normalizeBearing(thetaTrace + side * angle)
-        const evalRes = evaluateBearing(poly, world, fromIdx, toIdx, cand, viewport, undefined, terrainSampler)
+        const evalRes = evaluateBearing(poly, world, fromIdx, toIdx, cand, viewport, undefined, terrainSampler, camZoom, camPitch)
         if (evalRes.visible > best.visible) {
           best = evalRes
           bestBearing = cand
@@ -522,6 +526,8 @@ function resolveSegment(
  * @param terrainSampler - Échantillonneur d'altitude terrain (DEM) pour
  *                         l'occlusion par le relief ; `null` = fallback sur
  *                         les points de trace.
+ * @param camZoom        - Zoom de caméra appliqué aux keyframes générés.
+ * @param camPitch       - Pitch de caméra appliqué aux keyframes générés.
  * @returns Le jeu de keyframes, ou `null` si la trace est vide.
  */
 export function generateFrustumKeyframes(
@@ -531,6 +537,8 @@ export function generateFrustumKeyframes(
   minKeyframeGapM: number = 1000,
   tracePoints?: { lat: number; lon: number; alt: number | null; distance_m: number }[] | null,
   terrainSampler?: TerrainSampler | null,
+  camZoom: number = DEFAULT_CAM_ZOOM,
+  camPitch: number = DEFAULT_CAM_PITCH,
 ): KeyframeSet | null {
   // 1. Polyligne indexée par distance (avec altitude si points riches fournis).
   let poly: PolyVertex[]
@@ -554,7 +562,7 @@ export function generateFrustumKeyframes(
   let segments: { from: number; to: number; bearing: number }[] = []
 
   function place(fromIdx: number, toIdx: number): void {
-    const res = resolveSegment(poly, world, fromIdx, toIdx, viewport, sampler)
+    const res = resolveSegment(poly, world, fromIdx, toIdx, viewport, sampler, camZoom, camPitch)
     segments.push({ from: fromIdx, to: toIdx, bearing: res.bearing })
     if (res.allVisible) return
 
@@ -596,7 +604,7 @@ export function generateFrustumKeyframes(
       // Le cap d'arrivée est celui du segment suivant ; le dernier keyframe
       // reprend le cap du segment précédent (même logique qu'à l'étape 4).
       const bTo = ti === lastIdx ? bFrom : bearingByFrom.get(ti) ?? bFrom
-      const evalRes = evaluateBearing(poly, world, fi, ti, bFrom, viewport, bTo, sampler)
+      const evalRes = evaluateBearing(poly, world, fi, ti, bFrom, viewport, bTo, sampler, camZoom, camPitch)
       if (evalRes.total > 0 && evalRes.visible < evalRes.total) {
         const minHalf = gap / 2
         const k = bestInsertionPoint(poly, fi, ti, minHalf)
@@ -641,9 +649,9 @@ export function generateFrustumKeyframes(
       cam: {
         lng: p.lng,
         lat: p.lat,
-        zoom: DEFAULT_CAM_ZOOM,
+        zoom: camZoom,
         bearing: b,
-        pitch: DEFAULT_CAM_PITCH,
+        pitch: camPitch,
       },
       traceur: { lng: p.lng, lat: p.lat, altitude: p.altitude },
     }

@@ -68,13 +68,14 @@
             </rect>
           </g>
 
-          <!-- Curseur orange (3px) — au-dessus des bandes, sous les ticks RdV -->
+          <!-- Curseur d'avancement (3px) — au-dessus des bandes, sous les ticks
+               RdV. Couleur pilotée par le paramètre Edition.Couleurs.curseur. -->
           <rect
             :x="cursorX - CURSOR_WIDTH / 2"
             :y="rdvZoneY"
             :width="CURSOR_WIDTH"
             :height="advanceBarY + advanceBarHeight - rdvZoneY"
-            fill="#FF9800"
+            :fill="cursorColorRgba"
           />
 
           <!-- ZONE 1 : Points de RdV (keyframes) — ticks bleus (hauteur limitée, centrés) -->
@@ -198,6 +199,7 @@
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useEditionStore } from '../../stores/edition'
+import { hexToRgbaString } from '../../utils/materialColors'
 import {
   headingChangeThickness,
   ROTATION_BASE_COLORS,
@@ -404,6 +406,14 @@ function stopScrollLoop() {
 const totalDistanceM = computed(() => editionStore.totalDistanceM)
 const currentDistanceM = computed(() => editionStore.currentDistanceM)
 const progressRatio = computed(() => editionStore.progressRatio)
+
+/**
+ * Couleur du curseur d'avancement au format `rgba()` (SVG fill), depuis le
+ * paramètre Edition.Couleurs.curseur (#RRGGBBAA).
+ */
+const cursorColorRgba = computed(
+  () => hexToRgbaString(editionStore.cursorColor) || '#FF9800',
+)
 
 /** Largeur de la jauge jaune (px). */
 const progressWidthPx = computed(() =>

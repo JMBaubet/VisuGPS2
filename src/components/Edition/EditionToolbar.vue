@@ -6,33 +6,6 @@
 
     <v-spacer />
 
-    <!-- Sélecteur de l'algorithme de génération des keyframes -->
-    <v-select
-      :model-value="editionStore.keyframeAlgorithm"
-      :items="algorithmItems"
-      density="compact"
-      hide-details
-      variant="outlined"
-      class="algo-select"
-      label="Algorithme"
-      @update:model-value="onAlgorithmChange"
-    />
-
-    <!-- Distance minimale entre keyframes (frustum) -->
-    <v-text-field
-      :model-value="String(editionStore.minKeyframeGapM)"
-      density="compact"
-      hide-details
-      variant="outlined"
-      type="number"
-      min="200"
-      max="5000"
-      step="50"
-      label="Gap min (m)"
-      class="gap-field"
-      @change="onGapChange"
-    />
-
     <!--
       Cadre ViewPort : flip-flop 16:9 / 4:3.
       Icône = ratio (monitor / monitor-small) ; couleur = taux de verrouillage
@@ -75,8 +48,14 @@
       <v-icon>mdi-camera-lock</v-icon>
     </v-btn>
 
-    <!-- Paramètres de la vue (icône seule pour l'instant, comme la toolbar Accueil) -->
-    <v-btn icon="mdi-cog-outline" slim title="Paramètres de la vue Edition"></v-btn>
+    <!-- Paramètres de la vue (panneau Paramètres, comme la toolbar Accueil) -->
+    <v-btn
+      icon="mdi-cog-outline"
+      slim
+      :color="appStore.isSettingsDrawerOpen ? 'primary' : ''"
+      :title="appStore.isSettingsDrawerOpen ? 'Fermer les paramètres' : 'Paramètres de la vue Edition'"
+      @click="emit('open-settings')"
+    ></v-btn>
 
     <!-- Quitter l'édition (retour à l'accueil), complètement à droite -->
     <v-btn icon :to="{ name: 'accueil' }" title="Quitter l'édition — retour à l'accueil">
@@ -91,9 +70,6 @@
  *
  * Semi-transparente par-dessus la carte, elle expose :
  *   - le titre de la trace éditée
- *   - le sélecteur de l'algorithme de génération des keyframes
- *     (`'frustum'` — placement par visibilité — ou `'simple'` — MVP)
- *   - la distance minimale entre keyframes (frustum, 200–5000 m, pas 50)
  *   - le bouton **ViewPort** : **flip-flop** entre 16:9 et 4:3 — icône
  *     `mdi-monitor` (16:9) / `mdi-monitor-small` (4:3), chaque ratio exploite
  *     son propre fichier keyframes et son cadre ; **couleur** = avancement du
@@ -104,14 +80,20 @@
  *     un clic carte signale un problème (segment déverrouillé), les segments
  *     sans clic sont verrouillés
  *   - le bouton **Paramètres** (`mdi-cog-outline`, comme la toolbar Accueil) :
- *     icône seule pour l'instant, pas encore câblée
+ *     ouvre le panneau Paramètres de la vue (algorithme, gap min, zoom/pitch,
+ *     viewport et couleurs y sont gérés)
  *   - le bouton **Quitter** (`mdi-location-exit`, complètement à droite de la
  *     barre) : retour à l'accueil
  */
 import { computed } from 'vue'
+import { useAppStore } from '../../stores/app'
 import { useEditionStore } from '../../stores/edition'
 import { useTracesStore } from '../../stores/traces'
 
+/** Ouvre le panneau Paramètres de la vue (reçu par EditionCamera). */
+const emit = defineEmits<{ (e: 'open-settings'): void }>()
+
+const appStore = useAppStore()
 const editionStore = useEditionStore()
 const tracesStore = useTracesStore()
 
@@ -150,26 +132,6 @@ const viewportColor = computed(() => {
   return '#F44336' // rouge
 })
 
-/** Options du sélecteur d'algorithme. */
-const algorithmItems = [
-  { title: 'Frustum', value: 'frustum' },
-  { title: 'Simple', value: 'simple' },
-]
-
-function onAlgorithmChange(value: unknown) {
-  if (value === 'frustum' || value === 'simple') {
-    editionStore.setKeyframeAlgorithm(value)
-  }
-}
-
-function onGapChange(event: Event) {
-  const input = (event.target as HTMLInputElement)?.value
-  const n = input !== undefined && input !== '' ? Number(input) : NaN
-  if (!Number.isNaN(n)) editionStore.setMinKeyframeGapM(n)
-}
-
-// --- Bouton ViewPort (flip-flop 16:9 / 4:3) ---
-
 /**
  * Bascule (flip-flop) du ratio d'écran entre 16:9 et 4:3. Affiche le cadre et
  * charge/génère le fichier keyframes du ratio sélectionné.
@@ -184,14 +146,6 @@ function onViewportFlip() {
 .edition-toolbar {
   background-color: rgba(var(--v-theme-surface), 0.82);
   backdrop-filter: blur(4px);
-}
-
-/* Largeurs des champs Algorithme / Gap min. */
-.algo-select {
-  max-width: 150px;
-}
-.gap-field {
-  max-width: 130px;
 }
 
 </style>

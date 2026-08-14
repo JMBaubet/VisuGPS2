@@ -49,7 +49,7 @@
             <span
               class="slider-value"
               :class="{ 'value-modified': !isPitchDefault }"
-              :title="isPitchDefault ? undefined : 'Clic pour remettre 60°'"
+              :title="isPitchDefault ? undefined : `Clic pour remettre ${editionStore.defaultPitch}°`"
               @click="!isPitchDefault && !isCurrentKeyframeLocked && resetPitch()"
             >
               {{ pitchModel?.toFixed(0) }}°
@@ -73,7 +73,7 @@
             <span
               class="slider-value"
               :class="{ 'value-modified': !isZoomDefault }"
-              :title="isZoomDefault ? undefined : 'Clic pour remettre 16.0'"
+              :title="isZoomDefault ? undefined : `Clic pour remettre ${editionStore.defaultZoom.toFixed(1)}`"
               @click="!isZoomDefault && !isCurrentKeyframeLocked && resetZoom()"
             >
               {{ zoomModel?.toFixed(1) }}
@@ -203,11 +203,7 @@
  * (`saveKeyframes`), le bouton Undo restaure l'état précédent.
  */
 import { computed, ref, watch, onUnmounted } from 'vue'
-import {
-  type CamState,
-  DEFAULT_CAM_PITCH,
-  DEFAULT_CAM_ZOOM,
-} from '../../algorithms/keyframeGenerator'
+import type { CamState } from '../../algorithms/keyframeGenerator'
 import { useEditionStore } from '../../stores/edition'
 import { useEditionMap } from '../../composables/useEditionMap'
 import DistanceHud from './DistanceHud.vue'
@@ -312,19 +308,19 @@ function applyCamToMap(cam: CamState) {
 const pitchFillPct = computed(() => (pitchModel.value / 85) * 100)
 const zoomFillPct = computed(() => (zoomModel.value / 22) * 100)
 
-/** `true` si le pitch est sur sa valeur par défaut (60°). */
-const isPitchDefault = computed(() => pitchModel.value === DEFAULT_CAM_PITCH)
-/** `true` si le zoom est sur sa valeur par défaut (16.0). */
-const isZoomDefault = computed(() => zoomModel.value === DEFAULT_CAM_ZOOM)
+/** `true` si le pitch est sur sa valeur par défaut (paramètre Edition). */
+const isPitchDefault = computed(() => pitchModel.value === editionStore.defaultPitch)
+/** `true` si le zoom est sur sa valeur par défaut (paramètre Edition). */
+const isZoomDefault = computed(() => zoomModel.value === editionStore.defaultZoom)
 
-/** Remet le pitch à sa valeur par défaut (60°). */
+/** Remet le pitch à sa valeur par défaut (paramètre Edition). */
 function resetPitch() {
-  applySliderValue('pitch', DEFAULT_CAM_PITCH)
+  applySliderValue('pitch', editionStore.defaultPitch)
 }
 
-/** Remet le zoom à sa valeur par défaut (16.0). */
+/** Remet le zoom à sa valeur par défaut (paramètre Edition). */
 function resetZoom() {
-  applySliderValue('zoom', DEFAULT_CAM_ZOOM)
+  applySliderValue('zoom', editionStore.defaultZoom)
 }
 
 // --- Sliders verticaux customs (Pitch / Zoom) ---

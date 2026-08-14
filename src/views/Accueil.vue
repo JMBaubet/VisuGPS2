@@ -27,7 +27,7 @@ onMounted(async () => {
       <AppBar
         :theme="appStore.theme"
         @update:theme="appStore.toggleDarkMode()"
-        @open-settings="appStore.isSettingsDrawerOpen = true"
+        @open-settings="appStore.isSettingsDrawerOpen = !appStore.isSettingsDrawerOpen"
       />
 
       <v-main fill-height style="padding-left: 492px;">

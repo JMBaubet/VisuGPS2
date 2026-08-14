@@ -25,6 +25,15 @@ import ParameterCard from '../parameters/ParameterCard.vue'
 import SettingsEditMonitor from './SettingsEditMonitor.vue'
 import SettingsCategory from './SettingsCategory.vue'
 
+/**
+ * Affiche les sections système (actions + catégories communes) en plus des
+ * catégories de la vue active. `false` pour un drawer limité à la vue active
+ * (ex. vue d'édition : seuls les paramètres d'édition sont proposés).
+ */
+const props = withDefaults(defineProps<{ showSystem?: boolean }>(), {
+  showSystem: true,
+})
+
 const appStore = useAppStore()
 const settingsStore = useSettingsStore()
 
@@ -105,30 +114,32 @@ function onCategoryClick(category: CategoryNode) {
     <v-divider></v-divider>
 
     <v-list class="settings-list" density="compact" nav>
-      <!-- 1. Actions système (entrées non-paramètres) -->
-      <template v-if="systemActions.length">
-        <v-list-item
-          v-for="action in systemActions"
-          :key="`action-${action.key}`"
-          :prepend-icon="action.icon"
-          :title="action.label"
-          :value="`action-${action.key}`"
-          @click="onSystemAction(action.action)"
-        ></v-list-item>
-        <v-divider class="my-2"></v-divider>
+      <!-- Sections système : masquées si `showSystem` est false (vue Édition) -->
+      <template v-if="props.showSystem">
+        <!-- 1. Actions système (entrées non-paramètres) -->
+        <template v-if="systemActions.length">
+          <v-list-item
+            v-for="action in systemActions"
+            :key="`action-${action.key}`"
+            :prepend-icon="action.icon"
+            :title="action.label"
+            :value="`action-${action.key}`"
+            @click="onSystemAction(action.action)"
+          ></v-list-item>
+          <v-divider class="my-2"></v-divider>
+        </template>
+
+        <!-- 2. Catégories système (communes à toutes les vues) -->
+        <SettingsCategory
+          v-for="category in systemCategories"
+          :key="`sys-${category.id}`"
+          :category="category"
+          :can-open-handler="category.handler === 'monitors' ? hasMultipleDisplays : true"
+          @open-param="openParam"
+          @category-click="onCategoryClick"
+        />
+        <v-divider v-if="systemCategories.length" class="my-2"></v-divider>
       </template>
-
-      <!-- 2. Catégories système (communes à toutes les vues) -->
-      <SettingsCategory
-        v-for="category in systemCategories"
-        :key="`sys-${category.id}`"
-        :category="category"
-        :can-open-handler="category.handler === 'monitors' ? hasMultipleDisplays : true"
-        @open-param="openParam"
-        @category-click="onCategoryClick"
-      />
-
-      <v-divider v-if="systemCategories.length" class="my-2"></v-divider>
 
       <!-- 3. Catégories de la vue active -->
       <SettingsCategory

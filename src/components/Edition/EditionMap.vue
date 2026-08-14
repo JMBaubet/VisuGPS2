@@ -49,6 +49,7 @@ import {
   type KeyframeSet,
   type ViewportAspect,
 } from '../../algorithms/keyframeGenerator'
+import { hexToRgbaString } from '../../utils/materialColors'
 
 // --- Stores ---
 
@@ -390,7 +391,8 @@ async function initializeMap(token: string) {
           'line-join': 'round',
         },
         paint: {
-          'line-color': '#FF0000',
+          // Couleur de la trace pilotée par le paramètre Edition.Couleurs.trace.
+          'line-color': hexToRgbaString(editionStore.traceColor) || '#FF0000',
           'line-width': 5,
           'line-opacity': 0.9,
         },
@@ -417,7 +419,8 @@ async function initializeMap(token: string) {
         source: MARKER_SOURCE_ID,
         paint: {
           'circle-radius': 9,
-          'circle-color': '#FFD600',
+          // Couleur du curseur d'avancement pilotée par Edition.Couleurs.curseur.
+          'circle-color': hexToRgbaString(editionStore.cursorColor) || '#FFD600',
           'circle-stroke-width': 2,
           'circle-stroke-color': '#FFFFFF',
           'circle-opacity': 1,
@@ -530,6 +533,8 @@ async function generateKeyframesFor(aspect: ViewportAspect): Promise<KeyframeSet
     editionStore.minKeyframeGapM,
     sampler,
     VIEWPORTS_BY_ASPECT[aspect],
+    editionStore.defaultZoom,
+    editionStore.defaultPitch,
   )
   if (!generated) {
     console.error(`[EditionMap] Impossible de générer les keyframes pour ${traceId} (${aspect})`)
@@ -616,6 +621,30 @@ watch(
     void ensureAspectKeyframes(aspect, { active: true })
     void ensureAspectKeyframes(otherAspect(aspect), { active: false })
     scheduleTerrainRegeneration()
+  },
+)
+
+/**
+ * Couleur de la trace (LineString) : appliquée en direct sur la couche Mapbox
+ * quand le paramètre Edition.Couleurs.trace change.
+ */
+watch(
+  () => editionStore.traceColor,
+  color => {
+    const rgba = hexToRgbaString(color)
+    if (rgba) map?.setPaintProperty(TRACE_LINE_LAYER_ID, 'line-color', rgba)
+  },
+)
+
+/**
+ * Couleur du curseur d'avancement (marqueur carte) : appliquée en direct sur la
+ * couche CircleLayer quand le paramètre Edition.Couleurs.curseur change.
+ */
+watch(
+  () => editionStore.cursorColor,
+  color => {
+    const rgba = hexToRgbaString(color)
+    if (rgba) map?.setPaintProperty(MARKER_LAYER_ID, 'circle-color', rgba)
   },
 )
 
@@ -741,6 +770,12 @@ onMounted(async () => {
   } catch (error) {
     console.error('Failed to retrieve MapBox token from settings:', error)
   }
+
+  // Charger et appliquer les paramètres d'édition (algo/gap/zoom/pitch/
+  // viewport/couleurs) AVANT la génération des keyframes : celle-ci les lit
+  // dans le store édition au chargement de la trace.
+  await settingsStore.loadSettings()
+  editionStore.applySettings(true)
 
   await initializeMap(token)
 

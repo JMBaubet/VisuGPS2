@@ -48,6 +48,11 @@ label = "Accueil"
 icon = "mdi-home"
 groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Exemples"]
 
+[_meta.views.editionCamera]
+label = "Édition"
+icon = "mdi-camera"
+groups = ["Edition.Generation", "Edition.Camera", "Edition.Couleurs"]
+
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
 # Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
 [_meta.groups."Systeme.Key"]
@@ -73,6 +78,18 @@ icon = "mdi-gradient-horizontal"
 [_meta.groups."Carte.Clusters"]
 label = "Carte — Clusters"
 icon = "mdi-format-list-numbered"
+
+[_meta.groups."Edition.Generation"]
+label = "Édition — Génération"
+icon = "mdi-cog-outline"
+
+[_meta.groups."Edition.Camera"]
+label = "Édition — Caméra"
+icon = "mdi-camera-outline"
+
+[_meta.groups."Edition.Couleurs"]
+label = "Édition — Couleurs"
+icon = "mdi-palette"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -253,6 +270,104 @@ max = 2000
 step = 100
 unit = "ms"
 icon = "mdi-timer-outline"
+
+# ---------------------------------------------------------------------------
+# Paramètres de la vue d'édition caméra (route `editionCamera`).
+# Accessibles via le bouton Paramètres (`mdi-cog-outline`) de la toolbar
+# d'édition. L'algorithme et le gap min pilotent la génération des keyframes
+# (fichiers persistés jamais régénérés sauf changement explicite) ; le zoom /
+# pitch servent de valeurs par défaut aux nouveaux keyframes et au reset des
+# sliders du CameraEditor ; les couleurs sont appliquées en direct sur la carte
+# (trace + curseur d'avancement).
+# ---------------------------------------------------------------------------
+
+[Edition.Generation.algorithme]
+description = "Algorithme de génération des keyframes"
+documentation = """
+Algorithme utilisé pour générer les points de RdV de la trace :
+- **frustum** : placement récursif par visibilité (occlusion relief, cap lissé) ;
+- **simple** : échantillonnage régulier (MVP).
+Changer ce paramètre régénère les fichiers keyframes des deux ratios.
+"""
+type = "list"
+default = "frustum"
+choices = ["frustum", "simple"]
+icon = "mdi-creation"
+
+[Edition.Generation.gapMin]
+description = "Distance minimale entre keyframes (m)"
+documentation = """
+Distance minimale entre deux points de RdV consécutifs, en mètres. L'algorithme
+frustum l'utilise pour éviter la surabondance de keyframes.
+"""
+type = "int"
+default = 1000
+min = 200
+max = 5000
+step = 50
+unit = "m"
+icon = "mdi-format-line-spacing"
+
+[Edition.Camera.zoomDefaut]
+description = "Zoom par défaut de la caméra"
+documentation = """
+Zoom appliqué aux nouveaux keyframes (génération) et valeur de référence du
+reset des sliders du CameraEditor. N'affecte pas les fichiers keyframes déjà
+persistés.
+"""
+type = "float"
+default = 16.0
+min = 1.0
+max = 22.0
+step = 0.1
+icon = "mdi-magnify-plus-outline"
+
+[Edition.Camera.pitchDefaut]
+description = "Pitch par défaut de la caméra (°)"
+documentation = """
+Inclinaison de la caméra appliquée aux nouveaux keyframes et valeur de
+référence du reset des sliders du CameraEditor. 0 = vue verticale, 85 = quasi
+horizontale.
+"""
+type = "int"
+default = 60
+min = 0
+max = 85
+step = 1
+unit = "°"
+icon = "mdi-rotate-3d"
+
+[Edition.Camera.viewportDefaut]
+description = "ViewPort sélectionné par défaut"
+documentation = """
+Ratio d'écran actif à l'ouverture de la vue d'édition. Le bouton ViewPort de la
+toolbar permet toujours de basculer 16:9 / 4:3 pendant la session.
+"""
+type = "list"
+default = "16:9"
+choices = ["16:9", "4:3"]
+icon = "mdi-monitor"
+
+[Edition.Couleurs.trace]
+description = "Couleur de la trace"
+documentation = """
+Couleur de la LineString représentant la trace sur la carte satellite.
+Rouge Material (red 500) par défaut.
+"""
+type = "material_extended"
+default = "#F44336FF"
+icon = "mdi-vector-line"
+
+[Edition.Couleurs.curseur]
+description = "Couleur du curseur d'avancement"
+documentation = """
+Couleur du curseur qui avance le long de la trace pendant la lecture : le
+cercle sur la carte et le curseur de la timeline. Jaune Material (yellow A400)
+par défaut.
+"""
+type = "material_extended"
+default = "#FFD600FF"
+icon = "mdi-play-circle-outline"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.

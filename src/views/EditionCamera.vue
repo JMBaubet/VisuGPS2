@@ -14,7 +14,7 @@
  * Garde-fou : si aucune trace n'est sélectionnée (par exemple après un
  * rechargement direct de /edition-camera), on redirige vers l'accueil.
  */
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useSettingsStore } from '../stores/settings'
@@ -27,6 +27,7 @@ import PlaybackControls from '../components/Edition/PlaybackControls.vue'
 import TelemetryHud from '../components/Edition/TelemetryHud.vue'
 import HeadingChangesPanel from '../components/Edition/HeadingChangesPanel.vue'
 import CameraEditor from '../components/Edition/CameraEditor.vue'
+import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -46,7 +47,18 @@ onMounted(async () => {
   await appStore.loadModes()
   await settingsStore.loadSettings()
   await tracesStore.loadTraces()
+
+  // (Le seeding initial des paramètres d'édition est assuré par EditionMap
+  // avant la génération des keyframes : `loadSettings` + `applySettings(true)`.)
 })
+
+// Réactivité live : toute sauvegarde d'un paramètre dans le panneau Paramètres
+// (rechargement de `settings`) est répercutée sur le store édition — sans
+// toucher au viewport actif (le flip-flop de session n'est pas écrasé).
+watch(
+  () => settingsStore.settings,
+  () => editionStore.applySettings(false),
+)
 
 // --- Raccourcis clavier ---
 //   Espace        → Play/Pause ;
@@ -97,7 +109,7 @@ onUnmounted(() => {
 <template>
   <v-app :theme="appStore.theme" class="h-screen w-screen">
     <v-layout>
-      <EditionToolbar />
+      <EditionToolbar @open-settings="appStore.isSettingsDrawerOpen = !appStore.isSettingsDrawerOpen" />
 
       <!--
         v-main en colonne flex : la zone carte occupe toute la place
@@ -115,6 +127,10 @@ onUnmounted(() => {
         </div>
         <PlaybackControls />
       </v-main>
+
+      <!-- Panneau Paramètres (comme sur l'Accueil) : catégories de la vue active
+           uniquement — pas de sections système (prop `show-system`). -->
+      <SettingsDrawer :show-system="false" />
     </v-layout>
   </v-app>
 </template>

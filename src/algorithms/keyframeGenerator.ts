@@ -124,6 +124,8 @@ export const VIEWPORTS_BY_ASPECT: Record<ViewportAspect, { width: number; height
  *                         l'occlusion par le relief (algorithme frustum).
  * @param viewport       - Viewport de référence pour la visibilité et le champ
  *                         `viewport` du JSON (spec §3.4). Défaut : 16:9.
+ * @param camZoom        - Zoom de caméra appliqué aux keyframes générés.
+ * @param camPitch       - Pitch de caméra appliqué aux keyframes générés.
  * @returns Le jeu de keyframes, ou `null` si la trace est vide.
  */
 export function generateKeyframes(
@@ -135,10 +137,12 @@ export function generateKeyframes(
   minKeyframeGapM: number = 1000,
   terrainSampler?: TerrainSampler | null,
   viewport: { width: number; height: number } = VIEWPORTS_BY_ASPECT['16:9'],
+  camZoom: number = DEFAULT_CAM_ZOOM,
+  camPitch: number = DEFAULT_CAM_PITCH,
 ): KeyframeSet | null {
   // Algorithme frustum : placement récursif par visibilité.
   if (algorithm === 'frustum') {
-    return generateFrustumKeyframes(traceId, feature, viewport, minKeyframeGapM, tracePoints, terrainSampler)
+    return generateFrustumKeyframes(traceId, feature, viewport, minKeyframeGapM, tracePoints, terrainSampler, camZoom, camPitch)
   }
 
   // Algorithme simple (MVP) : échantillonnage régulier.
@@ -186,9 +190,9 @@ export function generateKeyframes(
       cam: {
         lng: k.p.lng,
         lat: k.p.lat,
-        zoom: DEFAULT_CAM_ZOOM,
+        zoom: camZoom,
         bearing: b,
-        pitch: DEFAULT_CAM_PITCH,
+        pitch: camPitch,
       },
       traceur: { lng: k.p.lng, lat: k.p.lat, altitude: k.p.altitude },
     }
