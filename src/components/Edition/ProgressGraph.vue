@@ -576,8 +576,33 @@ function formatTooltip(distanceM: number): string {
  */
 const KEYFRAME_HIT_TOLERANCE_M = 500
 
+/**
+ * Délai (ms) pour distinguer un clic simple d'un double-clic : le seek du clic
+ * est différé de ce délai ; si un second clic arrive avant, il est annulé
+ * (le double-clic bascule le verrou **sans bouger le curseur d'avancement**).
+ */
+const DBLCLICK_DELAY_MS = 250
+
+/** Timer du clic simple différé (annulé si un double-clic suit). */
+let singleClickTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Clic sur la timeline : **diffère** le seek de `DBLCLICK_DELAY_MS` pour ne pas
+ * bouger le curseur d'avancement quand le clic fait partie d'un double-clic
+ * (bascule de verrou). Un second clic avant l'échéance annule le seek en cours.
+ */
 function onTimelineClick(event: MouseEvent) {
-  const x = clientXToTimelineX(event.clientX)
+  if (singleClickTimer) clearTimeout(singleClickTimer)
+  const clientX = event.clientX
+  singleClickTimer = setTimeout(() => {
+    singleClickTimer = null
+    performTimelineSeek(clientX)
+  }, DBLCLICK_DELAY_MS)
+}
+
+/** Seek au point cliqué + sélection du keyframe le plus proche s'il est atteint. */
+function performTimelineSeek(clientX: number) {
+  const x = clientXToTimelineX(clientX)
   const dist = timelineXToDistance(x)
   editionStore.seekToDistance(dist)
 
@@ -616,9 +641,14 @@ function findSegmentAt(dist: number): { fromDistanceM: number } | null {
 /**
  * Double-clic sur un segment de la timeline : **bascule** l'état du verrou
  * (Verrouiller si déverrouillé, Déverrouiller si verrouillé), sans passer par
- * un menu.
+ * un menu. Le curseur d'avancement **ne bouge pas** : le seek des clics
+ * constituants est annulé ici.
  */
 function onTimelineDblClick(event: MouseEvent) {
+  if (singleClickTimer) {
+    clearTimeout(singleClickTimer)
+    singleClickTimer = null
+  }
   const x = clientXToTimelineX(event.clientX)
   const dist = timelineXToDistance(x)
   const seg = findSegmentAt(dist)
@@ -691,6 +721,10 @@ onUnmounted(() => {
     viewportEl.value.removeEventListener('scroll', onManualScroll)
   }
   if (userScrollTimer) clearTimeout(userScrollTimer)
+  if (singleClickTimer) {
+    clearTimeout(singleClickTimer)
+    singleClickTimer = null
+  }
 })
 </script>
 

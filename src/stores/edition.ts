@@ -52,6 +52,7 @@ const SETTING_GAP_MIN = 'Edition.Generation.gapMin'
 const SETTING_ZOOM_DEFAULT = 'Edition.Camera.zoomDefaut'
 const SETTING_PITCH_DEFAULT = 'Edition.Camera.pitchDefaut'
 const SETTING_VIEWPORT_DEFAULT = 'Edition.Camera.viewportDefaut'
+const SETTING_FLY_TO_DURATION = 'Edition.Camera.dureeFlyTo'
 const SETTING_TRACE_COLOR = 'Edition.Couleurs.trace'
 const SETTING_CURSOR_COLOR = 'Edition.Couleurs.curseur'
 const SETTING_TRACE_WIDTH = 'Edition.Couleurs.epaisseurTrace'
@@ -156,6 +157,13 @@ export const useEditionStore = defineStore('edition', () => {
    * `Edition.Couleurs.epaisseurTrace`), en pixels. Bornes 1–20. Défaut : 4.
    */
   const traceWidth = ref(4)
+
+  /**
+   * Durée de l'animation caméra quand la position du curseur change
+   * (paramètre `Edition.Camera.dureeFlyTo`), en ms. Bornes 100–1000.
+   * Défaut : 250.
+   */
+  const flyToDurationMs = ref(250)
 
   /** Visibilité du panneau « Changements de cap brutaux » (tableau à la demande). */
   const showHeadingChangesPanel = ref(false)
@@ -624,6 +632,9 @@ export const useEditionStore = defineStore('edition', () => {
     const width = Number(read(SETTING_TRACE_WIDTH, 4))
     if (!Number.isNaN(width)) traceWidth.value = Math.min(20, Math.max(1, width))
 
+    const fly = Number(read(SETTING_FLY_TO_DURATION, 250))
+    if (!Number.isNaN(fly)) flyToDurationMs.value = Math.min(1000, Math.max(100, fly))
+
     if (includeViewport) {
       const vp = read(SETTING_VIEWPORT_DEFAULT, '16:9')
       if (vp === '16:9' || vp === '4:3') viewportAspect.value = vp
@@ -662,13 +673,18 @@ export const useEditionStore = defineStore('edition', () => {
   }
 
   /**
-   * En mode validation : signale un « problème » sur le segment courant (il
-   * reste donc déverrouillé). Appelé par un clic sur la carte.
+   * En mode validation : signale un « problème » sur le segment courant — il
+   * reste **déverrouillé dans tous les cas** : on mémorise le segment (il ne
+   * sera pas re-verrouillé à sa sortie) **et** on le déverrouille explicitement
+   * s'il était déjà verrouillé (verrou automatique d'un passage précédent ou
+   * bascule manuelle). Appelé par un clic sur la carte ou la touche Entrée.
    */
   function markValidationClick() {
     if (!validationMode.value) return
     const d = currentSegmentFromDistance.value
-    if (d !== null) validationClicks.add(d)
+    if (d === null) return
+    validationClicks.add(d)
+    if (isSegmentLocked(d)) unlockSegment(d)
   }
 
   /** Verrouille le segment partant de `fromDistanceM` et persiste. */
@@ -680,8 +696,16 @@ export const useEditionStore = defineStore('edition', () => {
     saveKeyframes()
   }
 
-  /** Déverrouille le segment partant de `fromDistanceM` et persiste. */
+  /**
+   * Déverrouille le segment partant de `fromDistanceM` et persiste.
+   *
+   * Un déverrouillage manuel protège aussi le segment du **re-verrouillage
+   * automatique** du mode validation : sans cela, naviguer vers un autre
+   * segment (le seek du double-clic) ferait « quitter » ce segment au watcher,
+   * qui le reverrouillerait aussitôt.
+   */
   function unlockSegment(fromDistanceM: number) {
+    validationClicks.add(fromDistanceM)
     const set = keyframeSet.value
     if (!set?.locked_segments || !isSegmentLocked(fromDistanceM)) return
     set.locked_segments = set.locked_segments.filter(d => d !== fromDistanceM)
@@ -834,6 +858,7 @@ export const useEditionStore = defineStore('edition', () => {
     traceColor,
     cursorColor,
     traceWidth,
+    flyToDurationMs,
     // Actions : sélection / cadre
     selectTrace,
     clearSelection,

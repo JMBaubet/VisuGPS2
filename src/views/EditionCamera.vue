@@ -62,6 +62,9 @@ watch(
 
 // --- Raccourcis clavier ---
 //   Espace        → Play/Pause ;
+//   Entrée        → en mode validation : déverrouille le segment courant dans
+//                   tous les cas (équivalent au clic carte, y compris s'il
+//                   était déjà verrouillé) ;
 //   Flèche droite → pause (si lecture) + point de RdV suivant ;
 //   Flèche gauche → pause (si lecture) + point de RdV précédent.
 
@@ -85,6 +88,15 @@ function onEditionKeydown(event: KeyboardEvent) {
     case 'Space':
       event.preventDefault()
       if (editionStore.hasKeyframes) editionStore.togglePlay()
+      break
+    case 'Enter':
+    case 'NumpadEnter':
+      // En mode validation : Entrée = clic carte — le segment courant est
+      // déverrouillé dans tous les cas (mémorisé + déverrouillé s'il était
+      // verrouillé). Sans effet hors validation.
+      if (!editionStore.validationMode) break
+      event.preventDefault()
+      editionStore.markValidationClick()
       break
     case 'ArrowRight':
       event.preventDefault()

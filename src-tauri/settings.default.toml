@@ -389,6 +389,21 @@ default = "16:9"
 choices = ["16:9", "4:3"]
 icon = "mdi-monitor"
 
+[Edition.Camera.dureeFlyTo]
+description = "Durée du déplacement caméra vers le curseur (ms)"
+documentation = """
+Durée de l'animation de la caméra quand la position du curseur d'avancement
+change (clic sur la timeline, navigation entre RdV, clic sur un virage) : la
+caméra vole vers la nouvelle position au lieu d'y sauter instantanément.
+"""
+type = "int"
+default = 250
+min = 100
+max = 1000
+step = 50
+unit = "ms"
+icon = "mdi-timer-outline"
+
 [Edition.Couleurs.trace]
 description = "Couleur de la trace"
 documentation = """

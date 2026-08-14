@@ -40,7 +40,7 @@
       :color="editionStore.validationMode ? 'primary' : ''"
       :title="
         editionStore.validationMode
-          ? 'Mode validation actif — clic sur la carte = problème, segments sans clic verrouillés'
+          ? 'Mode validation actif — clic carte ou Entrée = problème, segments sans clic verrouillés'
           : 'Mode validation (verrouille les segments sans clic)'
       "
       @click="editionStore.toggleValidationMode()"

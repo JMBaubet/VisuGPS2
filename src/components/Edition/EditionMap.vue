@@ -353,8 +353,9 @@ async function initializeMap(token: string) {
   // Partager l'instance pour les widgets d'édition (CameraEditor).
   mapRef.value = map
 
-  // Mode validation : un clic sur la carte signale un « problème » sur le
-  // segment courant (il reste déverrouillé). Inactif hors validation.
+  // Mode validation : un clic sur la carte (ou la touche Entrée dans
+  // EditionCamera) signale un « problème » sur le segment courant (il reste
+  // déverrouillé). Inactif hors validation.
   map.on('click', () => editionStore.markValidationClick())
 
   map.on('load', async () => {
@@ -715,6 +716,66 @@ function updateMarkerSource() {
   }
 }
 
+// --- Seek animé (déplacement caméra vers le curseur) ---
+
+/**
+ * Easing entrée-sortie cubique : départ et arrivée en douceur, pour un
+ * déplacement « fly » agréable plutôt qu'un saut brutal.
+ */
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+}
+
+/**
+ * `true` quand l'animation de seek pose elle-même `currentTimeMs` : le watcher
+ * de `currentTimeMs` doit alors consommer le signal sans relancer d'animation.
+ */
+let suppressSeekWatch = false
+/** Identifiant rAF de l'animation de seek en cours (ou null). */
+let seekRafId: number | null = null
+
+/** Annule l'animation de seek en cours, le cas échéant. */
+function cancelSeekAnimation() {
+  if (seekRafId !== null) {
+    cancelAnimationFrame(seekRafId)
+    seekRafId = null
+  }
+  suppressSeekWatch = false
+}
+
+/**
+ * Anime le déplacement du curseur d'avancement (caméra + marqueur + timeline)
+ * de `fromMs` vers `toMs` sur la durée paramétrable `Edition.Camera.dureeFlyTo`
+ * (`flyToDurationMs`). Pose `currentTimeMs` à chaque frame avec un easing
+ * cubique : l'état interpolé (caméra, marqueur) est appliqué frame par frame,
+ * au lieu d'un `jumpTo` instantané.
+ */
+function startSeekAnimation(fromMs: number, toMs: number) {
+  cancelSeekAnimation()
+  const duration = Math.max(1, editionStore.flyToDurationMs)
+  if (fromMs === toMs || duration <= 1) {
+    applyInterpolatedState()
+    return
+  }
+  const start = performance.now()
+  const step = (now: number) => {
+    const t = Math.min(1, (now - start) / duration)
+    const eased = easeInOutCubic(t)
+    const target = fromMs + (toMs - fromMs) * eased
+    suppressSeekWatch = true
+    if (editionStore.currentTimeMs !== target) {
+      editionStore.currentTimeMs = target
+    }
+    applyInterpolatedState()
+    if (t >= 1) {
+      seekRafId = null
+      return
+    }
+    seekRafId = requestAnimationFrame(step)
+  }
+  seekRafId = requestAnimationFrame(step)
+}
+
 // --- Boucle d'animation (lecture) ---
 
 /** Callback d'une frame : calcule le delta, déclenche `tick`, applique l'état. */
@@ -753,22 +814,35 @@ function stopAnimation() {
   lastFrameTs = null
 }
 
-// Démarrage / arrêt de la boucle selon l'état de lecture du store.
+// Démarrage / arrêt de la boucle selon l'état de lecture du store. Au démarrage
+// de la lecture, une éventuelle animation de seek en cours est annulée (la
+// boucle rAF reprend le mouvement frame par frame).
 watch(
   () => editionStore.isPlaying,
   (playing) => {
-    if (playing) startAnimation()
-    else stopAnimation()
+    if (playing) {
+      cancelSeekAnimation()
+      startAnimation()
+    } else {
+      stopAnimation()
+    }
   },
 )
 
-// En pause : repositionner la caméra et le marker quand le temps change
-// (positionnement initial, seek futur). On évite la double-application
-// pendant la lecture (la boucle rAF s'en charge déjà).
+// En pause : quand la position change (seek via timeline, navigation RdV,
+// clic sur un virage…), animer le déplacement caméra/marqueur sur la durée
+// paramétrable (flyTo). Le watcher relance l'animation depuis la position
+// courante vers la nouvelle cible ; les frames de l'animation posent
+// `currentTimeMs` en court-circuitant ce watcher (`suppressSeekWatch`).
 watch(
   () => editionStore.currentTimeMs,
-  () => {
-    if (!editionStore.isPlaying) applyInterpolatedState()
+  (newMs, oldMs) => {
+    if (editionStore.isPlaying) return
+    if (suppressSeekWatch) {
+      suppressSeekWatch = false
+      return
+    }
+    startSeekAnimation(oldMs ?? newMs, newMs)
   },
 )
 
@@ -802,6 +876,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopAnimation()
+  cancelSeekAnimation()
   editionReady = false
   if (resizeObserver) {
     resizeObserver.disconnect()
