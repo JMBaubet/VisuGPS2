@@ -1,5 +1,5 @@
 <template>
-  <div v-if="editionStore.hasKeyframes" class="telemetry-hud">
+  <div v-if="editionStore.showTelemetryHud && editionStore.hasKeyframes" class="telemetry-hud">
     <div class="hud-title">Télémétrie</div>
 
     <!-- Paramètres caméra -->
@@ -36,7 +36,9 @@
  * (Zoom/Pitch/Bearing/Lng/Lat) et la relation caméra ↔ marqueur
  * (distance, cap relatif), lus depuis `editionStore`.
  *
- * Masqué tant qu'aucun jeu de keyframes n'est chargé.
+ * **Masqué par défaut** : la visibilité est pilotée par le paramètre
+ * `Edition.Camera.afficherTelemetrie` (bool, défaut false). Affiché
+ * uniquement si ce paramètre est actif **et** qu'un jeu de keyframes est chargé.
  */
 import { computed } from 'vue'
 import { useEditionStore } from '../../stores/edition'

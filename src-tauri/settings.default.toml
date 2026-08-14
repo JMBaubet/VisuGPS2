@@ -404,6 +404,17 @@ step = 50
 unit = "ms"
 icon = "mdi-timer-outline"
 
+[Edition.Camera.afficherTelemetrie]
+description = "Afficher le HUD de télémétrie"
+documentation = """
+Affiche l'overlay de télémétrie (coin supérieur droit) : paramètres caméra
+(Zoom/Pitch/Bearing/Lng/Lat), altitude du traceur et relation caméra ↔ marqueur
+(distance, cap relatif). Masqué par défaut.
+"""
+type = "bool"
+default = false
+icon = "mdi-information-outline"
+
 [Edition.Couleurs.trace]
 description = "Couleur de la trace"
 documentation = """

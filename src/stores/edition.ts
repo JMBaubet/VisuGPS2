@@ -53,6 +53,7 @@ const SETTING_ZOOM_DEFAULT = 'Edition.Camera.zoomDefaut'
 const SETTING_PITCH_DEFAULT = 'Edition.Camera.pitchDefaut'
 const SETTING_VIEWPORT_DEFAULT = 'Edition.Camera.viewportDefaut'
 const SETTING_FLY_TO_DURATION = 'Edition.Camera.dureeFlyTo'
+const SETTING_SHOW_TELEMETRY = 'Edition.Camera.afficherTelemetrie'
 const SETTING_TRACE_COLOR = 'Edition.Couleurs.trace'
 const SETTING_CURSOR_COLOR = 'Edition.Couleurs.curseur'
 const SETTING_TRACE_WIDTH = 'Edition.Couleurs.epaisseurTrace'
@@ -164,6 +165,12 @@ export const useEditionStore = defineStore('edition', () => {
    * Défaut : 250.
    */
   const flyToDurationMs = ref(250)
+
+  /**
+   * Visibilité du HUD de télémétrie (paramètre
+   * `Edition.Camera.afficherTelemetrie`). Masqué par défaut.
+   */
+  const showTelemetryHud = ref(false)
 
   /** Visibilité du panneau « Changements de cap brutaux » (tableau à la demande). */
   const showHeadingChangesPanel = ref(false)
@@ -635,6 +642,9 @@ export const useEditionStore = defineStore('edition', () => {
     const fly = Number(read(SETTING_FLY_TO_DURATION, 250))
     if (!Number.isNaN(fly)) flyToDurationMs.value = Math.min(1000, Math.max(100, fly))
 
+    const telemetry = read(SETTING_SHOW_TELEMETRY, false)
+    showTelemetryHud.value = telemetry === true
+
     if (includeViewport) {
       const vp = read(SETTING_VIEWPORT_DEFAULT, '16:9')
       if (vp === '16:9' || vp === '4:3') viewportAspect.value = vp
@@ -859,6 +869,7 @@ export const useEditionStore = defineStore('edition', () => {
     cursorColor,
     traceWidth,
     flyToDurationMs,
+    showTelemetryHud,
     // Actions : sélection / cadre
     selectTrace,
     clearSelection,
