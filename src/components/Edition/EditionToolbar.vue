@@ -1,10 +1,5 @@
 <template>
   <v-app-bar flat class="edition-toolbar" density="compact">
-    <!-- Retour à l'accueil -->
-    <v-btn icon :to="{ name: 'accueil' }" title="Accueil">
-      <v-icon>mdi-home</v-icon>
-    </v-btn>
-
     <v-app-bar-title class="text-truncate">
       {{ traceName }}
     </v-app-bar-title>
@@ -38,61 +33,23 @@
       @change="onGapChange"
     />
 
-    <!-- Seuil de détection des changements de cap brutaux (°/km) -->
-    <v-text-field
-      :model-value="String(editionStore.headingChangeThresholdDegPerKm)"
-      density="compact"
-      hide-details
-      variant="outlined"
-      type="number"
-      min="10"
-      max="1000"
-      step="5"
-      label="Seuil cap (°/km)"
-      class="threshold-field"
-      @change="onThresholdChange"
-    />
-
-    <!-- Cadre ViewPort : sélection du ratio d'écran + affichage/masquage -->
-    <v-menu
-      v-model="viewportMenuOpen"
-      location="bottom end"
-      :close-on-content-click="true"
+    <!--
+      Cadre ViewPort : flip-flop 16:9 / 4:3.
+      Icône = ratio (monitor / monitor-small) ; couleur = taux de verrouillage
+      (vert 100 %, jaune > 50 %, orange ≥ 10 %, rouge sinon).
+    -->
+    <v-btn
+      icon
+      :color="viewportColor"
+      :title="
+        `ViewPort ${editionStore.viewportAspect} · ${lockPct} % des segments verrouillés — cliquer pour basculer`
+      "
+      @click="onViewportFlip"
     >
-      <template #activator="{ props }">
-        <v-btn
-          icon
-          v-bind="props"
-          :color="editionStore.showViewportFrame ? 'primary' : ''"
-          :title="
-            editionStore.showViewportFrame
-              ? `Cadre ViewPort · ${editionStore.viewportAspect}`
-              : 'Cadre ViewPort masqué'
-          "
-        >
-          <v-icon>{{ editionStore.showViewportFrame ? 'mdi-monitor' : 'mdi-monitor-off' }}</v-icon>
-        </v-btn>
-      </template>
-      <v-list density="compact" class="viewport-menu">
-        <v-list-item
-          v-for="item in aspectItems"
-          :key="item.value"
-          :active="editionStore.viewportAspect === item.value"
-          @click="onAspectSelect(item.value)"
-        >
-          <v-list-item-title>{{ item.title }}</v-list-item-title>
-          <v-list-item-append-icon v-if="editionStore.viewportAspect === item.value">
-            mdi-check
-          </v-list-item-append-icon>
-        </v-list-item>
-        <v-divider />
-        <v-list-item @click="editionStore.toggleViewportFrame()">
-          <v-list-item-title>
-            {{ editionStore.showViewportFrame ? 'Masquer le cadre' : 'Afficher le cadre' }}
-          </v-list-item-title>
-        </v-list-item>
-      </v-list>
-    </v-menu>
+      <v-icon>
+        {{ editionStore.viewportAspect === '16:9' ? 'mdi-monitor' : 'mdi-monitor-small' }}
+      </v-icon>
+    </v-btn>
 
     <!-- Panneau « Changements de cap brutaux » (tableau à la demande) -->
     <v-btn
@@ -101,14 +58,7 @@
       title="Changements de cap brutaux"
       @click="editionStore.toggleHeadingChangesPanel()"
     >
-      <v-icon>mdi-rotate-3d</v-icon>
-      <v-badge
-        v-if="brutalCount > 0"
-        :content="String(brutalCount)"
-        color="error"
-        offset-x="-6"
-        offset-y="-6"
-      />
+      <v-icon>mdi-rotate-3d-variant</v-icon>
     </v-btn>
 
     <!-- Mode validation : verrouillage automatique des segments sans clic -->
@@ -124,6 +74,14 @@
     >
       <v-icon>mdi-camera-lock</v-icon>
     </v-btn>
+
+    <!-- Paramètres de la vue (icône seule pour l'instant, comme la toolbar Accueil) -->
+    <v-btn icon="mdi-cog-outline" slim title="Paramètres de la vue Edition"></v-btn>
+
+    <!-- Quitter l'édition (retour à l'accueil), complètement à droite -->
+    <v-btn icon :to="{ name: 'accueil' }" title="Quitter l'édition — retour à l'accueil">
+      <v-icon>mdi-location-exit</v-icon>
+    </v-btn>
   </v-app-bar>
 </template>
 
@@ -132,29 +90,27 @@
  * Barre d'outils supérieure de la vue d'édition caméra.
  *
  * Semi-transparente par-dessus la carte, elle expose :
- *   - un bouton Home (retour à l'accueil)
  *   - le titre de la trace éditée
  *   - le sélecteur de l'algorithme de génération des keyframes
  *     (`'frustum'` — placement par visibilité — ou `'simple'` — MVP)
  *   - la distance minimale entre keyframes (frustum, 200–5000 m, pas 50)
- *   - le seuil de détection des **changements de cap brutaux** (°/km,
- *     10–1000, pas 5 — filtre d'affichage, sans régénération)
- *   - le menu **ViewPort** : sélection du ratio d'écran (16:9 / 4:3 — chaque
- *     ratio exploite son propre fichier keyframes) et affichage/masquage du
- *     cadre (overlay CSS)
- *   - le bouton **Cap brutaux** (badge du nombre de virages détectés) :
- *     affiche/masque le tableau des changements de cap brutaux
+ *   - le bouton **ViewPort** : **flip-flop** entre 16:9 et 4:3 — icône
+ *     `mdi-monitor` (16:9) / `mdi-monitor-small` (4:3), chaque ratio exploite
+ *     son propre fichier keyframes et son cadre ; **couleur** = avancement du
+ *     verrouillage (vert 100 %, jaune > 50 %, orange ≥ 10 %, rouge sinon)
+ *   - le bouton **Cap brutaux** : affiche/masque le tableau des changements de
+ *     cap brutaux
  *   - le bouton **Mode validation** (`mdi-camera-lock`) : pendant la lecture,
  *     un clic carte signale un problème (segment déverrouillé), les segments
  *     sans clic sont verrouillés
+ *   - le bouton **Paramètres** (`mdi-cog-outline`, comme la toolbar Accueil) :
+ *     icône seule pour l'instant, pas encore câblée
+ *   - le bouton **Quitter** (`mdi-location-exit`, complètement à droite de la
+ *     barre) : retour à l'accueil
  */
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useEditionStore } from '../../stores/edition'
 import { useTracesStore } from '../../stores/traces'
-import {
-  VIEWPORTS_BY_ASPECT,
-  type ViewportAspect,
-} from '../../algorithms/keyframeGenerator'
 
 const editionStore = useEditionStore()
 const tracesStore = useTracesStore()
@@ -166,8 +122,33 @@ const traceName = computed(() => {
   return tracesStore.traces.find(t => t.id === id)?.name ?? 'Édition caméra'
 })
 
-/** Nombre de changements de cap brutaux (badge du bouton). */
-const brutalCount = computed(() => editionStore.brutalHeadingChanges.length)
+// --- Bouton ViewPort : ratio (icône) + avancement du verrouillage (couleur) ---
+
+/** Ratio (0..1) de segments verrouillés sur l'ensemble des segments. */
+const lockRatio = computed(() => {
+  const all = editionStore.headingChanges.length
+  if (all === 0) return 0
+  const locked = editionStore.headingChanges.filter(h =>
+    editionStore.isSegmentLocked(h.fromDistanceM),
+  ).length
+  return locked / all
+})
+
+/** Pourcentage de segments verrouillés (pour le tooltip). */
+const lockPct = computed(() => Math.round(lockRatio.value * 100))
+
+/**
+ * Couleur de l'icône ViewPort selon l'avancement du verrouillage :
+ * vert si **tous** les segments sont verrouillés, jaune si **> 50 %**, orange
+ * si **≥ 10 %**, rouge sinon (validation pas encore avancée).
+ */
+const viewportColor = computed(() => {
+  const r = lockRatio.value
+  if (r >= 1) return '#4CAF50' // vert
+  if (r > 0.5) return '#FFEB3B' // jaune
+  if (r >= 0.1) return '#FF9800' // orange
+  return '#F44336' // rouge
+})
 
 /** Options du sélecteur d'algorithme. */
 const algorithmItems = [
@@ -187,28 +168,14 @@ function onGapChange(event: Event) {
   if (!Number.isNaN(n)) editionStore.setMinKeyframeGapM(n)
 }
 
-/** Change le seuil de détection des changements de cap brutaux (°/km). */
-function onThresholdChange(event: Event) {
-  const input = (event.target as HTMLInputElement)?.value
-  const n = input !== undefined && input !== '' ? Number(input) : NaN
-  if (!Number.isNaN(n)) editionStore.setHeadingChangeThreshold(n)
-}
+// --- Bouton ViewPort (flip-flop 16:9 / 4:3) ---
 
-// --- Menu ViewPort (ratio d'écran + visibilité du cadre) ---
-
-/** Ouverture du menu ViewPort. */
-const viewportMenuOpen = ref(false)
-
-/** Ratios proposés, avec leurs dimensions de référence. */
-const aspectItems = (['16:9', '4:3'] as ViewportAspect[]).map(a => ({
-  value: a,
-  title: `ViewPort ${a} · ${VIEWPORTS_BY_ASPECT[a].width}×${VIEWPORTS_BY_ASPECT[a].height}`,
-}))
-
-/** Sélectionne un ratio : affiche son cadre et exploite son fichier keyframes. */
-function onAspectSelect(aspect: ViewportAspect) {
-  viewportMenuOpen.value = false
-  editionStore.setViewportAspect(aspect)
+/**
+ * Bascule (flip-flop) du ratio d'écran entre 16:9 et 4:3. Affiche le cadre et
+ * charge/génère le fichier keyframes du ratio sélectionné.
+ */
+function onViewportFlip() {
+  editionStore.setViewportAspect(editionStore.viewportAspect === '16:9' ? '4:3' : '16:9')
 }
 </script>
 
@@ -219,20 +186,12 @@ function onAspectSelect(aspect: ViewportAspect) {
   backdrop-filter: blur(4px);
 }
 
-/* Largeurs des champs Algorithme / Gap min / Seuil cap. */
+/* Largeurs des champs Algorithme / Gap min. */
 .algo-select {
   max-width: 150px;
 }
 .gap-field {
   max-width: 130px;
-}
-.threshold-field {
-  max-width: 130px;
-}
-
-/* Menu ViewPort (sélection du ratio d'écran). */
-.viewport-menu {
-  min-width: 200px;
 }
 
 </style>

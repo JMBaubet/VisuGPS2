@@ -101,3 +101,27 @@ export function headingChangeThickness(
     Math.floor((rateDegPerKm - thresholdDegPerKm) / RATE_BAND_STEP_DEG_PER_KM) + 1
   return THICKNESS_SUB + band * THICKNESS_STEP
 }
+
+/**
+ * Couleur **jaune → rouge** d'un taux de rotation (°/km) selon sa bande
+ * (tableau des changements de cap) : jaune pour la 1ʳᵉ bande (45–75 à seuil 45),
+ * ambre (75–105), orange foncé (105–135), rouge au-delà. La **teinte du sens**
+ * (teal/deep-purple) reste portée par les colonnes Δ dist / Δ cap.
+ */
+export function headingRateColor(
+  rateDegPerKm: number,
+  thresholdDegPerKm: number,
+): string {
+  const band =
+    Math.floor((rateDegPerKm - thresholdDegPerKm) / RATE_BAND_STEP_DEG_PER_KM) + 1
+  switch (band) {
+    case 1:
+      return '#FFEB3B' // jaune
+    case 2:
+      return '#FFC107' // ambre
+    case 3:
+      return '#FF6D00' // orange foncé
+    default:
+      return '#D50000' // rouge (bande ≥ 4)
+  }
+}

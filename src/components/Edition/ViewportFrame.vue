@@ -6,7 +6,11 @@
       de la zone de rendu, sans avoir à gérer quatre bandeaux.
       pointer-events: none pour ne pas bloquer la carte en dessous.
     -->
-    <div class="viewport-rect" :style="rectStyle">
+    <div
+      class="viewport-rect"
+      :class="{ 'mode-validation': editionStore.validationMode }"
+      :style="rectStyle"
+    >
       <span class="viewport-label">{{ viewportLabel }}</span>
     </div>
   </div>
@@ -142,6 +146,14 @@ onUnmounted(() => {
   border: 2px solid #FFFFFF;
   background: transparent;
   box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.7);
+}
+
+/* Mode validation : cadre bleu (et libellé assorti). */
+.viewport-rect.mode-validation {
+  border-color: #2196F3;
+}
+.viewport-rect.mode-validation .viewport-label {
+  color: #2196F3;
 }
 
 /* Étiquette discrète en haut à gauche du rectangle. */

@@ -19,11 +19,33 @@
       </v-btn>
     </div>
 
-    <!-- Légende : teinte = sens (l'épaisseur des bandes = intensité, sur la timeline) -->
+    <!-- Légende : teinte = sens (l'épaisseur des bandes = intensité, sur la timeline) + seuil -->
     <div class="hcp-legend">
       <span><i class="dot dot-teal" /> horaire (↻)</span>
       <span><i class="dot dot-purple" /> anti-horaire (↺)</span>
-      <span class="hcp-threshold">seuil {{ editionStore.headingChangeThresholdDegPerKm }} °/km</span>
+      <v-text-field
+        class="hcp-threshold-field"
+        :model-value="String(editionStore.headingChangeThresholdDegPerKm)"
+        density="compact"
+        hide-details
+        variant="outlined"
+        type="number"
+        min="10"
+        max="1000"
+        step="5"
+        label="Seuil °/km"
+        @change="onThresholdChange"
+      />
+    </div>
+
+    <!-- Code couleur des taux (°/km) : jaune → rouge par bande de 30 -->
+    <div class="hcp-rate-legend">
+      <span class="hcp-rate-title">Taux °/km</span>
+      <span class="rate-swatch" style="background: #ffeb3b" title="45–75 °/km" />
+      <span class="rate-swatch" style="background: #ffc107" title="75–105 °/km" />
+      <span class="rate-swatch" style="background: #ff6d00" title="105–135 °/km" />
+      <span class="rate-swatch" style="background: #d50000" title="≥ 135 °/km" />
+      <span class="hcp-rate-labels">45 · 75 · 105 · 135+</span>
     </div>
 
     <!-- Tableau des virages brutaux (clic → seek + sélection) -->
@@ -31,7 +53,6 @@
       <v-table density="compact" class="hcp-table">
         <thead>
           <tr>
-            <th class="ind"></th>
             <th class="num">Départ km</th>
             <th class="num">Arrivée km</th>
             <th class="num">Δ dist km</th>
@@ -45,25 +66,22 @@
             :key="h.fromDistanceM"
             class="hcp-row"
             :data-active="h.fromDistanceM === activeDistanceM ? 'true' : undefined"
-            :style="{ color: senseColor(h.direction) }"
             @click="goTo(h)"
           >
-            <!-- Chevron jaune : le curseur d'avance est sur ce segment -->
-            <td class="ind">
-              <v-icon
-                v-if="h.fromDistanceM === activeDistanceM"
-                size="small"
-                color="#FFD600"
-                title="Curseur d'avance sur ce segment"
-              >
-                mdi-chevron-right
-              </v-icon>
-            </td>
-            <td class="num">{{ (h.fromDistanceM / 1000).toFixed(2) }}</td>
-            <td class="num">{{ (h.toDistanceM / 1000).toFixed(2) }}</td>
-            <td class="num">{{ (h.distM / 1000).toFixed(2) }}</td>
-            <td class="num">{{ fmtDelta(h.deltaDeg) }}</td>
-            <td class="num">{{ h.rateDegPerKm.toFixed(0) }}</td>
+            <!-- Segment sous le curseur d'avance : Départ/Arrivée en jaune -->
+            <td
+              class="num"
+              :class="{ 'cell-active': h.fromDistanceM === activeDistanceM }"
+            >{{ (h.fromDistanceM / 1000).toFixed(2) }}</td>
+            <td
+              class="num"
+              :class="{ 'cell-active': h.fromDistanceM === activeDistanceM }"
+            >{{ (h.toDistanceM / 1000).toFixed(2) }}</td>
+            <!-- Sens de rotation : porté par Δ dist et Δ cap (teal/deep-purple) -->
+            <td class="num" :style="{ color: senseColor(h.direction) }">{{ (h.distM / 1000).toFixed(2) }}</td>
+            <td class="num" :style="{ color: senseColor(h.direction) }">{{ fmtDelta(h.deltaDeg) }}</td>
+            <!-- Code couleur jaune→rouge du taux par bande -->
+            <td class="num" :style="{ color: rateColor(h.rateDegPerKm) }">{{ h.rateDegPerKm.toFixed(0) }}</td>
           </tr>
         </tbody>
       </v-table>
@@ -79,14 +97,20 @@
  * rotation dépasse le seuil (`brutalHeadingChanges` du store édition). Clic sur
  * une ligne → seek au début du segment + sélection du keyframe de départ.
  *
- * Un **chevron jaune** marque la ligne du segment sous le **curseur d'avance**
- * (lecture ou seek) ; le tableau se scrolle automatiquement pour toujours le
- * garder visible. Conventions visuelles : teinte = sens (teal horaire /
- * deep-purple anti-horaire), comme sur la timeline.
+ * Code couleur par colonne :
+ *   - **Départ / Arrivée** : jaune (`#FFD600`, gras) pour le segment sous le
+ *     **curseur d'avance** (gain de largeur vs un chevron) ;
+ *   - **Δ dist / Δ cap** : teinte du **sens** (teal horaire / deep-purple
+ *     anti-horaire) ;
+ *   - **Taux °/km** : code couleur **jaune → rouge** par bande de taux
+ *     (45, 75, 105, 135…).
+ * Le tableau se scrolle automatiquement pour toujours garder la ligne active
+ * visible.
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { useEditionStore } from '../../stores/edition'
 import {
+  headingRateColor,
   ROTATION_BASE_COLORS,
   type HeadingChange,
   type RotationDirection,
@@ -94,7 +118,7 @@ import {
 
 const editionStore = useEditionStore()
 
-/** Conteneur scrollable du tableau (pour garder le chevron visible). */
+/** Conteneur scrollable du tableau (pour garder la ligne active visible). */
 const tableWrapEl = ref<HTMLDivElement | null>(null)
 
 /**
@@ -111,10 +135,10 @@ const activeDistanceM = computed(() => {
 })
 
 /**
- * Garde le chevron visible et **centré verticalement** dans la zone visible du
- * tableau : si la ligne active sort de la vue (par le haut ou le bas), on
- * défile pour la centrer ; si elle est déjà entièrement visible, on ne touche
- * pas au scroll (l'utilisateur peut lire librement).
+ * Garde la ligne active (Départ/Arrivée en jaune) visible et **centrée
+ * verticalement** dans la zone visible du tableau : si elle sort de la vue (par
+ * le haut ou le bas), on défile pour la centrer ; si elle est déjà entièrement
+ * visible, on ne touche pas au scroll (l'utilisateur peut lire librement).
  */
 function scrollActiveIntoView() {
   const wrap = tableWrapEl.value
@@ -130,7 +154,7 @@ function scrollActiveIntoView() {
   wrap.scrollTop += rowRect.top - targetTop
 }
 
-// Garder le chevron visible quand le curseur passe sur un autre segment.
+// Garder la ligne active visible quand le curseur passe sur un autre segment.
 watch(activeDistanceM, () => nextTick(scrollActiveIntoView))
 
 // Re-scroller à l'ouverture du panneau (le v-if recrée le DOM).
@@ -150,6 +174,18 @@ function fmtDelta(deltaDeg: number): string {
 /** Teinte du sens de rotation (teal / deep-purple). */
 function senseColor(direction: RotationDirection): string {
   return ROTATION_BASE_COLORS[direction]
+}
+
+/** Couleur jaune→rouge du taux (°/km), selon la bande (45, 75, 105, 135…). */
+function rateColor(rateDegPerKm: number): string {
+  return headingRateColor(rateDegPerKm, editionStore.headingChangeThresholdDegPerKm)
+}
+
+/** Change le seuil de détection des changements de cap brutaux (°/km). */
+function onThresholdChange(event: Event) {
+  const input = (event.target as HTMLInputElement)?.value
+  const n = input !== undefined && input !== '' ? Number(input) : NaN
+  if (!Number.isNaN(n)) editionStore.setHeadingChangeThreshold(n)
 }
 
 /** Seek au début du virage + sélection du keyframe de départ. */
@@ -206,9 +242,39 @@ function goTo(h: HeadingChange) {
   margin: 6px 0 4px;
 }
 
-.hcp-threshold {
+/* Champ seuil (°/km) : compact, poussé à droite de la légende. */
+.hcp-threshold-field {
   margin-left: auto;
-  opacity: 0.55;
+  max-width: 110px;
+  user-select: auto;
+}
+
+/* Légende du code couleur des taux (jaune → rouge par bande). */
+.hcp-rate-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  opacity: 0.75;
+  margin: 0 0 4px;
+  user-select: none;
+}
+
+.hcp-rate-title {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+}
+
+.rate-swatch {
+  width: 16px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.hcp-rate-labels {
+  margin-left: 4px;
+  opacity: 0.7;
 }
 
 .dot {
@@ -259,21 +325,10 @@ function goTo(h: HeadingChange) {
   text-align: right;
 }
 
-/* Colonne indicateur (chevron jaune du segment courant). */
-.ind {
-  width: 18px;
-  padding: 0;
-  text-align: center;
-  vertical-align: middle;
-}
-
-/* Le chevron est centré verticalement dans la cellule (la fonte Material Icons
-   positionne le glyphe bas dans la boîte de ligne sans cette correction). */
-.ind :deep(.v-icon) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-  line-height: 1;
+/* Départ/Arrivée du segment sous le curseur d'avance : en jaune (remplace le
+   chevron, et gagne la largeur de la colonne indicateur). */
+.cell-active {
+  color: #ffd600 !important;
+  font-weight: 700;
 }
 </style>

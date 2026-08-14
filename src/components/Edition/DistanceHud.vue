@@ -1,5 +1,9 @@
 <template>
-  <div v-if="editionStore.hasKeyframes" class="distance-hud">
+  <div
+    v-if="editionStore.hasKeyframes"
+    class="distance-hud"
+    :class="{ 'mode-validation': editionStore.validationMode }"
+  >
     <span class="distance-current">{{ currentKm }}</span>
     <span class="distance-sep">/</span>
     <span class="distance-total">{{ totalKm }}</span>
@@ -13,6 +17,7 @@
  *
  * Overlay en haut au centre, fond semi-transparent sombre (~80 %). La distance
  * parcourue est en orange (#FF9800), la distance totale en blanc atténué.
+ * En **mode validation**, le fond passe en **bleu**.
  *
  * Masqué tant qu'aucun jeu de keyframes n'est chargé.
  */
@@ -43,6 +48,12 @@ const totalKm = computed(() => editionStore.totalDistanceKm.toFixed(2))
   user-select: none;
   white-space: nowrap;
 }
+
+/* Mode validation : fond bleu. */
+.distance-hud.mode-validation {
+  background: rgba(33, 150, 243, 0.85);
+}
+
 
 .distance-current {
   color: #ff9800;
