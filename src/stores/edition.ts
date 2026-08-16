@@ -75,6 +75,14 @@ export const useEditionStore = defineStore('edition', () => {
   const showViewportFrame = ref(true)
 
   /**
+   * `true` quand la vue d'édition est prête à être **révélée** : la carte est
+   * positionnée au point de départ (km 0) et les tuiles visibles sont
+   * chargées. Tant que c'est `false`, la carte reste masquée (écran vierge)
+   * et la vue affiche le curseur d'attente système.
+   */
+  const editionViewReady = ref(false)
+
+  /**
    * Ratio d'écran de destination : détermine le fichier keyframes exploité
    * (`{trace_id}_169.json` / `{trace_id}_43.json`) **et** le cadre ViewPort
    * affiché. Défaut : 16:9. Un changement charge/génère le jeu du ratio choisi.
@@ -826,6 +834,7 @@ export const useEditionStore = defineStore('edition', () => {
     // État : sélection / cadre
     selectedTraceId,
     showViewportFrame,
+    editionViewReady,
     viewportAspect,
     // État : lecture
     keyframeSet,

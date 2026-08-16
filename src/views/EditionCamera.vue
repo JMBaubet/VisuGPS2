@@ -131,13 +131,22 @@ onUnmounted(() => {
       -->
       <v-main fill-height class="edition-main">
         <div class="edition-map-wrapper">
+          <!-- La carte se monte immédiatement (chargement des tuiles) mais reste
+               masquée tant que `editionViewReady` est false ; un spinner centré
+               est affiché à la place. Les overlays et le bandeau de lecture ne
+               sont montés qu'à la révélation. -->
           <EditionMap />
-          <ViewportFrame />
-          <TelemetryHud />
-          <HeadingChangesPanel />
-          <CameraEditor />
+          <div v-if="!editionStore.editionViewReady" class="edition-loading">
+            <v-progress-circular :size="70" :width="7" color="primary" indeterminate />
+          </div>
+          <template v-if="editionStore.editionViewReady">
+            <ViewportFrame />
+            <TelemetryHud />
+            <HeadingChangesPanel />
+            <CameraEditor />
+          </template>
         </div>
-        <PlaybackControls />
+        <PlaybackControls v-if="editionStore.editionViewReady" />
       </v-main>
 
       <!-- Panneau Paramètres (comme sur l'Accueil) : catégories de la vue active
@@ -158,5 +167,18 @@ onUnmounted(() => {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* Spinner centré pendant le chargement initial de la vue (écran vierge avant
+   la révélation de la carte et des composants). */
+.edition-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.25);
+  pointer-events: none;
 }
 </style>

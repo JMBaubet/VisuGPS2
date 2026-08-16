@@ -1,5 +1,12 @@
 <template>
-  <div ref="mapContainer" class="edition-map-container"></div>
+  <!-- Tant que la vue n'est pas prête (éditionViewReady), la carte est masquée
+       (opacity 0 + pointer-events none) : les tuiles se chargent en arrière-plan
+       et la vue est révélée d'un coup, sans apparition progressive. -->
+  <div
+    ref="mapContainer"
+    class="edition-map-container"
+    :class="{ 'map-loading': !editionStore.editionViewReady }"
+  ></div>
 </template>
 
 <script setup lang="ts">
@@ -430,15 +437,19 @@ async function initializeMap(token: string) {
       })
     }
 
-    // 3. Charger la géométrie de la trace sélectionnée.
+    // 3. Charger la géométrie de la trace sélectionnée, positionner la caméra
+    //    au départ (km 0), puis révéler la vue quand toutes les tuiles visibles
+    //    sont chargées (pas d'apparition progressive).
     await loadSelectedTrace()
+    scheduleReveal()
   })
 }
 
 /**
  * Charge la géométrie de la trace sélectionnée depuis le store, l'affiche
- * dans la couche LineString, pose le marqueur jaune au départ et cadre la
- * carte sur l'emprise de la trace.
+ * dans la couche LineString et **positionne directement la caméra au départ
+ * (km 0)** — pas de vue globale intermédiaire (le zoom bas initial et le
+ * `fitBounds` d'emprise ont été supprimés).
  *
  * Tente de charger les keyframes persistés sur disque ; si absents ou
  * invalides, les génère puis les sauvegarde pour les entrées futures
@@ -467,12 +478,6 @@ async function loadSelectedTrace() {
   const source = map.getSource(TRACE_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
   if (source) {
     source.setData({ type: 'FeatureCollection', features: [feature] })
-  }
-
-  // Cadrer la carte sur l'emprise de la trace (vue d'ensemble initiale).
-  const bounds = computeBounds(feature)
-  if (!bounds.isEmpty()) {
-    map.fitBounds(bounds, { padding: 80, duration: 0 })
   }
 
   // Charger les points riches du backend (altitude + distance 3D).
@@ -661,21 +666,6 @@ watch(
   },
 )
 
-/**
- * Calcule les bounds (LngLatBounds) d'une Feature LineString en
- * parcourant ses coordonnées. Utilisé par map.fitBounds.
- */
-function computeBounds(feature: GeoJSON.Feature): mapboxgl.LngLatBounds {
-  const bounds = new mapboxgl.LngLatBounds()
-  const geometry = feature.geometry
-  if (geometry && geometry.type === 'LineString') {
-    for (const coord of geometry.coordinates) {
-      bounds.extend(coord as [number, number])
-    }
-  }
-  return bounds
-}
-
 // --- Application de l'état interpolé (caméra + marker) ---
 
 /**
@@ -776,6 +766,69 @@ function startSeekAnimation(fromMs: number, toMs: number) {
   seekRafId = requestAnimationFrame(step)
 }
 
+// --- Révélation de la vue (écran vierge → affichage) ---
+
+/** Délai maximal (ms) avant de révéler la vue, même si `idle` ne survient pas. */
+const REVEAL_MAX_WAIT_MS = 10_000
+
+/** `true` si la révélation attend un événement `idle` de la carte. */
+let revealPending = false
+/** Timer de sécurité forçant la révélation au bout de `REVEAL_MAX_WAIT_MS`. */
+let revealFallbackTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Révèle la vue d'édition (carte + composants) dès que **toutes les tuiles
+ * visibles** sont chargées : on attend le premier événement `idle` de Mapbox
+ * (aucune tuile en attente) après avoir positionné la caméra au point de
+ * départ. Un timer de sécurité garantit de ne jamais laisser l'écran vierge.
+ */
+function scheduleReveal() {
+  if (revealPending || !map) return
+  revealPending = true
+
+  const onIdle = () => {
+    if (revealFallbackTimer) {
+      clearTimeout(revealFallbackTimer)
+      revealFallbackTimer = null
+    }
+    map?.off('idle', onIdle)
+    revealPending = false
+    revealView()
+  }
+
+  map.on('idle', onIdle)
+  revealFallbackTimer = setTimeout(onIdle, REVEAL_MAX_WAIT_MS)
+}
+
+/**
+ * Force Mapbox à **recalculer l'altitude de la caméra** par rapport au relief
+ * chargé. Le setter `center` de Mapbox v3 ne recalcule que si le centre
+ * **change** : re-positionner au même point est un no-op. On fait donc un
+ * premier saut vers un point légèrement décalé (sub-centimétrique, invisible),
+ * puis le saut vers le vrai centre — `_updateCameraOnTerrain` recalcule alors
+ * l'altitude avec le DEM désormais chargé, et le curseur est correctement
+ * centré au lieu d'apparaître décalé vers le bas.
+ */
+function repositionCameraForTerrain() {
+  if (!map || !editionReady) return
+  const cam = editionStore.interpolatedCam
+  if (!cam) return
+  const opts = { zoom: cam.zoom, bearing: cam.bearing, pitch: cam.pitch } as const
+  map.jumpTo({ center: [cam.lng + 1e-7, cam.lat], ...opts })
+  map.jumpTo({ center: [cam.lng, cam.lat], ...opts })
+}
+
+/**
+ * Révèle la vue : positionne la caméra au km 0, **force le recalcul de
+ * l'altitude caméra** avec le relief désormais chargé (le curseur serait sinon
+ * décalé vers le bas), puis affiche la vue.
+ */
+function revealView() {
+  applyInterpolatedState()
+  repositionCameraForTerrain()
+  editionStore.editionViewReady = true
+}
+
 // --- Boucle d'animation (lecture) ---
 
 /** Callback d'une frame : calcule le delta, déclenche `tick`, applique l'état. */
@@ -849,6 +902,10 @@ watch(
 // --- Cycle de vie ---
 
 onMounted(async () => {
+  // Remettre la vue en « écran vierge » : elle ne sera révélée (éditionViewReady)
+  // qu'une fois la carte positionnée au départ et les tuiles chargées.
+  editionStore.editionViewReady = false
+
   // Token Mapbox depuis les paramètres (cf. Accueil/Map.vue).
   let token = ''
   try {
@@ -878,6 +935,13 @@ onUnmounted(() => {
   stopAnimation()
   cancelSeekAnimation()
   editionReady = false
+  // Annuler une éventuelle attente de révélation et masquer la vue à nouveau.
+  if (revealFallbackTimer) {
+    clearTimeout(revealFallbackTimer)
+    revealFallbackTimer = null
+  }
+  revealPending = false
+  editionStore.editionViewReady = false
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
@@ -895,5 +959,12 @@ onUnmounted(() => {
 .edition-map-container {
   width: 100%;
   height: 100%;
+}
+
+/* Tant que la vue n'est pas prête : carte invisible (les tuiles se chargent en
+   arrière-plan) — la révélation se fait d'un bloc à l'arrivée des tuiles. */
+.edition-map-container.map-loading {
+  opacity: 0;
+  pointer-events: none;
 }
 </style>
