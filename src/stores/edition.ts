@@ -15,7 +15,7 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, reactive } from 'vue'
 import {
   type KeyframeSet,
   type Keyframe,
@@ -726,8 +726,15 @@ export const useEditionStore = defineStore('edition', () => {
 
   // --- Mode validation & verrous de segments ---
 
-  /** Segments (distance du keyframe de départ) signalés « problème » par un clic. */
-  const validationClicks = new Set<number>()
+  /**
+   * Segments « signalés » en mode validation (touche Entrée ou clic carte).
+   * Map réactif : **clé** = distance du keyframe de départ du segment (sert à
+   * le protéger du re-verrouillage automatique, via `.has()`) ; **valeur** =
+   * distance du curseur d'avancement au moment de la marque (positionne le
+   * trait bleu vertical sur la timeline). Un segment verrouillé en est retiré
+   * (le trait disparaît au verrouillage).
+   */
+  const validationClicks = reactive(new Map<number, number>())
   /** Dernier segment parcouru (pour verrouiller à la sortie). */
   let previousSegmentFromDistance: number | null = null
 
@@ -749,7 +756,9 @@ export const useEditionStore = defineStore('edition', () => {
     if (!validationMode.value) return
     const d = currentSegmentFromDistance.value
     if (d === null) return
-    validationClicks.add(d)
+    // Mémorise la distance du curseur d'avancement : c'est elle qui positionne
+    // le trait bleu de la timeline (et non le départ du segment).
+    validationClicks.set(d, currentDistanceM.value)
     if (isSegmentLocked(d)) unlockSegment(d)
   }
 
@@ -759,6 +768,8 @@ export const useEditionStore = defineStore('edition', () => {
     if (!set || isSegmentLocked(fromDistanceM)) return
     if (!set.locked_segments) set.locked_segments = []
     set.locked_segments.push(fromDistanceM)
+    // Un segment verrouillé n'est plus « signalé » : le trait bleu disparaît.
+    validationClicks.delete(fromDistanceM)
     saveKeyframes()
   }
 
@@ -771,7 +782,7 @@ export const useEditionStore = defineStore('edition', () => {
    * qui le reverrouillerait aussitôt.
    */
   function unlockSegment(fromDistanceM: number) {
-    validationClicks.add(fromDistanceM)
+    validationClicks.set(fromDistanceM, currentDistanceM.value)
     const set = keyframeSet.value
     if (!set?.locked_segments || !isSegmentLocked(fromDistanceM)) return
     set.locked_segments = set.locked_segments.filter(d => d !== fromDistanceM)
@@ -914,6 +925,7 @@ export const useEditionStore = defineStore('edition', () => {
     showHeadingChangesPanel,
     // État : verrous de segments (mode validation)
     validationMode,
+    validationClicks,
     lockedSegmentFromDistances,
     currentSegmentFromDistance,
     // État : édition keyframes

@@ -22,16 +22,6 @@
       </v-icon>
     </v-btn>
 
-    <!-- Panneau « Changements de cap brutaux » (tableau à la demande) -->
-    <v-btn
-      icon
-      :color="editionStore.showHeadingChangesPanel ? 'primary' : ''"
-      title="Changements de cap brutaux"
-      @click="editionStore.toggleHeadingChangesPanel()"
-    >
-      <v-icon>mdi-rotate-3d-variant</v-icon>
-    </v-btn>
-
     <!-- Mode validation : verrouillage automatique des segments sans clic -->
     <v-btn
       icon
@@ -72,8 +62,6 @@
  *     `mdi-monitor` (16:9) / `mdi-monitor-small` (4:3), chaque ratio exploite
  *     son propre fichier keyframes et son cadre ; **couleur** = avancement du
  *     verrouillage (vert 100 %, jaune > 50 %, orange ≥ 10 %, rouge sinon)
- *   - le bouton **Cap brutaux** : affiche/masque le tableau des changements de
- *     cap brutaux
  *   - le bouton **Mode validation** (`mdi-camera-lock`) : pendant la lecture,
  *     un clic carte signale un problème (segment déverrouillé), les segments
  *     sans clic sont verrouillés

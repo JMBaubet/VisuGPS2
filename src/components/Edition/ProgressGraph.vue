@@ -112,6 +112,25 @@
             </template>
           </g>
 
+          <!--
+            Segments « signalés » en mode validation (touche Entrée ou clic
+            carte) : trait vertical bleu au départ du segment. Disparaît quand
+            le segment est verrouillé.
+          -->
+          <g class="zone-rdv-marks">
+            <rect
+              v-for="(m, idx) in markedSegmentRects"
+              :key="'mark-' + idx"
+              :x="m.x - MARK_WIDTH / 2"
+              :y="rdvZoneY"
+              :width="MARK_WIDTH"
+              :height="rdvZoneHeight"
+              fill="#2196F3"
+            >
+              <title>Segment signalé — déverrouillé (Entrée / clic carte)</title>
+            </rect>
+          </g>
+
           <!-- Séparateur fin -->
           <line
             :x1="0" :y1="rdvZoneY + rdvZoneHeight"
@@ -509,6 +528,22 @@ const unlockedSegmentRects = computed(() => {
         (h.toDistanceM - h.fromDistanceM) * PX_PER_METER - RDV_WIDTH,
       ),
     }))
+})
+
+/** Largeur (px) du trait bleu des segments signalés (Entrée / clic carte). */
+const MARK_WIDTH = 2
+
+/**
+ * Segments « signalés » en mode validation : trait vertical bleu positionné à
+ * la distance du **curseur d'avancement** au moment de la marque (touche Entrée
+ * ou clic carte). Les positions viennent des **valeurs** de `validationClicks`
+ * (Map réactif) — un segment verrouillé en est retiré, donc son trait
+ * disparaît au verrouillage.
+ */
+const markedSegmentRects = computed(() => {
+  return [...editionStore.validationClicks.values()].map(cursorM => ({
+    x: cursorM * PX_PER_METER,
+  }))
 })
 
 /**
