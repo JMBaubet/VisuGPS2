@@ -256,7 +256,7 @@ onMounted(async () => {
     viewportAspect.value = raw === '4:3' ? '4:3' : '16:9'
     const kf = await keyframesStore.loadKeyframes(props.trace.id, viewportAspect.value)
     if (kf && kf.keyframes.length > 1) {
-      const locked = kf.locked_segments?.length ?? 0
+      const locked = kf.keyframes.filter(k => k.locked).length
       lockRatio.value = locked / (kf.keyframes.length - 1)
     }
   } catch (e) {

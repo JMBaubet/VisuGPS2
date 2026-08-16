@@ -534,16 +534,19 @@ const unlockedSegmentRects = computed(() => {
 const MARK_WIDTH = 2
 
 /**
- * Segments « signalés » en mode validation : trait vertical bleu positionné à
- * la distance du **curseur d'avancement** au moment de la marque (touche Entrée
- * ou clic carte). Les positions viennent des **valeurs** de `validationClicks`
- * (Map réactif) — un segment verrouillé en est retiré, donc son trait
- * disparaît au verrouillage.
+ * Traits bleus de validation : un trait vertical par marque **persistée** dans
+ * le fichier keyframes (`Keyframe.marks`), positionné à la distance du curseur
+ * d'avancement au moment de la pose (plusieurs par segment). Un segment
+ * verrouillé n'a plus de marques (`lockSegment` les supprime).
  */
 const markedSegmentRects = computed(() => {
-  return [...editionStore.validationClicks.values()].map(cursorM => ({
-    x: cursorM * PX_PER_METER,
-  }))
+  const marks: { x: number }[] = []
+  for (const kf of editionStore.keyframeSet?.keyframes ?? []) {
+    for (const m of kf.marks ?? []) {
+      marks.push({ x: m * PX_PER_METER })
+    }
+  }
+  return marks
 })
 
 /**

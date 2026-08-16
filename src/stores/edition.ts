@@ -345,10 +345,18 @@ export const useEditionStore = defineStore('edition', () => {
 
   // --- Verrous de segments (mode validation) ---
 
-  /** Distances (m) du keyframe de départ des segments **verrouillés**. */
-  const lockedSegmentFromDistances = computed<Set<number>>(
-    () => new Set(keyframeSet.value?.locked_segments ?? []),
-  )
+  /**
+   * Distances (m) du keyframe de départ des segments **verrouillés**, dérivées
+   * des flags `locked` portés par chaque keyframe (verrou du segment qui en
+   * part). Set construit pour les recherches O(1) des consommateurs.
+   */
+  const lockedSegmentFromDistances = computed<Set<number>>(() => {
+    const set = new Set<number>()
+    for (const kf of keyframeSet.value?.keyframes ?? []) {
+      if (kf.locked) set.add(kf.distance_from_start_m)
+    }
+    return set
+  })
 
   /** Distance (m) du keyframe de départ du segment courant (ou null). */
   const currentSegmentFromDistance = computed<number | null>(() => {
@@ -370,13 +378,7 @@ export const useEditionStore = defineStore('edition', () => {
     const kfs = keyframeSet.value?.keyframes ?? []
     const idx = kfs.findIndex(k => k.distance_from_start_m === distanceM)
     if (idx === -1) return false
-    const locked = lockedSegmentFromDistances.value
-    const prevFrom = idx > 0 ? kfs[idx - 1].distance_from_start_m : null
-    const thisFrom = idx < kfs.length - 1 ? kfs[idx].distance_from_start_m : null
-    return (
-      (prevFrom !== null && locked.has(prevFrom)) ||
-      (thisFrom !== null && locked.has(thisFrom))
-    )
+    return kfs[idx].locked === true || (idx > 0 && kfs[idx - 1].locked === true)
   }
 
   // --- Actions : sélection / cadre ViewPort ---
@@ -395,6 +397,7 @@ export const useEditionStore = defineStore('edition', () => {
     validationMode.value = false
     validationClicks.clear()
     previousSegmentFromDistance = null
+    suppressAutoLock = false
     editionViewReady.value = false
   }
 
@@ -440,6 +443,9 @@ export const useEditionStore = defineStore('edition', () => {
     tracePoints: { lat: number; lon: number; alt: number | null; distance_m: number }[] | null = null,
   ) {
     keyframeSet.value = set
+    // Les marques transitoires du mode validation référencent les segments de
+    // l'ancien jeu (régénération, changement de ratio) : on les réinitialise.
+    validationClicks.clear()
     if (tracePoints && tracePoints.length > 0) {
       tracePolyline.value = buildTracePolylineFromPoints(tracePoints)
     } else {
@@ -447,6 +453,10 @@ export const useEditionStore = defineStore('edition', () => {
     }
     currentTimeMs.value = 0
     isPlaying.value = false
+    // Nouveau jeu de keyframes : état de validation reparti à zéro (le segment
+    // « précédent » de l'ancien jeu n'existe plus).
+    previousSegmentFromDistance = null
+    suppressAutoLock = false
     // Sélectionner le premier keyframe pour rendre l'éditeur (Composant B)
     // immédiatement utilisable au chargement.
     selectedKeyframeDistance.value = set?.keyframes[0]?.distance_from_start_m ?? null
@@ -593,8 +603,11 @@ export const useEditionStore = defineStore('edition', () => {
 
   function play() {
     if (!keyframeSet.value) return
-    // Si la lecture est terminée, repartir du début.
-    if (currentTimeMs.value >= totalDurationMs.value) currentTimeMs.value = 0
+    // Si la lecture est terminée, repartir du début (repositionnement neutre).
+    if (currentTimeMs.value >= totalDurationMs.value) {
+      currentTimeMs.value = 0
+      suppressAutoLock = true
+    }
     isPlaying.value = true
   }
 
@@ -727,48 +740,62 @@ export const useEditionStore = defineStore('edition', () => {
   // --- Mode validation & verrous de segments ---
 
   /**
-   * Segments « signalés » en mode validation (touche Entrée ou clic carte).
-   * Map réactif : **clé** = distance du keyframe de départ du segment (sert à
-   * le protéger du re-verrouillage automatique, via `.has()`) ; **valeur** =
-   * distance du curseur d'avancement au moment de la marque (positionne le
-   * trait bleu vertical sur la timeline). Un segment verrouillé en est retiré
-   * (le trait disparaît au verrouillage).
+   * Segments « signalés » pendant le **parcours courant** en mode validation
+   * (touche Entrée ou clic carte). Set transitoire : sert uniquement de garde
+   * anti re-verrouillage automatique du watcher. Les traits bleus, eux, sont
+   * **persistés** dans `Keyframe.marks` (fichier keyframes).
    */
-  const validationClicks = reactive(new Map<number, number>())
+  const validationClicks = reactive(new Set<number>())
   /** Dernier segment parcouru (pour verrouiller à la sortie). */
   let previousSegmentFromDistance: number | null = null
+  /**
+   * `true` pendant un **seek manuel** (clic timeline, navigation RdV, km0,
+   * animation fly-to) : l'auto-verrouillage est alors **neutre** — aucun
+   * verrouillage ni consommation de marque. Levé à la prochaine avancée
+   * naturelle `tick()`.
+   */
+  let suppressAutoLock = false
 
   /** Bascule le mode validation (réinitialise l'état transitoire). */
   function toggleValidationMode() {
     validationMode.value = !validationMode.value
     validationClicks.clear()
     previousSegmentFromDistance = currentSegmentFromDistance.value
+    suppressAutoLock = false
   }
 
   /**
    * En mode validation : signale un « problème » sur le segment courant — il
    * reste **déverrouillé dans tous les cas** : on mémorise le segment (il ne
-   * sera pas re-verrouillé à sa sortie) **et** on le déverrouille explicitement
-   * s'il était déjà verrouillé (verrou automatique d'un passage précédent ou
-   * bascule manuelle). Appelé par un clic sur la carte ou la touche Entrée.
+   * sera pas re-verrouillé à sa sortie pendant **ce parcours**) **et** on le
+   * déverrouille explicitement s'il était déjà verrouillé. Un trait bleu
+   * **persisté** est posé à la distance du curseur d'avancement (plusieurs
+   * possibles par segment). Appelé par un clic sur la carte ou la touche Entrée.
    */
   function markValidationClick() {
     if (!validationMode.value) return
     const d = currentSegmentFromDistance.value
     if (d === null) return
-    // Mémorise la distance du curseur d'avancement : c'est elle qui positionne
-    // le trait bleu de la timeline (et non le départ du segment).
-    validationClicks.set(d, currentDistanceM.value)
+    const set = keyframeSet.value
+    const kf = set?.keyframes.find(k => k.distance_from_start_m === d)
+    if (!set || !kf) return
+    if (!kf.marks) kf.marks = []
+    kf.marks.push(currentDistanceM.value)
+    validationClicks.add(d)
     if (isSegmentLocked(d)) unlockSegment(d)
+    saveKeyframes()
   }
 
   /** Verrouille le segment partant de `fromDistanceM` et persiste. */
   function lockSegment(fromDistanceM: number) {
     const set = keyframeSet.value
-    if (!set || isSegmentLocked(fromDistanceM)) return
-    if (!set.locked_segments) set.locked_segments = []
-    set.locked_segments.push(fromDistanceM)
-    // Un segment verrouillé n'est plus « signalé » : le trait bleu disparaît.
+    if (!set) return
+    const kf = set.keyframes.find(k => k.distance_from_start_m === fromDistanceM)
+    if (!kf || kf.locked) return
+    kf.locked = true
+    // Un segment verrouillé n'est plus « signalé » : ses traits bleus
+    // persistés sont supprimés et sa protection de parcours levée.
+    delete kf.marks
     validationClicks.delete(fromDistanceM)
     saveKeyframes()
   }
@@ -776,16 +803,20 @@ export const useEditionStore = defineStore('edition', () => {
   /**
    * Déverrouille le segment partant de `fromDistanceM` et persiste.
    *
-   * Un déverrouillage manuel protège aussi le segment du **re-verrouillage
-   * automatique** du mode validation : sans cela, naviguer vers un autre
-   * segment (le seek du double-clic) ferait « quitter » ce segment au watcher,
-   * qui le reverrouillerait aussitôt.
+   * Le déverrouillage manuel protège le segment du **re-verrouillage
+   * automatique** — uniquement pendant **ce parcours** (la garde est consommée
+   * à la sortie par le watcher) : sans cela, naviguer vers un autre segment
+   * (le seek du double-clic) ferait « quitter » ce segment au watcher, qui le
+   * reverrouillerait aussitôt. Aucune marque persistée n'est posée ici
+   * (contrairement à l'Entrée / clic carte).
    */
   function unlockSegment(fromDistanceM: number) {
-    validationClicks.set(fromDistanceM, currentDistanceM.value)
+    validationClicks.add(fromDistanceM)
     const set = keyframeSet.value
-    if (!set?.locked_segments || !isSegmentLocked(fromDistanceM)) return
-    set.locked_segments = set.locked_segments.filter(d => d !== fromDistanceM)
+    if (!set) return
+    const kf = set.keyframes.find(k => k.distance_from_start_m === fromDistanceM)
+    if (!kf?.locked) return
+    kf.locked = false
     saveKeyframes()
   }
 
@@ -795,19 +826,35 @@ export const useEditionStore = defineStore('edition', () => {
     else lockSegment(fromDistanceM)
   }
 
-  // En validation : quand le curseur quitte un segment sans qu'un clic
-  // « problème » n'y ait été posé, le segment est verrouillé.
+  // En validation : quand le curseur quitte un segment —
+  //   - sans marque posée pendant **ce parcours** → le segment est verrouillé
+  //     et ses traits bleus persistés sont supprimés ;
+  //   - avec une marque posée pendant ce parcours → il reste déverrouillé, et
+  //     la marque est **consommée** (elle ne protège plus les parcours
+  //     suivants : un re-parcours sans Entrée le reverrouillera).
+  // Un **seek manuel** (clic timeline, navigation RdV, km0, animation fly-to —
+  // signal `suppressAutoLock`) est totalement **neutre** : ni verrouillage,
+  // ni consommation de marque. Seule la progression naturelle de la lecture
+  // (`tick`) traverse et verrouille.
   watch(currentSegmentFromDistance, (newFrom) => {
     if (!validationMode.value) return
     const prev = previousSegmentFromDistance
     previousSegmentFromDistance = newFrom
-    if (prev !== null && prev !== newFrom && !validationClicks.has(prev)) {
+    if (prev === null || prev === newFrom) return
+    if (suppressAutoLock) return
+    if (!validationClicks.has(prev)) {
       lockSegment(prev)
     }
+    validationClicks.delete(prev)
   })
 
   /** Se positionne à une distance cumulée donnée (m), clampée à la trace. */
   function seekToDistance(distanceM: number) {
+    // Seek manuel : **neutre** pour le mode validation — les segments
+    // traversés ne sont pas verrouillés. Le signal est levé jusqu'à la
+    // prochaine avancée naturelle `tick()` (et couvre aussi les frames de
+    // l'animation fly-to qui suivent).
+    suppressAutoLock = true
     const t = distanceM * MS_PER_METER
     currentTimeMs.value = Math.min(
       totalDurationMs.value,
@@ -880,6 +927,9 @@ export const useEditionStore = defineStore('edition', () => {
    */
   function tick(deltaMs: number) {
     if (!isPlaying.value || !keyframeSet.value) return
+    // La progression naturelle de la lecture réactive l'auto-verrouillage
+    // après un seek manuel : les traversées suivantes verrouillent à nouveau.
+    suppressAutoLock = false
     const next = currentTimeMs.value + deltaMs * speed.value
     if (next >= totalDurationMs.value) {
       currentTimeMs.value = totalDurationMs.value
@@ -925,7 +975,6 @@ export const useEditionStore = defineStore('edition', () => {
     showHeadingChangesPanel,
     // État : verrous de segments (mode validation)
     validationMode,
-    validationClicks,
     lockedSegmentFromDistances,
     currentSegmentFromDistance,
     // État : édition keyframes

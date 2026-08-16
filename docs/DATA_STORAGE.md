@@ -129,10 +129,15 @@ Jeux de keyframes sérialisés en JSON pour la vue d'édition caméra.
 champ horizontal diffère). Le ratio d'un jeu sauvegardé est déduit de son champ
 `viewport` côté frontend (`saveKeyframes`).
 Le contenu est un `KeyframeSet` (type TS, sérialisé par le frontend) :
-`trace_id`, `total_distance_m`, `total_duration_ms`, `viewport`, `sample_rate_m`, `keyframes[]`,
-et optionnellement `locked_segments` (distances en m du keyframe de départ des
-segments **verrouillés** en mode validation — champ rétro-compatible, réinitialisé
-à la régénération des keyframes).
+`trace_id`, `total_distance_m`, `total_duration_ms`, `viewport`, `sample_rate_m`, `keyframes[]`.
+Chaque keyframe porte deux champs optionnels :
+- `locked` (booléen) : le verrou du segment qui **part de ce keyframe** en mode
+  validation (absent = déverrouillé, sans signification sur le dernier keyframe) ;
+- `marks` (tableau de nombres) : les **traits bleus** posés en mode validation
+  dans ce segment — distances (m) du curseur d'avancement au moment de chaque
+  pose (plusieurs possibles). **Persistés** : réaffichés à la réouverture de la
+  vue, supprimés quand le segment est verrouillé.
+Verrous et marques sont réinitialisés à la régénération des keyframes.
 Le backend traite le JSON de manière transparente (`serde_json::Value`), sans validation structurelle côté Rust.
 Écriture atomique (tmp + rename). Le dossier `keyframes/` est créé automatiquement à la première sauvegarde.
 
@@ -197,4 +202,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-08-14
+**Dernière mise à jour** : 2026-08-16

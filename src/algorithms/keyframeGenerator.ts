@@ -49,6 +49,21 @@ export interface Keyframe {
   cam: CamState
   /** Position du traceur à ce keyframe. */
   traceur: TraceurPoint
+  /**
+   * Verrou du segment qui **part de ce keyframe** (mode validation) :
+   * `true` = segment `[i, i+1]` verrouillé. Optionnel (absent = déverrouillé).
+   * Sans signification sur le dernier keyframe (aucun segment après lui).
+   * Réinitialisé quand le jeu est régénéré.
+   */
+  locked?: boolean
+  /**
+   * Traits bleus posés en mode validation dans le segment qui **part de ce
+   * keyframe** : distances (m) du curseur d'avancement au moment de chaque
+   * pose (plusieurs possibles). Optionnel (absent = aucun trait). **Persistés**
+   * dans le fichier keyframes, supprimés au verrouillage du segment.
+   * Réinitialisés quand le jeu est régénéré.
+   */
+  marks?: number[]
 }
 
 /** Jeu complet de keyframes pour une trace. */
@@ -59,13 +74,6 @@ export interface KeyframeSet {
   viewport: { width: number; height: number }
   sample_rate_m: number
   keyframes: Keyframe[]
-  /**
-   * Segments **verrouillés** (mode validation) : distances (m) du keyframe de
-   * départ de chaque segment verrouillé. Un segment = `[keyframe i, i+1]`.
-   * Champ optionnel et rétro-compatible (absent = aucun verrou). Réinitialisé
-   * quand le jeu est régénéré.
-   */
-  locked_segments?: number[]
 }
 
 // --- Paramètres ---
