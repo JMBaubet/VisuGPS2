@@ -419,6 +419,18 @@ type = "bool"
 default = false
 icon = "mdi-information-outline"
 
+[Edition.Camera.afficherCapBrutaux]
+description = "Afficher le panneau des changements de cap brutaux"
+documentation = """
+Affiche **par défaut** le tableau des changements de cap brutaux (Départ /
+Arrivée, Δ dist, Δ cap, Taux °/km) — comme le HUD de télémétrie, c'est un
+paramètre d'affichage. Le bouton de la toolbar permet toujours de
+l'afficher/masquer en cours de session.
+"""
+type = "bool"
+default = false
+icon = "mdi-rotate-3d-variant"
+
 [Edition.Playback.acceleration]
 description = "Accélération de la lecture (×)"
 documentation = """

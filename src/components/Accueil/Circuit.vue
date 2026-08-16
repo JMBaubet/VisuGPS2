@@ -26,15 +26,22 @@
       </span>
       <v-spacer></v-spacer> <!-- Pousse les icônes à droite (alignées sur la ligne Distance/Dénivelé) -->
       <div class="d-flex align-center">
-        <!-- Éditer : visible au survol uniquement -->
+        <!--
+          Éditer : couleur = avancement du verrouillage (vert / jaune / orange /
+          rouge, mêmes seuils que la toolbar d'édition). **Forcée visible** quand
+          l'édition est incomplète (non verte), même sans survol ; masquée
+          uniquement si verte et non survolée ; visible au survol quelle que
+          soit la couleur (pour pouvoir lancer l'édition).
+        -->
         <v-btn
           class="action-btn"
-          :class="{ 'action-btn--hidden': !isHovering }"
+          :class="{ 'action-btn--hidden': !(isEditionIncomplete || isHovering) }"
           icon="mdi-pencil"
+          :color="editColor"
           variant="text"
           density="comfortable"
           size="small"
-          title="Éditer"
+          :title="pencilTitle"
           @click="editerCircuit"
         />
         <!-- Gérer les groupes : visible au survol uniquement -->
@@ -186,13 +193,16 @@
  * curseur quitte la carte. Le clic Info déclenche en outre un focus carte
  * (état `focusedTraceId` du store traces) : Map.vue isole la trace et la cadre.
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../stores/app'
 import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
+import { useSettingsStore } from '../../stores/settings'
+import { useKeyframesStore } from '../../stores/keyframes'
+import type { ViewportAspect } from '../../algorithms/keyframeGenerator'
 import { formatDistance, formatElevation } from '../../utils/format'
 
 const emit = defineEmits<{
@@ -215,11 +225,74 @@ const appStore = useAppStore()
 const router = useRouter()
 const tracesStore = useTracesStore()
 const editionStore = useEditionStore()
+const settingsStore = useSettingsStore()
+const keyframesStore = useKeyframesStore()
 
 /** État d'ouverture de la section info déroulante. */
 const infoExpanded = ref(false)
 /** true tant que le curseur survole la carte (régit l'affichage des actions). */
 const isHovering = ref(false)
+
+// --- Avancement de l'édition (icône Éditer) ---
+
+/**
+ * Ratio (0..1) de segments **verrouillés** pour le **viewport paramétré**
+ * (`Edition.Camera.viewportDefaut`). 0 si aucun jeu de keyframes ou indisponible
+ * (édition jamais commencée). Calculé au montage (les cartes sont remontées à
+ * chaque retour sur l'accueil, l'état est donc rafraîchi).
+ */
+const lockRatio = ref(0)
+
+/** Ratio viewport paramétré (`Edition.Camera.viewportDefaut`) utilisé pour l'édition. */
+const viewportAspect = ref<ViewportAspect>('16:9')
+
+/**
+ * Charge le fichier keyframes du viewport paramétré et calcule le ratio de
+ * verrouillage des segments (segments verrouillés / segments totaux).
+ */
+onMounted(async () => {
+  try {
+    const raw = await settingsStore.getSettingValue('Edition.Camera.viewportDefaut')
+    viewportAspect.value = raw === '4:3' ? '4:3' : '16:9'
+    const kf = await keyframesStore.loadKeyframes(props.trace.id, viewportAspect.value)
+    if (kf && kf.keyframes.length > 1) {
+      const locked = kf.locked_segments?.length ?? 0
+      lockRatio.value = locked / (kf.keyframes.length - 1)
+    }
+  } catch (e) {
+    console.warn(`[Circuit] État d'édition indisponible pour ${props.trace.id} :`, e)
+    lockRatio.value = 0
+  }
+})
+
+/**
+ * Couleur de l'icône Éditer selon l'avancement de l'édition (mêmes seuils que
+ * le bouton ViewPort de la toolbar d'édition) : vert si **tous** les segments
+ * sont verrouillés, jaune si **> 50 %**, orange si **≥ 10 %**, rouge sinon.
+ */
+const editColor = computed(() => {
+  const r = lockRatio.value
+  if (r >= 1) return '#4CAF50' // vert
+  if (r > 0.5) return '#FFEB3B' // jaune
+  if (r >= 0.1) return '#FF9800' // orange
+  return '#F44336' // rouge
+})
+
+/**
+ * `true` si l'édition de la trace est **incomplète** pour le viewport paramétré
+ * (ratio < 1 → icône non verte). Dans ce cas l'icône Éditer est **toujours
+ * visible** (même sans survol) pour signaler qu'une édition reste à faire.
+ */
+const isEditionIncomplete = computed(() => lockRatio.value < 1)
+
+/** Tooltip de l'icône Éditer (ratio viewport + % de segments verrouillés). */
+const pencilTitle = computed(() => {
+  const pct = Math.round(lockRatio.value * 100)
+  const vp = viewportAspect.value
+  return lockRatio.value >= 1
+    ? `Éditer — édition complète (${vp})`
+    : `Éditer (${vp}) — édition incomplète (${pct} % des segments verrouillés)`
+})
 
 /**
  * Ouvre/ferme la section info et pilote le focus carte correspondant.

@@ -14,9 +14,7 @@
     <v-btn
       icon
       :color="viewportColor"
-      :title="
-        `ViewPort ${editionStore.viewportAspect} · ${lockPct} % des segments verrouillés — cliquer pour basculer`
-      "
+      :title="viewportTitle"
       @click="onViewportFlip"
     >
       <v-icon>
@@ -123,13 +121,28 @@ const lockPct = computed(() => Math.round(lockRatio.value * 100))
  * Couleur de l'icône ViewPort selon l'avancement du verrouillage :
  * vert si **tous** les segments sont verrouillés, jaune si **> 50 %**, orange
  * si **≥ 10 %**, rouge sinon (validation pas encore avancée).
+ *
+ * **Neutre au lancement** : tant que la vue n'est pas prête
+ * (`editionViewReady` false), l'icône n'affiche pas la couleur de la session
+ * précédente — elle n'est colorée qu'à la révélation, avec le ratio de la
+ * trace courante.
  */
 const viewportColor = computed(() => {
+  if (!editionStore.editionViewReady) return ''
   const r = lockRatio.value
   if (r >= 1) return '#4CAF50' // vert
   if (r > 0.5) return '#FFEB3B' // jaune
   if (r >= 0.1) return '#FF9800' // orange
   return '#F44336' // rouge
+})
+
+/**
+ * Tooltip du bouton ViewPort : neutre pendant le chargement, sinon ratio actif
+ * + pourcentage de segments verrouillés.
+ */
+const viewportTitle = computed(() => {
+  if (!editionStore.editionViewReady) return 'ViewPort — chargement de la trace…'
+  return `ViewPort ${editionStore.viewportAspect} · ${lockPct} % des segments verrouillés — cliquer pour basculer`
 })
 
 /**

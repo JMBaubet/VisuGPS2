@@ -54,6 +54,7 @@ const SETTING_PITCH_DEFAULT = 'Edition.Camera.pitchDefaut'
 const SETTING_VIEWPORT_DEFAULT = 'Edition.Camera.viewportDefaut'
 const SETTING_FLY_TO_DURATION = 'Edition.Camera.dureeFlyTo'
 const SETTING_SHOW_TELEMETRY = 'Edition.Camera.afficherTelemetrie'
+const SETTING_SHOW_HEADING_CHANGES = 'Edition.Camera.afficherCapBrutaux'
 const SETTING_PLAYBACK_ACCELERATION = 'Edition.Playback.acceleration'
 const SETTING_TRACE_COLOR = 'Edition.Couleurs.trace'
 const SETTING_CURSOR_COLOR = 'Edition.Couleurs.curseur'
@@ -380,8 +381,21 @@ export const useEditionStore = defineStore('edition', () => {
 
   // --- Actions : sélection / cadre ViewPort ---
 
+  /**
+   * Sélectionne la trace à éditer (appelé par le bouton Éditer de l'accueil
+   * avant la navigation). À chaque **ouverture** de la vue d'édition :
+   *   - le mode validation repart **désactivé** (même s'il était actif lors
+   *     d'une session précédente) ;
+   *   - la vue repart en « écran vierge » (`editionViewReady` false) — l'icône
+   *     ViewPort est alors neutre jusqu'au chargement de la trace.
+   * Les verrous persistés des segments ne sont pas touchés.
+   */
   function selectTrace(traceId: string) {
     selectedTraceId.value = traceId
+    validationMode.value = false
+    validationClicks.clear()
+    previousSegmentFromDistance = null
+    editionViewReady.value = false
   }
 
   function clearSelection() {
@@ -627,8 +641,10 @@ export const useEditionStore = defineStore('edition', () => {
    * Lit les valeurs par dotted path dans `settingsStore.settings` (avec repli
    * sur les défauts) et les répercute sur l'état. `includeViewport` ne vaut
    * `true` qu'à **l'ouverture** de la vue : le « viewport par défaut » fixe
-   * alors le ratio initial. En cours de session, on appelle avec `false` pour
-   * ne pas écraser le flip-flop ViewPort à chaque sauvegarde d'un autre
+   * alors le ratio initial. En cours de session (`false`), le viewport n'est
+   * **pas** touché ici — un watch dédié sur la valeur persistée du paramètre
+   * (EditionCamera.vue) bascule le ratio actif quand **c'est ce paramètre** qui
+   * change, sans écraser le flip-flop ViewPort à la sauvegarde d'un autre
    * paramètre.
    *
    * Algorithme / gap min : les watchers d'EditionMap déclenchent la
@@ -663,15 +679,21 @@ export const useEditionStore = defineStore('edition', () => {
     const fly = Number(read(SETTING_FLY_TO_DURATION, 250))
     if (!Number.isNaN(fly)) flyToDurationMs.value = Math.min(1000, Math.max(100, fly))
 
-    const telemetry = read(SETTING_SHOW_TELEMETRY, false)
-    showTelemetryHud.value = telemetry === true
-
     const accel = Number(read(SETTING_PLAYBACK_ACCELERATION, 2))
     if (!Number.isNaN(accel)) acceleration.value = Math.min(8, Math.max(1.5, accel))
 
+    // Viewport / affichages (télémétrie, caps) : appliqués à l'ouverture
+    // (`includeViewport`) — la valeur initiale. En cours de session, les mises à
+    // jour live sont pilotées par des watchers dédiés sur les valeurs persistées
+    // (cf. EditionCamera.vue), pour ne pas écraser les bascules manuelles
+    // (flip-flop ViewPort, boutons Fermer) quand un autre paramètre change.
     if (includeViewport) {
       const vp = read(SETTING_VIEWPORT_DEFAULT, '16:9')
       if (vp === '16:9' || vp === '4:3') viewportAspect.value = vp
+      const telemetry = read(SETTING_SHOW_TELEMETRY, false)
+      showTelemetryHud.value = telemetry === true
+      const hcp = read(SETTING_SHOW_HEADING_CHANGES, false)
+      showHeadingChangesPanel.value = hcp === true
     }
   }
 
@@ -690,6 +712,16 @@ export const useEditionStore = defineStore('edition', () => {
   /** Affiche / masque le panneau « Changements de cap brutaux ». */
   function toggleHeadingChangesPanel() {
     showHeadingChangesPanel.value = !showHeadingChangesPanel.value
+  }
+
+  /** Fixe l'affichage du panneau « Changements de cap brutaux » (paramètre). */
+  function setHeadingChangesPanel(visible: boolean) {
+    showHeadingChangesPanel.value = visible
+  }
+
+  /** Fixe l'affichage du HUD de télémétrie (fermeture via son bouton). */
+  function setTelemetryHud(visible: boolean) {
+    showTelemetryHud.value = visible
   }
 
   // --- Mode validation & verrous de segments ---
@@ -907,6 +939,8 @@ export const useEditionStore = defineStore('edition', () => {
     // Actions : analyse des changements de cap
     setHeadingChangeThreshold,
     toggleHeadingChangesPanel,
+    setHeadingChangesPanel,
+    setTelemetryHud,
     // Actions : mode validation & verrous
     toggleValidationMode,
     markValidationClick,

@@ -60,6 +60,38 @@ watch(
   () => editionStore.applySettings(false),
 )
 
+// Mise à jour live du **viewport** : quand c'est **ce paramètre** qui change
+// dans le panneau Paramètres, on bascule le ratio actif (cadre ViewPort +
+// fichier keyframes du ratio). Les autres paramètres ne déclenchent pas ce
+// watch (la valeur lue ne change pas) → le flip-flop de session est préservé.
+watch(
+  () => settingsStore.settings.find(s => s.path === 'Edition.Camera.viewportDefaut')?.value,
+  vp => {
+    if (vp === '16:9' || vp === '4:3') editionStore.setViewportAspect(vp)
+  },
+)
+
+// Mise à jour live de l'affichage du panneau des changements de cap brutaux
+// (paramètre comme le HUD de télémétrie) : n'applique que quand **ce paramètre**
+// change, pour ne pas écraser la bascule manuelle de la toolbar.
+watch(
+  () =>
+    settingsStore.settings.find(s => s.path === 'Edition.Camera.afficherCapBrutaux')?.value,
+  visible => {
+    if (typeof visible === 'boolean') editionStore.setHeadingChangesPanel(visible)
+  },
+)
+
+// Mise à jour live du HUD de télémétrie : idem, pour ne pas réafficher le HUD
+// après une fermeture manuelle (bouton Fermer) quand un autre paramètre change.
+watch(
+  () =>
+    settingsStore.settings.find(s => s.path === 'Edition.Camera.afficherTelemetrie')?.value,
+  visible => {
+    if (typeof visible === 'boolean') editionStore.setTelemetryHud(visible)
+  },
+)
+
 // --- Raccourcis clavier ---
 //   Espace        → Play/Pause ;
 //   Entrée        → en mode validation : déverrouille le segment courant dans
