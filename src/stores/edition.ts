@@ -54,6 +54,7 @@ const SETTING_PITCH_DEFAULT = 'Edition.Camera.pitchDefaut'
 const SETTING_VIEWPORT_DEFAULT = 'Edition.Camera.viewportDefaut'
 const SETTING_FLY_TO_DURATION = 'Edition.Camera.dureeFlyTo'
 const SETTING_SHOW_TELEMETRY = 'Edition.Camera.afficherTelemetrie'
+const SETTING_PLAYBACK_ACCELERATION = 'Edition.Playback.acceleration'
 const SETTING_TRACE_COLOR = 'Edition.Couleurs.trace'
 const SETTING_CURSOR_COLOR = 'Edition.Couleurs.curseur'
 const SETTING_TRACE_WIDTH = 'Edition.Couleurs.epaisseurTrace'
@@ -106,10 +107,21 @@ export const useEditionStore = defineStore('edition', () => {
   const isPlaying = ref(false)
 
   /**
-   * Multiplicateur de vitesse (0.5, 1, 2, 4). La durée « réelle » du
-   * parcours est multipliée par `1 / speed` pendant la lecture.
+   * Facteur d'accélération de la lecture (paramètre
+   * `Edition.Playback.acceleration`), appliqué quand le mode accéléré est
+   * actif. Bornes 1.5–8. Défaut : 2.
    */
-  const speed = ref(1)
+  const acceleration = ref(2)
+
+  /** `true` si la lecture accélérée (bouton double chevron) est active. */
+  const accelerated = ref(false)
+
+  /**
+   * Vitesse de lecture effective : 1× en lecture normale, sinon le facteur
+   * d'accélération (`acceleration`). La durée « réelle » du parcours est
+   * multipliée par `1 / speed` pendant la lecture.
+   */
+  const speed = computed(() => (accelerated.value ? acceleration.value : 1))
 
   /** Temps absolu courant depuis le départ (ms), dans [0, total_duration_ms]. */
   const currentTimeMs = ref(0)
@@ -581,8 +593,9 @@ export const useEditionStore = defineStore('edition', () => {
     else play()
   }
 
-  function setSpeed(s: number) {
-    speed.value = s
+  /** Bascule la lecture accélérée (bouton double chevron). */
+  function toggleAccelerated() {
+    accelerated.value = !accelerated.value
   }
 
   /**
@@ -652,6 +665,9 @@ export const useEditionStore = defineStore('edition', () => {
 
     const telemetry = read(SETTING_SHOW_TELEMETRY, false)
     showTelemetryHud.value = telemetry === true
+
+    const accel = Number(read(SETTING_PLAYBACK_ACCELERATION, 2))
+    if (!Number.isNaN(accel)) acceleration.value = Math.min(8, Math.max(1.5, accel))
 
     if (includeViewport) {
       const vp = read(SETTING_VIEWPORT_DEFAULT, '16:9')
@@ -840,6 +856,8 @@ export const useEditionStore = defineStore('edition', () => {
     keyframeSet,
     isPlaying,
     speed,
+    acceleration,
+    accelerated,
     currentTimeMs,
     // Getters
     hasKeyframes,
@@ -906,7 +924,7 @@ export const useEditionStore = defineStore('edition', () => {
     play,
     pause,
     togglePlay,
-    setSpeed,
+    toggleAccelerated,
     setKeyframeAlgorithm,
     setMinKeyframeGapM,
     seekToDistance,

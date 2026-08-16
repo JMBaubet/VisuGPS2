@@ -78,18 +78,38 @@
             :fill="cursorColorRgba"
           />
 
-          <!-- ZONE 1 : Points de RdV (keyframes) — ticks bleus (hauteur limitée, centrés) -->
+          <!--
+            ZONE 1 : Points de RdV (keyframes) — tick en **deux zones** verticales :
+            zone supérieure = ZOOM, zone inférieure = PITCH. Vert (Material 500)
+            si la valeur est égale au défaut (paramètres `zoomDefaut`/`pitchDefaut`),
+            sinon orange (pitch ≠ défaut) / rouge (zoom ≠ défaut). Permet d'identifier
+            les RdV « inhabituels » (changement de tilt/zoom au lieu d'un cap).
+          -->
           <g class="zone-rdv">
-            <rect
-              v-for="kf in keyframeTicks"
-              :key="'rdv-' + kf.distance_from_start_m"
-              :x="kf.x - RDV_WIDTH / 2"
-              :y="rdvTickY"
-              :width="RDV_WIDTH"
-              :height="rdvTickHeight"
-              fill="rgba(33, 150, 243, 0.7)"
-              class="rdv-tick"
-            />
+            <template v-for="kf in keyframeTicks" :key="'rdv-' + kf.distance_from_start_m">
+              <!-- Zone supérieure : ZOOM -->
+              <rect
+                :x="kf.x - RDV_WIDTH / 2"
+                :y="rdvTickY"
+                :width="RDV_WIDTH"
+                :height="rdvTickHeight / 2"
+                :fill="kf.zoom === editionStore.defaultZoom ? RDV_DEFAULT_COLOR : RDV_ZOOM_COLOR"
+                class="rdv-tick"
+              >
+                <title>Zoom {{ kf.zoom.toFixed(1) }}{{ kf.zoom === editionStore.defaultZoom ? '' : ` (défaut ${editionStore.defaultZoom.toFixed(1)})` }}</title>
+              </rect>
+              <!-- Zone inférieure : PITCH -->
+              <rect
+                :x="kf.x - RDV_WIDTH / 2"
+                :y="rdvTickY + rdvTickHeight / 2"
+                :width="RDV_WIDTH"
+                :height="rdvTickHeight / 2"
+                :fill="kf.pitch === editionStore.defaultPitch ? RDV_DEFAULT_COLOR : RDV_PITCH_COLOR"
+                class="rdv-tick"
+              >
+                <title>Pitch {{ kf.pitch.toFixed(0) }}°{{ kf.pitch === editionStore.defaultPitch ? '' : ` (défaut ${editionStore.defaultPitch.toFixed(0)}°)` }}</title>
+              </rect>
+            </template>
           </g>
 
           <!-- Séparateur fin -->
@@ -423,12 +443,23 @@ const progressWidthPx = computed(() =>
 /** Position X du curseur rouge (px). */
 const cursorX = computed(() => currentDistanceM.value * PX_PER_METER)
 
-/** Ticks des Points de RdV (keyframes) avec X pré-calculé. */
+/** Couleurs des zones des ticks RdV (Material Design). */
+const RDV_DEFAULT_COLOR = '#4CAF50' // vert : valeur par défaut (pitch ET zoom)
+const RDV_PITCH_COLOR = '#FF9800'   // orange : pitch ≠ défaut
+const RDV_ZOOM_COLOR = '#F44336'    // rouge : zoom ≠ défaut
+
+/**
+ * Ticks des Points de RdV (keyframes) avec X pré-calculé et les valeurs caméra
+ * (zoom / pitch) — la zone supérieure du tick code le zoom, la zone inférieure
+ * le pitch (couleur ≠ défaut).
+ */
 const keyframeTicks = computed(() => {
   const kf = editionStore.keyframeSet?.keyframes ?? []
   return kf.map(k => ({
     distance_from_start_m: k.distance_from_start_m,
     x: k.distance_from_start_m * PX_PER_METER,
+    zoom: k.cam.zoom,
+    pitch: k.cam.pitch,
   }))
 })
 
