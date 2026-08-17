@@ -31,10 +31,20 @@ const displayedTraces = computed(() =>
 )
 
 /**
+ * Garde anti double-déclenchement : évite d'ouvrir deux sélecteurs de fichier
+ * en même temps (un double-clic rapide sur le bouton peut précéder le rendu de
+ * l'état `disabled`). Sur macOS, deux NSOpenPanel simultanés font planter le
+ * second (`openPanel` → NULL).
+ */
+let importing = false
+
+/**
  * Déclenche l'import d'un fichier GPX.
  * Gère les différents cas de retour (succès, annulation, doublon, erreur).
  */
 async function importerGpx() {
+  if (importing) return
+  importing = true
   try {
     const trace = await tracesStore.importerGpx()
     ui.showSuccess(`Trace « ${trace.name} » importée avec succès.`)
@@ -52,6 +62,8 @@ async function importerGpx() {
     }
 
     ui.showError(msg || "Une erreur est survenue lors de l'import.")
+  } finally {
+    importing = false
   }
 }
 

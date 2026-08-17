@@ -925,6 +925,10 @@ function initializeMap(initialView: { center: [number, number]; zoom: number }) 
   map.on('idle', () => {
     if (pendingVisibleRefresh) {
       pendingVisibleRefresh = false
+      if (visibleRefreshTimer) {
+        clearTimeout(visibleRefreshTimer)
+        visibleRefreshTimer = null
+      }
       refreshVisibleTraceIds()
     }
   })
@@ -936,19 +940,29 @@ function initializeMap(initialView: { center: [number, number]; zoom: number }) 
  * atteint un etat stable, garantissant que les clusters sont rendus.
  */
 let pendingVisibleRefresh = false
+/** Timer de secours : force le recalcul si l'état stable ('idle') n'arrive pas. */
+let visibleRefreshTimer: ReturnType<typeof setTimeout> | null = null
+/** Délai maximal d'attente de l'état stable avant recalcul forcé (ms). */
+const VISIBLE_REFRESH_FALLBACK_MS = 800
 
 /**
- * Demande un recalcul des traces visibles. Si la carte est deja stable, le
- * calcul est effectue immediatement ; sinon il est differe jusqu'au prochain
- * etat stable (evenement 'idle').
+ * Demande un recalcul des traces visibles, **différé** jusqu'au prochain état
+ * stable (evenement 'idle'). Juste après un `setData` de la source (import,
+ * suppression, favori…), le re-clustering est **asynchrone** : interroger
+ * `queryRenderedFeatures` immédiatement renverrait des données transitoires
+ * (périmées ou vides) et la liste des circuits serait faussée (nouveau circuit
+ * absent, circuits manquants jusqu'au prochain déplacement de carte). Un timer
+ * de secours garantit le recalcul même si l'événement 'idle' n'arrivait pas.
  */
 function scheduleVisibleRefresh() {
   if (!map || !mapReady) return
-  if (map.isMoving() || map.isEasing()) {
-    pendingVisibleRefresh = true
-  } else {
+  pendingVisibleRefresh = true
+  if (visibleRefreshTimer) clearTimeout(visibleRefreshTimer)
+  visibleRefreshTimer = setTimeout(() => {
+    visibleRefreshTimer = null
+    pendingVisibleRefresh = false
     refreshVisibleTraceIds()
-  }
+  }, VISIBLE_REFRESH_FALLBACK_MS)
 }
 
 // --- Réactivité : mise à jour des données sans recréer la carte ---
@@ -1039,6 +1053,36 @@ watch(
       if (savedCenter) {
         map.flyTo({ center: savedCenter, zoom: savedZoom, duration, essential: true })
       }
+    }
+  },
+)
+// Import d'une trace : cadrer la carte sur la trace nouvellement importée.
+// Signal one-shot (`traceToFrameId`, posé par `importerGpx`) — la trace
+// occupe au plus 80 % de la hauteur et de la largeur de la carte (marge de
+// 10 % de chaque côté).
+watch(
+  () => tracesStore.traceToFrameId,
+  async (id) => {
+    if (!map || !mapReady || !id) return
+    try {
+      const geom = await tracesStore.getTraceGeometry(id)
+      const bounds = computeBounds(geom)
+      const rect = map.getContainer().getBoundingClientRect()
+      map.fitBounds(bounds, {
+        padding: {
+          top: rect.height * 0.1,
+          bottom: rect.height * 0.1,
+          left: rect.width * 0.1,
+          right: rect.width * 0.1,
+        },
+        duration: getParam('Carte.Traces.dureeFlyTo') ?? 500,
+        essential: true,
+      })
+    } catch (error) {
+      console.error(`Cadrage impossible pour la trace ${id} :`, error)
+    } finally {
+      // Consommer le signal (one-shot).
+      tracesStore.traceToFrameId = null
     }
   },
 )
@@ -1134,6 +1178,7 @@ onMounted(async () => {
 onUnmounted(() => {
   mapReady = false
   if (moveEndTimer) clearTimeout(moveEndTimer)
+  if (visibleRefreshTimer) clearTimeout(visibleRefreshTimer)
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null

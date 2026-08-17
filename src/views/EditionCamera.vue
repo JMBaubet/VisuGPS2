@@ -169,7 +169,10 @@ onUnmounted(() => {
                sont montés qu'à la révélation. -->
           <EditionMap />
           <div v-if="!editionStore.editionViewReady" class="edition-loading">
-            <v-progress-circular :size="70" :width="7" color="primary" indeterminate />
+            <div class="edition-loading-inner">
+              <v-progress-circular :size="70" :width="7" color="primary" indeterminate />
+              <span class="edition-loading-text">Chargement en cours…</span>
+            </div>
           </div>
           <template v-if="editionStore.editionViewReady">
             <ViewportFrame />
@@ -212,5 +215,20 @@ onUnmounted(() => {
   justify-content: center;
   background: rgba(0, 0, 0, 0.25);
   pointer-events: none;
+}
+
+/* Colonne spinner + message. */
+.edition-loading-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.edition-loading-text {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  letter-spacing: 0.03em;
 }
 </style>

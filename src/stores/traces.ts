@@ -82,6 +82,12 @@ export const useTracesStore = defineStore('traces', () => {
    */
   const focusedTraceId = ref<string | null>(null)
   /**
+   * id de la trace à **cadrer** sur la carte (import récent) — signal
+   * transitoire **one-shot**, posé par `importerGpx` et consommé (remis à null)
+   * par Map.vue après le `fitBounds`.
+   */
+  const traceToFrameId = ref<string | null>(null)
+  /**
    * Identifiants des traces actuellement visibles dans le viewport de la carte
    * (feuilles des clusters rendus + points individuels non clusterises).
    * Mis a jour par Map.vue via `setVisibleTraceIds` sur moveend / sourcedata.
@@ -147,6 +153,15 @@ export const useTracesStore = defineStore('traces', () => {
       const result = await invoke<TraceMetadata>('import_gpx_file')
       // Recharger la liste depuis le backend (source de vérité)
       await loadTraces()
+      // La nouvelle trace est **forcée en affichage** et demandée en cadrage
+      // (signal one-shot consommé par Map.vue). Best-effort : un échec
+      // d'affichage/cadrage ne doit pas faire échouer l'import.
+      try {
+        await updateTrace(result.id, { is_displayed: true })
+        traceToFrameId.value = result.id
+      } catch (error) {
+        console.error(`Impossible d'afficher/cadrer la trace ${result.id} :`, error)
+      }
       return result
     } finally {
       loading.value = false
@@ -249,6 +264,7 @@ export const useTracesStore = defineStore('traces', () => {
     loading,
     mapCenter,
     focusedTraceId,
+    traceToFrameId,
     visibleTraceIds,
     // Getters
     traceCount,

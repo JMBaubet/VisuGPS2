@@ -680,6 +680,15 @@ fn save_registry(traces_path: &Path, registry: &[TraceMetadata]) -> Result<(), S
 /// métadonnées sont enregistrées dans `{app_data_dir}/{active_mode}/traces.json`.
 #[tauri::command]
 pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, String> {
+    // macOS : contournement d'un bug AppKit/ViewBridge connu — `+[NSOpenPanel
+    // openPanel]` peut retourner NULL (voire rester bloqué avec la roue
+    // colorée) quand un panneau précédent n'a pas fini d'être démonté par le
+    // service système. Un court délai avant d'ouvrir le sélecteur laisse le
+    // temps au service de se stabiliser (surtout pour les ouvertures
+    // successives). Sans effet notable dans les autres cas.
+    #[cfg(target_os = "macos")]
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
     let start_time = std::time::Instant::now();
 
     // 1. Ouvrir le sélecteur de fichier natif (fichier unique, filtre .gpx)
