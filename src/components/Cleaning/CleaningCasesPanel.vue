@@ -35,10 +35,13 @@
             <template v-if="c.apex_indices.length"> · apex {{ c.apex_indices.map(a => a + 1).join(', ') }}</template>
           </v-list-item-subtitle>
           <template #append>
-            <!-- Poubelle rouge : supprimer le cas (toujours possible pour les
-                 cas « Modification de segment », sinon tant que non validé) -->
+            <!-- Poubelle rouge : supprimer le cas. Disponible pour les cas
+                 « Point hors trace » (tant que non validé) et pour les cas
+                 « Modification de segment » (même après validation). Les cas
+                 « Aller-retour » se traitent via Valider / Faux positif : pas
+                 de suppression. -->
             <v-btn
-              v-if="c.state === 'pending' || c.kind === 'manual'"
+              v-if="(c.state === 'pending' && c.kind !== 'out_and_back') || c.kind === 'manual'"
               size="x-small"
               icon="mdi-delete"
               variant="text"
@@ -114,19 +117,6 @@
           {{ cleaning.toleranceDeg.toFixed(1) }}°)
         </div>
 
-        <!-- Outils de correction -->
-        <div class="d-flex flex-wrap ga-1 mb-2">
-          <v-btn
-            size="small"
-            variant="text"
-            prepend-icon="mdi-undo-variant"
-            title="Retirer toutes les corrections du cas courant"
-            @click="cleaning.clearCorrection()"
-          >
-            Restaurer
-          </v-btn>
-        </div>
-
         <!-- Suppression d'un cas (dans la liste, poubelle à gauche de l'état) -->
 
         <div class="text-caption text-medium-emphasis mb-2">
@@ -139,8 +129,17 @@
           </template>
         </div>
 
-        <!-- Validation manuelle (obligatoire pour passer au cas suivant) -->
-        <div class="d-flex ga-2">
+        <!-- Restaurer + validation manuelle (obligatoire pour passer au cas suivant) -->
+        <div class="d-flex flex-wrap ga-2">
+          <v-btn
+            size="small"
+            variant="text"
+            prepend-icon="mdi-undo-variant"
+            title="Retirer toutes les corrections du cas courant"
+            @click="cleaning.clearCorrection()"
+          >
+            Restaurer
+          </v-btn>
           <v-btn
             color="green"
             variant="flat"
@@ -155,10 +154,10 @@
             variant="tonal"
             prepend-icon="mdi-check-decagram-outline"
             :disabled="current.state === 'kept'"
-            :title="'Conserver la trace telle quelle sur ce segment (faux positif)'"
+            :title="'Marquer ce segment comme faux positif : il sera conservé tel quel dans le GPX final'"
             @click="cleaning.validateCurrentCase('kept')"
           >
-            Conserver tel quel
+            Faux positif
           </v-btn>
         </div>
       </template>
@@ -176,9 +175,8 @@
  * actions de correction + **validation manuelle** du cas courant.
  *
  * La validation est de la responsabilité de l'utilisateur : chaque cas doit
- * être « Validé » ou « Conservé tel quel » (faux positif) avant de pouvoir
- * passer au suivant. La finalisation n'est possible qu'une fois tous les cas
- * validés.
+ * être « Validé » ou marqué « Faux positif » avant de pouvoir passer au
+ * suivant. La finalisation n'est possible qu'une fois tous les cas validés.
  */
 import { computed } from 'vue'
 import { useCleaningStore, type CleaningCaseKind, type CleaningCaseState } from '../../stores/cleaning'
@@ -258,7 +256,7 @@ function stateLabel(state: CleaningCaseState): string {
     case 'corrected':
       return 'Validé'
     case 'kept':
-      return 'Conservé'
+      return 'Faux positif'
   }
 }
 </script>
