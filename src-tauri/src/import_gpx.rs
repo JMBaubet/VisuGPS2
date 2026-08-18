@@ -89,6 +89,18 @@ pub struct TraceMetadata {
     /// Indique si la trace est affichée sur la carte.
     #[serde(default)]
     pub is_displayed: bool,
+    /// Statut de nettoyage de la trace : `"clean"` (aucune anomalie détectée ou
+    /// déjà nettoyée), `"needs_review"` (anomalies à corriger), `"in_progress"`
+    /// (corrections commencées, fichier de travail présent). Absent dans les
+    /// registres antérieurs → `"clean"` (rétrocompatibilité).
+    #[serde(default = "default_cleaning_status")]
+    pub cleaning_status: String,
+}
+
+/// Valeur par défaut du statut de nettoyage pour les registres antérieurs :
+/// `"clean"` (et non la chaîne vide produite par `String::default()`).
+fn default_cleaning_status() -> String {
+    "clean".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +109,7 @@ pub struct TraceMetadata {
 
 /// Retourne le dossier racine du mode d'exécution actif.
 /// Exemple : `{app_data_dir}/OPE` ou `{app_data_dir}/EVAL_essai`.
-fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let is_dev = cfg!(debug_assertions);
     let app_data_dir = app
         .path()
@@ -116,7 +128,7 @@ fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Retourne le dossier gpx/ à l'intérieur du mode actif.
-fn get_gpx_dir(mode_dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn get_gpx_dir(mode_dir: &Path) -> Result<PathBuf, String> {
     let gpx_dir = mode_dir.join("gpx");
     std::fs::create_dir_all(&gpx_dir)
         .map_err(|e| format!("Impossible de créer le dossier gpx : {}", e))?;
@@ -125,7 +137,7 @@ fn get_gpx_dir(mode_dir: &Path) -> Result<PathBuf, String> {
 
 /// Retourne le dossier geojson/ à l'intérieur du mode actif.
 /// Contient les LineString GeoJSON des traces (un fichier `{id}.geojson` par trace).
-fn get_geojson_dir(mode_dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn get_geojson_dir(mode_dir: &Path) -> Result<PathBuf, String> {
     let geojson_dir = mode_dir.join("geojson");
     std::fs::create_dir_all(&geojson_dir)
         .map_err(|e| format!("Impossible de créer le dossier geojson : {}", e))?;
@@ -133,12 +145,12 @@ fn get_geojson_dir(mode_dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// Retourne le chemin du fichier LineString GeoJSON d'une trace, d'après son UUID.
-fn get_geojson_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
+pub(crate) fn get_geojson_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
     mode_dir.join("geojson").join(format!("{}.geojson", trace_id))
 }
 
 /// Retourne le chemin du registre traces.json du mode actif.
-fn get_traces_path(mode_dir: &Path) -> PathBuf {
+pub(crate) fn get_traces_path(mode_dir: &Path) -> PathBuf {
     mode_dir.join("traces.json")
 }
 
@@ -179,7 +191,7 @@ fn get_keyframes_path(mode_dir: &Path, trace_id: &str, viewport_aspect: &str) ->
 
 /// Calcule le hash SHA256 du contenu binaire d'un fichier.
 /// Retourne une chaîne préfixée "sha256:…".
-fn compute_file_hash(path: &Path) -> Result<String, String> {
+pub(crate) fn compute_file_hash(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path).map_err(|e| format!("Lecture du fichier : {}", e))?;
     let mut hasher = Sha256::new();
@@ -344,7 +356,7 @@ fn detect_editor_from_name(name: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Distance en mètres entre deux points géographiques (formule de Haversine).
-fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+pub(crate) fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     const R: f64 = 6_371_000.0; // Rayon terrestre moyen en mètres
 
     let lat1_rad = lat1.to_radians();
@@ -379,7 +391,7 @@ fn clean_trace_name(name: &str) -> String {
 }
 
 /// Extrait le nom de la trace (priorité : <name> de la première track, puis nom du fichier).
-fn extract_name(gpx: &gpx::Gpx, fallback_filename: &str) -> String {
+pub(crate) fn extract_name(gpx: &gpx::Gpx, fallback_filename: &str) -> String {
     // Priorité 1 : nom de la première track (nettoyé des ID de plateforme)
     if let Some(track) = gpx.tracks.first() {
         if let Some(name) = &track.name {
@@ -420,7 +432,7 @@ fn extract_activity_type(gpx: &gpx::Gpx) -> Option<String> {
 
 /// Calcul complet des statistiques d'un GPX.
 /// Retourne un tuple (stats, nombre_total_de_points).
-fn compute_stats(gpx: &gpx::Gpx) -> Result<(TraceStats, usize), String> {
+pub(crate) fn compute_stats(gpx: &gpx::Gpx) -> Result<(TraceStats, usize), String> {
     // Collecter tous les points dans l'ordre (coords, altitude, timestamp)
     let mut all_points: Vec<(f64, f64, Option<f64>, Option<time::OffsetDateTime>)> =
         Vec::new();
@@ -540,7 +552,7 @@ fn compute_stats(gpx: &gpx::Gpx) -> Result<(TraceStats, usize), String> {
 /// Le GPX fournit `lat = pt.y()` et `lon = pt.x()`, d'où `[lon, lat] = [pt.x(), pt.y()]`.
 /// Lève une erreur explicite si le GPX contient strictement moins de 2 points
 /// (une LineString valide en nécessite au moins 2).
-fn extract_line_coordinates(gpx: &gpx::Gpx) -> Result<Vec<[f64; 2]>, String> {
+pub(crate) fn extract_line_coordinates(gpx: &gpx::Gpx) -> Result<Vec<[f64; 2]>, String> {
     let mut coords: Vec<[f64; 2]> = Vec::new();
 
     for track in &gpx.tracks {
@@ -566,7 +578,7 @@ fn extract_line_coordinates(gpx: &gpx::Gpx) -> Result<Vec<[f64; 2]>, String> {
 /// Construit une Feature GeoJSON (LineString) à partir des coordonnées et de la trace.
 ///
 /// Le `properties.id` reprend l'UUID de la trace (clé de liaison avec `TraceMetadata`).
-fn build_geojson_feature(coords: Vec<[f64; 2]>, id: &str, name: &str) -> serde_json::Value {
+pub(crate) fn build_geojson_feature(coords: Vec<[f64; 2]>, id: &str, name: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "Feature",
         "geometry": {
@@ -638,14 +650,23 @@ fn extract_points_with_distance(gpx: &gpx::Gpx) -> Result<Vec<TracePoint>, Strin
 
 /// Charge le registre des traces depuis le fichier JSON.
 /// Retourne un vecteur vide si le fichier n'existe pas ou est illisible.
-fn load_registry(traces_path: &Path) -> Vec<TraceMetadata> {
+pub(crate) fn load_registry(traces_path: &Path) -> Vec<TraceMetadata> {
     if !traces_path.exists() {
         return Vec::new();
     }
 
     match std::fs::read_to_string(traces_path) {
         Ok(content) => match serde_json::from_str::<Vec<TraceMetadata>>(&content) {
-            Ok(registry) => registry,
+            Ok(mut registry) => {
+                // Rétrocompatibilité : normalise le statut de nettoyage des
+                // registres antérieurs ou corrompus (chaîne vide → "clean").
+                for trace in &mut registry {
+                    if trace.cleaning_status.is_empty() {
+                        trace.cleaning_status = "clean".to_string();
+                    }
+                }
+                registry
+            }
             Err(e) => {
                 eprintln!("Erreur de lecture du registre traces.json : {}", e);
                 Vec::new()
@@ -659,7 +680,7 @@ fn load_registry(traces_path: &Path) -> Vec<TraceMetadata> {
 }
 
 /// Sauvegarde le registre des traces avec une écriture atomique (fichier tmp + rename).
-fn save_registry(traces_path: &Path, registry: &[TraceMetadata]) -> Result<(), String> {
+pub(crate) fn save_registry(traces_path: &Path, registry: &[TraceMetadata]) -> Result<(), String> {
     let tmp_path = traces_path.with_extension("json.tmp");
     let content =
         serde_json::to_string_pretty(registry).map_err(|e| format!("Sérialisation JSON : {}", e))?;
@@ -742,6 +763,36 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     let detection = detect_editor(&gpx);
     let (stats, _) = compute_stats(&gpx)?;
 
+    // 6bis. Détecter les anomalies de trace (points hors trace, aller-retours)
+    //       via la tolérance de cap paramétrable (Nettoyage.Cap.toleranceDeg).
+    //       Une trace avec anomalies n'est pas valide et ne peut pas être
+    //       candidate aux traitements (édition caméra) avant nettoyage.
+    //
+    //       La détection est **protégée contre tout panic imprévu** : un panic
+    //       dans une commande async laisserait l'appelant (le frontend) bloqué
+    //       sans réponse — l'import resterait muet après la sélection du
+    //       fichier. En cas de défaillance, on replie sur « aucune anomalie ».
+    let tolerance = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::cleaning::read_tolerance_deg(&app)
+    }))
+    .unwrap_or(5.0);
+    let anomalies = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::cleaning::detect_anomalies_from_gpx(&gpx, tolerance)
+    }))
+    .unwrap_or_default();
+    let cleaning_status = if anomalies.is_empty() {
+        "clean".to_string()
+    } else {
+        "needs_review".to_string()
+    };
+    if !anomalies.is_empty() {
+        println!(
+            "[import_gpx] Trace « {} » : {} anomalie(s) détectée(s), statut « needs_review ».",
+            name,
+            anomalies.len()
+        );
+    }
+
     // 7. Copier le fichier dans le dossier gpx/ avec un nom unique si nécessaire
     let raw_filename = file_path
         .file_name()
@@ -785,6 +836,7 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         hash,
         favorite: false,
         is_displayed: false,
+        cleaning_status,
     };
 
     // 9. Ajouter au registre et sauvegarder (écriture atomique)
@@ -868,6 +920,19 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
     let legacy_keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned, "");
     if legacy_keyframes_file.exists() {
         let _ = std::fs::remove_file(&legacy_keyframes_file);
+    }
+
+    // 2ter) Supprimer le fichier de travail de nettoyage (tolérant si absent).
+    let cleaning_file = mode_dir.join("cleaning").join(format!("{}.json", trace_id_owned));
+    if cleaning_file.exists() {
+        let _ = std::fs::remove_file(&cleaning_file);
+    }
+
+    // 2quater) Supprimer le backup d'origine `{filename}.gpx.orig` créé par la
+    //          finalisation du nettoyage (tolérant si absent).
+    let backup_file = gpx_file.with_extension("gpx.orig");
+    if backup_file.exists() {
+        let _ = std::fs::remove_file(&backup_file);
     }
 
     // 3) Retirer l'entrée du registre en mémoire

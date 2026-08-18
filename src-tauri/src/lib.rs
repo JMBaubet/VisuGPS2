@@ -3,6 +3,7 @@ mod display;
 mod gestionMode;
 mod settings;
 mod import_gpx;
+mod cleaning;
 
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;
@@ -51,7 +52,12 @@ pub fn run() {
             import_gpx::get_trace_points,
             import_gpx::save_keyframes,
             import_gpx::get_keyframes,
-            import_gpx::delete_keyframes
+            import_gpx::delete_keyframes,
+            cleaning::detect_trace_anomalies,
+            cleaning::get_cleaning_state,
+            cleaning::save_cleaning_state,
+            cleaning::reset_cleaning,
+            cleaning::finalize_cleaning
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

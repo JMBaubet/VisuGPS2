@@ -240,6 +240,17 @@ Par priorité décroissante :
    - Ajouter l'entrée au registre.
    - **Écriture atomique** : écrire dans un `.tmp` puis `rename`.
 
+### 4.5-bis Détection automatique des anomalies (statut de nettoyage)
+
+Une trace n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946) ou **aller-retours inutiles** (ex. points 711/791) — détectables par un **changement de cap proche de 180°** au point de demi-tour.
+
+À l'import, avant l'enregistrement au registre, le backend lance une **détection automatique** via `cleaning::detect_anomalies_from_gpx`, avec la tolérance de cap paramétrable **`Nettoyage.Cap.toleranceDeg`** (défaut 5°, plage 1–20°, pas 0,5°, unité `°`). Le résultat est porté par le champ **`cleaning_status`** de `TraceMetadata` :
+
+- aucune anomalie → `"clean"` ;
+- anomalies détectées → `"needs_review"`.
+
+Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/nettoyage`, et `EditionCamera.vue` redirige également vers `/nettoyage` (garde-fou). Le workflow de nettoyage (validation manuelle des cas, sauvegardes partielles dans `cleaning/{trace_id}.json`, finalisation avec GPX nettoyé + backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Nettoyage de trace GPX ».
+
 ### 4.6 Structures de données Rust
 
 ```rust
@@ -278,10 +289,13 @@ pub struct TraceMetadata {
     pub favorite: bool,                   // marquer comme favori (persisté)
     #[serde(default)]
     pub is_displayed: bool,               // afficher sur la carte (persisté)
+    #[serde(default)]
+    pub cleaning_status: String,          // "clean" (défaut) | "needs_review" | "in_progress"
 }
 ```
 
 > ℹ️ Les noms de champs en `snake_case` sérialisés tels quels correspondent exactement aux interfaces TypeScript du frontend (§5.3). Inutile d'ajouter `#[serde(rename_all = …)]`.
+> ℹ️ Le champ `cleaning_status` est posé à l'import (détection automatique, §4.5-bis). Absent dans les registres antérieurs → `"clean"` (rétrocompatibilité via `#[serde(default)]`).
 
 ### 4.7 Gestion des erreurs
 
@@ -675,5 +689,6 @@ export function formatElevation(m: number): string {
 
 ---
 
+**Version** : 1.2 — 2026-08-18. Détection automatique des anomalies à l'import : champ `cleaning_status` sur `TraceMetadata` (défaut `"clean"`, `"needs_review"` si anomalies), tolérance `Nettoyage.Cap.toleranceDeg`, blocage de l'édition caméra tant que la trace n'est pas « clean » (vue `/nettoyage`).
 **Version** : 1.1 — 2026-07-10. Ajout des commandes `delete_trace` et `update_trace` (persistance favori/affichage), champs `favorite`/`is_displayed` sur `TraceMetadata` (avec `#[serde(default)]` pour la rétrocompatibilité).
 **Version** : 1.0 — adapté à l'état du dépôt `VisuGPS2/stage` au 2026-07-08.

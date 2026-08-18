@@ -66,6 +66,13 @@ export interface TraceMetadata {
   favorite: boolean
   /** Trace affichée sur la carte. */
   is_displayed: boolean
+  /**
+   * Statut de nettoyage de la trace :
+   * `"clean"` (aucune anomalie ou déjà nettoyée), `"needs_review"` (anomalies
+   * à corriger), `"in_progress"` (corrections commencées). Une trace non
+   * « clean » ne peut pas entrer en édition caméra.
+   */
+  cleaning_status: string
 }
 
 // --- Store ---
@@ -241,6 +248,15 @@ export const useTracesStore = defineStore('traces', () => {
   }
 
   /**
+   * Invalide la géométrie mise en cache d'une trace (à appeler quand le GPX
+   * source change, ex. après une finalisation de nettoyage) afin que la
+   * prochaine lecture relise le backend.
+   */
+  function invalidateGeometry(traceId: string) {
+    geometryCache.delete(traceId)
+  }
+
+  /**
    * Met à jour le centre de la carte.
    * Appelé par Map.vue sur moveend pour synchroniser le tri par distance.
    */
@@ -277,6 +293,7 @@ export const useTracesStore = defineStore('traces', () => {
     updateTrace,
     getTraceGeometry,
     getTracePoints,
+    invalidateGeometry,
     updateMapCenter,
     setVisibleTraceIds,
   }

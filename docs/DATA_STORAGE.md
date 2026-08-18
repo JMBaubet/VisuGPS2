@@ -33,9 +33,12 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │   ├── geojson/                 # LineString GeoJSON (un fichier par trace)
 │   │   ├── {uuid}.geojson
 │   │   └── ...
-│   └── keyframes/               # Keyframes persistés (vue d'édition caméra)
-│       ├── {uuid}_169.json      #   ratio 16:9
-│       ├── {uuid}_43.json       #   ratio 4:3
+│   ├── keyframes/               # Keyframes persistés (vue d'édition caméra)
+│   │   ├── {uuid}_169.json      #   ratio 16:9
+│   │   ├── {uuid}_43.json       #   ratio 4:3
+│   │   └── ...
+│   └── cleaning/                # Fichier de travail du nettoyage de trace
+│       ├── {uuid}.json          #   décisions de correction (cas + état)
 │       └── ...
 │
 └── EVAL_xxx/                    # Un dossier par mode d'évaluation créé
@@ -44,7 +47,8 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
     ├── traces.json
     ├── gpx/*.gpx
     ├── geojson/{uuid}.geojson
-    └── keyframes/{uuid}_169.json / {uuid}_43.json
+    ├── keyframes/{uuid}_169.json / {uuid}_43.json
+    └── cleaning/{uuid}.json
 ```
 
 ## Détail des fichiers
@@ -106,12 +110,15 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     },
     "hash": "sha256:91a5d3aa7185523b717b4169884d6ee48afa613cd10c0a9bdae75d18a900becb",
     "favorite": false,
-    "is_displayed": false
+    "is_displayed": false,
+    "cleaning_status": "clean"
   }
 ]
 ```
 
-**Rétrocompatibilité** : les champs `favorite` et `is_displayed` ont `#[serde(default)]` en Rust. Un `traces.json` antérieur (sans ces champs) se charge avec `false`/`false` sans erreur.
+**Statut de nettoyage** (`cleaning_status`) : `"clean"` (aucune anomalie détectée ou trace déjà nettoyée), `"needs_review"` (anomalies détectées à l'import, corrections en attente), `"in_progress"` (corrections commencées, fichier de travail présent). Une trace non `"clean"` **n'est pas candidate** à l'édition caméra (la vue `/nettoyage` est présentée à la place).
+
+**Rétrocompatibilité** : les champs `favorite` et `is_displayed` ont `#[serde(default)]` et `cleaning_status` a `#[serde(default = "default_cleaning_status")]` en Rust. Un `traces.json` antérieur (sans ces champs) se charge avec `false`/`false`/`"clean"` sans erreur. En complément, `load_registry` **normalise** toute chaîne vide en `"clean"` (registres intermédiaires ou corrompus).
 
 ### `geojson/{uuid}.geojson` — LineString GeoJSON
 
@@ -141,7 +148,35 @@ Verrous et marques sont réinitialisés à la régénération des keyframes.
 Le backend traite le JSON de manière transparente (`serde_json::Value`), sans validation structurelle côté Rust.
 Écriture atomique (tmp + rename). Le dossier `keyframes/` est créé automatiquement à la première sauvegarde.
 
-> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), les deux fichiers keyframes (`{uuid}_169.json` et `{uuid}_43.json`, plus l'ancien `{uuid}.json` non suffixé des versions antérieures) sont supprimés en même temps que le `.gpx` et le `.geojson`.
+> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), les deux fichiers keyframes (`{uuid}_169.json` et `{uuid}_43.json`, plus l'ancien `{uuid}.json` non suffixé des versions antérieures) sont supprimés en même temps que le `.gpx`, le `.geojson`, le fichier de travail `cleaning/{uuid}.json` et le backup `{filename}.gpx.orig`.
+
+### `cleaning/{uuid}.json` — Fichier de travail du nettoyage
+
+Décisions de correction d'une trace, persistées à chaque **sauvegarde partielle** (commande `save_cleaning_state`, écriture atomique tmp + rename). Le GPX original reste **intact** tant que la finalisation n'a pas eu lieu.
+
+```json
+{
+  "trace_id": "cd9e49cb-…",
+  "tolerance_deg": 5.0,
+  "cases": [
+    {
+      "id": "c1",
+      "kind": "out_and_back",
+      "start_index": 710,
+      "end_index": 790,
+      "apex_indices": [710],
+      "bearing_delta_deg": 0.0,
+      "suggested_delete_ranges": [[710, 790]],
+      "state": "corrected",
+      "correction": { "delete_ranges": [[710, 790]], "insert_points": [] }
+    }
+  ]
+}
+```
+
+- `state` : `"pending"` (à traiter), `"corrected"` (corrigé par l'utilisateur), `"kept"` (conservé tel quel — faux positif). La **validation de chaque cas est de la responsabilité de l'utilisateur**.
+- La présence du fichier pose `cleaning_status = "in_progress"`.
+- À la **finalisation** (`finalize_cleaning`), le GPX original est remplacé par la version nettoyée, l'original est sauvegardé en `{filename}.gpx.orig`, les dérivés (geojson, stats, hash) sont régénérés, la trace passe en `"clean"` et le fichier de travail est supprimé.
 
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
@@ -169,6 +204,8 @@ get_geojson_path(mode_dir, trace_id) → {mode_dir}/geojson/{trace_id}.geojson
 get_keyframes_dir(mode_dir) → {mode_dir}/keyframes             // créé si absent
 get_keyframes_path(mode_dir, trace_id, viewport_aspect) → {mode_dir}/keyframes/{trace_id}_169.json | {trace_id}_43.json
 get_traces_path(mode_dir)  → {mode_dir}/traces.json
+get_cleaning_dir(mode_dir) → {mode_dir}/cleaning                // créé si absent (cleaning.rs)
+get_cleaning_path(mode_dir, trace_id) → {mode_dir}/cleaning/{trace_id}.json
 ```
 
 Le mode actif est déterminé par `gestionMode::read_active_mode(app_data_dir, is_dev)` qui lit `.env`.
@@ -189,7 +226,7 @@ Côté frontend, les secrets arrivent toujours masqués (`********`) via `get_se
 ## Isolation par mode
 
 Changer de mode d'exécution isole **complètement** les données :
-- `traces.json`, `gpx/`, `geojson/` et `keyframes/` sont propres à chaque mode.
+- `traces.json`, `gpx/`, `geojson/`, `keyframes/` et `cleaning/` sont propres à chaque mode.
 - `config.toml` et `config-dev.toml` sont propres à chaque mode.
 
 Cela permet de tester/démontrer sans polluer l'environnement de production (`OPE`).
@@ -202,4 +239,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-08-16
+**Dernière mise à jour** : 2026-08-18

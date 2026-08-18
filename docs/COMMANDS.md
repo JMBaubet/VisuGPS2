@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (24 commandes)
+## Catalogue (29 commandes)
 
 ### Application
 
@@ -84,13 +84,55 @@ pub struct ModeInfo {
 |---|---|---|
 | `import_gpx_file` | `async (app) -> Result<TraceMetadata, String>` | Sélecteur natif, parse, hash, copie, stats, màj registre. |
 | `get_traces` | `async (app) -> Result<Vec<TraceMetadata>, String>` | Liste les traces du mode actif depuis `traces.json`. |
-| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les **deux** fichiers keyframes (`_169`/`_43`, + l'ancien non suffixé) + l'entrée du registre (écriture atomique). |
+| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les **deux** fichiers keyframes (`_169`/`_43`, + l'ancien non suffixé) + le fichier de travail `cleaning/{id}.json` + le backup `{filename}.gpx.orig` + l'entrée du registre (écriture atomique). |
 | `update_trace` | `async (app, trace_id, favorite: Option<bool>, is_displayed: Option<bool>) -> Result<(), String>` | Mise à jour partielle (PATCH) d'une trace. Seuls les champs `Some(...)` sont modifiés. |
 | `get_trace_geometry` | `async (app, trace_id) -> Result<TraceGeometry, String>` | Géométrie GeoJSON d'une trace (lu depuis le cache, ou régénéré depuis le GPX en cas de migration). |
 | `get_trace_points` | `async (app, trace_id) -> Result<TracePoints, String>` | Points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX original à la demande). |
 | `save_keyframes` | `async (app, trace_id, viewport_aspect: String, keyframes_json: Value) -> Result<(), String>` | Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}_{ratio}.json` (`_169` pour `"16:9"`, `_43` pour `"4:3"` ; écriture atomique tmp + rename). |
 | `get_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<Option<Value>, String>` | Charge les keyframes persistés d'une trace **pour un ratio donné** (`"16:9"`/`"4:3"`). Retourne `None` si le fichier est absent. |
 | `delete_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<(), String>` | Supprime le fichier `keyframes/{trace_id}_{ratio}.json` d'un ratio donné (tolérant si absent). |
+
+### Nettoyage de trace (`cleaning.rs`)
+
+> Une trace n'est **valide** que si elle est « propre » (`cleaning_status = "clean"`). La détection ne fait que **proposer** des cas ; la **validation de chaque cas est de la responsabilité de l'utilisateur** (`corrected` / `kept`), et le GPX original n'est remplacé qu'à la finalisation, une fois **tous** les cas validés.
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `detect_trace_anomalies` | `async (app, trace_id, tolerance_deg: f64) -> Result<Vec<CleaningCase>, String>` | Détecte les anomalies (rebroussements ~180° sous la tolérance de cap) en re-parsant le GPX original. Aucune persistance. |
+| `get_cleaning_state` | `async (app, trace_id, tolerance_deg: f64) -> Result<CleaningState, String>` | État de nettoyage : le fichier de travail `cleaning/{trace_id}.json` s'il existe (corrections en cours), sinon une détection fraîche. |
+| `save_cleaning_state` | `async (app, trace_id, state_json: Value) -> Result<(), String>` | Sauvegarde partielle (écriture atomique) ; passe la trace en `"in_progress"`. Le GPX original reste intact. |
+| `reset_cleaning` | `async (app, trace_id) -> Result<(), String>` | Abandonne les corrections (supprime le fichier de travail) et remet la trace en `"needs_review"`. |
+| `finalize_cleaning` | `async (app, trace_id, state_json: Value) -> Result<TraceMetadata, String>` | Applique les corrections validées, génère le GPX nettoyé, **sauvegarde l'original en `{filename}.gpx.orig`**, régénère geojson/stats/hash, passe la trace en `"clean"`. Refuse tant qu'un cas est `"pending"`. |
+
+**Type `CleaningState`** (miroir TS `CleaningState` dans `src/stores/cleaning.ts`) :
+```rust
+pub struct CleaningCase {
+    pub id: String,                    // "c1", "c2", …
+    pub kind: CleaningCaseKind,        // spike | out_and_back | parallel
+    pub start_index: usize,            // zone d'intérêt (index originaux)
+    pub end_index: usize,
+    pub apex_indices: Vec<usize>,      // points de rebroussement
+    pub bearing_delta_deg: f64,        // écart de cap max mesuré
+    pub suggested_delete_ranges: Vec<[usize; 2]>, // proposition (pré-remplissage)
+    pub state: String,                 // "pending" | "corrected" | "kept"
+    pub correction: Correction,
+}
+
+pub struct Correction {
+    pub delete_ranges: Vec<[usize; 2]>,   // index originaux à supprimer
+    pub insert_points: Vec<InsertPoint>,  // points à ajouter (après un index original)
+}
+
+pub struct InsertPoint {
+    pub after_index: usize,               // index original du point conservé après lequel insérer
+    pub lat: f64,
+    pub lon: f64,
+    pub ele: Option<f64>,                 // interpolation proposée côté frontend
+    pub time: Option<String>,             // ISO 8601, écrit tel quel dans le GPX
+}
+```
+
+### Paramètres / Settings (`settings.rs`)
 
 **Types `TracePoint` et `TracePoints`** (miroir TS `TracePoint` dans `src/stores/traces.ts`) :
 ```rust
@@ -123,10 +165,12 @@ pub struct TraceMetadata {
     pub favorite: bool,                   // marquer comme favori (persisté)
     #[serde(default)]
     pub is_displayed: bool,               // afficher sur la carte (persisté)
+    #[serde(default = "default_cleaning_status")]
+    pub cleaning_status: String,          // "clean" | "needs_review" | "in_progress"
 }
 ```
 
-> `#[serde(default)]` sur `favorite` et `is_displayed` assure la **rétrocompatibilité** : un `traces.json` antérieur se charge avec `false`/`false` sans erreur.
+> `#[serde(default)]` sur `favorite`/`is_displayed` et `#[serde(default = "default_cleaning_status")]` sur `cleaning_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`"clean"`). En outre, `load_registry` **normalise** toute chaîne vide en `"clean"` (registres corrompus ou intermédiaires).
 
 ## Exemples d'appel côté frontend
 
@@ -157,4 +201,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-08-13
+**Dernière mise à jour** : 2026-08-18

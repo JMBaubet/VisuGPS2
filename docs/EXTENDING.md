@@ -96,6 +96,8 @@ const router = createRouter({
 }
 ```
 
+> **Exemple dans le projet** : la route **`/nettoyage`** (`name: 'nettoyage'`, vue `Cleaning.vue`) suit exactement ce pattern — voir `src/router/index.ts` et `src/views/Cleaning.vue`. La route est déclarée statiquement (pas de lazy loading) comme les autres vues de l'application.
+
 ---
 
 ## Créer un nouveau store
@@ -197,6 +199,8 @@ onMounted(() => {
   </div>
 </template>
 ```
+
+> **Exemple dans le projet** : **`src/stores/cleaning.ts`** (store de la vue de nettoyage de trace) illustre un store plus complet — état de travail persisté via commandes Tauri (`save_cleaning_state`), getters de validation (`allValidated`, `validatedCount`), actions de sauvegarde partielle et de finalisation (`save`, `finalize`). Le store expose aussi ses types (`CleaningCase`, `Correction`, `InsertPoint`, …) en miroir des structs Rust.
 
 ---
 
@@ -343,7 +347,7 @@ export const useProductsStore = defineStore('products', () => {
 
 ### Côté Rust
 
-`src-tauri/src/lib.rs` (ou un module dédié comme `import_gpx.rs`)
+`src-tauri/src/lib.rs` (ou un module dédié comme `import_gpx.rs` ou `cleaning.rs`)
 ```rust
 use tauri::command;
 
@@ -375,6 +379,8 @@ pub fn run() {
 ```
 
 > ⚠️ **Ne pas modifier `main.rs`** : il se contente d'appeler `tauri_app_lib::run()`. Les commandes sont enregistrées dans **`lib.rs`** (ou dans un module déclaré via `mod mon_module;` dans `lib.rs`). Voir [COMMANDS.md](./COMMANDS.md) pour la procédure complète.
+>
+> **Exemple dans le projet** : le catalogue compte actuellement **29 commandes**. Le module **`cleaning.rs`** illustre le pattern complet — module déclaré (`mod cleaning;` dans `lib.rs`), 5 commandes enregistrées dans `invoke_handler` (`detect_trace_anomalies`, `get_cleaning_state`, `save_cleaning_state`, `reset_cleaning`, `finalize_cleaning`), appelées depuis `src/stores/cleaning.ts` via `invoke()`.
 
 ### Côté Frontend
 
@@ -906,6 +912,8 @@ label = "Ma nouvelle section"
 icon = "mdi-tune"
 ```
 
+> **Exemple dans le projet** : le paramètre **`Nettoyage.Cap.toleranceDeg`** (float, défaut 5.0, min 1.0, max 20.0, step 0.5, unité `°`) suit exactement ce pattern : déclaré dans `src-tauri/settings.default.toml`, référencé sur la vue `nettoyage` (`[_meta.views.nettoyage]`, icône `mdi-broom`, `groups = ["Nettoyage.Cap"]`) et affiché via `[_meta.groups."Nettoyage.Cap"]` (« Nettoyage — Détection »).
+
 > **Handlers spéciaux** : si une catégorie ne doit pas ouvrir `ParameterCard`
 > paramètre par paramètre (ex: `Affichage.moniteurs` → carte double), déclarez-le
 > dans `[_meta.system.handlers]` : `"Affichage.moniteurs" = "monitors"`.
@@ -936,3 +944,7 @@ const monParam = computed(() => {
 > [useSettingsTree.ts](file:///Volumes/Externe/Dev/VisuGPS2/src/composables/useSettingsTree.ts) :
 > il construit l'arbre des catégories filtré par la route active. Aucune entrée
 > n'est à coder côté composant pour faire apparaître le nouveau paramètre.
+
+---
+
+**Dernière mise à jour** : 2026-08-18

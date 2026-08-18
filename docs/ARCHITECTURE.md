@@ -81,6 +81,7 @@ const router = createRouter({
     { path: '/', name: 'accueil', component: Accueil },
     { path: '/visualisation', name: 'visualisation', component: Visualisation },
     { path: '/edition-camera', name: 'editionCamera', component: EditionCamera },
+    { path: '/nettoyage', name: 'nettoyage', component: Nettoyage },
     { path: '/screen-bis', name: 'screenBis', component: ScreenBis }
   ]
 })
@@ -89,7 +90,7 @@ const router = createRouter({
 **Stratégie de routing** :
 - `createWebHistory()` : URLs propres sans `#`
 - Navigation par `name` recommandée (plus stable que `path`)
-- 4 routes : `accueil`, `visualisation`, `editionCamera`, `screenBis`
+- 5 routes : `accueil`, `visualisation`, `editionCamera`, `nettoyage`, `screenBis`
 
 **Ajout de routes** :
 ```typescript
@@ -249,9 +250,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 24 commandes : voir COMMANDS.md pour le catalogue complet
+            // 29 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
-            gestionMode::*, settings::*, import_gpx::*
+            gestionMode::*, settings::*, import_gpx::*, cleaning::*
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -267,6 +268,7 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `gestionMode.rs` : Gestion des modes d'exécution (CRUD, sélection, fichier `.env`)
 - `settings.rs` : Système de paramètres de configuration (TOML, chiffrement des secrets)
 - `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces, points avec distance cumulée, persistance des keyframes)
+- `cleaning.rs` : Nettoyage de trace GPX (détection d'anomalies, persistance des décisions, finalisation)
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -329,6 +331,7 @@ src/
 │   ├── traces.ts     # Store des traces GPX importées
 │   ├── keyframes.ts  # Store de persistance des keyframes (loadKeyframes, saveKeyframes, clearKeyframes)
 │   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
+│   ├── cleaning.ts   # Store de la vue de nettoyage de trace (détection, corrections, finalisation)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
 │   ├── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra (simple + délégation frustum)
@@ -341,6 +344,7 @@ src/
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
 │   ├── Home.vue
+│   ├── Cleaning.vue  # Nettoyage de trace GPX (route `/nettoyage`) — carte, panneau des cas, table des points
 │   └── About.vue
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
@@ -361,7 +365,12 @@ src/
    │   │   ├── HeadingChangesPanel.vue # Overlay — tableau des changements de cap brutaux (à la demande)
    │   │   ├── DistanceHud.vue      # Overlay — HUD distance parcourue/total (barre bas, orange)
    │   │   └── CameraEditor.vue     # Composant B — édition des keyframes (widgets manipulation directe)
-│   └── parameters/   # Composants d'édition des paramètres
+│   ├── Cleaning/     # Composants de la vue de nettoyage de trace
+│   │   ├── CleaningToolbar.vue    # Barre d'outils (retour accueil, titre trace, Enregistrer, Finaliser)
+│   │   ├── CleaningMap.vue        # Carte Mapbox — trace complète (ligne verte + bouton « Trace complète »), segment courant surligné, branches aller/retour décalées (line-offset), points numérotés cliquables, ajout de points par clic (cas « parallel »)
+│   │   ├── CleaningCasesPanel.vue # Panneau des anomalies (liste des cas, validation « Corriger & valider » / « Conserver tel quel »)
+│   │   └── CleaningPointTable.vue # Table des points du segment courant (index GPX, marquage suppression/insertion)
+│   ├── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
 │       └── …
@@ -389,6 +398,7 @@ src-tauri/
 │   ├── gestionMode.rs    # Gestion des modes d'exécution
 │   ├── settings.rs       # Système de paramètres de configuration
 │   ├── import_gpx.rs     # Import de fichiers GPX
+│   ├── cleaning.rs       # Nettoyage de trace GPX (détection, persistance, finalisation)
 │   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
 │   │   └── default.json  # Permissions pour les fenêtres
@@ -406,6 +416,7 @@ src-tauri/
 - `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
+- `cleaning.rs` : Détection d'anomalies (rebroussement ~180°), persistance des décisions (`cleaning/{trace_id}.json`), finalisation (GPX nettoyé + backup + régénération geojson/stats/hash)
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -758,7 +769,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
-   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. Le bouton **Éditer** (`mdi-pencil`) sélectionne la trace (`editionStore.selectTrace`) puis navigue vers la vue `editionCamera` (cf. § « Vue d'édition caméra » ci-dessous). **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / jaune > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Badge de nettoyage** : un `v-chip` orange « À nettoyer » est affiché tant que `cleaning_status !== 'clean'`, et l'icône Éditer devient **`mdi-broom`** (au lieu de `mdi-pencil`). Le bouton **Éditer** sélectionne la trace (`editionStore.selectTrace`) puis navigue vers la vue `editionCamera` — ou vers la vue `/nettoyage` si la trace n'est pas « clean » (cf. § « Nettoyage de trace GPX » ci-dessous). **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / jaune > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
    - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).
@@ -776,6 +787,53 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 5. **Notifications** (`src/stores/ui.ts`) :
    - Store mutualisé pour les snackbars Vuetify (succès, erreur, avertissement, info).
+
+## Nettoyage de trace GPX (`/nettoyage`)
+
+Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946) ou **aller-retours inutiles** (ex. points 711/791) — détectables par un **changement de cap proche de 180°** au point de demi-tour. Une trace non « clean » ne peut **pas** entrer en édition caméra.
+
+### État de nettoyage (`cleaning_status`)
+
+`TraceMetadata` porte un champ `cleaning_status` (Rust + TS) : `"clean" | "needs_review" | "in_progress"`, défaut **`"clean"`** (`#[serde(default)]`, rétrocompatibilité avec les registres antérieurs). Il est posé **à l'import** : détection automatique des anomalies (§ ci-dessous) → `"needs_review"` si anomalies, sinon `"clean"`.
+
+**Blocage de l'édition caméra** : une trace non « clean » ne peut pas entrer dans la vue d'édition caméra. Le bouton Éditer de l'accueil (`Circuit.vue`) redirige vers `/nettoyage` ; `EditionCamera.vue` dispose d'un **garde-fou** qui redirige également vers `/nettoyage` au montage si `cleaning_status !== 'clean'`.
+
+### Architecture
+
+1. **Module backend** (`src-tauri/src/cleaning.rs`) :
+   - **Détection** : pour chaque point, le cap vers le point précédent et vers le point suivant sont comparés ; s'ils sont quasi identiques (différence ≤ tolérance), le point est un **rebroussement** (~180°). Les rebroussements proches (fenêtre de 25 index) sont regroupés en un **cas** ; la zone de déviation est délimitée par retraçage symétrique (points jumeaux aller/retour). Classification : branche courte (< 100 m) → `spike` (point isolé, suggestion : supprimer l'apex) ; sinon → `out_and_back` (suggestion : supprimer le demi-tour + le retour) ; `parallel` (sortie soutenue / route parallèle, suppression **et** ajout de points) est réservé aux cas assignés manuellement par l'utilisateur.
+   - **Tolérance paramétrable** : `Nettoyage.Cap.toleranceDeg` (float, défaut 5.0, min 1.0, max 20.0, step 0.5, unité `°`), lu via `read_tolerance_deg` (repli sur 5° si absent). Déclaré dans `src-tauri/settings.default.toml` avec l'entrée `[_meta.views.nettoyage]` (icône `mdi-broom`) et le groupe `[_meta.groups."Nettoyage.Cap"]` (« Nettoyage — Détection »).
+   - **Persistance des décisions** : fichier de travail `{mode}/cleaning/{trace_id}.json` (écriture atomique). Chaque cas porte un état de validation `pending` / `corrected` / `kept`, des plages de suppression et des points d'insertion (`after_index`, index **originaux**).
+   - **Cycle de vie** : `needs_review` (anomalies à l'import) → `in_progress` (première sauvegarde partielle) → `clean` (finalisation). `reset_cleaning` ramène à `needs_review`.
+   - **Finalisation** : refuse tant que **tous** les cas ne sont pas validés ; applique les corrections, génère le **GPX nettoyé** (1.1, `<trkseg>` unique, lat/lon 6 décimales, altitude et timestamp préservés), sauvegarde l'original en **`{filename}.gpx.orig`** (une seule fois, jamais écrasé), régénère les dérivés (geojson, stats, hash) et supprime le fichier de travail.
+
+2. **Store Frontend** (`src/stores/cleaning.ts`) — Pattern Setup Store :
+   - Types miroir des structs Rust (`CleaningCaseKind`, `CleaningCase`, `Correction`, `InsertPoint`, `CleaningState`).
+   - État : `selectedTraceId`, `state` (détection + décisions), `points` (index GPX), `currentCaseIndex`, `toleranceDeg`.
+   - Getters : `hasCases`, `currentCase`, `currentZone`, `allValidated` (tous les cas ≠ `pending`), `validatedCount`, `isDeletedCount`.
+   - Actions : `load` (reprise du travail en cours via `get_cleaning_state`, sinon détection via `detect_trace_anomalies`), `reDetect`, validation manuelle des cas (« Corriger & valider » / « Conserver tel quel » pour les faux positifs), `applySuggestion`, `toggleDeletePoint`/`addDeleteRange` (suppressions), `addInsertPoint` (ajouts — cas « parallel »), `save` (sauvegarde partielle via `save_cleaning_state`, le GPX original reste intact), `finalize` (`finalize_cleaning`), `reset` (`reset_cleaning`).
+
+3. **Vue** (`src/views/Cleaning.vue`, route `/nettoyage`) :
+   - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des cas + table des points + drawer Paramètres.
+   - Garde-fou : sans trace sélectionnée → retour à l'accueil. Détection de modifications non sauvegardées (dialog de retour), boutons **Enregistrer** (sauvegarde partielle) et **Finaliser** (actif uniquement quand tous les cas sont validés).
+
+4. **Composants** (`src/components/Cleaning/`) :
+   - `CleaningToolbar.vue` : barre d'outils (retour accueil, titre « Nettoyage — {trace} », Enregistrer, Finaliser).
+   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte** (contexte global, bouton flottant « Trace complète » pour le cadrage), **segment courant** (zone du cas) surligné, branches **aller/retour** décalées perpendiculairement (`line-offset`) et colorées différemment pour les passages superposés, points numérotés (index GPX) **cliquables**, **ajout de points par clic** (cas « parallel »).
+   - `CleaningCasesPanel.vue` : liste des anomalies (n°/total validés, type, écart de cap, zone) + validation de chaque cas.
+   - `CleaningPointTable.vue` : table des points du segment courant (index, marquage suppression/insertion).
+
+5. **Responsabilité de validation** : la détection est **propositive** — chaque cas doit être **validé par l'utilisateur** (« Corriger & valider » ou « Conserver tel quel » pour les faux positifs) avant de passer au suivant ; la **finalisation n'est possible que quand tous les cas sont validés**. Le GPX original n'est remplacé qu'à la finalisation.
+
+### Commandes Tauri du module Nettoyage
+
+| Commande | Description |
+|----------|-------------|
+| `detect_trace_anomalies` | Re-parse le GPX original et retourne les anomalies détectées (aucune persistance). |
+| `get_cleaning_state` | Retourne le fichier de travail `cleaning/{trace_id}.json` s'il existe, sinon une détection fraîche. |
+| `save_cleaning_state` | Sauvegarde partielle du travail (écriture atomique) et passe la trace en `"in_progress"`. |
+| `reset_cleaning` | Abandonne les corrections en cours (supprime le fichier) et repasse en `"needs_review"`. |
+| `finalize_cleaning` | Applique les corrections validées, génère le GPX nettoyé + backup `.orig`, régénère geojson/stats/hash, repasse la trace en `"clean"`. Refuse tant que des cas sont `pending`. |
 
 ## Vue d'édition caméra (`/edition-camera`)
 
@@ -819,7 +877,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 3. **Vue** (`src/views/EditionCamera.vue`) :
    - `v-main` en **colonne flex** : un wrapper carte (`position: relative`, `flex: 1`) contenant `EditionMap` + overlays `ViewportFrame`, `TelemetryHud` et `DistanceHud`, puis `PlaybackControls` en bandeau bas fixe.
-   - Au montage : précharge `appStore`, `settingsStore`, `tracesStore`. **Garde-fou** : si `selectedTraceId` est `null` (rechargement direct), `router.replace({ name: 'accueil' })`.
+   - Au montage : précharge `appStore`, `settingsStore`, `tracesStore`. **Garde-fou** : si `selectedTraceId` est `null` (rechargement direct), `router.replace({ name: 'accueil' })` ; si la trace sélectionnée n'est pas « clean » (`cleaning_status !== 'clean'`), `router.replace({ name: 'nettoyage' })` (une trace doit être nettoyée avant l'édition caméra, cf. § « Nettoyage de trace GPX »).
 
 4. **Carte + lecture** (`src/components/Edition/EditionMap.vue`) :
    - Carte Mapbox GL **dédiée** (distincte de `Accueil/Map.vue`). Style `standard-satellite` ; **terrain/élévation** via source `raster-dem` (`mapbox-terrain-rgb`) + `setTerrain({ exaggeration: 1.5 })` ; pitch 60° par défaut (spec §7).
@@ -841,7 +899,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
    - `CameraEditor.vue` (Composant B, spec « Interface de contrôle MapBox ») : widgets de manipulation directe superposés sur la carte, **pilotés par la position de lecture** (`currentKeyframe`). **Hors RdV** → bouton « Ajouter un point de RdV » (sous le compas). **Sur un RdV** → widgets : **switch Cible** (pitch à 0° + croix bleue + drag sur carte pour viser, sauvegarde `cam.lng/lat`), **sliders Pitch/Zoom customs** (drag vertical + molette ±1 pas, double-clic ou clic sur valeur orange pour remettre les **valeurs par défaut des paramètres** `Edition.Camera.pitchDefaut`/`zoomDefaut`, **vert** sur la valeur par défaut sinon **bleu**), **CompassBandeau** (bandeau ±90°, défilement **infini** sur 3 copies -360°…720°, drag + molette ±1°, repère rouge fixe). **Barre d'actions** en bas : Undo (restaure la baseline), Supprimer (grisé sur le km 0), Sauvegarder (**grisé tant que non modifié** — sauvegarde explicite). **Verrouillage carte** : sur un RdV, toutes les interactions Mapbox sont désactivées tant que le mode Cible est inactif. **Keyframes verrouillés** : si le keyframe courant borde un segment verrouillé (mode validation), un badge cadenas s'affiche et les widgets (sliders, compas, Cible, Undo/Supprimer, Ajouter) sont **désactivés** — la protection réelle est portée par les gardes du store. Raccourcis : Espace Play/Pause, flèches ←/→ navigation RdV.
 
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
-   - Le bouton **Éditer** (`mdi-pencil`) appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis `router.push({ name: 'editionCamera' })`.
+   - Le bouton **Éditer** appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis — si `cleaning_status !== 'clean'` (trace à nettoyer) → `cleaningStore.selectTrace(trace.id)` + `router.push({ name: 'nettoyage' })` ; sinon → `router.push({ name: 'editionCamera' })`.
 
 ### Carte satellite + terrain (vs. Accueil/Map.vue)
 
@@ -865,6 +923,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
     ├── gpx/                 # Fichiers .gpx copiés (nom unique si doublon)
     ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
     ├── keyframes/           # Keyframes persistés (un {trace_id}.json par trace)
+    ├── cleaning/            # Travail de nettoyage (un {trace_id}.json par trace en cours)
     ├── config-dev.toml      # Surcharges de paramètres (dev)
     └── config.toml          # Surcharges de paramètres (prod)
 ```
@@ -883,10 +942,10 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | `get_keyframes` | Charge les keyframes persistés d'une trace (`None` si absent). |
 | `delete_keyframes` | Supprime le fichier keyframes d'une trace (tolérant si absent). |
 
-> Référence complète des 24 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 29 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-08-16
+**Dernière mise à jour** : 2026-08-18
