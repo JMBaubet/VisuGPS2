@@ -367,7 +367,7 @@ src/
    │   │   └── CameraEditor.vue     # Composant B — édition des keyframes (widgets manipulation directe)
 │   ├── Cleaning/     # Composants de la vue de nettoyage de trace
 │   │   ├── CleaningToolbar.vue    # Barre d'outils (retour accueil, titre trace, Enregistrer, Finaliser)
-│   │   ├── CleaningMap.vue        # Carte Mapbox — trace complète (ligne verte + bouton « Trace complète »), segment courant surligné, branches aller/retour décalées (line-offset), points numérotés cliquables, ajout de points par clic (cas « parallel »)
+│   │   ├── CleaningMap.vue        # Carte Mapbox — trace complète (verte), linestring corrigé (jaune), segment surligné, branches décalées, labels anti-revouvrement, points supprimés en rouge, ajout par clic
 │   │   ├── CleaningCasesPanel.vue # Panneau des anomalies (liste des cas, validation « Corriger & valider » / « Conserver tel quel »)
 │   │   └── CleaningPointTable.vue # Table des points du segment courant (index GPX, marquage suppression/insertion)
 │   ├── parameters/   # Composants d'édition des paramètres
@@ -819,7 +819,7 @@ Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX é
 
 4. **Composants** (`src/components/Cleaning/`) :
    - `CleaningToolbar.vue` : barre d'outils (retour accueil, titre « Nettoyage — {trace} », Enregistrer, Finaliser).
-   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte** (contexte global, bouton flottant « Trace complète » pour le cadrage), **segment courant** (zone du cas) surligné, branches **aller/retour** décalées perpendiculairement (`line-offset`) et colorées différemment pour les passages superposés, points numérotés (index GPX) **cliquables**, **ajout de points par clic** (cas « parallel »).
+   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte** (contexte global, bouton flottant « Trace complète » pour le cadrage), **segment courant** (zone du cas) surligné, **linestring corrigé** (ligne jaune à halo blanc : résultat réel des suppressions/ajouts, mis à jour en direct), branches **aller/retour** décalées perpendiculairement (`line-offset`) et colorées différemment pour les passages superposés, points numérotés (index GPX) **cliquables** avec **anti-revouvrement des labels** (placement greedy priorisant l'apex et les points supprimés), points supprimés en **rouge**, **ajout de points par clic** (cas « parallel »).
    - `CleaningCasesPanel.vue` : liste des anomalies (n°/total validés, type, écart de cap, zone) + validation de chaque cas.
    - `CleaningPointTable.vue` : table des points du segment courant (index, marquage suppression/insertion).
 

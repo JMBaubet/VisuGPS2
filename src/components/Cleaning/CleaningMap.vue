@@ -56,6 +56,8 @@ const FULL_SOURCE = 'clean-full'
 const ZONE_SOURCE = 'clean-zone'
 const BRANCH_A_SOURCE = 'clean-branch-a'
 const BRANCH_B_SOURCE = 'clean-branch-b'
+const CORRECTED_SOURCE = 'clean-corrected'
+const CORRECTED_HALO_SOURCE = 'clean-corrected-halo'
 const POINTS_SOURCE = 'clean-points'
 const POINTS_LAYER = 'clean-points-layer'
 const LABELS_LAYER = 'clean-labels-layer'
@@ -95,11 +97,107 @@ function pointFeatures(): GeoJSON.FeatureCollection {
         : 'normal'
     features.push({
       type: 'Feature',
-      properties: { i, label: String(i + 1), status },
+      properties: {
+        i,
+        label: String(i + 1),
+        status,
+        // Décalage du label en em (mis à jour par `layoutPointLabels`).
+        offset: [0, -0.9],
+        // 1 = label placé sans chevauchement, 0 = masqué (reste le cercle).
+        placed: 1,
+      },
       geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
     })
   }
   return { type: 'FeatureCollection', features }
+}
+
+// --- Anti-revouvrement des labels (placement greedy) ---
+
+/** Largeur/hauteur approx. d'un label à l'écran (px). */
+const LABEL_W = 22
+const LABEL_H = 12
+
+/** Taille de police des labels (px) — 1 em = 1 caractère de hauteur. */
+const LABEL_EM = 10
+
+/** Priorité d'affichage : apex, puis points supprimés, puis le reste. */
+function labelPriority(status: string): number {
+  if (status === 'apex') return 0
+  if (status === 'deleted') return 1
+  return 2
+}
+
+/**
+ * Candidats de décalage (px) pour un rayon donné. r=0 place le label au-dessus
+ * du point ; les rayons suivants écartent le label dans 8 directions.
+ */
+function labelCandidates(radius: number): [number, number][] {
+  if (radius === 0) return [[0, -14]]
+  const d = radius * 12
+  return [
+    [0, -d],
+    [d, 0],
+    [0, d],
+    [-d, 0],
+    [d, -d],
+    [d, d],
+    [-d, d],
+    [-d, -d],
+  ]
+}
+
+function rectsCollide(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+): boolean {
+  return (
+    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+  )
+}
+
+/**
+ * Calcule un décalage par label tel qu'aucun label ne chevauche un autre.
+ * Les points les plus importants (apex, supprimés) sont placés en premier
+ * (greedy) ; un label sans emplacement libre est masqué (placed = 0).
+ */
+function layoutPointLabels(features: GeoJSON.Feature[]): void {
+  if (!map) return
+  const placed: { x: number; y: number; w: number; h: number }[] = []
+
+  const ordered = [...features].sort((a, b) => {
+    const pa = labelPriority(String(a.properties?.status ?? ''))
+    const pb = labelPriority(String(b.properties?.status ?? ''))
+    if (pa !== pb) return pa - pb
+    return Number(a.properties?.i) - Number(b.properties?.i)
+  })
+
+  for (const f of ordered) {
+    const geom = f.geometry as GeoJSON.Point | undefined
+    const props = f.properties as Record<string, unknown>
+    if (!geom || geom.type !== 'Point' || !props) continue
+
+    const [lon, lat] = geom.coordinates as [number, number]
+    const px = map.project([lon, lat])
+    const label = String(props.label ?? '')
+    const w = Math.max(LABEL_W, label.length * 7 + 4)
+    const h = LABEL_H
+
+    let placedPos: [number, number] | null = null
+    search: for (let r = 0; r < 6; r++) {
+      for (const [dx, dy] of labelCandidates(r)) {
+        const box = { x: px.x + dx - w / 2, y: px.y + dy - h / 2, w, h }
+        if (!placed.some(p => rectsCollide(p, box))) {
+          placed.push(box)
+          placedPos = [dx, dy]
+          break search
+        }
+      }
+    }
+
+    props.offset = placedPos ? [placedPos[0] / LABEL_EM, placedPos[1] / LABEL_EM] : [0, -0.9]
+    props.placed = placedPos ? 1 : 0
+  }
 }
 
 function insertedFeatures(): GeoJSON.FeatureCollection {
@@ -169,14 +267,26 @@ function renderZone() {
 }
 
 function renderPoints() {
-  setData(POINTS_SOURCE, pointFeatures())
+  const fc = pointFeatures()
+  // Anti-revouvrement : repositionne les labels selon la vue courante.
+  layoutPointLabels(fc.features)
+  setData(POINTS_SOURCE, fc)
   setData(INSERTED_SOURCE, insertedFeatures())
+}
+
+/** Linestring du segment courant **après corrections** (points supprimés
+ * retirés, points ajoutés intégrés) — le retour visuel de l'impact réel. */
+function renderCorrected() {
+  const coords = cleaning.correctedZoneCoords
+  setData(CORRECTED_SOURCE, lineFeature(coords))
+  setData(CORRECTED_HALO_SOURCE, lineFeature(coords))
 }
 
 function renderAll() {
   if (!map) return
   renderFullTrace()
   renderZone()
+  renderCorrected()
   renderPoints()
 }
 
@@ -309,8 +419,18 @@ async function initializeMap() {
     map.getCanvas().style.cursor = hover.length > 0 ? 'pointer' : ''
   })
 
-  resizeObserver = new ResizeObserver(() => map?.resize())
+  resizeObserver = new ResizeObserver(() => {
+    map?.resize()
+    // Re-placer les labels après un redimensionnement (moveend n'est pas
+    // garanti d'être émis après un resize).
+    window.setTimeout(() => renderPoints(), 60)
+  })
   resizeObserver.observe(mapContainer.value)
+
+  // Anti-revouvrement : recalcule les décalages des labels à la fin de chaque
+  // mouvement de caméra (pan / zoom) — les labels sont stables pendant le
+  // mouvement, repositionnés au repos.
+  map.on('moveend', () => renderPoints())
 }
 
 function setupLayers() {
@@ -374,6 +494,28 @@ function setupLayers() {
   addBranchLayer(BRANCH_A_SOURCE, '#2e7d32', -7)
   addBranchLayer(BRANCH_B_SOURCE, '#ef6c00', 7)
 
+  // 3bis. Linestring corrigé (résultat des suppressions/insertions) : halo
+  //       blanc en dessous, ligne jaune épaisse au-dessus de la zone.
+  for (const [id, color, width, opacity] of [
+    [CORRECTED_HALO_SOURCE, '#ffffff', 9, 0.8],
+    [CORRECTED_SOURCE, '#FDD835', 4, 0.95],
+  ] as const) {
+    if (!map.getSource(id)) map.addSource(id, { type: 'geojson', data: emptyFC() })
+    if (!map.getLayer(id)) {
+      map.addLayer({
+        id,
+        type: 'line',
+        source: id,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': color,
+          'line-width': width,
+          'line-opacity': opacity,
+        },
+      })
+    }
+  }
+
   // 4. Points de la zone (cercles + numéros d'index GPX).
   if (!map.getSource(POINTS_SOURCE)) {
     map.addSource(POINTS_SOURCE, { type: 'geojson', data: pointFeatures() })
@@ -391,12 +533,12 @@ function setupLayers() {
           'match',
           ['get', 'status'],
           'apex',
-          '#e53935',
+          '#b71c1c',
           'deleted',
-          '#9e9e9e',
+          '#f44336',
           '#1e88e5',
         ],
-        'circle-opacity': ['case', ['==', ['get', 'status'], 'deleted'], 0.35, 1],
+        'circle-opacity': ['case', ['==', ['get', 'status'], 'deleted'], 0.9, 1],
       },
     })
   }
@@ -408,20 +550,25 @@ function setupLayers() {
       layout: {
         'text-field': ['get', 'label'],
         'text-size': 10,
+        // Le chevauchement est contrôlé par `layoutPointLabels` (anti-revouvrement
+        // custom) : `text-allow-overlap` doit rester à true pour que Mapbox
+        // n'écrase pas nos décalages par son propre placement.
         'text-allow-overlap': true,
-        'text-offset': [0, -0.9],
+        'text-offset': ['get', 'offset'],
       },
       paint: {
         'text-color': [
           'match',
           ['get', 'status'],
           'apex',
-          '#e53935',
+          '#b71c1c',
           'deleted',
-          '#9e9e9e',
+          '#f44336',
           '#1565c0',
         ],
-        'text-opacity': ['case', ['==', ['get', 'status'], 'deleted'], 0.3, 1],
+        // Les points supprimés sont affichés en rouge bien visible ; seuls les
+        // labels sans emplacement libre (anti-revouvrement) sont masqués.
+        'text-opacity': ['case', ['==', ['get', 'placed'], 0], 0, 1],
         'text-halo-color': '#ffffff',
         'text-halo-width': 1.5,
       },
@@ -478,7 +625,10 @@ watch(
 
 watch(
   () => cleaning.currentCase?.correction,
-  () => renderPoints(),
+  () => {
+    renderPoints()
+    renderCorrected()
+  },
   { deep: true },
 )
 

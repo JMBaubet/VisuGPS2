@@ -99,6 +99,40 @@ export const useCleaningStore = defineStore('cleaning', () => {
     return points.value.slice(c.start_index, c.end_index + 1)
   })
 
+  /**
+   * Coordonnées `[lon, lat]` du **segment courant après application des
+   * corrections** : les points marqués à supprimer sont retirés du tracé et
+   * les points ajoutés y sont intégrés (à leur `after_index`). Un point de
+   * marge avant/après la zone est inclus pour le raccord visuel. Permet
+   * d'afficher l'impact réel d'une modification sur le linestring.
+   */
+  const correctedZoneCoords = computed<number[][]>(() => {
+    const c = currentCase.value
+    const pts = points.value
+    if (!c || pts.length === 0) return []
+    const start = Math.max(0, c.start_index - 1)
+    const end = Math.min(pts.length - 1, c.end_index + 1)
+
+    // Points ajoutés, groupés par index original après lequel ils s'insèrent.
+    const insertsByIndex = new Map<number, { lat: number; lon: number }[]>()
+    for (const ins of c.correction.insert_points) {
+      if (ins.after_index < start || ins.after_index > end) continue
+      const arr = insertsByIndex.get(ins.after_index) ?? []
+      arr.push({ lat: ins.lat, lon: ins.lon })
+      insertsByIndex.set(ins.after_index, arr)
+    }
+
+    const out: number[][] = []
+    for (let i = start; i <= end; i++) {
+      if (isDeleted(i)) continue
+      out.push([pts[i].lon, pts[i].lat])
+      for (const ins of insertsByIndex.get(i) ?? []) {
+        out.push([ins.lon, ins.lat])
+      }
+    }
+    return out
+  })
+
   /** true quand tous les cas ont été validés par l'utilisateur. */
   const allValidated = computed(() => {
     const cases = state.value?.cases
@@ -412,6 +446,7 @@ export const useCleaningStore = defineStore('cleaning', () => {
     hasCases,
     currentCase,
     currentZone,
+    correctedZoneCoords,
     allValidated,
     validatedCount,
     isDeletedCount,
