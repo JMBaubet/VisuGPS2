@@ -99,7 +99,7 @@ pub struct ModeInfo {
 | Commande | Signature Rust | Retour |
 |---|---|---|
 | `detect_trace_anomalies` | `async (app, trace_id, tolerance_deg: f64) -> Result<Vec<CleaningCase>, String>` | Détecte les anomalies (rebroussements ~180° sous la tolérance de cap) en re-parsant le GPX original. Aucune persistance. |
-| `get_cleaning_state` | `async (app, trace_id, tolerance_deg: f64) -> Result<CleaningState, String>` | État de nettoyage : le fichier de travail `cleaning/{trace_id}.json` s'il existe (corrections en cours), sinon une détection fraîche. |
+| `get_cleaning_state` | `async (app, trace_id, tolerance_deg: f64) -> Result<CleaningState, String>` | État de nettoyage : le fichier de travail `cleaning/{trace_id}.json` s'il existe et est **valide** (corrections en cours), sinon une détection fraîche. Un fichier illisible/invalide est ignoré (re-détection) pour ne jamais bloquer l'IHM. |
 | `save_cleaning_state` | `async (app, trace_id, state_json: Value) -> Result<(), String>` | Sauvegarde partielle (écriture atomique) ; passe la trace en `"in_progress"`. Le GPX original reste intact. |
 | `reset_cleaning` | `async (app, trace_id) -> Result<(), String>` | Abandonne les corrections (supprime le fichier de travail) et remet la trace en `"needs_review"`. |
 | `finalize_cleaning` | `async (app, trace_id, state_json: Value) -> Result<TraceMetadata, String>` | Applique les corrections validées, génère le GPX nettoyé, **sauvegarde l'original en `{filename}.gpx.orig`**, régénère geojson/stats/hash, passe la trace en `"clean"`. Refuse tant qu'un cas est `"pending"`. |
@@ -107,8 +107,8 @@ pub struct ModeInfo {
 **Type `CleaningState`** (miroir TS `CleaningState` dans `src/stores/cleaning.ts`) :
 ```rust
 pub struct CleaningCase {
-    pub id: String,                    // "c1", "c2", …
-    pub kind: CleaningCaseKind,        // spike | out_and_back | parallel
+    pub id: String,                    // "c1", "c2", "manual1", …
+    pub kind: CleaningCaseKind,        // spike | out_and_back | manual
     pub start_index: usize,            // zone d'intérêt (index originaux)
     pub end_index: usize,
     pub apex_indices: Vec<usize>,      // points de rebroussement
@@ -120,17 +120,17 @@ pub struct CleaningCase {
 
 pub struct Correction {
     pub delete_ranges: Vec<[usize; 2]>,   // index originaux à supprimer
-    pub insert_points: Vec<InsertPoint>,  // points à ajouter (après un index original)
+    pub moved_points: Vec<MovedPoint>,    // points déplacés géographiquement
 }
 
-pub struct InsertPoint {
-    pub after_index: usize,               // index original du point conservé après lequel insérer
-    pub lat: f64,
+pub struct MovedPoint {
+    pub index: usize,                 // index original du point
+    pub lat: f64,                     // nouvelles coordonnées
     pub lon: f64,
-    pub ele: Option<f64>,                 // interpolation proposée côté frontend
-    pub time: Option<String>,             // ISO 8601, écrit tel quel dans le GPX
 }
 ```
+
+> Le type `manual` désigne un cas créé **manuellement** par l'utilisateur (plage `[start, end]` désignée sur la carte) — jamais produit par la détection automatique ; il peut être supprimé avant validation.
 
 ### Paramètres / Settings (`settings.rs`)
 

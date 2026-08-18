@@ -5,8 +5,8 @@
  * Une trace qui contient des anomalies (points hors trace, aller-retours)
  * n'est pas **valide** et ne peut pas entrer en édition caméra. Cette vue
  * présente chaque anomalie sur une carte MapBox et permet à l'utilisateur de
- * corriger **segment par segment** (suppression de points, ajout de points),
- * avec validation manuelle obligatoire avant de passer au suivant.
+ * corriger **segment par segment** (suppression de points), avec validation
+ * manuelle obligatoire avant de passer au suivant.
  *
  * Sauvegardes **partielles** à tout moment (bouton Enregistrer) : le GPX
  * original reste intact. La **finalisation** (bouton Finaliser, actif quand

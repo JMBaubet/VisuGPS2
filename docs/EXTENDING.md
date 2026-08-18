@@ -200,7 +200,7 @@ onMounted(() => {
 </template>
 ```
 
-> **Exemple dans le projet** : **`src/stores/cleaning.ts`** (store de la vue de nettoyage de trace) illustre un store plus complet — état de travail persisté via commandes Tauri (`save_cleaning_state`), getters de validation (`allValidated`, `validatedCount`), actions de sauvegarde partielle et de finalisation (`save`, `finalize`). Le store expose aussi ses types (`CleaningCase`, `Correction`, `InsertPoint`, …) en miroir des structs Rust.
+> **Exemple dans le projet** : **`src/stores/cleaning.ts`** (store de la vue de nettoyage de trace) illustre un store plus complet — état de travail persisté via commandes Tauri (`save_cleaning_state`), getters de validation (`allValidated`, `validatedCount`), actions de sauvegarde partielle et de finalisation (`save`, `finalize`). Le store expose aussi ses types (`CleaningCase`, `Correction`, …) en miroir des structs Rust.
 
 ---
 

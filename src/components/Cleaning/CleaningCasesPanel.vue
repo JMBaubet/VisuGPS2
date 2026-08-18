@@ -94,29 +94,60 @@
           >
             Restaurer
           </v-btn>
-          <v-btn
-            size="small"
-            variant="tonal"
-            prepend-icon="mdi-plus-circle-outline"
-            :color="current.kind === 'parallel' ? 'pink' : ''"
-            :title="
-              current.kind === 'parallel'
-                ? 'Mode ajout actif : un clic sur la carte pose un point'
-                : 'Activer l\'ajout de points (clic sur la carte)'
-            "
-            @click="cleaning.setCaseKind(current.kind === 'parallel' ? 'out_and_back' : 'parallel')"
-          >
-            {{ current.kind === 'parallel' ? 'Ajout actif' : 'Ajouter des points' }}
-          </v-btn>
         </div>
+
+        <!-- Création manuelle d'un cas -->
+        <template v-if="cleaning.createMode">
+          <div class="create-help mb-2">
+            <v-icon size="small" icon="mdi-draw" class="mr-1" color="green" />
+            <span class="text-caption">
+              <template v-if="cleaning.createStartIndex === null">
+                Cliquez sur la carte pour le <b>point de début</b> du segment,
+                puis sur le <b>point de fin</b>.
+              </template>
+              <template v-else>
+                Point de début posé (n° {{ cleaning.createStartIndex + 1 }}) —
+                cliquez maintenant sur le <b>point de fin</b>.
+              </template>
+            </span>
+            <v-btn
+              size="x-small"
+              icon="mdi-close"
+              variant="text"
+              title="Annuler la création"
+              @click="cleaning.cancelCreate()"
+            />
+          </div>
+        </template>
+        <v-btn
+          v-else
+          size="small"
+          variant="tonal"
+          color="green"
+          prepend-icon="mdi-draw"
+          title="Créer manuellement un cas : désigner sur la carte un point de début puis un point de fin"
+          @click="cleaning.toggleCreateMode()"
+        >
+          Créer une anomalie
+        </v-btn>
+
+        <!-- Suppression d'un cas manuel non validé -->
+        <v-btn
+          v-if="current.kind === 'manual' && current.state === 'pending'"
+          size="small"
+          variant="text"
+          color="red"
+          prepend-icon="mdi-delete-outline"
+          class="mt-1"
+          title="Supprimer ce cas (création manuelle) avant validation"
+          @click="supprimerCasCourant"
+        >
+          Supprimer ce cas
+        </v-btn>
 
         <div class="text-caption text-medium-emphasis mb-2">
           <template v-if="deletedCount > 0">
             {{ deletedCount }} point(s) marqué(s) à supprimer
-            <template v-if="insertedCount > 0"> · {{ insertedCount }} point(s) ajouté(s)</template>
-          </template>
-          <template v-else-if="insertedCount > 0">
-            {{ insertedCount }} point(s) ajouté(s)
           </template>
           <template v-else>
             Aucune modification — cliquez sur les points de la carte ou
@@ -177,7 +208,13 @@ const deletedCount = computed(() => {
   return c.correction.delete_ranges.reduce((acc, [from, to]) => acc + (to - from + 1), 0)
 })
 
-const insertedCount = computed(() => cleaning.currentCase?.correction.insert_points.length ?? 0)
+/** Supprime le cas manuel courant (non validé) de la liste. */
+function supprimerCasCourant() {
+  const ok = window.confirm(
+    'Supprimer ce cas créé manuellement ? Les corrections associées seront perdues.',
+  )
+  if (ok) cleaning.removeCase(cleaning.currentCaseIndex)
+}
 
 function kindIcon(kind: CleaningCaseKind): string {
   switch (kind) {
@@ -185,8 +222,8 @@ function kindIcon(kind: CleaningCaseKind): string {
       return 'mdi-dots-hexagon'
     case 'out_and_back':
       return 'mdi-arrow-u-left-bottom'
-    case 'parallel':
-      return 'mdi-broom'
+    case 'manual':
+      return 'mdi-draw'
   }
 }
 
@@ -196,8 +233,8 @@ function kindColor(kind: CleaningCaseKind): string {
       return 'purple'
     case 'out_and_back':
       return 'orange'
-    case 'parallel':
-      return 'pink'
+    case 'manual':
+      return 'green'
   }
 }
 
@@ -207,8 +244,8 @@ function kindLabel(kind: CleaningCaseKind): string {
       return 'Point hors trace'
     case 'out_and_back':
       return 'Aller-retour'
-    case 'parallel':
-      return 'Sortie / ajout'
+    case 'manual':
+      return 'Manuel (créé à la carte)'
   }
 }
 
@@ -252,5 +289,16 @@ function stateLabel(state: CleaningCaseState): string {
 .current-case-actions {
   flex: 0 0 auto;
   border-top: 0.5px solid rgba(127, 127, 127, 0.3);
+}
+
+/* Consigne du mode « Créer une anomalie ». */
+.create-help {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-left: 3px solid #00c853;
+  background: color-mix(in srgb, #00c853 8%, transparent);
+  border-radius: 0 4px 4px 0;
 }
 </style>

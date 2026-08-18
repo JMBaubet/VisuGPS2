@@ -24,23 +24,21 @@ import { useSettingsStore } from './settings'
 
 // --- Types (miroir exact des structs Rust cleaning.rs, snake_case) ---
 
-export type CleaningCaseKind = 'spike' | 'out_and_back' | 'parallel'
+export type CleaningCaseKind = 'spike' | 'out_and_back' | 'manual'
 
 export type CleaningCaseState = 'pending' | 'corrected' | 'kept'
 
-/** Point à insérer dans la trace, positionné après l'index original `after_index`. */
-export interface InsertPoint {
-  after_index: number
+/** Point de la trace déplacé géographiquement (index original + coordonnées). */
+export interface MovedPoint {
+  index: number
   lat: number
   lon: number
-  ele: number | null
-  time: string | null
 }
 
 /** Corrections appliquées à un cas (index **originaux**, avant suppression). */
 export interface Correction {
   delete_ranges: [number, number][]
-  insert_points: InsertPoint[]
+  moved_points: MovedPoint[]
 }
 
 /** Un cas d'anomalie à traiter. */
@@ -81,6 +79,15 @@ export const useCleaningStore = defineStore('cleaning', () => {
   const toleranceDeg = ref(5.0)
   const loading = ref(false)
 
+  // --- État UI éphémère (non persisté) ---
+
+  /** Mode « création d'anomalie » : deux clics sur la carte délimitent un cas. */
+  const createMode = ref(false)
+  /** Index (original) du point de début posé par le premier clic, ou null. */
+  const createStartIndex = ref<number | null>(null)
+  /** Point en cours de déplacement sur la carte (index original), ou null. */
+  const movePointIndex = ref<number | null>(null)
+
   // --- Getters ---
 
   const hasCases = computed(() => (state.value?.cases.length ?? 0) > 0)
@@ -101,10 +108,10 @@ export const useCleaningStore = defineStore('cleaning', () => {
 
   /**
    * Coordonnées `[lon, lat]` du **segment courant après application des
-   * corrections** : les points marqués à supprimer sont retirés du tracé et
-   * les points ajoutés y sont intégrés (à leur `after_index`). Un point de
-   * marge avant/après la zone est inclus pour le raccord visuel. Permet
-   * d'afficher l'impact réel d'une modification sur le linestring.
+   * corrections** : les points marqués à supprimer sont retirés et les points
+   * déplacés sont positionnés à leurs nouvelles coordonnées. Un point de marge
+   * avant/après la zone est inclus pour le raccord visuel. Permet d'afficher
+   * l'impact réel d'une modification sur le linestring.
    */
   const correctedZoneCoords = computed<number[][]>(() => {
     const c = currentCase.value
@@ -113,22 +120,14 @@ export const useCleaningStore = defineStore('cleaning', () => {
     const start = Math.max(0, c.start_index - 1)
     const end = Math.min(pts.length - 1, c.end_index + 1)
 
-    // Points ajoutés, groupés par index original après lequel ils s'insèrent.
-    const insertsByIndex = new Map<number, { lat: number; lon: number }[]>()
-    for (const ins of c.correction.insert_points) {
-      if (ins.after_index < start || ins.after_index > end) continue
-      const arr = insertsByIndex.get(ins.after_index) ?? []
-      arr.push({ lat: ins.lat, lon: ins.lon })
-      insertsByIndex.set(ins.after_index, arr)
-    }
+    const movedByIndex = new Map<number, MovedPoint>()
+    for (const mp of c.correction.moved_points) movedByIndex.set(mp.index, mp)
 
     const out: number[][] = []
     for (let i = start; i <= end; i++) {
       if (isDeleted(i)) continue
-      out.push([pts[i].lon, pts[i].lat])
-      for (const ins of insertsByIndex.get(i) ?? []) {
-        out.push([ins.lon, ins.lat])
-      }
+      const p = movedByIndex.get(i) ?? pts[i]
+      out.push([p.lon, p.lat])
     }
     return out
   })
@@ -217,6 +216,13 @@ export const useCleaningStore = defineStore('cleaning', () => {
         )
         return prev ?? freshCase
       })
+      // Les cas **manuels** validés ne sont jamais re-détectés : on les
+      // conserve tels quels (état + corrections) pour ne rien perdre.
+      for (const prev of previous) {
+        if (prev.state !== 'pending' && prev.kind === 'manual' && !merged.includes(prev)) {
+          merged.push(prev)
+        }
+      }
       state.value = { ...state.value, tolerance_deg: toleranceDeg.value, cases: merged }
       const firstPending = merged.findIndex(c => c.state === 'pending')
       currentCaseIndex.value = firstPending >= 0 ? firstPending : 0
@@ -278,7 +284,8 @@ export const useCleaningStore = defineStore('cleaning', () => {
   function clearCorrection() {
     const c = currentCase.value
     if (!c) return
-    c.correction = { delete_ranges: [], insert_points: [] }
+    c.correction = { delete_ranges: [], moved_points: [] }
+    movePointIndex.value = null
   }
 
   /** Vrai si le point (index original) est supprimé par une correction du cas courant. */
@@ -288,43 +295,103 @@ export const useCleaningStore = defineStore('cleaning', () => {
     return c.correction.delete_ranges.some(r => r[0] <= index && index <= r[1])
   }
 
-  /**
-   * Ajoute un point à insérer dans le cas courant. `afterIndex` = index du
-   * point original après lequel insérer (déterminé par le clic carte).
-   */
-  function addInsertPoint(afterIndex: number, lat: number, lon: number) {
+  /** Point déplacé du cas courant pour un index original (ou null). */
+  function isMoved(index: number): MovedPoint | null {
     const c = currentCase.value
-    if (!c) return
-    const prev = points.value[afterIndex]
-    const next = points.value[afterIndex + 1]
-    // Interpolation de l'élévation (et du temps) depuis les voisins.
-    const ele =
-      prev?.alt != null && next?.alt != null
-        ? Math.round(((prev.alt + next.alt) / 2) * 10) / 10
-        : prev?.alt ?? next?.alt ?? null
-    c.correction.insert_points.push({
-      after_index: afterIndex,
-      lat,
-      lon,
-      ele,
-      time: null,
-    })
+    if (!c) return null
+    return c.correction.moved_points.find(mp => mp.index === index) ?? null
   }
 
-  function removeInsertPoint(index: number) {
+  /** Déplace un point (index original) vers de nouvelles coordonnées. */
+  function setMovedPoint(index: number, lat: number, lon: number) {
     const c = currentCase.value
     if (!c) return
-    c.correction.insert_points.splice(index, 1)
-  }
-
-  function setInsertPointPosition(index: number, lat: number, lon: number) {
-    const c = currentCase.value
-    if (!c) return
-    const p = c.correction.insert_points[index]
-    if (p) {
-      p.lat = lat
-      p.lon = lon
+    // Garde-fou : index invalide (négatif ou hors bornes) → ignoré.
+    if (!Number.isInteger(index) || index < 0 || index >= points.value.length) return
+    const existing = c.correction.moved_points.find(mp => mp.index === index)
+    if (existing) {
+      existing.lat = lat
+      existing.lon = lon
+    } else {
+      c.correction.moved_points.push({ index, lat, lon })
     }
+  }
+
+  /** Annule le déplacement d'un point. */
+  function clearMovedPoint(index: number) {
+    const c = currentCase.value
+    if (!c) return
+    c.correction.moved_points = c.correction.moved_points.filter(mp => mp.index !== index)
+  }
+
+  /** Démarre/arrête le déplacement d'un point sur la carte. */
+  function startMovePoint(index: number) {
+    movePointIndex.value = index
+  }
+
+  function stopMovePoint() {
+    movePointIndex.value = null
+  }
+
+  // --- Création manuelle d'un cas ---
+
+  /** Active/désactive le mode « création d'anomalie » (2 clics sur la carte). */
+  function toggleCreateMode() {
+    createMode.value = !createMode.value
+    createStartIndex.value = null
+  }
+
+  /** Abandonne la création en cours. */
+  function cancelCreate() {
+    createMode.value = false
+    createStartIndex.value = null
+  }
+
+  /**
+   * Crée un cas **manuel** à partir d'une plage d'index originaux désignée sur
+   * la carte (2 clics). Le cas est ajouté à la liste et devient courant ; il
+   * peut être supprimé avant validation.
+   */
+  function createManualCase(start: number, end: number) {
+    const st = state.value
+    if (!st) return
+    const lo = Math.min(start, end)
+    const hi = Math.max(start, end)
+    if (lo < 0 || hi >= points.value.length || lo === hi) {
+      cancelCreate()
+      return
+    }
+    const c: CleaningCase = {
+      // Identifiant unique (horodatage) — les cas manuels ne proviennent pas
+      // de la détection et ne doivent jamais entrer en collision d'id.
+      id: `manual-${Date.now()}`,
+      kind: 'manual',
+      start_index: lo,
+      end_index: hi,
+      apex_indices: [],
+      bearing_delta_deg: 0,
+      suggested_delete_ranges: [],
+      state: 'pending',
+      correction: { delete_ranges: [], moved_points: [] },
+    }
+    st.cases.push(c)
+    currentCaseIndex.value = st.cases.length - 1
+    cancelCreate()
+  }
+
+  /**
+   * Supprime un cas **non validé** de la liste (création manuelle erronée ou
+   * cas à retraiter). Refusé si le cas est déjà validé.
+   */
+  function removeCase(index: number): boolean {
+    const st = state.value
+    if (!st || index < 0 || index >= st.cases.length) return false
+    if (st.cases[index].state !== 'pending') return false
+    st.cases.splice(index, 1)
+    currentCaseIndex.value = Math.min(currentCaseIndex.value, Math.max(0, st.cases.length - 1))
+    cancelCreate()
+    stopMovePoint()
+    return true
   }
 
   // --- Validation ---
@@ -342,18 +409,14 @@ export const useCleaningStore = defineStore('cleaning', () => {
       c.state = 'corrected'
     } else {
       c.state = 'kept'
-      c.correction = { delete_ranges: [], insert_points: [] }
+      c.correction = { delete_ranges: [], moved_points: [] }
     }
+    stopMovePoint()
+    cancelCreate()
     // Passer au prochain cas non validé.
     const cases = state.value?.cases ?? []
     const next = cases.findIndex((cc, i) => i > currentCaseIndex.value && cc.state === 'pending')
     if (next >= 0) currentCaseIndex.value = next
-  }
-
-  /** Bascule un cas en mode « ajout de points » (type parallel). */
-  function setCaseKind(kind: CleaningCaseKind) {
-    const c = currentCase.value
-    if (c) c.kind = kind
   }
 
   // --- Persistance ---
@@ -442,6 +505,10 @@ export const useCleaningStore = defineStore('cleaning', () => {
     currentCaseIndex,
     toleranceDeg,
     loading,
+    // État UI éphémère
+    createMode,
+    createStartIndex,
+    movePointIndex,
     // Getters
     hasCases,
     currentCase,
@@ -460,11 +527,16 @@ export const useCleaningStore = defineStore('cleaning', () => {
     addDeleteRange,
     clearCorrection,
     isDeleted,
-    addInsertPoint,
-    removeInsertPoint,
-    setInsertPointPosition,
+    isMoved,
+    setMovedPoint,
+    clearMovedPoint,
+    startMovePoint,
+    stopMovePoint,
+    toggleCreateMode,
+    cancelCreate,
+    createManualCase,
+    removeCase,
     validateCurrentCase,
-    setCaseKind,
     save,
     finalize,
     reset,

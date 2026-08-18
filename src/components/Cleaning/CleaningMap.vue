@@ -12,6 +12,24 @@
     >
       Trace complète
     </v-btn>
+
+    <!-- Sélecteur des points proches du curseur (points superposés) -->
+    <div
+      v-if="hoverCandidates.length > 0"
+      class="hover-candidates"
+      :style="{ left: hoverPos.x + 'px', top: hoverPos.y + 'px' }"
+    >
+      <div class="hover-candidates-title">Points proches :</div>
+      <button
+        v-for="c in hoverCandidates"
+        :key="c.i"
+        class="hover-candidate"
+        :class="{ 'hover-candidate--start': c.i === cleaning.createStartIndex }"
+        @click="onPickCandidate(c.i)"
+      >
+        #{{ c.label }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -20,18 +38,15 @@
  * Carte Mapbox GL de la vue de nettoyage de trace.
  *
  * Affichage :
- * - la trace complète en filigrane (gris, pointillés) ;
+ * - la trace complète (ligne continue verte, contexte) ;
  * - le **segment courant** (zone du cas) surligné ;
+ * - le **linestring corrigé** (ligne jaune à halo blanc) : le tracé réel après
+ *   les suppressions, mis à jour en direct ;
  * - pour un aller-retour (`out_and_back`), les branches **aller** et **retour**
  *   décalées perpendiculairement (`line-offset`) et colorées différemment pour
  *   distinguer les passages superposés ;
- * - les points de la zone numérotés (index GPX), cliquables pour basculer
- *   leur suppression ;
- * - les points ajoutés (cas `parallel`) : déplaçables à la souris, retirés par
- *   simple clic.
- *
- * Le clic sur la carte, quand le cas courant est en mode ajout (`parallel`),
- * pose un nouveau point après le point de la zone le plus proche.
+ * - les points de la zone numérotés (index GPX), cliquables pour basculer leur
+ *   suppression, avec anti-revouvrement des labels.
  *
  * Conventions reprises de EditionMap.vue / Accueil/Map.vue : token Mapbox
  * depuis `Systeme.Key.mapBox`, `ResizeObserver` pour le redimensionnement,
@@ -49,6 +64,28 @@ const cleaning = useCleaningStore()
 const mapContainer = ref<HTMLDivElement | null>(null)
 let map: mapboxgl.Map | null = null
 let resizeObserver: ResizeObserver | null = null
+/** Index du point en cours de drag (déplacement), ou null. */
+let dragPointIndex: number | null = null
+/** true si la souris a bougé pendant le drag en cours. */
+let dragMoved = false
+/** true si le prochain clic doit être ignoré (suite à un vrai drag). */
+let suppressNextClick = false
+
+/** Rayon (px) de détection des points proches du curseur. */
+const HOVER_RADIUS_PX = 14
+/** Nombre maximal de candidats affichés. */
+const HOVER_MAX_CANDIDATES = 8
+
+/** Points proches du curseur (sélecteur de points superposés). */
+const hoverCandidates = ref<{ i: number; label: string }[]>([])
+/** Position du curseur (px) pour positionner le sélecteur. */
+const hoverPos = ref({ x: 0, y: 0 })
+/**
+ * true quand le sélecteur est **verrouillé** (affiché suite à un clic ambigu) :
+ * il reste affiché et cliquable même si la souris bouge ou quitte la carte,
+ * jusqu'au choix d'un numéro ou à un clic ailleurs sur la carte.
+ */
+let candidatesLocked = false
 
 // --- Identifiants de sources / couches ---
 
@@ -61,11 +98,7 @@ const CORRECTED_HALO_SOURCE = 'clean-corrected-halo'
 const POINTS_SOURCE = 'clean-points'
 const POINTS_LAYER = 'clean-points-layer'
 const LABELS_LAYER = 'clean-labels-layer'
-const INSERTED_SOURCE = 'clean-inserted'
-const INSERTED_LAYER = 'clean-inserted-layer'
-
-/** Drag en cours d'un point ajouté (index dans insert_points du cas courant). */
-let dragInserted: { index: number; moved: boolean } | null = null
+const CREATE_SOURCE = 'clean-create'
 
 // --- Helpers GeoJSON ---
 
@@ -82,6 +115,14 @@ function emptyFC(): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features: [] }
 }
 
+/** Coordonnées `[lon, lat]` effectives d'un point de la trace (déplacement
+ * appliqué s'il existe) pour le cas courant. */
+function effectivePoint(i: number): { lat: number; lon: number } | null {
+  const pts = cleaning.points
+  if (i < 0 || i >= pts.length) return null
+  return cleaning.isMoved(i) ?? pts[i]
+}
+
 function pointFeatures(): GeoJSON.FeatureCollection {
   const c = cleaning.currentCase
   const pts = cleaning.points
@@ -89,12 +130,15 @@ function pointFeatures(): GeoJSON.FeatureCollection {
 
   const features: GeoJSON.Feature[] = []
   for (let i = c.start_index; i <= c.end_index && i < pts.length; i++) {
-    const p = pts[i]
-    const status = c.apex_indices.includes(i)
-      ? 'apex'
-      : cleaning.isDeleted(i)
-        ? 'deleted'
-        : 'normal'
+    const p = effectivePoint(i)
+    if (!p) continue
+    const status = cleaning.movePointIndex === i
+      ? 'moving'
+      : c.apex_indices.includes(i)
+        ? 'apex'
+        : cleaning.isDeleted(i)
+          ? 'deleted'
+          : 'normal'
     features.push({
       type: 'Feature',
       properties: {
@@ -112,6 +156,23 @@ function pointFeatures(): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features }
 }
 
+/** Marqueur(s) de la création manuelle en cours (point de début désigné). */
+function createMarkersFeatures(): GeoJSON.FeatureCollection {
+  const idx = cleaning.createStartIndex
+  const p = idx !== null ? effectivePoint(idx) : null
+  if (!p) return { type: 'FeatureCollection', features: [] }
+  return {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: { role: 'start' },
+        geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+      },
+    ],
+  }
+}
+
 // --- Anti-revouvrement des labels (placement greedy) ---
 
 /** Largeur/hauteur approx. d'un label à l'écran (px). */
@@ -121,8 +182,9 @@ const LABEL_H = 12
 /** Taille de police des labels (px) — 1 em = 1 caractère de hauteur. */
 const LABEL_EM = 10
 
-/** Priorité d'affichage : apex, puis points supprimés, puis le reste. */
+/** Priorité d'affichage : point en cours de déplacement, apex, supprimés, reste. */
 function labelPriority(status: string): number {
+  if (status === 'moving') return 0
   if (status === 'apex') return 0
   if (status === 'deleted') return 1
   return 2
@@ -157,13 +219,24 @@ function rectsCollide(
 }
 
 /**
- * Calcule un décalage par label tel qu'aucun label ne chevauche un autre.
- * Les points les plus importants (apex, supprimés) sont placés en premier
- * (greedy) ; un label sans emplacement libre est masqué (placed = 0).
+ * Offsets des labels **mémorisés par cas** (clé `id:start:end` → index →
+ * offset en px) : une fois calculés, les labels ne sont plus déplacés — ils
+ * suivent leur point (position écran = position du point + offset fixe en
+ * pixels), même pendant un pan/zoom ou un déplacement de point. Le clic reste
+ * donc fiable. Chaque cas conserve ses propres offsets.
  */
-function layoutPointLabels(features: GeoJSON.Feature[]): void {
+const labelOffsetsCache = new Map<string, Map<number, [number, number]>>()
+
+/**
+ * Calcule les décalages des labels (anti-revouvrement greedy) en réutilisant
+ * les offsets déjà mémorisés pour ce cas. Les labels dont l'offset est connu
+ * restent **stables** ; seuls les labels sans offset (premier affichage du
+ * cas) sont placés autour des boîtes déjà posées.
+ */
+function layoutPointLabels(features: GeoJSON.Feature[], offsets: Map<number, [number, number]>): void {
   if (!map) return
   const placed: { x: number; y: number; w: number; h: number }[] = []
+  const pending: GeoJSON.Feature[] = []
 
   const ordered = [...features].sort((a, b) => {
     const pa = labelPriority(String(a.properties?.status ?? ''))
@@ -177,6 +250,30 @@ function layoutPointLabels(features: GeoJSON.Feature[]): void {
     const props = f.properties as Record<string, unknown>
     if (!geom || geom.type !== 'Point' || !props) continue
 
+    const i = Number(props.i)
+    const [lon, lat] = geom.coordinates as [number, number]
+    const px = map.project([lon, lat])
+    const label = String(props.label ?? '')
+    const w = Math.max(LABEL_W, label.length * 7 + 4)
+    const h = LABEL_H
+
+    const cached = offsets.get(i)
+    if (cached) {
+      // Label déjà positionné : on garde l'offset, on place sa boîte pour que
+      // les nouveaux labels ne le recouvrent pas.
+      const box = { x: px.x + cached[0] - w / 2, y: px.y + cached[1] - h / 2, w, h }
+      placed.push(box)
+      props.offset = [cached[0] / LABEL_EM, cached[1] / LABEL_EM]
+      props.placed = 1
+      continue
+    }
+    pending.push(f)
+  }
+
+  for (const f of pending) {
+    const geom = f.geometry as GeoJSON.Point
+    const props = f.properties as Record<string, unknown>
+    const i = Number(props.i)
     const [lon, lat] = geom.coordinates as [number, number]
     const px = map.project([lon, lat])
     const label = String(props.label ?? '')
@@ -197,23 +294,23 @@ function layoutPointLabels(features: GeoJSON.Feature[]): void {
 
     props.offset = placedPos ? [placedPos[0] / LABEL_EM, placedPos[1] / LABEL_EM] : [0, -0.9]
     props.placed = placedPos ? 1 : 0
+    if (placedPos) offsets.set(i, placedPos)
   }
 }
 
-function insertedFeatures(): GeoJSON.FeatureCollection {
+function renderPoints() {
+  const fc = pointFeatures()
+  // Anti-revouvrement : offsets mémorisés par cas (stables ensuite).
   const c = cleaning.currentCase
-  if (!c) return { type: 'FeatureCollection', features: [] }
-  return {
-    type: 'FeatureCollection',
-    features: c.correction.insert_points.map((p, idx) => ({
-      type: 'Feature',
-      properties: { idx, label: `A${idx + 1}` },
-      geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
-    })),
+  const key = c ? `${c.id}:${c.start_index}:${c.end_index}` : ''
+  let offsets = labelOffsetsCache.get(key)
+  if (!offsets) {
+    offsets = new Map()
+    labelOffsetsCache.set(key, offsets)
   }
+  layoutPointLabels(fc.features, offsets)
+  setData(POINTS_SOURCE, fc)
 }
-
-// --- Rendu ---
 
 function setData(sourceId: string, data: GeoJSON.Feature | GeoJSON.FeatureCollection) {
   const source = map?.getSource(sourceId) as mapboxgl.GeoJSONSource | undefined
@@ -239,13 +336,14 @@ function renderZone() {
     setData(BRANCH_A_SOURCE, lineFeature([]))
     setData(BRANCH_B_SOURCE, lineFeature([]))
     return
-  }  const zone = pts
+  }
+  const zone = pts
     .slice(c.start_index, c.end_index + 1)
     .map(p => [p.lon, p.lat] as number[])
   setData(ZONE_SOURCE, lineFeature(zone))
 
   // Branches aller / retour pour les aller-retours (décalage latéral visuel).
-  const hasBranches = c.kind === 'out_and_back' || c.kind === 'parallel'
+  const hasBranches = c.kind === 'out_and_back'
   if (hasBranches) {
     const apex = c.apex_indices[0] ?? Math.floor((c.start_index + c.end_index) / 2)
     const a = pts
@@ -266,20 +364,17 @@ function renderZone() {
   }
 }
 
-function renderPoints() {
-  const fc = pointFeatures()
-  // Anti-revouvrement : repositionne les labels selon la vue courante.
-  layoutPointLabels(fc.features)
-  setData(POINTS_SOURCE, fc)
-  setData(INSERTED_SOURCE, insertedFeatures())
-}
-
 /** Linestring du segment courant **après corrections** (points supprimés
- * retirés, points ajoutés intégrés) — le retour visuel de l'impact réel. */
+ * retirés, points déplacés repositionnés) — le retour visuel de l'impact réel. */
 function renderCorrected() {
   const coords = cleaning.correctedZoneCoords
   setData(CORRECTED_SOURCE, lineFeature(coords))
   setData(CORRECTED_HALO_SOURCE, lineFeature(coords))
+}
+
+/** Marqueurs du mode « création d'anomalie » (point de début désigné). */
+function renderCreate() {
+  setData(CREATE_SOURCE, createMarkersFeatures())
 }
 
 function renderAll() {
@@ -288,6 +383,109 @@ function renderAll() {
   renderZone()
   renderCorrected()
   renderPoints()
+  renderCreate()
+}
+
+/**
+ * Index du point de la **trace entière** le plus proche du clic — utilisé pour
+ * le snap lors de la création manuelle d'un cas (début / fin de segment).
+ */
+function nearestIndexInTrace(lngLat: mapboxgl.LngLat): number {
+  const pts = cleaning.points
+  if (pts.length === 0) return -1
+  let best = -1
+  let bestDist = Infinity
+  for (let i = 0; i < pts.length; i++) {
+    const d = (pts[i].lon - lngLat.lng) ** 2 + (pts[i].lat - lngLat.lat) ** 2
+    if (d < bestDist) {
+      bestDist = d
+      best = i
+    }
+  }
+  return best
+}
+
+// --- Sélecteur des points proches du curseur (points superposés) ---
+
+/**
+ * Points de la trace situés dans le rayon (px) autour d'une position écran,
+ * triés par distance. En mode création, la recherche porte sur **toute** la
+ * trace ; sinon sur la zone du cas courant. Utilise les positions effectives
+ * (déplacements appliqués).
+ */
+function computeNearbyPoints(px: { x: number; y: number }): { i: number; label: string }[] {
+  if (!map) return []
+  const pts = cleaning.points
+  if (pts.length === 0) return []
+
+  // Bbox en degrés autour de la position (conversion du rayon pixel).
+  const r = HOVER_RADIUS_PX
+  const tl = map.unproject([px.x - r, px.y - r])
+  const br = map.unproject([px.x + r, px.y + r])
+  const minLon = Math.min(tl.lng, br.lng)
+  const maxLon = Math.max(tl.lng, br.lng)
+  const minLat = Math.min(tl.lat, br.lat)
+  const maxLat = Math.max(tl.lat, br.lat)
+
+  // Plage d'index à parcourir.
+  const c = cleaning.currentCase
+  let start = 0
+  let end = pts.length - 1
+  if (!cleaning.createMode && c) {
+    start = c.start_index
+    end = Math.min(c.end_index, pts.length - 1)
+  }
+
+  const candidates: { i: number; label: string; dist: number }[] = []
+  for (let i = start; i <= end; i++) {
+    const p = effectivePoint(i)
+    if (!p) continue
+    if (p.lat < minLat || p.lat > maxLat || p.lon < minLon || p.lon > maxLon) continue
+    const proj = map.project([p.lon, p.lat])
+    const dist = Math.hypot(proj.x - px.x, proj.y - px.y)
+    if (dist <= r) {
+      candidates.push({ i, label: String(i + 1), dist })
+    }
+  }
+  candidates.sort((a, b) => a.dist - b.dist)
+  return candidates.slice(0, HOVER_MAX_CANDIDATES).map(({ i, label }) => ({ i, label }))
+}
+
+/** Affiche le sélecteur de candidats (au survol). */
+function updateHoverCandidates(e: mapboxgl.MapMouseEvent) {
+  if (!map || dragPointIndex !== null) return
+  // Liste verrouillée par un clic ambigu : le survol ne la modifie pas.
+  if (candidatesLocked) return
+  const found = computeNearbyPoints(e.point)
+  // La liste n'apparaît que pour **trancher une ambiguïté** (≥ 2 points
+  // superposés) : avec un seul candidat, on clique directement sur le label.
+  if (found.length >= 2) {
+    hoverCandidates.value = found
+    hoverPos.value = {
+      x: Math.min(e.point.x + 14, Math.max(0, (map.getContainer().clientWidth || 0) - 170)),
+      y: e.point.y + 14,
+    }
+  } else {
+    hoverCandidates.value = []
+  }
+}
+
+/** Sélection d'un point dans la liste des candidats. */
+function onPickCandidate(index: number) {
+  candidatesLocked = false
+  hoverCandidates.value = []
+  if (cleaning.createMode) {
+    // Création manuelle : 1er clic = début, 2e clic = fin du segment.
+    if (cleaning.createStartIndex === null) {
+      cleaning.createStartIndex = index
+      renderCreate()
+    } else {
+      cleaning.createManualCase(cleaning.createStartIndex, index)
+    }
+    return
+  }
+  // Sinon : bascule la suppression du point choisi.
+  cleaning.toggleDeletePoint(index)
 }
 
 function fitZone() {
@@ -308,24 +506,6 @@ function fitFullTrace() {
   const bounds = new mapboxgl.LngLatBounds()
   for (const p of pts) bounds.extend([p.lon, p.lat])
   map.fitBounds(bounds, { padding: 50, duration: 600 })
-}
-
-/** Index du point de la zone le plus proche du clic (pour l'insertion). */
-function nearestIndexInZone(lngLat: mapboxgl.LngLat): number {
-  const c = cleaning.currentCase
-  const pts = cleaning.points
-  if (!c) return -1
-  let best = -1
-  let bestDist = Infinity
-  for (let i = c.start_index; i <= c.end_index && i < pts.length; i++) {
-    const p = pts[i]
-    const d = (p.lon - lngLat.lng) ** 2 + (p.lat - lngLat.lat) ** 2
-    if (d < bestDist) {
-      bestDist = d
-      best = i
-    }
-  }
-  return best
 }
 
 // --- Initialisation de la carte ---
@@ -356,67 +536,125 @@ async function initializeMap() {
     fitZone()
   })
 
-  // Interactions : sélection de points, ajout, déplacement des points insérés.
+  // Clic : en mode « création d'anomalie », désigne le début puis la fin du
+  // segment (snap au point de trace le plus proche) ; sinon, un clic sur un
+  // point de la zone bascule sa suppression.
+  //
+  // Si **plusieurs points sont superposés** sous le curseur, on n'applique
+  // aucune action : le sélecteur des N° d'ordre s'affiche et l'utilisateur
+  // clique sur le numéro voulu (l'action se fait alors via `onPickCandidate`).
   map.on('click', (e) => {
     if (!map) return
-    const c = cleaning.currentCase
-    if (!c) return
+    // Suite à un vrai drag (déplacement d'un point), on ignore le clic qui suit.
+    if (suppressNextClick) {
+      suppressNextClick = false
+      return
+    }
 
-    // Clic sur un point de la zone → bascule sa suppression.
+    candidatesLocked = false
+    const nearby = computeNearbyPoints(e.point)
+    if (nearby.length >= 2) {
+      // Ambiguïté : verrouiller la liste et attendre le choix de l'utilisateur.
+      candidatesLocked = true
+      hoverCandidates.value = nearby
+      hoverPos.value = {
+        x: Math.min(e.point.x + 14, Math.max(0, (map.getContainer().clientWidth || 0) - 170)),
+        y: e.point.y + 14,
+      }
+      return
+    }
+    hoverCandidates.value = []
+    const snap = nearby.length === 1 ? nearby[0].i : -1
+
+    if (cleaning.createMode) {
+      // Snap au point de trace le plus proche (le seul candidat, ou le plus
+      // proche de toute la trace si aucun n'est dans le rayon).
+      const idx = snap >= 0 ? snap : nearestIndexInTrace(e.lngLat)
+      if (idx < 0) return
+      if (cleaning.createStartIndex === null) {
+        cleaning.createStartIndex = idx
+        renderCreate()
+      } else {
+        cleaning.createManualCase(cleaning.createStartIndex, idx)
+      }
+      return
+    }
+
+    if (snap >= 0) {
+      cleaning.toggleDeletePoint(snap)
+      return
+    }
+
+    // Aucun point dans le rayon : on cherche les éléments rendus sous le
+    // curseur (label décalé par l'anti-revouvrement, point déplacé…).
     const hit = map.queryRenderedFeatures(e.point, {
       layers: [POINTS_LAYER, LABELS_LAYER],
     })
     if (hit.length > 0) {
       const i = Number(hit[0].properties?.i)
       if (Number.isInteger(i)) cleaning.toggleDeletePoint(i)
-      return
-    }
-    // Clic sur un point inséré → traité par le drag (mouseup sans déplacement).
-    const hitInserted = map.queryRenderedFeatures(e.point, { layers: [INSERTED_LAYER] })
-    if (hitInserted.length > 0) return
-
-    // Mode ajout (cas `parallel`) : poser un nouveau point.
-    if (c.kind === 'parallel') {
-      const idx = nearestIndexInZone(e.lngLat)
-      if (idx >= 0) cleaning.addInsertPoint(idx, e.lngLat.lat, e.lngLat.lng)
     }
   })
 
-  // Déplacement des points ajoutés (drag) ; un simple clic les retire.
+  // Déplacement **direct** des points : réservé aux cas manuels, tous les
+  // points du segment sont déplaçables à la souris (cliquez-glissez). Un
+  // simple clic sans déplacement reste une bascule de suppression (gérée par
+  // le handler `click` ci-dessus).
   map.on('mousedown', (e) => {
-    if (!map) return
-    const feats = map.queryRenderedFeatures(e.point, { layers: [INSERTED_LAYER] })
-    if (feats.length > 0) {
-      const idx = Number(feats[0].properties?.idx)
-      if (Number.isInteger(idx)) {
-        dragInserted = { index: idx, moved: false }
-        map.dragPan.disable()
-        map.getCanvas().style.cursor = 'grabbing'
-      }
-    }
+    if (!map || cleaning.createMode) return
+    const c = cleaning.currentCase
+    if (!c || c.kind !== 'manual') return
+    const hit = map.queryRenderedFeatures(e.point, { layers: [POINTS_LAYER] })
+    const i = hit.length > 0 ? Number(hit[0].properties?.i) : -1
+    // Attention : -1 est un entier valide pour `Number.isInteger` — il faut
+    // aussi exclure les index négatifs (clic sur la carte vide).
+    if (!Number.isInteger(i) || i < 0) return
+    dragPointIndex = i
+    dragMoved = false
+    cleaning.startMovePoint(i)
+    map.dragPan.disable()
+    map.getCanvas().style.cursor = 'grabbing'
   })
   map.on('mousemove', (e) => {
-    if (!dragInserted) return
-    dragInserted.moved = true
-    cleaning.setInsertPointPosition(dragInserted.index, e.lngLat.lat, e.lngLat.lng)
+    if (dragPointIndex === null) return
+    dragMoved = true
+    cleaning.setMovedPoint(dragPointIndex, e.lngLat.lat, e.lngLat.lng)
   })
   map.on('mouseup', () => {
-    if (!dragInserted) return
-    const { index, moved } = dragInserted
-    dragInserted = null
+    if (dragPointIndex === null) return
+    dragPointIndex = null
+    cleaning.stopMovePoint()
+    // Un vrai drag (souris bougée) : on ignore le clic qui suit (pas de
+    // bascule de suppression après un déplacement).
+    suppressNextClick = dragMoved
     if (map) {
       map.dragPan.enable()
       map.getCanvas().style.cursor = ''
     }
-    if (!moved) cleaning.removeInsertPoint(index)
   })
-  // Curseur adaptatif sur les éléments interactifs.
+
+  // Curseur adaptatif : réticule en mode création, main sur les points des
+  // cas manuels (déplaçables), pointeur sur un point cliquable. Met à jour le
+  // sélecteur des points proches (superposés).
   map.on('mousemove', (e) => {
-    if (dragInserted || !map) return
+    if (!map || dragPointIndex !== null) return
+    updateHoverCandidates(e)
     const hover = map.queryRenderedFeatures(e.point, {
-      layers: [POINTS_LAYER, LABELS_LAYER, INSERTED_LAYER],
+      layers: [POINTS_LAYER, LABELS_LAYER],
     })
-    map.getCanvas().style.cursor = hover.length > 0 ? 'pointer' : ''
+    if (cleaning.currentCase?.kind === 'manual' && hover.length > 0) {
+      map.getCanvas().style.cursor = 'move'
+    } else if (cleaning.createMode) {
+      map.getCanvas().style.cursor = 'crosshair'
+    } else {
+      map.getCanvas().style.cursor = hover.length > 0 ? 'pointer' : ''
+    }
+  })
+
+  // Sortie du curseur de la carte : masque le sélecteur, sauf s'il est
+  // verrouillé (choix en cours après un clic ambigu).
+  map.on('mouseout', () => {
+    if (!candidatesLocked) hoverCandidates.value = []
   })
 
   resizeObserver = new ResizeObserver(() => {
@@ -536,6 +774,8 @@ function setupLayers() {
           '#b71c1c',
           'deleted',
           '#f44336',
+          'moving',
+          '#00c853',
           '#1e88e5',
         ],
         'circle-opacity': ['case', ['==', ['get', 'status'], 'deleted'], 0.9, 1],
@@ -564,6 +804,8 @@ function setupLayers() {
           '#b71c1c',
           'deleted',
           '#f44336',
+          'moving',
+          '#00c853',
           '#1565c0',
         ],
         // Les points supprimés sont affichés en rouge bien visible ; seuls les
@@ -575,38 +817,21 @@ function setupLayers() {
     })
   }
 
-  // 5. Points ajoutés (rouge, déplaçables).
-  if (!map.getSource(INSERTED_SOURCE)) {
-    map.addSource(INSERTED_SOURCE, { type: 'geojson', data: insertedFeatures() })
+  // 6. Marqueur(s) de la création manuelle d'un cas (point de début désigné).
+  if (!map.getSource(CREATE_SOURCE)) {
+    map.addSource(CREATE_SOURCE, { type: 'geojson', data: emptyFC() })
   }
-  if (!map.getLayer(INSERTED_LAYER)) {
+  if (!map.getLayer(CREATE_SOURCE)) {
     map.addLayer({
-      id: INSERTED_LAYER,
+      id: CREATE_SOURCE,
       type: 'circle',
-      source: INSERTED_SOURCE,
+      source: CREATE_SOURCE,
       paint: {
-        'circle-radius': 6,
+        'circle-radius': 9,
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffffff',
-        'circle-color': '#d81b60',
-      },
-    })
-  }
-  if (!map.getLayer('clean-inserted-labels')) {
-    map.addLayer({
-      id: 'clean-inserted-labels',
-      type: 'symbol',
-      source: INSERTED_SOURCE,
-      layout: {
-        'text-field': ['get', 'label'],
-        'text-size': 11,
-        'text-allow-overlap': true,
-        'text-offset': [0, -1],
-      },
-      paint: {
-        'text-color': '#d81b60',
-        'text-halo-color': '#ffffff',
-        'text-halo-width': 1.5,
+        'circle-color': '#00c853',
+        'circle-opacity': 0.95,
       },
     })
   }
@@ -630,6 +855,18 @@ watch(
     renderCorrected()
   },
   { deep: true },
+)
+
+// Re-rendu quand le point à déplacer change (coloration « moving »).
+watch(
+  () => cleaning.movePointIndex,
+  () => renderPoints(),
+)
+
+// Re-rendu des marqueurs de création manuelle.
+watch(
+  () => cleaning.createStartIndex,
+  () => renderCreate(),
 )
 
 // Rendu quand l'état est chargé (carte montée avant le chargement du store).
@@ -673,5 +910,48 @@ onUnmounted(() => {
   z-index: 2;
   background: rgba(255, 255, 255, 0.92);
   color: rgba(0, 0, 0, 0.87);
+}
+
+/* Sélecteur des points proches du curseur (points superposés). */
+.hover-candidates {
+  position: absolute;
+  z-index: 3;
+  min-width: 120px;
+  max-width: 200px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 0.5px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+  pointer-events: auto;
+}
+
+.hover-candidates-title {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.6);
+  padding: 2px 6px 4px;
+  white-space: nowrap;
+}
+
+.hover-candidate {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1565c0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.hover-candidate:hover {
+  background: rgba(21, 101, 192, 0.12);
+}
+
+.hover-candidate--start {
+  color: #00c853;
 }
 </style>

@@ -18,7 +18,6 @@
 //! chaque cas est de la responsabilité de l'utilisateur ; le GPX original
 //! n'est remplacé qu'à la finalisation, une fois **tous** les cas validés.
 
-use std::collections::BTreeMap;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -43,30 +42,32 @@ pub enum CleaningCaseKind {
     Spike,
     /// Branche aller-retour avec retraçage (ex. 711 / 791).
     OutAndBack,
-    /// Sortie soutenue / route parallèle : suppression **et** ajout de points.
-    Parallel,
+    /// Cas créé **manuellement** par l'utilisateur (plage `[start, end]`
+    /// désignée sur la carte) — jamais produit par la détection.
+    Manual,
+    /// Valeur de repli pour les états de travail antérieurs (inconnus).
+    #[serde(other)]
+    Unknown,
 }
 
-/// Point à insérer dans la trace, positionné par rapport à l'index **original**
-/// d'un point conservé (`after_index` = après ce point).
+/// Point de la trace **déplacé** géographiquement : à la finalisation, le point
+/// d'index original `index` est remplacé par les coordonnées fournies
+/// (élévation et temps d'origine conservés).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct InsertPoint {
-    pub after_index: usize,
+pub struct MovedPoint {
+    pub index: usize,
     pub lat: f64,
     pub lon: f64,
-    pub ele: Option<f64>,
-    /// Timestamp ISO 8601 à écrire tel quel dans le GPX nettoyé.
-    pub time: Option<String>,
 }
 
-/// Corrections appliquées à un cas. Les plages `[from, to]` sont des index
-/// **originaux** (avant suppression) de la trace.
+/// Corrections appliquées à un cas. Les index sont **originaux** (avant
+/// suppression) de la trace.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct Correction {
     #[serde(default)]
     pub delete_ranges: Vec<[usize; 2]>,
     #[serde(default)]
-    pub insert_points: Vec<InsertPoint>,
+    pub moved_points: Vec<MovedPoint>,
 }
 
 /// Un cas d'anomalie à traiter.
@@ -414,41 +415,25 @@ fn apply_corrections(points: &[GpxPoint], cases: &[CleaningCase]) -> Result<(Vec
         }
     }
 
-    // Insertions groupées par index original de point conservé.
-    let mut inserts: BTreeMap<usize, Vec<&InsertPoint>> = BTreeMap::new();
-    for c in cases {
-        if c.state == "kept" {
-            continue;
-        }
-        for ins in &c.correction.insert_points {
-            if ins.after_index >= n {
-                return Err(format!(
-                    "Cas {} : insertion après l'index {} hors bornes ({} points).",
-                    c.id, ins.after_index, n
-                ));
-            }
-            inserts.entry(ins.after_index).or_default().push(ins);
-        }
-    }
-
     let mut result = Vec::with_capacity(n);
     let mut removed = 0usize;
-    for i in 0..n {
+    for (i, point) in points.iter().enumerate() {
         if deleted[i] {
             removed += 1;
             continue;
         }
-        result.push(points[i].clone());
-        if let Some(ins_list) = inserts.get(&i) {
-            for ins in ins_list {
-                result.push(GpxPoint {
-                    lat: ins.lat,
-                    lon: ins.lon,
-                    ele: ins.ele,
-                    time: ins.time.clone(),
-                });
-            }
+        let mut p = point.clone();
+        // Points déplacés : remplace les coordonnées des points conservés.
+        if let Some(mp) = cases
+            .iter()
+            .filter(|c| c.state != "kept")
+            .flat_map(|c| &c.correction.moved_points)
+            .find(|mp| mp.index == i)
+        {
+            p.lat = mp.lat;
+            p.lon = mp.lon;
         }
+        result.push(p);
     }
 
     if result.len() < 2 {
@@ -509,8 +494,10 @@ pub async fn detect_trace_anomalies(
 }
 
 /// Retourne l'état de nettoyage d'une trace : le fichier de travail s'il
-/// existe (corrections déjà en cours), sinon une détection fraîche avec la
-/// tolérance fournie.
+/// existe et est **valide** (corrections déjà en cours), sinon une détection
+/// fraîche avec la tolérance fournie. Un fichier de travail illisible ou
+/// invalide (ex. index négatif) est ignoré et régénéré par détection — il ne
+/// doit jamais bloquer l'IHM.
 #[tauri::command]
 pub async fn get_cleaning_state(
     app: tauri::AppHandle,
@@ -521,11 +508,17 @@ pub async fn get_cleaning_state(
     let state_path = get_cleaning_path(&mode_dir, &trace_id);
 
     if state_path.exists() {
-        let content = std::fs::read_to_string(&state_path)
-            .map_err(|e| format!("Lecture du fichier de travail : {}", e))?;
-        let state: CleaningState = serde_json::from_str(&content)
-            .map_err(|e| format!("Fichier de travail invalide : {}", e))?;
-        return Ok(state);
+        match std::fs::read_to_string(&state_path) {
+            Ok(content) => match serde_json::from_str::<CleaningState>(&content) {
+                Ok(state) => return Ok(state),
+                Err(e) => {
+                    eprintln!("[cleaning] Fichier de travail invalide ({}), re-détection.", e);
+                }
+            },
+            Err(e) => {
+                eprintln!("[cleaning] Fichier de travail illisible : {}", e);
+            }
+        }
     }
 
     let (gpx, _) = load_trace_gpx(&app, &trace_id)?;
@@ -759,8 +752,8 @@ mod tests {
         assert_eq!(detect_anomalies(&pts, 20.0).len(), 1);
     }
 
-    /// Vérifie l'application des corrections (suppressions + insertions) et la
-    /// génération du GPX nettoyé.
+    /// Vérifie l'application des corrections (suppressions) et la génération
+    /// du GPX nettoyé.
     #[test]
     fn apply_corrections_and_build_gpx() {
         let raw: Vec<GpxPoint> = out_and_back_trace()
@@ -795,30 +788,51 @@ mod tests {
         assert_eq!(final_points.len(), 7);
         assert_eq!(final_points[6].lat, 41.62250);
 
-        // Insertion : un point après l'index 5 (début de la déviation).
-        let mut correction2 = Correction::default();
-        correction2.delete_ranges.push([6, 12]);
-        correction2.insert_points.push(InsertPoint {
-            after_index: 5,
-            lat: 41.62213,
-            lon: 2.55400,
-            ele: Some(160.0),
-            time: Some("2026-01-01T10:00:30Z".to_string()),
-        });
-        let mut cases2 = cases.clone();
-        cases2[0].state = "corrected".to_string();
-        cases2[0].correction = correction2;
-        let (with_insert, _) = apply_corrections(&raw, &cases2).unwrap();
-        assert_eq!(with_insert.len(), 8);
-        assert_eq!(with_insert[6].lat, 41.62213);
-
         // Le GPX généré doit être du XML valide et contenir les points.
-        let gpx_str = build_cleaned_gpx(&with_insert, "Test trace");
+        let gpx_str = build_cleaned_gpx(&final_points, "Test trace");
         assert!(gpx_str.starts_with("<?xml"));
         assert!(gpx_str.contains("<name>Test trace</name>"));
-        assert!(gpx_str.matches("<trkpt ").count() == 8);
-        assert!(gpx_str.contains("<ele>160.0</ele>"));
-        assert!(gpx_str.contains("<time>2026-01-01T10:00:30Z</time>"));
+        assert!(gpx_str.matches("<trkpt ").count() == 7);
+        assert!(gpx_str.contains("<ele>105.0</ele>"));
+        assert!(gpx_str.contains("<time>2026-01-01T10:00:05Z</time>"));
+
+        // Un cas « conservé tel quel » (faux positif) ne supprime rien.
+        let mut kept = cases.clone();
+        kept[0].state = "kept".to_string();
+        kept[0].correction = Correction::default();
+        let (kept_points, kept_removed) = apply_corrections(&raw, &kept).unwrap();
+        assert_eq!(kept_points.len(), raw.len());
+        assert_eq!(kept_removed, 0);
+
+        // Un point **déplacé** (index original 3) remplace ses coordonnées.
+        let mut moved = cases.clone();
+        moved[0].correction.moved_points.push(MovedPoint {
+            index: 3,
+            lat: 41.62300,
+            lon: 2.55310,
+        });
+        let (moved_points, _) = apply_corrections(&raw, &moved).unwrap();
+        // Le point d'index 3 est conservé (pas supprimé) : position dans le
+        // résultat = index 3 (les suppressions [6,12] sont après).
+        assert_eq!(moved_points.len(), 7);
+        assert_eq!(moved_points[3].lat, 41.62300);
+        assert_eq!(moved_points[3].lon, 2.55310);
+        // Les autres points conservent leurs coordonnées.
+        assert_eq!(moved_points[0].lat, raw[0].lat);
+
+        // Un point déplacé **et** supprimé ne doit pas réapparaître.
+        let mut both = cases.clone();
+        both[0].correction.delete_ranges.push([3, 3]);
+        both[0].correction.moved_points.push(MovedPoint {
+            index: 3,
+            lat: 41.62300,
+            lon: 2.55310,
+        });
+        let (both_points, _) = apply_corrections(&raw, &both).unwrap();
+        assert!(
+            !both_points.iter().any(|p| (p.lat - 41.62300).abs() < 1e-9),
+            "un point supprimé ne doit pas être déplacé"
+        );
     }
 
     /// Vérifie que la finalisation refuse un cas encore « pending ».

@@ -6,7 +6,18 @@
       </span>
       <v-spacer />
       <span class="text-caption text-medium-emphasis">
-        {{ cleaning.isDeletedCount }} supprimé(s)
+        {{ deletedCount }} supprimé(s)
+      </span>
+    </div>
+
+    <!-- Aide : pour les cas manuels, les points se déplacent directement sur la carte -->
+    <div
+      v-if="current?.kind === 'manual'"
+      class="move-hint px-2 pb-1"
+    >
+      <v-icon size="x-small" icon="mdi-cursor-move" class="mr-1" color="green" />
+      <span class="text-caption">
+        Déplacement : cliquez-glissez les points directement sur la carte.
       </span>
     </div>
 
@@ -15,16 +26,14 @@
         <thead>
           <tr>
             <th>#</th>
-            <th>Lat</th>
-            <th>Lon</th>
-            <th>Ele</th>
             <th>Suppr.</th>
+            <th>Déplacé</th>
           </tr>
         </thead>
         <tbody>
           <template v-if="current">
             <tr
-              v-for="(p, i) in zone"
+              v-for="(_, i) in zone"
               :key="current.start_index + i"
               :class="{
                 'row-deleted': cleaning.isDeleted(current.start_index + i),
@@ -32,9 +41,6 @@
               }"
             >
               <td>{{ current.start_index + i + 1 }}</td>
-              <td>{{ p.lat.toFixed(5) }}</td>
-              <td>{{ p.lon.toFixed(5) }}</td>
-              <td>{{ p.alt?.toFixed(0) ?? '—' }}</td>
               <td>
                 <v-checkbox
                   :model-value="cleaning.isDeleted(current.start_index + i)"
@@ -43,10 +49,24 @@
                   @update:model-value="cleaning.toggleDeletePoint(current.start_index + i)"
                 />
               </td>
+              <td>
+                <!-- Indicateur « Déplacé » (cliquable pour annuler) -->
+                <v-btn
+                  v-if="cleaning.isMoved(current.start_index + i)"
+                  size="x-small"
+                  variant="text"
+                  color="green"
+                  prepend-icon="mdi-check"
+                  title="Point déplacé — cliquer pour annuler le déplacement"
+                  @click="cleaning.clearMovedPoint(current.start_index + i)"
+                >
+                  Déplacé
+                </v-btn>
+              </td>
             </tr>
           </template>
           <tr v-else>
-            <td colspan="5" class="text-center text-medium-emphasis text-body-2">
+            <td colspan="3" class="text-center text-medium-emphasis text-body-2">
               Aucun segment.
             </td>
           </tr>
@@ -58,8 +78,9 @@
 
 <script setup lang="ts">
 /**
- * Tableau détaillé des points de la zone du cas courant, avec case à cocher de
- * suppression (index GPX). Complète la sélection visuelle sur la carte.
+ * Tableau simplifié des points de la zone du cas courant : numéro, case à
+ * cocher de suppression et indicateur « Déplacé » (cliquable pour annuler).
+ * Le déplacement lui-même se fait **directement sur la carte** (cas manuels).
  */
 import { computed } from 'vue'
 import { useCleaningStore } from '../../stores/cleaning'
@@ -70,6 +91,13 @@ const current = computed(() => cleaning.currentCase)
 
 /** Points de la zone du cas courant (avec leur index original implicite). */
 const zone = computed(() => cleaning.currentZone)
+
+/** Nombre de points marqués à supprimer dans le segment courant. */
+const deletedCount = computed(() => {
+  const c = cleaning.currentCase
+  if (!c) return 0
+  return c.correction.delete_ranges.reduce((acc, [from, to]) => acc + (to - from + 1), 0)
+})
 </script>
 
 <style scoped>
@@ -124,5 +152,12 @@ const zone = computed(() => cleaning.currentZone)
 
 .row-apex {
   background: color-mix(in srgb, #e53935 14%, transparent);
+}
+
+/* Aide au déplacement (cas manuels). */
+.move-hint {
+  color: #2e7d32;
+  display: flex;
+  align-items: center;
 }
 </style>

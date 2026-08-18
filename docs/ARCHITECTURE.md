@@ -367,9 +367,9 @@ src/
    │   │   └── CameraEditor.vue     # Composant B — édition des keyframes (widgets manipulation directe)
 │   ├── Cleaning/     # Composants de la vue de nettoyage de trace
 │   │   ├── CleaningToolbar.vue    # Barre d'outils (retour accueil, titre trace, Enregistrer, Finaliser)
-│   │   ├── CleaningMap.vue        # Carte Mapbox — trace complète (verte), linestring corrigé (jaune), segment surligné, branches décalées, labels anti-revouvrement, points supprimés en rouge, ajout par clic
+│   │   ├── CleaningMap.vue        # Carte Mapbox — trace complète (verte), linestring corrigé (jaune), segment surligné, branches décalées, labels anti-revouvrement, points supprimés en rouge, drag direct des points (cas manuels)
 │   │   ├── CleaningCasesPanel.vue # Panneau des anomalies (liste des cas, validation « Corriger & valider » / « Conserver tel quel »)
-│   │   └── CleaningPointTable.vue # Table des points du segment courant (index GPX, marquage suppression/insertion)
+│   │   └── CleaningPointTable.vue # Table simplifiée des points (numéro, suppression, indicateur « Déplacé »)
 │   ├── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
@@ -801,17 +801,17 @@ Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX é
 ### Architecture
 
 1. **Module backend** (`src-tauri/src/cleaning.rs`) :
-   - **Détection** : pour chaque point, le cap vers le point précédent et vers le point suivant sont comparés ; s'ils sont quasi identiques (différence ≤ tolérance), le point est un **rebroussement** (~180°). Les rebroussements proches (fenêtre de 25 index) sont regroupés en un **cas** ; la zone de déviation est délimitée par retraçage symétrique (points jumeaux aller/retour). Classification : branche courte (< 100 m) → `spike` (point isolé, suggestion : supprimer l'apex) ; sinon → `out_and_back` (suggestion : supprimer le demi-tour + le retour) ; `parallel` (sortie soutenue / route parallèle, suppression **et** ajout de points) est réservé aux cas assignés manuellement par l'utilisateur.
+   - **Détection** : pour chaque point, le cap vers le point précédent et vers le point suivant sont comparés ; s'ils sont quasi identiques (différence ≤ tolérance), le point est un **rebroussement** (~180°). Les rebroussements proches (fenêtre de 25 index) sont regroupés en un **cas** ; la zone de déviation est délimitée par retraçage symétrique (points jumeaux aller/retour). Classification : branche courte (< 100 m) → `spike` (point isolé, suggestion : supprimer l'apex) ; sinon → `out_and_back` (suggestion : supprimer le demi-tour + le retour). Le type `manual` (créé par l'utilisateur) n'est jamais produit par la détection.
    - **Tolérance paramétrable** : `Nettoyage.Cap.toleranceDeg` (float, défaut 5.0, min 1.0, max 20.0, step 0.5, unité `°`), lu via `read_tolerance_deg` (repli sur 5° si absent). Déclaré dans `src-tauri/settings.default.toml` avec l'entrée `[_meta.views.nettoyage]` (icône `mdi-broom`) et le groupe `[_meta.groups."Nettoyage.Cap"]` (« Nettoyage — Détection »).
-   - **Persistance des décisions** : fichier de travail `{mode}/cleaning/{trace_id}.json` (écriture atomique). Chaque cas porte un état de validation `pending` / `corrected` / `kept`, des plages de suppression et des points d'insertion (`after_index`, index **originaux**).
+   - **Persistance des décisions** : fichier de travail `{mode}/cleaning/{trace_id}.json` (écriture atomique). Chaque cas porte un état de validation `pending` / `corrected` / `kept`, des plages de suppression et des points **déplacés** (`MovedPoint` : index original + nouvelles coordonnées — les index sont **originaux**).
    - **Cycle de vie** : `needs_review` (anomalies à l'import) → `in_progress` (première sauvegarde partielle) → `clean` (finalisation). `reset_cleaning` ramène à `needs_review`.
-   - **Finalisation** : refuse tant que **tous** les cas ne sont pas validés ; applique les corrections, génère le **GPX nettoyé** (1.1, `<trkseg>` unique, lat/lon 6 décimales, altitude et timestamp préservés), sauvegarde l'original en **`{filename}.gpx.orig`** (une seule fois, jamais écrasé), régénère les dérivés (geojson, stats, hash) et supprime le fichier de travail.
+   - **Finalisation** : refuse tant que **tous** les cas ne sont pas validés ; applique les corrections (suppressions + déplacements), génère le **GPX nettoyé** (1.1, `<trkseg>` unique, lat/lon 6 décimales, altitude et timestamp préservés), sauvegarde l'original en **`{filename}.gpx.orig`** (une seule fois, jamais écrasé), régénère les dérivés (geojson, stats, hash) et supprime le fichier de travail.
 
 2. **Store Frontend** (`src/stores/cleaning.ts`) — Pattern Setup Store :
-   - Types miroir des structs Rust (`CleaningCaseKind`, `CleaningCase`, `Correction`, `InsertPoint`, `CleaningState`).
-   - État : `selectedTraceId`, `state` (détection + décisions), `points` (index GPX), `currentCaseIndex`, `toleranceDeg`.
-   - Getters : `hasCases`, `currentCase`, `currentZone`, `allValidated` (tous les cas ≠ `pending`), `validatedCount`, `isDeletedCount`.
-   - Actions : `load` (reprise du travail en cours via `get_cleaning_state`, sinon détection via `detect_trace_anomalies`), `reDetect`, validation manuelle des cas (« Corriger & valider » / « Conserver tel quel » pour les faux positifs), `applySuggestion`, `toggleDeletePoint`/`addDeleteRange` (suppressions), `addInsertPoint` (ajouts — cas « parallel »), `save` (sauvegarde partielle via `save_cleaning_state`, le GPX original reste intact), `finalize` (`finalize_cleaning`), `reset` (`reset_cleaning`).
+   - Types miroir des structs Rust (`CleaningCaseKind`, `CleaningCase`, `Correction`, `MovedPoint`, `CleaningState`).
+   - État : `selectedTraceId`, `state` (détection + décisions), `points` (index GPX), `currentCaseIndex`, `toleranceDeg` + état UI éphémère `createMode` / `createStartIndex` / `movePointIndex`.
+   - Getters : `hasCases`, `currentCase`, `currentZone`, `correctedZoneCoords` (linestring corrigé : suppressions retirées, déplacements appliqués), `allValidated` (tous les cas ≠ `pending`), `validatedCount`, `isDeletedCount`.
+   - Actions : `load` (reprise du travail en cours via `get_cleaning_state`, sinon détection via `detect_trace_anomalies`), `reDetect`, validation manuelle des cas (« Corriger & valider » / « Conserver tel quel » pour les faux positifs), `applySuggestion`, `toggleDeletePoint`/`addDeleteRange`/`clearCorrection` (suppressions), `setMovedPoint`/`clearMovedPoint`/`startMovePoint`/`stopMovePoint` (déplacements), `toggleCreateMode`/`cancelCreate`/`createManualCase`/`removeCase` (cas manuels), `save` (sauvegarde partielle via `save_cleaning_state`, le GPX original reste intact), `finalize` (`finalize_cleaning`), `reset` (`reset_cleaning`).
 
 3. **Vue** (`src/views/Cleaning.vue`, route `/nettoyage`) :
    - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des cas + table des points + drawer Paramètres.
@@ -819,11 +819,11 @@ Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX é
 
 4. **Composants** (`src/components/Cleaning/`) :
    - `CleaningToolbar.vue` : barre d'outils (retour accueil, titre « Nettoyage — {trace} », Enregistrer, Finaliser).
-   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte** (contexte global, bouton flottant « Trace complète » pour le cadrage), **segment courant** (zone du cas) surligné, **linestring corrigé** (ligne jaune à halo blanc : résultat réel des suppressions/ajouts, mis à jour en direct), branches **aller/retour** décalées perpendiculairement (`line-offset`) et colorées différemment pour les passages superposés, points numérotés (index GPX) **cliquables** avec **anti-revouvrement des labels** (placement greedy priorisant l'apex et les points supprimés), points supprimés en **rouge**, **ajout de points par clic** (cas « parallel »).
-   - `CleaningCasesPanel.vue` : liste des anomalies (n°/total validés, type, écart de cap, zone) + validation de chaque cas.
-   - `CleaningPointTable.vue` : table des points du segment courant (index, marquage suppression/insertion).
+   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte** (contexte global, bouton flottant « Trace complète » pour le cadrage), **segment courant** (zone du cas) surligné, **linestring corrigé** (ligne jaune à halo blanc : résultat réel des suppressions/déplacements, mis à jour en direct), branches **aller/retour** décalées perpendiculairement (`line-offset`) et colorées différemment pour les passages superposés, points numérotés (index GPX) **cliquables** avec **anti-revouvrement des labels** (positions **mémorisées par cas** : une fois affichés, les labels restent stables pour un clic fiable), points supprimés en **rouge**, **déplacement direct à la souris** des points des cas **manuels** (drag ; un simple clic bascule la suppression), **sélecteur des points proches du curseur** (liste cliquable des N° d'ordre, verrouillée après un clic ambigu, quand plusieurs points sont superposés), **mode « Créer une anomalie »** (2 clics : début puis fin, snap au point de trace le plus proche).
+   - `CleaningCasesPanel.vue` : liste des anomalies (n°/total validés, type, écart de cap, zone), validation de chaque cas, bouton **« Créer une anomalie »** (désignation d'un segment sur la carte) et **« Supprimer ce cas »** (cas manuel non validé).
+   - `CleaningPointTable.vue` : table **simplifiée** des points du segment courant (numéro, case de suppression, indicateur **« Déplacé »** cliquable pour annuler) — le déplacement se fait directement sur la carte, pas dans le tableau.
 
-5. **Responsabilité de validation** : la détection est **propositive** — chaque cas doit être **validé par l'utilisateur** (« Corriger & valider » ou « Conserver tel quel » pour les faux positifs) avant de passer au suivant ; la **finalisation n'est possible que quand tous les cas sont validés**. Le GPX original n'est remplacé qu'à la finalisation.
+5. **Responsabilité de validation** : la détection est **propositive** — chaque cas (détecté ou créé manuellement) doit être **validé par l'utilisateur** (« Corriger & valider » ou « Conserver tel quel » pour les faux positifs) avant de passer au suivant ; la **finalisation n'est possible que quand tous les cas sont validés**. Le GPX original n'est remplacé qu'à la finalisation.
 
 ### Commandes Tauri du module Nettoyage
 
