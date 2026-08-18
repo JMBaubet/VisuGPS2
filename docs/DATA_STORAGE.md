@@ -176,7 +176,7 @@ Décisions de correction d'une trace, persistées à chaque **sauvegarde partiel
 
 - `state` : `"pending"` (à traiter), `"corrected"` (corrigé par l'utilisateur), `"kept"` (conservé tel quel — faux positif). La **validation de chaque cas est de la responsabilité de l'utilisateur**.
 - `correction.delete_ranges` : plages d'index **originaux** à supprimer ; `correction.moved_points` : points dont les coordonnées sont **remplacées** (déplacement géographique, ex. remettre la trace sur la bonne route).
-- Les cas `manual` (créés sur la carte via « Créer une anomalie ») sont persistés comme les autres et peuvent être supprimés tant qu'ils ne sont pas validés.
+- Les cas `manual` (« Modification de segment », créés via le bouton éponyme sous la liste) sont persistés comme les autres et peuvent être supprimés **même après validation** (avant finalisation).
 - La présence du fichier pose `cleaning_status = "in_progress"`.
 - À la **finalisation** (`finalize_cleaning`), le GPX original est remplacé par la version nettoyée, l'original est sauvegardé en `{filename}.gpx.orig`, les dérivés (geojson, stats, hash) sont régénérés, la trace passe en `"clean"` et le fichier de travail est supprimé.
 

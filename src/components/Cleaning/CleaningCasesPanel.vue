@@ -35,6 +35,18 @@
             <template v-if="c.apex_indices.length"> · apex {{ c.apex_indices.map(a => a + 1).join(', ') }}</template>
           </v-list-item-subtitle>
           <template #append>
+            <!-- Poubelle rouge : supprimer le cas (toujours possible pour les
+                 cas « Modification de segment », sinon tant que non validé) -->
+            <v-btn
+              v-if="c.state === 'pending' || c.kind === 'manual'"
+              size="x-small"
+              icon="mdi-delete"
+              variant="text"
+              color="red"
+              class="mr-1"
+              :title="`Supprimer le cas ${idx + 1}`"
+              @click.stop="confirmerSuppressionCas(idx)"
+            />
             <v-chip
               size="x-small"
               :color="stateColor(c.state)"
@@ -47,6 +59,43 @@
       </template>
       <div v-else class="pa-4 text-center text-medium-emphasis text-body-2">
         Aucune anomalie détectée avec cette tolérance.
+      </div>
+
+      <!-- Modifier un segment : désigner manuellement un segment sur la carte -->
+      <div class="pa-3">
+        <template v-if="cleaning.createMode">
+          <div class="create-help">
+            <v-icon size="small" icon="mdi-draw" class="mr-1" color="green" />
+            <span class="text-caption">
+              <template v-if="cleaning.createStartIndex === null">
+                Cliquez sur la carte pour le <b>point de début</b> du segment,
+                puis sur le <b>point de fin</b>.
+              </template>
+              <template v-else>
+                Point de début posé (n° {{ cleaning.createStartIndex + 1 }}) —
+                cliquez maintenant sur le <b>point de fin</b>.
+              </template>
+            </span>
+            <v-btn
+              size="x-small"
+              icon="mdi-close"
+              variant="text"
+              title="Annuler la modification"
+              @click="cleaning.cancelCreate()"
+            />
+          </div>
+        </template>
+        <v-btn
+          v-else
+          size="small"
+          variant="tonal"
+          color="green"
+          prepend-icon="mdi-draw"
+          title="Modifier un segment : désigner sur la carte un point de début puis un point de fin"
+          @click="cleaning.toggleCreateMode()"
+        >
+          Modifier un segment
+        </v-btn>
       </div>
     </div>
 
@@ -69,24 +118,6 @@
         <div class="d-flex flex-wrap ga-1 mb-2">
           <v-btn
             size="small"
-            variant="tonal"
-            prepend-icon="mdi-vector-polyline"
-            title="Pré-remplir la suppression avec la suggestion de détection"
-            @click="cleaning.applySuggestion()"
-          >
-            Appliquer la suggestion
-          </v-btn>
-          <v-btn
-            size="small"
-            variant="tonal"
-            prepend-icon="mdi-arrow-expand-all"
-            title="Marquer toute la zone du cas comme à supprimer"
-            @click="cleaning.addDeleteRange(current.start_index, current.end_index)"
-          >
-            Tout supprimer
-          </v-btn>
-          <v-btn
-            size="small"
             variant="text"
             prepend-icon="mdi-undo-variant"
             title="Retirer toutes les corrections du cas courant"
@@ -96,62 +127,15 @@
           </v-btn>
         </div>
 
-        <!-- Création manuelle d'un cas -->
-        <template v-if="cleaning.createMode">
-          <div class="create-help mb-2">
-            <v-icon size="small" icon="mdi-draw" class="mr-1" color="green" />
-            <span class="text-caption">
-              <template v-if="cleaning.createStartIndex === null">
-                Cliquez sur la carte pour le <b>point de début</b> du segment,
-                puis sur le <b>point de fin</b>.
-              </template>
-              <template v-else>
-                Point de début posé (n° {{ cleaning.createStartIndex + 1 }}) —
-                cliquez maintenant sur le <b>point de fin</b>.
-              </template>
-            </span>
-            <v-btn
-              size="x-small"
-              icon="mdi-close"
-              variant="text"
-              title="Annuler la création"
-              @click="cleaning.cancelCreate()"
-            />
-          </div>
-        </template>
-        <v-btn
-          v-else
-          size="small"
-          variant="tonal"
-          color="green"
-          prepend-icon="mdi-draw"
-          title="Créer manuellement un cas : désigner sur la carte un point de début puis un point de fin"
-          @click="cleaning.toggleCreateMode()"
-        >
-          Créer une anomalie
-        </v-btn>
-
-        <!-- Suppression d'un cas manuel non validé -->
-        <v-btn
-          v-if="current.kind === 'manual' && current.state === 'pending'"
-          size="small"
-          variant="text"
-          color="red"
-          prepend-icon="mdi-delete-outline"
-          class="mt-1"
-          title="Supprimer ce cas (création manuelle) avant validation"
-          @click="supprimerCasCourant"
-        >
-          Supprimer ce cas
-        </v-btn>
+        <!-- Suppression d'un cas (dans la liste, poubelle à gauche de l'état) -->
 
         <div class="text-caption text-medium-emphasis mb-2">
           <template v-if="deletedCount > 0">
             {{ deletedCount }} point(s) marqué(s) à supprimer
           </template>
           <template v-else>
-            Aucune modification — cliquez sur les points de la carte ou
-            « Appliquer la suggestion ».
+            Aucune modification — cliquez sur les points de la carte pour les
+            supprimer (ou déplacez-les pour les cas de modification de segment).
           </template>
         </div>
 
@@ -164,7 +148,7 @@
             :disabled="current.state === 'corrected'"
             @click="cleaning.validateCurrentCase('corrected')"
           >
-            Corriger &amp; valider
+            Valider
           </v-btn>
           <v-btn
             color="blue"
@@ -187,13 +171,14 @@
 
 <script setup lang="ts">
 /**
- * Panneau latéral de la vue de nettoyage : liste des cas détectés (navigation)
- * et actions de correction + **validation manuelle** du cas courant.
+ * Panneau latéral de la vue de nettoyage : liste des cas (navigation), bouton
+ * « Modifier un segment » (désignation manuelle d'un segment sur la carte) et
+ * actions de correction + **validation manuelle** du cas courant.
  *
  * La validation est de la responsabilité de l'utilisateur : chaque cas doit
- * être « Corrigé & validé » ou « Conservé tel quel » (faux positif) avant de
- * pouvoir passer au suivant. La finalisation n'est possible qu'une fois tous
- * les cas validés.
+ * être « Validé » ou « Conservé tel quel » (faux positif) avant de pouvoir
+ * passer au suivant. La finalisation n'est possible qu'une fois tous les cas
+ * validés.
  */
 import { computed } from 'vue'
 import { useCleaningStore, type CleaningCaseKind, type CleaningCaseState } from '../../stores/cleaning'
@@ -208,12 +193,18 @@ const deletedCount = computed(() => {
   return c.correction.delete_ranges.reduce((acc, [from, to]) => acc + (to - from + 1), 0)
 })
 
-/** Supprime le cas manuel courant (non validé) de la liste. */
-function supprimerCasCourant() {
+/**
+ * Confirme puis supprime un cas (poubelle de la liste). Les cas « Modification
+ * de segment » sont supprimables même après validation ; les cas détectés
+ * seulement tant qu'ils ne sont pas validés (refus géré par le store).
+ */
+function confirmerSuppressionCas(index: number) {
+  const c = cleaning.state?.cases[index]
+  if (!c) return
   const ok = window.confirm(
-    'Supprimer ce cas créé manuellement ? Les corrections associées seront perdues.',
+    `Supprimer le cas ${index + 1} (« ${kindLabel(c.kind)} ») ? Les corrections associées seront perdues.`,
   )
-  if (ok) cleaning.removeCase(cleaning.currentCaseIndex)
+  if (ok) cleaning.removeCase(index)
 }
 
 function kindIcon(kind: CleaningCaseKind): string {
@@ -245,7 +236,7 @@ function kindLabel(kind: CleaningCaseKind): string {
     case 'out_and_back':
       return 'Aller-retour'
     case 'manual':
-      return 'Manuel (créé à la carte)'
+      return 'Modification de segment'
   }
 }
 
@@ -265,7 +256,7 @@ function stateLabel(state: CleaningCaseState): string {
     case 'pending':
       return 'À traiter'
     case 'corrected':
-      return 'Corrigé'
+      return 'Validé'
     case 'kept':
       return 'Conservé'
   }
@@ -291,7 +282,7 @@ function stateLabel(state: CleaningCaseState): string {
   border-top: 0.5px solid rgba(127, 127, 127, 0.3);
 }
 
-/* Consigne du mode « Créer une anomalie ». */
+/* Consigne du mode « Modifier un segment ». */
 .create-help {
   display: flex;
   align-items: center;

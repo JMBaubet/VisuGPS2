@@ -24,17 +24,6 @@
       >
         {{ trace.name }}
       </span>
-      <!-- Badge signalant que la trace n'est pas encore propre (à nettoyer) -->
-      <v-chip
-        v-if="needsCleaning"
-        size="x-small"
-        color="orange"
-        variant="tonal"
-        class="ml-2"
-        title="Cette trace contient des anomalies : elle doit être nettoyée avant l'édition."
-      >
-        À nettoyer
-      </v-chip>
       <v-spacer></v-spacer> <!-- Pousse les icônes à droite (alignées sur la ligne Distance/Dénivelé) -->
       <div class="d-flex align-center">
         <!--

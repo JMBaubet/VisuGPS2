@@ -26,7 +26,19 @@
         <thead>
           <tr>
             <th>#</th>
-            <th>Suppr.</th>
+            <th>
+              <div class="d-flex flex-column align-center">
+                <span class="text-caption">Suppr.</span>
+                <v-checkbox
+                  :model-value="allDeleted"
+                  :indeterminate="someDeleted && !allDeleted"
+                  density="compact"
+                  hide-details
+                  title="Cocher = supprimer tous les points du segment, décocher = tout remettre"
+                  @update:model-value="v => cleaning.setZoneDeleted(v === true)"
+                />
+              </div>
+            </th>
             <th>Déplacé</th>
           </tr>
         </thead>
@@ -98,6 +110,12 @@ const deletedCount = computed(() => {
   if (!c) return 0
   return c.correction.delete_ranges.reduce((acc, [from, to]) => acc + (to - from + 1), 0)
 })
+
+/** Tous les points du segment sont marqués à supprimer (case d'en-tête). */
+const allDeleted = computed(() => cleaning.isZoneFullyDeleted())
+
+/** Au moins un point du segment est marqué à supprimer (état intermédiaire). */
+const someDeleted = computed(() => deletedCount.value > 0)
 </script>
 
 <style scoped>
@@ -139,6 +157,18 @@ const deletedCount = computed(() => {
 .points-table td:first-child {
   text-align: center;
   font-weight: 500;
+}
+
+/* Colonne « Suppr. » : cases à cocher centrées. */
+.points-table td:nth-child(2) {
+  text-align: center;
+}
+
+/* Aligne parfaitement les cases à cocher de l'en-tête et des lignes :
+   mêmes marges/paddings → mêmes centres horizontaux. */
+.points-table :deep(.v-checkbox) {
+  margin: 0;
+  padding: 0;
 }
 
 .points-table td:last-child {

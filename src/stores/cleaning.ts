@@ -273,11 +273,49 @@ export const useCleaningStore = defineStore('cleaning', () => {
     }
   }
 
-  /** Supprime une plage entière [from, to] (index originaux) dans le cas courant. */
+  /**
+   * Supprime une plage entière [from, to] (index originaux) dans le cas
+   * courant. Tous les index de `from` à `to` sont marqués (pas seulement les
+   * bornes) — la compaction en plages est ensuite faite par `toRanges`.
+   */
   function addDeleteRange(from: number, to: number) {
     const c = currentCase.value
+    if (!c || from > to) return
+    const idx: number[] = []
+    for (let i = from; i <= to; i++) idx.push(i)
+    c.correction.delete_ranges = toRanges([...flattenRanges(c.correction.delete_ranges), ...idx])
+  }
+
+  /** Tous les points de la zone du cas courant sont-ils marqués à supprimer ? */
+  function isZoneFullyDeleted(): boolean {
+    const c = currentCase.value
+    if (!c) return false
+    const len = c.end_index - c.start_index + 1
+    let count = 0
+    for (const [from, to] of c.correction.delete_ranges) {
+      const lo = Math.max(from, c.start_index)
+      const hi = Math.min(to, c.end_index)
+      if (lo <= hi) count += hi - lo + 1
+    }
+    return count >= len
+  }
+
+  /**
+   * Sélectionne (`true`) ou désélectionne (`false`) **tous** les points du
+   * segment courant (case à cocher d'en-tête du tableau des points).
+   */
+  function setZoneDeleted(deleted: boolean) {
+    const c = currentCase.value
     if (!c) return
-    c.correction.delete_ranges = toRanges([...flattenRanges(c.correction.delete_ranges), from, to])
+    if (deleted) {
+      addDeleteRange(c.start_index, c.end_index)
+    } else {
+      // Tout remettre : retirer les index de la zone des plages de suppression.
+      const kept = flattenRanges(c.correction.delete_ranges).filter(
+        i => i < c.start_index || i > c.end_index,
+      )
+      c.correction.delete_ranges = toRanges(kept)
+    }
   }
 
   /** Vide les corrections du cas courant (retour à l'état proposé). */
@@ -380,13 +418,15 @@ export const useCleaningStore = defineStore('cleaning', () => {
   }
 
   /**
-   * Supprime un cas **non validé** de la liste (création manuelle erronée ou
-   * cas à retraiter). Refusé si le cas est déjà validé.
+   * Supprime un cas de la liste. Un cas « modification de segment » (manuel)
+   * peut être supprimé **même après validation** ; les cas détectés
+   * automatiquement ne sont supprimables que tant qu'ils ne sont pas validés.
    */
   function removeCase(index: number): boolean {
     const st = state.value
     if (!st || index < 0 || index >= st.cases.length) return false
-    if (st.cases[index].state !== 'pending') return false
+    const c = st.cases[index]
+    if (c.state !== 'pending' && c.kind !== 'manual') return false
     st.cases.splice(index, 1)
     currentCaseIndex.value = Math.min(currentCaseIndex.value, Math.max(0, st.cases.length - 1))
     cancelCreate()
@@ -526,6 +566,8 @@ export const useCleaningStore = defineStore('cleaning', () => {
     toggleDeletePoint,
     addDeleteRange,
     clearCorrection,
+    isZoneFullyDeleted,
+    setZoneDeleted,
     isDeleted,
     isMoved,
     setMovedPoint,
