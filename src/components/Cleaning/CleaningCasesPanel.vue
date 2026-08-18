@@ -135,7 +135,7 @@
             size="small"
             variant="text"
             prepend-icon="mdi-undo-variant"
-            title="Retirer toutes les corrections du cas courant"
+            title="Retirer toutes les corrections et remettre le cas à l'état « À traiter » (même s'il était validé)"
             @click="cleaning.clearCorrection()"
           >
             Restaurer

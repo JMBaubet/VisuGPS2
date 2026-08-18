@@ -318,11 +318,17 @@ export const useCleaningStore = defineStore('cleaning', () => {
     }
   }
 
-  /** Vide les corrections du cas courant (retour à l'état proposé). */
+  /**
+   * Vide les corrections du cas courant (retour à l'état proposé) **et remet le
+   * cas à « À traiter »** : si le cas était validé (corrigé ou faux positif), il
+   * redevient `pending` — les boutons Valider / Faux positif se réactivent et la
+   * trace redevient non finalisable tant que le cas n'est pas re-validé.
+   */
   function clearCorrection() {
     const c = currentCase.value
     if (!c) return
     c.correction = { delete_ranges: [], moved_points: [] }
+    c.state = 'pending'
     movePointIndex.value = null
   }
 
