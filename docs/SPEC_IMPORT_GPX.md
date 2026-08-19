@@ -15,7 +15,7 @@ Les documents d'origine reposaient sur une vision générique de Tauri. Voici le
 
 | # | Document d'origine | Application réelle | Correction apportée |
 |---|--------------------|--------------------|---------------------|
-| 1 | Stockage dans `{app_data_dir}/gpx/` et `{app_data_dir}/traces.json` | Les données vivent **dans le dossier du mode actif** : `{app_data_dir}/{active_mode}/…` (cf. `settings.rs`, `gestionMode.rs`) | Stockage dans `{app_data_dir}/{active_mode}/gpx/` et `{app_data_dir}/{active_mode}/traces.json` |
+| 1 | Stockage dans `{app_data_dir}/gpx/` et `{app_data_dir}/traces.json` | Les données vivent **dans le dossier du mode actif**, un dossier par trace : `{app_data_dir}/{active_mode}/traces/{trace_id}/` + `traces.json` (cf. `settings.rs`, `gestionMode.rs`, `import_gpx.rs`) | Stockage dans `{app_data_dir}/{active_mode}/traces/{trace_id}/` et `{app_data_dir}/{active_mode}/traces.json` |
 | 2 | `tauri::api::dialog::FileDialogBuilder` et `tauri::api::path` (API Tauri **1.x**) | Tauri **2.x** : plugins (`tauri-plugin-dialog`) et `app.path().app_data_dir()` | Utilisation du plugin `tauri-plugin-dialog` + `app.path()` |
 | 3 | Enregistrement de la commande dans `main.rs` | `main.rs` ne fait qu'appeler `tauri_app_lib::run()` ; les commandes sont enregistrées dans **`lib.rs`** (`invoke_handler`) | Enregistrement dans `lib.rs` |
 | 4 | 3 options pour gérer les traces (store / composable / état local) + `readTextFile` direct côté frontend | Le projet utilise systématiquement le **pattern Setup Store Pinia** (`app.ts`, `settings.ts`) et passe par des **commandes Tauri** (le backend seul connaît le mode actif) | Création d'un `useTracesStore` + commande `get_traces` côté backend |
@@ -60,7 +60,7 @@ Les documents d'origine reposaient sur une vision générique de Tauri. Voici le
 │    │     │   - dialog (plugin) → sélection fichier    │     │
 │    │     │   - parsing gpx + stats                     │     │
 │    │     │   - SHA256 (anti-doublon)                   │     │
-│    │     │   - stockage dans {app_data}/{mode}/gpx/    │     │
+│    │     │   - stockage dans {app_data}/{mode}/traces/{trace_id}/    │     │
 │    │     │   - mise à jour de {app_data}/{mode}/       │     │
 │    │     │     traces.json (écriture atomique)         │     │
 │    │     └────────────────────────────────────────────┘     │
@@ -249,7 +249,7 @@ Une trace n'est **valide** que si elle est « propre ». Les fichiers GPX édit�
 - aucune anomalie → `"clean"` ;
 - anomalies détectées → `"needs_review"`.
 
-Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/nettoyage`, et `EditionCamera.vue` redirige également vers `/nettoyage` (garde-fou). Le workflow de nettoyage (3 étapes séquentielles, validation manuelle des cas, sauvegardes partielles par phase dans `cleaning/{trace_id}.{phase}.json`, validation d'étape avec GPX réécrit + backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Nettoyage de trace GPX ».
+Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/nettoyage`, et `EditionCamera.vue` redirige également vers `/nettoyage` (garde-fou). Le workflow de nettoyage (3 étapes séquentielles, validation manuelle des cas, sauvegardes partielles par phase dans `traces/{trace_id}/cleaning.{phase}.json`, validation d'étape avec GPX réécrit + backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Nettoyage de trace GPX ».
 
 ### 4.6 Structures de données Rust
 

@@ -17,7 +17,7 @@ Application **VisuGPS2** : Tauri (backend Rust + frontend Vue 3 / Vuetify 3), Ma
 - Commandes Tauri existantes : `get_traces`, `import_gpx_file`, `delete_trace`, `update_trace(trace_id, favorite?, is_displayed?)`.
 - `Circuit.vue` émet déjà `toggle-favorite` et `toggle-display` ; `CircuitsDrawer.vue` appelle déjà `tracesStore.updateTrace(...)`. Il expose en outre deux lignes d'icônes d'action (masquées par opacité hors survol) : ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris). Il pilote le focus carte via `tracesStore.focusedTraceId` (cf. §8-bis).
 - `Map.vue` affiche déjà les **points de départ** en clusters Mapbox (source `traces`, couches `clusters` / `cluster-count` / `unclustered-point`).
-- Stockage GPX : `{app_data_dir}/{active_mode}/gpx/` ; registre `{app_data_dir}/{active_mode}/traces.json`.
+- Stockage GPX : `{app_data_dir}/{active_mode}/traces/{trace_id}/` ; registre `{app_data_dir}/{active_mode}/traces.json`.
 - Paramètres : `src-tauri/settings.default.toml`, types `int|float|bool|secret|list|rgba|material_primary|material_extended|monitor`. **Les couleurs sont toujours au format `#RRGGBBAA`.**
 
 ## 3. Nouveaux paramètres (`src-tauri/settings.default.toml`)

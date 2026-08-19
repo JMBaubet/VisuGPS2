@@ -27,29 +27,32 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │   ├── config.toml              # Surcharges utilisateur en PROD
 │   ├── config-dev.toml          # Surcharges utilisateur en DEV
 │   ├── traces.json              # Registre des traces importées (Vec<TraceMetadata>)
-│   ├── gpx/                     # Fichiers GPX copiés (nom sanitizé + unique si conflit)
-│   │   ├── trace1.gpx
-│   │   └── trace2.gpx
-│   ├── geojson/                 # LineString GeoJSON (un fichier par trace)
-│   │   ├── {uuid}.geojson
-│   │   └── ...
-│   ├── keyframes/               # Keyframes persistés (vue d'édition caméra)
-│   │   ├── {uuid}_169.json      #   ratio 16:9
-│   │   ├── {uuid}_43.json       #   ratio 4:3
-│   │   └── ...
-│   └── cleaning/                # Fichier de travail du nettoyage de trace
-│       ├── {uuid}.json          #   décisions de correction (cas + état)
-│       └── ...
+│   └── traces/                  # **Un dossier par trace** (le dossier est le discriminant)
+│       └── {trace_id}/
+│           ├── {filename}.gpx          # GPX (nom d'origine sanitizé)
+│           ├── {filename}.gpx.orig     # backup de l'original (si nettoyage)
+│           ├── trace.geojson           # LineString GeoJSON
+│           ├── keyframes_169.json      # keyframes ratio 16:9
+│           ├── keyframes_43.json       # keyframes ratio 4:3
+│           ├── cleaning.{phase}.json          # fichier de travail par étape
+│           └── cleaning.{phase}.decisions.json # décisions « faux positif » par étape
 │
 └── EVAL_xxx/                    # Un dossier par mode d'évaluation créé
     ├── config.toml
     ├── config-dev.toml
     ├── traces.json
-    ├── gpx/*.gpx
-    ├── geojson/{uuid}.geojson
-    ├── keyframes/{uuid}_169.json / {uuid}_43.json
-    └── cleaning/{uuid}.json
+    └── traces/{trace_id}/
+        ├── {filename}.gpx
+        ├── trace.geojson
+        ├── keyframes_169.json / keyframes_43.json
+        └── cleaning.{phase}.json
 ```
+
+> **Migration automatique** : au premier accès à un mode (point de passage
+> `get_mode_dir`), `migrate_mode_storage` déplace les fichiers de l'ancien
+> agencement plat (`gpx/`, `geojson/`, `keyframes/`, `cleaning/`) vers les
+> dossiers par trace, puis retire les anciens dossiers vides. Idempotente
+> (no-op si `{mode}/traces` existe déjà).
 
 ## Détail des fichiers
 
@@ -123,18 +126,19 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Rétrocompatibilité** : les champs `favorite` et `is_displayed` ont `#[serde(default)]`, `cleaning_status` a `#[serde(default = "default_cleaning_status")]` et `cleaning_phase` a `#[serde(default)]` en Rust. Un `traces.json` antérieur se charge sans erreur. En complément, `load_registry` **normalise** toute chaîne vide en `"clean"` et déduit `cleaning_phase` : `""` pour une trace « clean », sinon `"spike"` (re-détection en chaîne).
 
-### `geojson/{uuid}.geojson` — LineString GeoJSON
+### `traces/{trace_id}/trace.geojson` — LineString GeoJSON
 
-Feature GeoJSON (LineString) d'une trace, générée à l'import et mise en cache.
-Le fichier est nommé d'après l'UUID de la trace (`{id}.geojson`).
+Feature GeoJSON (LineString) d'une trace, générée à l'import et mise en cache,
+dans le dossier de la trace (nom **uniforme** `trace.geojson`).
 `properties.id` contient l'UUID pour la liaison avec `TraceMetadata`.
-Écriture atomique (tmp + rename).
+Écriture atomique (tmp + rename). Régénérée depuis le GPX si absente.
 
-### `keyframes/{uuid}_169.json` / `{uuid}_43.json` — Keyframes persistés (édition caméra)
+### `traces/{trace_id}/keyframes_169.json` / `keyframes_43.json` — Keyframes persistés (édition caméra)
 
-Jeux de keyframes sérialisés en JSON pour la vue d'édition caméra.
-**Un fichier par trace et par ratio d'écran** : `{trace_id}_169.json` (16:9) et
-`{trace_id}_43.json` (4:3) — chaque ratio dispose de son propre cadrage
+Jeux de keyframes sérialisés en JSON pour la vue d'édition caméra, dans le
+dossier de la trace.
+**Un fichier par ratio d'écran** : `keyframes_169.json` (16:9) et
+`keyframes_43.json` (4:3) — chaque ratio dispose de son propre cadrage
 (les viewports de référence sont 1920×1080 et 1440×1080, même hauteur, seul le
 champ horizontal diffère). Le ratio d'un jeu sauvegardé est déduit de son champ
 `viewport` côté frontend (`saveKeyframes`).
@@ -149,13 +153,15 @@ Chaque keyframe porte deux champs optionnels :
   vue, supprimés quand le segment est verrouillé.
 Verrous et marques sont réinitialisés à la régénération des keyframes.
 Le backend traite le JSON de manière transparente (`serde_json::Value`), sans validation structurelle côté Rust.
-Écriture atomique (tmp + rename). Le dossier `keyframes/` est créé automatiquement à la première sauvegarde.
+Écriture atomique (tmp + rename). Le dossier de la trace est créé automatiquement à la première sauvegarde.
 
-> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), les deux fichiers keyframes (`{uuid}_169.json` et `{uuid}_43.json`, plus l'ancien `{uuid}.json` non suffixé des versions antérieures) sont supprimés en même temps que le `.gpx`, le `.geojson`, les fichiers de travail `cleaning/{uuid}.*.json` (toutes phases + ancien nom non suffixé) et le backup `{filename}.gpx.orig`.
+> **Suppression** : quand une trace est supprimée (`delete_trace`), son **dossier entier**
+> `traces/{trace_id}/` est supprimé (GPX, backup `.orig`, GeoJSON, keyframes, nettoyage) —
+> la cascade est implicite.
 
-### `cleaning/{uuid}.{phase}.json` — Fichiers de travail du nettoyage (par étape)
+### `traces/{trace_id}/cleaning.{phase}.json` — Fichiers de travail du nettoyage (par étape)
 
-Décisions de correction d'une trace, persistées à chaque **sauvegarde partielle** de la phase (commande `save_cleaning_state`, écriture atomique tmp + rename). **Un fichier par phase** (`{trace_id}.spike.json`, `{trace_id}.roundabout.json`, `{trace_id}.out_and_back.json`) : les index de cas sont propres à la version du GPX traitée, donc re-créés à chaque étape. Le GPX reste **intact** tant que la phase n'est pas validée.
+Décisions de correction d'une trace, persistées à chaque **sauvegarde partielle** de la phase (commande `save_cleaning_state`, écriture atomique tmp + rename), dans le dossier de la trace. **Un fichier par phase** (`cleaning.spike.json`, `cleaning.roundabout.json`, `cleaning.out_and_back.json`) : les index de cas sont propres à la version du GPX traitée, donc re-créés à chaque étape. Le GPX reste **intact** tant que la phase n'est pas validée.
 
 ```json
 {
@@ -185,9 +191,9 @@ Décisions de correction d'une trace, persistées à chaque **sauvegarde partiel
 - La présence d'un fichier pose `cleaning_status = "in_progress"` et `cleaning_phase = phase`.
 - À la **validation d'étape** (`validate_phase`), le GPX est remplacé par la version nettoyée (entrée de l'étape suivante), l'original est sauvegardé en `{filename}.gpx.orig` (**une seule fois**, à l'étape 1), les dérivés (geojson, stats, hash) sont régénérés, `cleaning_phase` avance et le fichier de travail de la phase est supprimé. Une étape sans anomalie est **auto-validée** (avancement de phase sans réécriture).
 
-### `cleaning/{uuid}.{phase}.decisions.json` — Décisions validées par phase (faux positifs)
+### `traces/{trace_id}/cleaning.{phase}.decisions.json` — Décisions validées par phase (faux positifs)
 
-Persiste, à chaque **validation d'étape** (`validate_phase`), les cas validés **sans modification effective** (conservés tel quel, ou corrigés sans correction) : leur **coordonnée représentative** (apex ou centroïde de la zone) + état. Écriture atomique. Le fichier **survit** à la validation (le fichier de travail, lui, est supprimé) et **n'est effacé qu'au `reset_cleaning`** (ou à la suppression de la trace, via le glob `{id}.*.json`).
+Persiste, à chaque **validation d'étape** (`validate_phase`), les cas validés **sans modification effective** (conservés tel quel, ou corrigés sans correction) : leur **coordonnée représentative** (apex ou centroïde de la zone) + état. Écriture atomique. Le fichier **survit** à la validation (le fichier de travail, lui, est supprimé) et **n'est effacé qu'au `reset_cleaning`** (ou à la suppression de la trace, avec le dossier).
 
 À la **re-détection** d'une étape déjà validée (retour via le widget de la toolbar), les cas détectés dont la coordonnée représentative est à moins de ~40 m d'une décision `"kept"` sont **automatiquement re-marqués « faux positif »** — l'utilisateur retrouve ses décisions. Exemple :
 
@@ -213,18 +219,16 @@ Ce fichier contient également une **table spéciale `[_meta]`** (placée en tê
 
 ## Résolution des chemins (backend)
 
-Les fonctions privées dans `import_gpx.rs` résolvent les chemins en fonction du mode actif :
+Les fonctions dans `import_gpx.rs` résolvent les chemins en fonction du mode actif :
 
 ```rust
-get_mode_dir(app)          → {app_data_dir}/{active_mode}     // créé si absent
-get_gpx_dir(mode_dir)      → {mode_dir}/gpx                   // créé si absent
-get_geojson_dir(mode_dir)  → {mode_dir}/geojson               // créé si absent
-get_geojson_path(mode_dir, trace_id) → {mode_dir}/geojson/{trace_id}.geojson
-get_keyframes_dir(mode_dir) → {mode_dir}/keyframes             // créé si absent
-get_keyframes_path(mode_dir, trace_id, viewport_aspect) → {mode_dir}/keyframes/{trace_id}_169.json | {trace_id}_43.json
-get_traces_path(mode_dir)  → {mode_dir}/traces.json
-get_cleaning_dir(mode_dir) → {mode_dir}/cleaning                // créé si absent (cleaning.rs)
-get_cleaning_path(mode_dir, trace_id, phase) → {mode_dir}/cleaning/{trace_id}.{phase}.json
+get_mode_dir(app)     → {app_data_dir}/{active_mode}     // créé si absent ; déclenche la migration
+get_trace_dir(mode_dir, trace_id)      → {mode_dir}/traces/{trace_id}         // créé si absent
+get_trace_gpx_path(mode_dir, trace_id, filename) → {mode_dir}/traces/{trace_id}/{filename}
+get_geojson_path(mode_dir, trace_id)  → {mode_dir}/traces/{trace_id}/trace.geojson
+get_keyframes_path(mode_dir, trace_id, viewport_aspect) → {mode_dir}/traces/{trace_id}/keyframes_169.json | keyframes_43.json
+get_traces_path(mode_dir)             → {mode_dir}/traces.json
+get_cleaning_path(mode_dir, trace_id, phase) → {mode_dir}/traces/{trace_id}/cleaning.{phase}.json  (cleaning.rs)
 ```
 
 Le mode actif est déterminé par `gestionMode::read_active_mode(app_data_dir, is_dev)` qui lit `.env`.

@@ -8,7 +8,7 @@
 //! - la **détection** des anomalies par changement de cap proche de 180° (la
 //!   tolérance de cap est paramétrable : `Nettoyage.Cap.toleranceDeg`) ;
 //! - la **persistance** des décisions de correction (fichier de travail
-//!   `{mode}/cleaning/{trace_id}.json`, écriture atomique) ;
+//!   `{mode}/traces/{trace_id}/cleaning.{phase}.json`, écriture atomique) ;
 //! - la **finalisation** : génération du GPX nettoyé, sauvegarde de l'original
 //!   en `{filename}.orig`, régénération des dérivés (geojson, stats, hash) et
 //!   passage de la trace à l'état `"clean"`.
@@ -25,8 +25,8 @@ use tauri::Manager;
 
 use crate::import_gpx::{
     build_geojson_feature, compute_file_hash, compute_stats, extract_line_coordinates,
-    get_geojson_path, get_gpx_dir, get_mode_dir, get_traces_path, haversine, load_registry,
-    save_registry, TraceMetadata,
+    get_geojson_path, get_mode_dir, get_traces_path, get_trace_gpx_path, haversine,
+    load_registry, save_registry, TraceMetadata,
 };
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
@@ -107,7 +107,7 @@ pub struct CleaningCase {
 }
 
 /// État complet du nettoyage d'une trace (persisté dans
-/// `cleaning/{trace_id}.{phase}.json`).
+/// `traces/{trace_id}/cleaning.{phase}.json`).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct CleaningState {
     pub trace_id: String,
@@ -527,7 +527,7 @@ pub fn detect_all_phases_from_gpx(
 //
 // Quand une étape est **validée**, son fichier de travail est supprimé : les
 // décisions « faux positif » ne doivent pas être perdues. On persiste par
-// phase un fichier `cleaning/{trace_id}.{phase}.decisions.json` contenant les
+// phase un fichier `traces/{trace_id}/cleaning.{phase}.decisions.json` contenant les
 // zones décidées (coordonnée représentative + état). À la re-détection
 // ultérieure (retour sur une étape déjà validée), les cas détectés dont la
 // zone correspond à une décision « kept » sont re-marqués automatiquement.
@@ -545,8 +545,9 @@ pub struct PhaseDecision {
 
 fn get_decisions_path(mode_dir: &Path, trace_id: &str, phase: &str) -> PathBuf {
     mode_dir
-        .join("cleaning")
-        .join(format!("{}.{}.decisions.json", trace_id, phase))
+        .join("traces")
+        .join(trace_id)
+        .join(format!("cleaning.{phase}.decisions.json"))
 }
 
 fn load_decisions(mode_dir: &Path, trace_id: &str, phase: &str) -> Vec<PhaseDecision> {
@@ -745,7 +746,6 @@ pub fn roundabout_params_from_settings(
 /// Résout et parse le fichier GPX original d'une trace depuis le registre.
 fn load_trace_gpx(app: &tauri::AppHandle, trace_id: &str) -> Result<(gpx::Gpx, TraceMetadata), String> {
     let mode_dir = get_mode_dir(app)?;
-    let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
     let registry = load_registry(&traces_path);
     let trace = registry
@@ -754,7 +754,7 @@ fn load_trace_gpx(app: &tauri::AppHandle, trace_id: &str) -> Result<(gpx::Gpx, T
         .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?
         .clone();
 
-    let gpx_file = gpx_dir.join(&trace.filename);
+    let gpx_file = crate::import_gpx::get_trace_gpx_path(&mode_dir, trace_id, &trace.filename);
     if !gpx_file.exists() {
         return Err(format!(
             "Fichier GPX source introuvable pour la trace (id={}, fichier={:?})",
@@ -771,35 +771,26 @@ fn load_trace_gpx(app: &tauri::AppHandle, trace_id: &str) -> Result<(gpx::Gpx, T
 // Persistance du fichier de travail
 // ---------------------------------------------------------------------------
 
-/// Retourne le dossier cleaning/ du mode actif (créé si absent).
-fn get_cleaning_dir(mode_dir: &Path) -> Result<PathBuf, String> {
-    let dir = mode_dir.join("cleaning");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Impossible de créer le dossier cleaning : {}", e))?;
-    Ok(dir)
-}
-
 /// Chemin du fichier de travail de nettoyage d'une trace **pour une phase**
-/// (`cleaning/{trace_id}.{phase}.json`). Chaque phase dispose de son propre
-/// fichier : les index de cas sont propres à la version du GPX traitée.
+/// (`traces/{trace_id}/cleaning.{phase}.json`). Chaque phase dispose de son
+/// propre fichier : les index de cas sont propres à la version du GPX traitée.
 fn get_cleaning_path(mode_dir: &Path, trace_id: &str, phase: &str) -> PathBuf {
     mode_dir
-        .join("cleaning")
-        .join(format!("{}.{}.json", trace_id, phase))
+        .join("traces")
+        .join(trace_id)
+        .join(format!("cleaning.{phase}.json"))
 }
 
-/// Supprime tous les fichiers de travail de nettoyage d'une trace (par phase
-/// `{id}.{phase}.json` et l'ancien nom sans suffixe `{id}.json`). Tolérant.
+/// Supprime les fichiers de travail de nettoyage d'une trace (toutes phases,
+/// `cleaning.*.json` dans son dossier). Tolérant.
 pub(crate) fn remove_cleaning_files(mode_dir: &Path, trace_id: &str) {
-    let dir = mode_dir.join("cleaning");
+    let dir = mode_dir.join("traces").join(trace_id);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let legacy = name == format!("{}.json", trace_id);
-        let phased = name.starts_with(&format!("{}.", trace_id)) && name.ends_with(".json");
-        if legacy || phased {
+        if name.starts_with("cleaning.") && name.ends_with(".json") {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -1009,7 +1000,7 @@ pub async fn get_cleaning_state(
 }
 
 /// Sauvegarde partielle du travail d'une phase (fichier
-/// `cleaning/{trace_id}.{phase}.json`). Le GPX reste intact. Passe la trace en
+/// `traces/{trace_id}/cleaning.{phase}.json`). Le GPX reste intact. Passe la trace en
 /// `"in_progress"` et mémorise la phase en cours.
 #[tauri::command]
 pub async fn save_cleaning_state(
@@ -1019,8 +1010,7 @@ pub async fn save_cleaning_state(
     state_json: serde_json::Value,
 ) -> Result<(), String> {
     let mode_dir = get_mode_dir(&app)?;
-    let dir = get_cleaning_dir(&mode_dir)?;
-    let path = dir.join(format!("{}.{}.json", trace_id, phase));
+    let path = get_cleaning_path(&mode_dir, &trace_id, &phase);
 
     let content = serde_json::to_string_pretty(&state_json)
         .map_err(|e| format!("Sérialisation du fichier de travail : {}", e))?;
@@ -1091,7 +1081,6 @@ pub async fn validate_phase(
     };
 
     let mode_dir = get_mode_dir(&app)?;
-    let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
 
     // Charger le GPX courant et ses points (réutilisés pour les corrections et
@@ -1116,7 +1105,7 @@ pub async fn validate_phase(
 
         // 4. Générer et écrire le GPX nettoyé (entrée de l'étape suivante).
         let cleaned_gpx = build_cleaned_gpx(&final_points, &trace_name);
-        let gpx_file = gpx_dir.join(&trace.filename);
+        let gpx_file = get_trace_gpx_path(&mode_dir, &trace_id, &trace.filename);
 
         // 5. Backup de l'original (une seule fois, ne pas écraser un backup).
         let backup_path = gpx_file.with_extension("gpx.orig");
@@ -1205,14 +1194,10 @@ pub async fn validate_phase(
         save_decisions(&mode_dir, &trace_id, &phase, &decisions)?;
     }
 
-    // 10. Supprimer le fichier de travail de la phase validée (+ ancien nom).
+    // 10. Supprimer le fichier de travail de la phase validée.
     let state_path = get_cleaning_path(&mode_dir, &trace_id, &phase);
     if state_path.exists() {
         let _ = std::fs::remove_file(&state_path);
-    }
-    let legacy_path = mode_dir.join("cleaning").join(format!("{}.json", trace_id));
-    if legacy_path.exists() {
-        let _ = std::fs::remove_file(&legacy_path);
     }
 
     let registry = load_registry(&traces_path);
@@ -1534,32 +1519,35 @@ mod tests {
     /// Test `#[ignore]` : il dépend de fichiers présents uniquement sur la
     /// machine de travail. À lancer via `cargo test -- --ignored`.
     ///
-    /// Tous les `.gpx` du dossier sont scannés : le pipeline complet d'import
-    /// (name, stats, coords, détection) ne doit **jamais paniquer**, et la
-    /// détection doit rester rapide même sur les gros fichiers.
+    /// Tous les `.gpx` du dossier `traces/*/` sont scannés : le pipeline
+    /// complet d'import (name, stats, coords, détection) ne doit **jamais
+    /// paniquer**, et la détection doit rester rapide même sur les gros fichiers.
     #[test]
     #[ignore]
     fn detects_real_trace_anomalies() {
-        let gpx_dir = "/Users/jean-marcbaubet/Library/Application Support/com.jean-marc.baubet.visugps2/OPE/gpx";
-        let mut files: Vec<String> = std::fs::read_dir(gpx_dir)
+        let traces_root =
+            "/Users/jean-marcbaubet/Library/Application Support/com.jean-marc.baubet.visugps2/OPE/traces";
+        let mut files: Vec<String> = std::fs::read_dir(traces_root)
             .unwrap()
             .filter_map(|e| e.ok())
+            .flat_map(|e| std::fs::read_dir(e.path()).ok())
+            .flatten()
+            .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().map(|x| x == "gpx").unwrap_or(false))
-            .map(|e| e.file_name().to_string_lossy().to_string())
+            .map(|e| e.path().to_string_lossy().to_string())
             .collect();
         files.sort();
-        assert!(!files.is_empty(), "Aucun GPX trouvé dans {}", gpx_dir);
+        assert!(!files.is_empty(), "Aucun GPX trouvé dans {}", traces_root);
 
-        for name in &files {
-            let path = format!("{}/{}", gpx_dir, name);
+        for path in &files {
             let start = std::time::Instant::now();
-            let file = std::fs::File::open(&path)
+            let file = std::fs::File::open(path)
                 .unwrap_or_else(|e| panic!("Fichier introuvable {} : {}", path, e));
             let gpx = gpx::read(BufReader::new(file)).unwrap();
 
             // Pipeline d'import complet (étapes 6 → 8bis de import_gpx_file) :
             // aucun de ces appels ne doit paniquer.
-            let trace_name = crate::import_gpx::extract_name(&gpx, name);
+            let trace_name = crate::import_gpx::extract_name(&gpx, path);
             assert!(!trace_name.is_empty());
             let (stats, count) = crate::import_gpx::compute_stats(&gpx).unwrap();
             assert!(stats.points_count >= 2 && count == stats.points_count);
@@ -1571,7 +1559,7 @@ mod tests {
             let elapsed = start.elapsed();
             println!(
                 "{} → {} cas ({} pts, {:.0} ms)",
-                name,
+                path,
                 cases.len(),
                 count,
                 elapsed.as_millis()
@@ -1587,7 +1575,7 @@ mod tests {
             assert!(
                 elapsed.as_millis() < 5000,
                 "{} : détection trop lente ({} ms)",
-                name,
+                path,
                 elapsed.as_millis()
             );
 
@@ -1602,7 +1590,7 @@ mod tests {
             assert!(
                 final_points.len() >= 2,
                 "{} : trop de points supprimés ({} restants)",
-                name,
+                path,
                 final_points.len()
             );
             let gpx_str = build_cleaned_gpx(&final_points, "test nettoyage");
@@ -1610,7 +1598,7 @@ mod tests {
                 gpx_str.matches("<trkpt ").count(),
                 final_points.len(),
                 "{} : nombre de <trkpt> du GPX généré",
-                name
+                path
             );
             let reparsed = gpx::read(std::io::Cursor::new(gpx_str)).unwrap();
             let reparsed_count: usize = reparsed
@@ -1619,7 +1607,7 @@ mod tests {
                 .flat_map(|t| &t.segments)
                 .flat_map(|s| &s.points)
                 .count();
-            assert_eq!(reparsed_count, final_points.len(), "{} : re-parse", name);
+            assert_eq!(reparsed_count, final_points.len(), "{} : re-parse", path);
             let _ = removed;
         }
     }

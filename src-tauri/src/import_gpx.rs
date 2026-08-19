@@ -9,7 +9,7 @@
 //! - `save_keyframes` / `get_keyframes` / `delete_keyframes` : persistance JSON des
 //!   keyframes de la vue d'édition caméra (un fichier par trace).
 //!
-//! Les données sont stockées dans `{app_data_dir}/{active_mode}/gpx/` et
+//! Les données sont stockées dans `{app_data_dir}/{active_mode}/traces/{trace_id}/` et
 //! `{app_data_dir}/{active_mode}/traces.json`, conformément au pattern établi
 //! par `settings.rs` et `gestionMode.rs`.
 
@@ -75,7 +75,7 @@ pub struct TraceMetadata {
     pub source_url: Option<String>,
     /// Type d'activité (running, cycling, hiking…).
     pub activity_type: Option<String>,
-    /// Nom du fichier stocké dans le dossier gpx/.
+    /// Nom du fichier GPX stocké dans le dossier de la trace.
     pub filename: String,
     /// Date et heure d'import (ISO 8601 UTC).
     pub import_date: String,
@@ -114,6 +114,10 @@ fn default_cleaning_status() -> String {
 
 /// Retourne le dossier racine du mode d'exécution actif.
 /// Exemple : `{app_data_dir}/OPE` ou `{app_data_dir}/EVAL_essai`.
+///
+/// Point de passage unique de toutes les commandes : déclenche la **migration
+/// du stockage** vers « un dossier par trace » au premier accès au mode
+/// (idempotente — no-op si `{mode}/traces` existe déjà).
 pub(crate) fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let is_dev = cfg!(debug_assertions);
     let app_data_dir = app
@@ -129,29 +133,30 @@ pub(crate) fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             .map_err(|e| format!("Impossible de créer le dossier du mode {:?} : {}", mode_dir, e))?;
     }
 
+    migrate_mode_storage(&mode_dir)?;
+
     Ok(mode_dir)
 }
 
-/// Retourne le dossier gpx/ à l'intérieur du mode actif.
-pub(crate) fn get_gpx_dir(mode_dir: &Path) -> Result<PathBuf, String> {
-    let gpx_dir = mode_dir.join("gpx");
-    std::fs::create_dir_all(&gpx_dir)
-        .map_err(|e| format!("Impossible de créer le dossier gpx : {}", e))?;
-    Ok(gpx_dir)
+/// Retourne le dossier d'une trace : `{mode}/traces/{trace_id}/` (créé si
+/// absent). Le dossier est le **discriminant** de la trace : tous les fichiers
+/// qui la concernent y vivent (GPX, GeoJSON, keyframes, nettoyage).
+pub(crate) fn get_trace_dir(mode_dir: &Path, trace_id: &str) -> Result<PathBuf, String> {
+    let dir = mode_dir.join("traces").join(trace_id);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Impossible de créer le dossier de la trace : {}", e))?;
+    Ok(dir)
 }
 
-/// Retourne le dossier geojson/ à l'intérieur du mode actif.
-/// Contient les LineString GeoJSON des traces (un fichier `{id}.geojson` par trace).
-pub(crate) fn get_geojson_dir(mode_dir: &Path) -> Result<PathBuf, String> {
-    let geojson_dir = mode_dir.join("geojson");
-    std::fs::create_dir_all(&geojson_dir)
-        .map_err(|e| format!("Impossible de créer le dossier geojson : {}", e))?;
-    Ok(geojson_dir)
+/// Chemin du fichier GPX d'une trace (nom d'origine sanitizé dans son dossier).
+pub(crate) fn get_trace_gpx_path(mode_dir: &Path, trace_id: &str, filename: &str) -> PathBuf {
+    mode_dir.join("traces").join(trace_id).join(filename)
 }
 
-/// Retourne le chemin du fichier LineString GeoJSON d'une trace, d'après son UUID.
+/// Retourne le chemin du fichier LineString GeoJSON d'une trace, dans son
+/// dossier (`traces/{trace_id}/trace.geojson`).
 pub(crate) fn get_geojson_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
-    mode_dir.join("geojson").join(format!("{}.geojson", trace_id))
+    mode_dir.join("traces").join(trace_id).join("trace.geojson")
 }
 
 /// Retourne le chemin du registre traces.json du mode actif.
@@ -159,35 +164,27 @@ pub(crate) fn get_traces_path(mode_dir: &Path) -> PathBuf {
     mode_dir.join("traces.json")
 }
 
-/// Retourne le dossier keyframes/ à l'intérieur du mode actif.
-/// Contient les jeux de keyframes (un fichier `{id}_{ratio}.json` par trace).
-fn get_keyframes_dir(mode_dir: &Path) -> Result<PathBuf, String> {
-    let dir = mode_dir.join("keyframes");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Impossible de créer le dossier keyframes : {}", e))?;
-    Ok(dir)
-}
-
 /// Nom de fichier keyframes d'une trace pour un ratio d'écran donné.
 ///
-/// Nommage **explicite par ratio** : `{trace_id}_169.json` (16:9) et
-/// `{trace_id}_43.json` (4:3). Tout ratio inconnu retombe sur le nom non
-/// suffixé (`{trace_id}.json`), qui sert aussi de filet de sécurité.
-fn keyframes_file_name(trace_id: &str, viewport_aspect: &str) -> String {
-    let stem = match viewport_aspect {
-        "16:9" => format!("{trace_id}_169"),
-        "4:3" => format!("{trace_id}_43"),
-        _ => trace_id.to_string(),
-    };
-    format!("{stem}.json")
+/// Nommage **explicite par ratio** dans le dossier de la trace :
+/// `keyframes_169.json` (16:9) et `keyframes_43.json` (4:3). Tout ratio
+/// inconnu retombe sur le nom non suffixé (`keyframes.json`).
+fn keyframes_file_name(viewport_aspect: &str) -> String {
+    match viewport_aspect {
+        "16:9" => "keyframes_169.json".to_string(),
+        "4:3" => "keyframes_43.json".to_string(),
+        _ => "keyframes.json".to_string(),
+    }
 }
 
 /// Retourne le chemin du fichier keyframes d'une trace, d'après son UUID et le
-/// ratio d'écran (`16:9` ou `4:3`) — un fichier distinct par ratio.
+/// ratio d'écran (`16:9` ou `4:3`) — un fichier distinct par ratio, dans le
+/// dossier de la trace.
 fn get_keyframes_path(mode_dir: &Path, trace_id: &str, viewport_aspect: &str) -> PathBuf {
     mode_dir
-        .join("keyframes")
-        .join(keyframes_file_name(trace_id, viewport_aspect))
+        .join("traces")
+        .join(trace_id)
+        .join(keyframes_file_name(viewport_aspect))
 }
 
 // ---------------------------------------------------------------------------
@@ -222,30 +219,110 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
-/// Génère un nom de fichier unique dans le dossier cible en cas de conflit.
-/// Ex : "trace.gpx" → "trace_1.gpx" si "trace.gpx" existe déjà.
-fn unique_filename(gpx_dir: &Path, base_name: &str) -> String {
-    if !gpx_dir.join(base_name).exists() {
-        return base_name.to_string();
+// ---------------------------------------------------------------------------
+// Migration vers l'agencement « un dossier par trace »
+// ---------------------------------------------------------------------------
+
+/// Migre le stockage d'un mode vers `{mode}/traces/{trace_id}/` (un dossier par
+/// trace). **Idempotente** : ne fait rien si le dossier `{mode}/traces` existe
+/// déjà.
+///
+/// Pour chaque trace du registre, déplace depuis l'ancien agencement plat
+/// (`gpx/`, `geojson/`, `keyframes/`, `cleaning/`) vers son dossier :
+/// - `gpx/{filename}` (+ `.gpx.orig`) → `traces/{id}/{filename}` ;
+/// - `geojson/{id}.geojson` → `traces/{id}/trace.geojson` ;
+/// - `keyframes/{id}_169|_43|.json` → `traces/{id}/keyframes_169|_43|.json` ;
+/// - `cleaning/{id}.{phase}*.json` → `traces/{id}/cleaning.{phase}*.json`.
+///
+/// Les anciens dossiers, une fois vidés, sont supprimés. Les fichiers légués
+/// non migrés (ex. `cleaning/{id}.json` sans phase, déjà invalides) restent
+/// dans l'ancien dossier et disparaissent avec lui.
+pub(crate) fn migrate_mode_storage(mode_dir: &Path) -> Result<(), String> {
+    let new_root = mode_dir.join("traces");
+    if new_root.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&new_root)
+        .map_err(|e| format!("Création du dossier traces/ : {}", e))?;
+
+    let traces_path = get_traces_path(mode_dir);
+    let registry = load_registry(&traces_path);
+    if registry.is_empty() {
+        return Ok(());
     }
 
-    let stem = Path::new(base_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("trace");
-    let ext = Path::new(base_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("gpx");
-
-    let mut counter = 1u32;
-    loop {
-        let candidate = format!("{}_{}.{}", stem, counter, ext);
-        if !gpx_dir.join(&candidate).exists() {
-            return candidate;
+    let move_into = |old: &Path, new: &Path| -> Result<(), String> {
+        if old.exists() {
+            if let Some(parent) = new.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("Création du dossier : {}", e))?;
+            }
+            std::fs::rename(old, new)
+                .map_err(|e| format!("Déplacement {} → {} : {}", old.display(), new.display(), e))?;
         }
-        counter += 1;
+        Ok(())
+    };
+
+    for trace in &registry {
+        let id = &trace.id;
+        let trace_dir = new_root.join(id);
+        std::fs::create_dir_all(&trace_dir)
+            .map_err(|e| format!("Création du dossier de la trace {} : {}", id, e))?;
+
+        // GPX + backup `.orig`.
+        move_into(
+            &mode_dir.join("gpx").join(&trace.filename),
+            &trace_dir.join(&trace.filename),
+        )?;
+        move_into(
+            &mode_dir.join("gpx").join(format!("{}.gpx.orig", trace.filename)),
+            &trace_dir.join(format!("{}.gpx.orig", trace.filename)),
+        )?;
+
+        // GeoJSON.
+        move_into(
+            &mode_dir.join("geojson").join(format!("{id}.geojson")),
+            &trace_dir.join("trace.geojson"),
+        )?;
+
+        // Keyframes (16:9, 4:3, ancien nom non suffixé).
+        for (old_suffix, new_name) in [
+            ("_169", "keyframes_169.json"),
+            ("_43", "keyframes_43.json"),
+            ("", "keyframes.json"),
+        ] {
+            move_into(
+                &mode_dir.join("keyframes").join(format!("{id}{old_suffix}.json")),
+                &trace_dir.join(new_name),
+            )?;
+        }
+
+        // Fichiers de nettoyage par phase (`{id}.{phase}*.json`).
+        if let Ok(entries) = std::fs::read_dir(mode_dir.join("cleaning")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let prefix = format!("{id}.");
+                if name.starts_with(&prefix) && name.ends_with(".json") {
+                    let rest = &name[id.len() + 1..]; // "spike.json", "spike.decisions.json"
+                    move_into(&entry.path(), &trace_dir.join(format!("cleaning.{rest}")))?;
+                }
+            }
+        }
     }
+
+    // Retirer les anciens dossiers s'ils sont vides.
+    for dir in ["gpx", "geojson", "keyframes", "cleaning"] {
+        let p = mode_dir.join(dir);
+        let empty = p
+            .read_dir()
+            .map(|mut it| it.next().is_none())
+            .unwrap_or(false);
+        if empty {
+            let _ = std::fs::remove_dir(&p);
+        }
+    }
+
+    println!("[storage] Migration vers « un dossier par trace » effectuée ({} trace(s)).", registry.len());
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -755,7 +832,6 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
 
     // 2. Résoudre les chemins du mode d'exécution actif
     let mode_dir = get_mode_dir(&app)?;
-    let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
 
     // 3. Calculer le hash SHA256 (anti-doublon)
@@ -821,28 +897,31 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         );
     }
 
-    // 7. Copier le fichier dans le dossier gpx/ avec un nom unique si nécessaire
+    // 7. Générer l'UUID de la trace et créer son dossier
+    //    (`traces/{id}/` — le dossier est le discriminant de la trace).
+    let id = uuid::Uuid::new_v4().to_string();
+    let trace_dir = get_trace_dir(&mode_dir, &id)?;
+
+    // 7bis. Copier le GPX dans le dossier de la trace (nom d'origine sanitizé ;
+    //       pas de collision possible : le dossier est unique par trace).
     let raw_filename = file_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("trace.gpx");
-    let safe_filename = sanitize_filename(raw_filename);
-    let stored_filename = unique_filename(&gpx_dir, &safe_filename);
-    let dest_path = gpx_dir.join(&stored_filename);
+    let stored_filename = sanitize_filename(raw_filename);
+    let dest_path = trace_dir.join(&stored_filename);
 
     std::fs::copy(&file_path, &dest_path)
         .map_err(|e| format!("Copie du fichier GPX : {}", e))?;
 
     // 8. Construire la métadonnée
-    let id = uuid::Uuid::new_v4().to_string();
     let import_date = chrono::Utc::now().to_rfc3339();
 
-    // 8bis. Générer la LineString GeoJSON et l'écrire dans geojson/{id}.geojson
+    // 8bis. Générer la LineString GeoJSON et l'écrire dans `traces/{id}/trace.geojson`
     //       (après génération de l'UUID, avant la construction de TraceMetadata).
-    let geojson_dir = get_geojson_dir(&mode_dir)?;
     let coords = extract_line_coordinates(&gpx)?;
     let feature = build_geojson_feature(coords, &id, &name);
-    let geojson_path = geojson_dir.join(format!("{}.geojson", &id));
+    let geojson_path = get_geojson_path(&mode_dir, &id);
     // Écriture atomique (tmp + rename), cohérent avec save_registry.
     let geojson_tmp = geojson_path.with_extension("geojson.tmp");
     let geojson_content = serde_json::to_string_pretty(&feature)
@@ -900,14 +979,14 @@ pub async fn get_traces(app: tauri::AppHandle) -> Result<Vec<TraceMetadata>, Str
 // Commande Tauri : delete_trace
 // ---------------------------------------------------------------------------
 
-/// Supprime une trace (fichier GPX + entrée du registre) par son identifiant.
+/// Supprime une trace (dossier entier + entrée du registre) par son identifiant.
 ///
-/// Supprime d'abord le fichier GPX sur disque (tolérant si absent), puis
-/// retire l'entrée du registre et sauvegarde atomiquement traces.json.
+/// Tous les fichiers d'une trace vivent dans son dossier `traces/{id}/` (GPX,
+/// backup `.orig`, GeoJSON, keyframes, nettoyage) : la suppression du dossier
+/// **est** la cascade complète.
 #[tauri::command]
 pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(), String> {
     let mode_dir = get_mode_dir(&app)?;
-    let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
 
     let mut registry = load_registry(&traces_path);
@@ -918,54 +997,21 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
         .position(|t| t.id == trace_id)
         .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
 
-    let filename = registry[idx].filename.clone();
     let trace_id_owned = registry[idx].id.clone();
 
-    // 1) Supprimer le fichier GPX (tolérant si absent)
-    let gpx_file = gpx_dir.join(&filename);
-    if gpx_file.exists() {
-        std::fs::remove_file(&gpx_file)
-            .map_err(|e| format!("Suppression du fichier GPX : {}", e))?;
+    // 1) Supprimer le dossier de la trace (tolérant si absent) — contient le
+    //    GPX, le backup `.orig`, le GeoJSON, les keyframes et les fichiers de
+    //    nettoyage.
+    let trace_dir = mode_dir.join("traces").join(&trace_id_owned);
+    if trace_dir.exists() {
+        std::fs::remove_dir_all(&trace_dir)
+            .map_err(|e| format!("Suppression du dossier de la trace : {}", e))?;
     }
 
-    // 2) Supprimer le fichier LineString GeoJSON (tolérant si absent)
-    let geojson_file = get_geojson_path(&mode_dir, &trace_id_owned);
-    if geojson_file.exists() {
-        std::fs::remove_file(&geojson_file)
-            .map_err(|e| format!("Suppression du fichier GeoJSON : {}", e))?;
-    }
-
-    // 2bis) Supprimer les fichiers keyframes associés (tolérant si absent) :
-    //       un fichier par ratio d'écran, plus l'ancien nom non suffixé
-    //       (versions antérieures au nommage par ratio).
-    let keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned, "16:9");
-    if keyframes_file.exists() {
-        let _ = std::fs::remove_file(&keyframes_file);
-    }
-    let keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned, "4:3");
-    if keyframes_file.exists() {
-        let _ = std::fs::remove_file(&keyframes_file);
-    }
-    let legacy_keyframes_file = get_keyframes_path(&mode_dir, &trace_id_owned, "");
-    if legacy_keyframes_file.exists() {
-        let _ = std::fs::remove_file(&legacy_keyframes_file);
-    }
-
-    // 2ter) Supprimer les fichiers de travail de nettoyage (toutes phases,
-    //       tolérant si absents) — gère aussi l'ancien nom sans suffixe.
-    crate::cleaning::remove_cleaning_files(&mode_dir, &trace_id_owned);
-
-    // 2quater) Supprimer le backup d'origine `{filename}.gpx.orig` créé par la
-    //          finalisation du nettoyage (tolérant si absent).
-    let backup_file = gpx_file.with_extension("gpx.orig");
-    if backup_file.exists() {
-        let _ = std::fs::remove_file(&backup_file);
-    }
-
-    // 3) Retirer l'entrée du registre en mémoire
+    // 2) Retirer l'entrée du registre en mémoire
     registry.remove(idx);
 
-    // 4) Sauvegarde atomique (tmp + rename via save_registry)
+    // 3) Sauvegarde atomique (tmp + rename via save_registry)
     save_registry(&traces_path, &registry)?;
 
     Ok(())
@@ -1028,7 +1074,6 @@ pub struct TraceGeometry {
 /// Retourne la Feature GeoJSON fraîchement écrite. Écriture atomique.
 fn rebuild_geometry_from_gpx(
     mode_dir: &Path,
-    gpx_dir: &Path,
     registry: &[TraceMetadata],
     trace_id: &str,
 ) -> Result<serde_json::Value, String> {
@@ -1037,7 +1082,7 @@ fn rebuild_geometry_from_gpx(
         .find(|t| t.id == trace_id)
         .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
 
-    let gpx_file = gpx_dir.join(&trace.filename);
+    let gpx_file = get_trace_gpx_path(mode_dir, trace_id, &trace.filename);
     if !gpx_file.exists() {
         return Err(format!(
             "Fichier GPX source introuvable pour la trace (id={}, fichier={:?})",
@@ -1053,9 +1098,8 @@ fn rebuild_geometry_from_gpx(
     let coords = extract_line_coordinates(&gpx)?;
     let feature = build_geojson_feature(coords, trace_id, &trace.name);
 
-    // Écriture atomique du fichier geojson/{trace_id}.geojson.
-    let geojson_dir = get_geojson_dir(mode_dir)?;
-    let geojson_path = geojson_dir.join(format!("{}.geojson", trace_id));
+    // Écriture atomique du fichier `traces/{trace_id}/trace.geojson`.
+    let geojson_path = get_geojson_path(mode_dir, trace_id);
     let geojson_tmp = geojson_path.with_extension("geojson.tmp");
     let geojson_content = serde_json::to_string_pretty(&feature)
         .map_err(|e| format!("Sérialisation GeoJSON : {}", e))?;
@@ -1069,9 +1113,9 @@ fn rebuild_geometry_from_gpx(
 
 /// Retourne la Feature LineString GeoJSON d'une trace par son identifiant.
 ///
-/// Lit le fichier `{mode_dir}/geojson/{trace_id}.geojson` généré à l'import.
-/// Si ce fichier manque (trace importée avant l'existence du dossier `geojson/`),
-/// il est régénéré automatiquement depuis le GPX original, puis mis en cache.
+/// Lit le fichier `{mode_dir}/traces/{trace_id}/trace.geojson` généré à
+/// l'import. Si ce fichier manque, il est régénéré automatiquement depuis le
+/// GPX original, puis mis en cache.
 /// Le `properties.id` de la Feature correspond à l'UUID de la trace.
 #[tauri::command]
 pub async fn get_trace_geometry(
@@ -1094,10 +1138,9 @@ pub async fn get_trace_geometry(
     }
 
     // Cas de migration : le fichier manque, on le régénère depuis le GPX.
-    let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
     let registry = load_registry(&traces_path);
-    let geometry = rebuild_geometry_from_gpx(&mode_dir, &gpx_dir, &registry, &trace_id)?;
+    let geometry = rebuild_geometry_from_gpx(&mode_dir, &registry, &trace_id)?;
 
     Ok(TraceGeometry {
         id: trace_id,
@@ -1120,7 +1163,6 @@ pub async fn get_trace_points(
     trace_id: String,
 ) -> Result<TracePoints, String> {
     let mode_dir = get_mode_dir(&app)?;
-    let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
     let registry = load_registry(&traces_path);
 
@@ -1130,8 +1172,8 @@ pub async fn get_trace_points(
         .find(|t| t.id == trace_id)
         .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
 
-    // Re-parser le GPX original.
-    let gpx_file = gpx_dir.join(&trace.filename);
+    // Re-parser le GPX original (dans le dossier de la trace).
+    let gpx_file = get_trace_gpx_path(&mode_dir, &trace_id, &trace.filename);
     if !gpx_file.exists() {
         return Err(format!(
             "Fichier GPX source introuvable pour la trace (id={}, fichier={:?})",
@@ -1158,8 +1200,9 @@ pub async fn get_trace_points(
 
 /// Sauvegarde un jeu de keyframes (sérialisé en JSON par le frontend).
 ///
-/// Le JSON est écrit dans `{mode_dir}/keyframes/{trace_id}_{ratio}.json` avec une
-/// écriture atomique (fichier tmp + rename), cohérente avec `save_registry`.
+/// Le JSON est écrit dans `{mode_dir}/traces/{trace_id}/keyframes_{ratio}.json`
+/// avec une écriture atomique (fichier tmp + rename), cohérente avec
+/// `save_registry`. Le dossier de la trace est créé si nécessaire.
 #[tauri::command]
 pub async fn save_keyframes(
     app: tauri::AppHandle,
@@ -1168,7 +1211,7 @@ pub async fn save_keyframes(
     keyframes_json: serde_json::Value,
 ) -> Result<(), String> {
     let mode_dir = get_mode_dir(&app)?;
-    let _dir = get_keyframes_dir(&mode_dir)?; // crée le dossier si nécessaire
+    get_trace_dir(&mode_dir, &trace_id)?; // crée le dossier de la trace
     let path = get_keyframes_path(&mode_dir, &trace_id, &viewport_aspect);
 
     let tmp_path = path.with_extension("json.tmp");
@@ -1224,4 +1267,116 @@ pub async fn delete_keyframes(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Dossier temporaire isolé pour un test (nettoyé au préalable).
+    fn test_mode_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("vg2_{}_{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn make_trace(id: &str, filename: &str) -> TraceMetadata {
+        TraceMetadata {
+            id: id.to_string(),
+            name: "Test trace".to_string(),
+            source: "gpx".to_string(),
+            source_url: None,
+            activity_type: None,
+            filename: filename.to_string(),
+            import_date: "2026-01-01T00:00:00Z".to_string(),
+            stats: TraceStats {
+                start_point: Point3D { lat: 41.6, lon: 2.5, alt: None },
+                end_point: Point3D { lat: 41.7, lon: 2.6, alt: None },
+                distance_m: 1000.0,
+                positive_elevation_m: 0.0,
+                negative_elevation_m: 0.0,
+                alt_min_m: None,
+                alt_max_m: None,
+                points_count: 2,
+                duration_s: None,
+            },
+            hash: "sha256:test".to_string(),
+            favorite: false,
+            is_displayed: false,
+            cleaning_status: "needs_review".to_string(),
+            cleaning_phase: "spike".to_string(),
+        }
+    }
+
+    /// La migration déplace chaque fichier de l'ancien agencement plat vers le
+    /// dossier de la trace, puis retire les anciens dossiers vides.
+    #[test]
+    fn migrate_mode_storage_moves_files_to_trace_dir() {
+        let mode = test_mode_dir("migrate");
+        let id = "abc-123";
+        let gpx_name = "2024_ma_route.gpx";
+
+        // Ancien agencement.
+        fs::create_dir_all(mode.join("gpx")).unwrap();
+        fs::create_dir_all(mode.join("geojson")).unwrap();
+        fs::create_dir_all(mode.join("keyframes")).unwrap();
+        fs::create_dir_all(mode.join("cleaning")).unwrap();
+        fs::write(mode.join("gpx").join(gpx_name), "gpx").unwrap();
+        fs::write(mode.join("gpx").join(format!("{}.gpx.orig", gpx_name)), "orig").unwrap();
+        fs::write(mode.join("geojson").join(format!("{}.geojson", id)), "geo").unwrap();
+        fs::write(mode.join("keyframes").join(format!("{}_169.json", id)), "k169").unwrap();
+        fs::write(mode.join("keyframes").join(format!("{}_43.json", id)), "k43").unwrap();
+        fs::write(mode.join("cleaning").join(format!("{}.spike.json", id)), "w1").unwrap();
+        fs::write(mode.join("cleaning").join(format!("{}.spike.decisions.json", id)), "d1").unwrap();
+
+        // Registre.
+        let registry = vec![make_trace(id, gpx_name)];
+        let traces_path = mode.join("traces.json");
+        fs::write(&traces_path, serde_json::to_string(&registry).unwrap()).unwrap();
+
+        migrate_mode_storage(&mode).unwrap();
+
+        let td = mode.join("traces").join(id);
+        assert_eq!(fs::read_to_string(td.join(gpx_name)).unwrap(), "gpx");
+        assert_eq!(fs::read_to_string(td.join(format!("{}.gpx.orig", gpx_name))).unwrap(), "orig");
+        assert_eq!(fs::read_to_string(td.join("trace.geojson")).unwrap(), "geo");
+        assert_eq!(fs::read_to_string(td.join("keyframes_169.json")).unwrap(), "k169");
+        assert_eq!(fs::read_to_string(td.join("keyframes_43.json")).unwrap(), "k43");
+        assert_eq!(fs::read_to_string(td.join("cleaning.spike.json")).unwrap(), "w1");
+        assert_eq!(fs::read_to_string(td.join("cleaning.spike.decisions.json")).unwrap(), "d1");
+        // Anciens dossiers retirés (vides).
+        for d in ["gpx", "geojson", "keyframes", "cleaning"] {
+            assert!(!mode.join(d).exists(), "{} devrait avoir été retiré", d);
+        }
+        // traces.json reste au niveau du mode.
+        assert!(traces_path.exists());
+    }
+
+    /// La migration est **idempotente** : un second appel ne fait rien (et ne
+    /// casse pas les fichiers déjà en place).
+    #[test]
+    fn migrate_mode_storage_is_idempotent() {
+        let mode = test_mode_dir("migrate_idem");
+        let id = "def-456";
+        let gpx_name = "trace.gpx";
+
+        fs::create_dir_all(mode.join("gpx")).unwrap();
+        fs::create_dir_all(mode.join("geojson")).unwrap();
+        fs::write(mode.join("gpx").join(gpx_name), "gpx").unwrap();
+        fs::write(mode.join("geojson").join(format!("{}.geojson", id)), "geo").unwrap();
+        let registry = vec![make_trace(id, gpx_name)];
+        fs::write(mode.join("traces.json"), serde_json::to_string(&registry).unwrap()).unwrap();
+
+        migrate_mode_storage(&mode).unwrap();
+        migrate_mode_storage(&mode).unwrap();
+
+        let td = mode.join("traces").join(id);
+        assert_eq!(fs::read_to_string(td.join(gpx_name)).unwrap(), "gpx");
+        assert_eq!(fs::read_to_string(td.join("trace.geojson")).unwrap(), "geo");
+    }
 }

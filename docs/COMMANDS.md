@@ -84,7 +84,7 @@ pub struct ModeInfo {
 |---|---|---|
 | `import_gpx_file` | `async (app) -> Result<TraceMetadata, String>` | Sélecteur natif, parse, hash, copie, stats, màj registre. |
 | `get_traces` | `async (app) -> Result<Vec<TraceMetadata>, String>` | Liste les traces du mode actif depuis `traces.json`. |
-| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les **deux** fichiers keyframes (`_169`/`_43`, + l'ancien non suffixé) + les fichiers de travail `cleaning/{id}.*.json` (toutes phases, + ancien nom non suffixé) + le backup `{filename}.gpx.orig` + l'entrée du registre (écriture atomique). |
+| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le **dossier entier** `traces/{trace_id}/` (GPX, backup `.orig`, GeoJSON, keyframes, nettoyage) + l'entrée du registre (écriture atomique). |
 | `update_trace` | `async (app, trace_id, favorite: Option<bool>, is_displayed: Option<bool>) -> Result<(), String>` | Mise à jour partielle (PATCH) d'une trace. Seuls les champs `Some(...)` sont modifiés. |
 | `get_trace_geometry` | `async (app, trace_id) -> Result<TraceGeometry, String>` | Géométrie GeoJSON d'une trace (lu depuis le cache, ou régénéré depuis le GPX en cas de migration). |
 | `get_trace_points` | `async (app, trace_id) -> Result<TracePoints, String>` | Points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX original à la demande). |
@@ -99,7 +99,7 @@ pub struct ModeInfo {
 | Commande | Signature Rust | Retour |
 |---|---|---|
 | `detect_trace_anomalies` | `async (app, trace_id, phase: String, tolerance_deg: f64, roundabout_params: Option<RoundaboutParams>) -> Result<Vec<CleaningCase>, String>` | Détecte les anomalies de la **phase** demandée sur le GPX courant (étape 1 : rebroussements ~180° ; étape 2 : ronds-points — cumul d'angle). Aucune persistance. |
-| `get_cleaning_state` | `async (app, trace_id, phase: String, tolerance_deg: f64, roundabout_params: Option<RoundaboutParams>) -> Result<CleaningState, String>` | État de nettoyage de la phase : fichier de travail `cleaning/{trace_id}.{phase}.json` s'il est **valide** (phase cohérente), sinon détection fraîche. Un fichier illisible/invalide/d'une autre phase est ignoré (re-détection). |
+| `get_cleaning_state` | `async (app, trace_id, phase: String, tolerance_deg: f64, roundabout_params: Option<RoundaboutParams>) -> Result<CleaningState, String>` | État de nettoyage de la phase : fichier de travail `traces/{trace_id}/cleaning.{phase}.json` s'il est **valide** (phase cohérente), sinon détection fraîche. Un fichier illisible/invalide/d'une autre phase est ignoré (re-détection). |
 | `save_cleaning_state` | `async (app, trace_id, phase: String, state_json: Value) -> Result<(), String>` | Sauvegarde partielle de la phase (écriture atomique) ; passe en `"in_progress"`, mémorise `cleaning_phase`. Le GPX reste intact. |
 | `reset_cleaning` | `async (app, trace_id) -> Result<(), String>` | Abandonne les corrections (tous les fichiers de travail) et repasse à l'étape 1, `"needs_review"`. |
 | `validate_phase` | `async (app, trace_id, phase: String, state_json: Value) -> Result<TraceMetadata, String>` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `{filename}.gpx.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`). Refuse tant qu'un cas est `"pending"` ; refuse l'étape 3 (non implémentée). Sans correction → avancement de phase sans réécriture. |

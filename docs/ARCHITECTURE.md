@@ -417,7 +417,7 @@ src-tauri/
 - `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
-- `cleaning.rs` : Pipeline de nettoyage en 3 étapes (étape 1 combinée pts hors trace + aller-retours, ronds-points, aller/retour à venir) — `detect_anomalies`/`detect_roundabouts`/`detect_cases_for_phase`, persistance par phase (`cleaning/{trace_id}.{phase}.json` + décisions), validation d'étape (GPX réécrit + backup + régénération geojson/stats/hash)
+- `cleaning.rs` : Pipeline de nettoyage en 3 étapes (étape 1 combinée pts hors trace + aller-retours, ronds-points, aller/retour à venir) — `detect_anomalies`/`detect_roundabouts`/`detect_cases_for_phase`, persistance par phase (`traces/{trace_id}/cleaning.{phase}.json` + décisions), validation d'étape (GPX réécrit + backup + régénération geojson/stats/hash)
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -748,7 +748,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 1. **Backend Rust** (`src-tauri/src/import_gpx.rs`) :
    - Le sélecteur de fichier natif est ouvert via le plugin `tauri-plugin-dialog` (pas d'API Tauri 1.x).
    - Le parsing utilise le crate `gpx` (version 0.10) et les calculs géodésiques le crate `geo` (Haversine).
-   - Les données sont stockées dans le **dossier du mode d'exécution actif** : `{app_data_dir}/{active_mode}/gpx/` pour les fichiers et `{app_data_dir}/{active_mode}/traces.json` pour le registre.
+   - Les données sont stockées dans le **dossier du mode d'exécution actif** : **un dossier par trace** `{app_data_dir}/{active_mode}/traces/{trace_id}/` (GPX, GeoJSON, keyframes, nettoyage) + `traces.json` pour le registre. La migration depuis l'ancien agencement plat (`gpx/`, `geojson/`, `keyframes/`, `cleaning/`) est automatique au premier accès au mode (`migrate_mode_storage`).
    - Le registre est sauvegardé avec une **écriture atomique** (fichier `.tmp` + `rename`).
    - Les doublons sont détectés par **empreinte SHA256** du contenu binaire.
 
@@ -817,7 +817,7 @@ Posés **à l'import** : détection de l'**étape 1** (points hors trace) → `"
    - **Import** : `detect_all_phases_from_gpx` (spikes + ronds-points + aller-retours) — la trace est signalée « à nettoyer » dès qu'une anomalie existe, quelle que soit son étape.
    - **Tolérance de cap** : `Nettoyage.Cap.toleranceDeg` (défaut 5.0), lue via `read_tolerance_deg` (repli 5°, jamais de panic).
    - **Paramètres ronds-points** : groupe `Nettoyage.RondPoints` — `angleMinDeg` (5), `pointsMin` (5), `pointsMax` (50), `angleSeuilDeg` (210), `margePoints` (5, points de contexte avant/après le segment). Transmis au backend par le frontend (`RoundaboutParams`).
-   - **Persistance par phase** : fichier de travail `{mode}/cleaning/{trace_id}.{phase}.json` (écriture atomique) — les index de cas sont propres à la version du GPX traitée. Chaque cas porte `pending` / `corrected` / `kept`, plages de suppression et points **déplacés** (`MovedPoint`). **Décisions mémorisées** : à la validation d'étape, les cas « faux positif » (sans modification effective) sont persistés dans `cleaning/{trace_id}.{phase}.decisions.json` (coordonnée représentative + état) ; à la re-détection d'une étape déjà validée, les cas dont la zone correspond (~40 m) sont **re-marqués automatiquement**.
+   - **Persistance par phase** : fichier de travail `{mode}/traces/{trace_id}/cleaning.{phase}.json` (écriture atomique) — les index de cas sont propres à la version du GPX traitée. Chaque cas porte `pending` / `corrected` / `kept`, plages de suppression et points **déplacés** (`MovedPoint`). **Décisions mémorisées** : à la validation d'étape, les cas « faux positif » (sans modification effective) sont persistés dans `traces/{trace_id}/cleaning.{phase}.decisions.json` (coordonnée représentative + état) ; à la re-détection d'une étape déjà validée, les cas dont la zone correspond (~40 m) sont **re-marqués automatiquement**.
    - **Cycle de vie** : à l'import `needs_review` + étape 1 ; à chaque **validation d'étape** (`validate_phase`), les corrections de la phase sont appliquées et le **GPX est réécrit** (entrée de l'étape suivante) ; `cleaning_phase` avance (`spike → roundabout → out_and_back`) et la trace **reste `needs_review`** tant que l'étape 3 n'est pas implémentée. **Auto-validation** : une étape sans anomalie est validée automatiquement (avancement de phase sans réécriture).
    - **Backup `.orig`** : pris **une seule fois** à l'étape 1 (`{filename}.gpx.orig`, jamais écrasé) ; dérivés (geojson, stats, hash) régénérés à chaque réécriture.
 
@@ -845,7 +845,7 @@ Posés **à l'import** : détection de l'**étape 1** (points hors trace) → `"
 | Commande | Description |
 |----------|-------------|
 | `detect_trace_anomalies(trace_id, phase, tolerance_deg, roundabout_params?)` | Détecte les anomalies de la **phase** demandée sur le GPX courant (aucune persistance). |
-| `get_cleaning_state(trace_id, phase, tolerance_deg, roundabout_params?)` | Fichier de travail `cleaning/{trace_id}.{phase}.json` s'il est valide (phase cohérente), sinon détection fraîche **fusionnée avec les décisions mémorisées** (`{phase}.decisions.json` — faux positifs re-marqués). |
+| `get_cleaning_state(trace_id, phase, tolerance_deg, roundabout_params?)` | Fichier de travail `traces/{trace_id}/cleaning.{phase}.json` s'il est valide (phase cohérente), sinon détection fraîche **fusionnée avec les décisions mémorisées** (`{phase}.decisions.json` — faux positifs re-marqués). |
 | `save_cleaning_state(trace_id, phase, state_json)` | Sauvegarde partielle (écriture atomique), passe en `"in_progress"`, mémorise la phase. |
 | `reset_cleaning(trace_id)` | Abandonne les corrections (toutes phases, **y compris les décisions**) et repasse à l'étape 1, `"needs_review"`. |
 | `validate_phase(trace_id, phase, state_json)` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`) et **persiste les faux positifs** dans `{phase}.decisions.json`. Refuse tant qu'un cas est `pending` ; refuse l'étape 3 (non implémentée). Sans correction → simple avancement de phase. |
@@ -935,10 +935,9 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 ├── .env                     # Mode actif (APP_ENV_DEV / APP_ENV_PROD)
 ├── ModeExe.toml             # Définition des modes
 └── {active_mode}/           # Ex : OPE, EVAL_essai
-    ├── gpx/                 # Fichiers .gpx copiés (nom unique si doublon)
     ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
-    ├── keyframes/           # Keyframes persistés (un {trace_id}.json par trace)
-    ├── cleaning/            # Travail de nettoyage (un {trace_id}.json par trace en cours)
+    ├── traces/              # Un dossier par trace (le dossier est le discriminant)
+    │   └── {trace_id}/      #   gpx, .gpx.orig, trace.geojson, keyframes_*, cleaning.*
     ├── config-dev.toml      # Surcharges de paramètres (dev)
     └── config.toml          # Surcharges de paramètres (prod)
 ```
