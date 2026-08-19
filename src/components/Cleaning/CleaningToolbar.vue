@@ -104,8 +104,9 @@ const traceName = computed(() => {
   return t ? t.name : '…'
 })
 
-/** Étape 3 atteinte → rien à valider (bouton désactivé). */
-const canValidate = computed(() => cleaning.allValidated)
+/** Étape affichée validable ? (étape courante du pipeline, tous cas validés —
+ * on ne re-valide jamais une étape déjà franchie). */
+const canValidate = computed(() => cleaning.canValidatePhase)
 
 const currentPhaseNum = computed(
   () => CLEANING_PHASES.find(p => p.id === cleaning.currentPhase)?.num ?? 1,
@@ -119,6 +120,9 @@ const validateLabel = computed(() => {
 const validateTitle = computed(() => {
   if (cleaning.currentPhase === 'out_and_back') {
     return 'Étape « Aller/Retour » non implémentée : elle produira un autre type de fichier'
+  }
+  if (cleaning.phaseValidated(cleaning.currentPhase)) {
+    return 'Cette étape a déjà été validée — aucune nouvelle validation nécessaire (revenir à l\'étape courante)'
   }
   if (cleaning.allValidated) {
     return 'Appliquer les corrections de cette étape, enregistrer le GPX et passer à l\'étape suivante'

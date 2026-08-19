@@ -4,7 +4,7 @@
       <v-chip
         class="phase-step"
         :color="chipColor(p)"
-        :variant="p.id === cleaning.currentPhase ? 'flat' : 'tonal'"
+        :variant="isCurrent(p) ? 'flat' : 'tonal'"
         size="small"
         :disabled="!canClick(p)"
         :title="chipTitle(p)"
@@ -33,13 +33,15 @@
 /**
  * Widget « boîte à états » de la barre d'outils du nettoyage : affiche les
  * 3 étapes du pipeline (Pts hors trace → Rond-Points → Aller/Retour) avec
- * leur validité (✓ validée / ✗ à faire), l'étape courante surlignée, et
- * permet de naviguer entre elles.
+ * leur validité (✓ validée / ✗ à faire), l'étape **courante du pipeline**
+ * surlignée, et permet de naviguer entre elles.
  *
  * Règles :
- * - l'étape 3 « Aller/Retour » n'est **pas cliquable** (non implémentée —
- *   elle produira un autre type de fichier, pas une modification du GPX) ;
- * - pour atteindre une étape, l'étape précédente doit être validée.
+ * - navigation **séquentielle** : une étape n'est cliquable que si l'étape
+ *   précédente est validée (l'étape 3, emplacement seul, devient cliquable une
+ *   fois l'étape 2 validée — pour revenir à l'étape courante) ;
+ * - l'étape 3 « Aller/Retour » n'est **pas implémentée** : elle produira un
+ *   autre type de fichier, pas une modification du GPX.
  */
 import { useCleaningStore, CLEANING_PHASES, type CleaningPhaseDef } from '../../stores/cleaning'
 
@@ -51,27 +53,35 @@ function phaseValidated(p: CleaningPhaseDef): boolean {
   return cleaning.phaseValidated(p.id)
 }
 
-/** Étape cliquable ? (pas l'étape 3 ; navigation séquentielle.) */
+/** Étape cliquable ? (navigation séquentielle : précédente validée.) */
 function canClick(p: CleaningPhaseDef): boolean {
-  if (p.id === 'out_and_back') return false
   if (p.id === 'roundabout') return cleaning.phaseValidated('spike')
+  if (p.id === 'out_and_back') return cleaning.phaseValidated('roundabout')
   return true
 }
 
+/** L'étape courante du pipeline est surlignée (même quand on consulte une
+ * étape déjà franchie). */
+function isCurrent(p: CleaningPhaseDef): boolean {
+  return p.id === cleaning.pipelinePhase
+}
+
 function chipColor(p: CleaningPhaseDef): string {
-  if (p.id === cleaning.currentPhase) return 'primary'
+  if (isCurrent(p)) return 'primary'
   if (phaseValidated(p)) return 'green'
   return 'grey-darken-1'
 }
 
 function chipTitle(p: CleaningPhaseDef): string {
   if (p.id === 'out_and_back') {
-    return 'Étape « Aller/Retour » à venir : produira un autre type de fichier (pas une modification du GPX)'
+    return cleaning.phaseValidated('roundabout')
+      ? 'Revenir à l\'étape 3 « Aller/Retour » (à venir — produira un autre type de fichier)'
+      : 'Étape « Aller/Retour » à venir : produira un autre type de fichier (pas une modification du GPX)'
   }
   if (phaseValidated(p)) {
     return `Étape ${p.num} validée — cliquer pour revoir la détection sur le GPX courant`
   }
-  if (p.id === cleaning.currentPhase) return `Étape ${p.num} en cours`
+  if (isCurrent(p)) return `Étape ${p.num} en cours`
   return `Aller à l'étape ${p.num}`
 }
 </script>

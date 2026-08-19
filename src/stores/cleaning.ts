@@ -328,14 +328,22 @@ export const useCleaningStore = defineStore('cleaning', () => {
   /**
    * Navigue vers une **étape précise** du pipeline (widget de la toolbar), sans
    * auto-validation : la détection de cette étape sur le GPX courant est
-   * affichée telle quelle. L'étape 3 (Aller/Retour) n'est pas cliquable.
+   * affichée telle quelle. L'étape 3 (Aller/Retour) n'affiche que son
+   * emplacement (état vide, aucune détection).
    */
   async function goToPhase(phase: CleaningPhaseId) {
     const id = selectedTraceId.value
-    if (!id || phase === 'out_and_back') return
+    if (!id) return
     loading.value = true
     try {
       await readParams()
+      if (phase === 'out_and_back') {
+        // Étape 3 : emplacement seul — état vide.
+        currentPhase.value = phase
+        state.value = { trace_id: id, tolerance_deg: toleranceDeg.value, phase, cases: [] }
+        currentCaseIndex.value = 0
+        return
+      }
       const pts = await tracesStore.getTracePoints(id)
       points.value = pts.map(p => ({ lat: p.lat, lon: p.lon, alt: p.alt }))
       const st = await invoke<CleaningState>('get_cleaning_state', {
@@ -360,6 +368,27 @@ export const useCleaningStore = defineStore('cleaning', () => {
     if (phaseId === 'roundabout') return tp === 'out_and_back'
     return false // étape 3 : jamais validée
   }
+
+  /**
+   * Phase **réelle** du pipeline (d'après `cleaning_phase` de la trace) : la
+   * première étape non encore validée. Distincte de `currentPhase` (l'étape
+   * affichée) quand l'utilisateur revient consulter une étape déjà franchie.
+   */
+  const pipelinePhase = computed<CleaningPhaseId>(() => {
+    for (const p of CLEANING_PHASES) {
+      if (!phaseValidated(p.id)) return p.id
+    }
+    return 'out_and_back'
+  })
+
+  /**
+   * L'étape affichée peut-elle être **validée** ? Il faut qu'elle soit l'étape
+   * courante du pipeline (pas déjà franchie) et que tous ses cas soient validés.
+   * On ne re-valide jamais une étape déjà validée.
+   */
+  const canValidatePhase = computed(
+    () => currentPhase.value !== 'out_and_back' && !phaseValidated(currentPhase.value) && allValidated.value,
+  )
 
   /**
    * Re-détecte la phase courante avec les paramètres actuels. Les cas **déjà
@@ -755,6 +784,8 @@ export const useCleaningStore = defineStore('cleaning', () => {
     allValidated,
     validatedCount,
     isDeletedCount,
+    pipelinePhase,
+    canValidatePhase,
     // Actions
     selectTrace,
     load,
