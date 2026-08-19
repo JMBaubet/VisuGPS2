@@ -249,7 +249,7 @@ Une trace n'est **valide** que si elle est « propre ». Les fichiers GPX édit�
 - aucune anomalie → `"clean"` ;
 - anomalies détectées → `"needs_review"`.
 
-Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/nettoyage`, et `EditionCamera.vue` redirige également vers `/nettoyage` (garde-fou). Le workflow de nettoyage (validation manuelle des cas, sauvegardes partielles dans `cleaning/{trace_id}.json`, finalisation avec GPX nettoyé + backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Nettoyage de trace GPX ».
+Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/nettoyage`, et `EditionCamera.vue` redirige également vers `/nettoyage` (garde-fou). Le workflow de nettoyage (3 étapes séquentielles, validation manuelle des cas, sauvegardes partielles par phase dans `cleaning/{trace_id}.{phase}.json`, validation d'étape avec GPX réécrit + backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Nettoyage de trace GPX ».
 
 ### 4.6 Structures de données Rust
 

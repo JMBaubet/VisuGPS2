@@ -57,7 +57,7 @@ pub fn run() {
             cleaning::get_cleaning_state,
             cleaning::save_cleaning_state,
             cleaning::reset_cleaning,
-            cleaning::finalize_cleaning
+            cleaning::validate_phase
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

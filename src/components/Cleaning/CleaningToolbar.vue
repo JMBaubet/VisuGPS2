@@ -14,14 +14,14 @@
 
     <v-spacer />
 
-    <!-- Progression de la validation -->
-    <span class="text-body-2 text-medium-emphasis mr-4">
-      Cas {{ currentIndex + 1 }}/{{ totalCases }} validés
-      <span class="font-weight-medium">{{ validatedCount }}</span>
-    </span>
+    <!-- Widget « boîte à états » : avancement des 3 étapes du pipeline -->
+    <CleaningPhaseStepper class="mr-4" />
 
-    <!-- Tolérance de cap (paramétrable, re-détection à la volée) -->
+    <!-- Tolérance de cap (détection des rebroussements — étapes 1 et 3).
+         Masquée en phase « Rond-Points » : la détection y dépend des
+         paramètres Nettoyage.RondPoints.* (réglables dans le drawer). -->
     <v-text-field
+      v-if="cleaning.currentPhase !== 'roundabout'"
       v-model="toleranceInput"
       label="Tolérance cap"
       suffix="°"
@@ -54,32 +54,28 @@
       prepend-icon="mdi-check-decagram"
       color="green"
       class="ml-1"
-      :disabled="!cleaning.allValidated"
-      :title="
-        cleaning.allValidated
-          ? 'Générer le GPX nettoyé et remplacer l\'original'
-          : 'Tous les cas doivent être validés avant la finalisation'
-      "
-      :loading="finalizing"
-      @click="emit('finalize')"
+      :disabled="!canValidate"
+      :title="validateTitle"
+      :loading="validating"
+      @click="emit('validate')"
     >
-      Finaliser
+      {{ validateLabel }}
     </v-btn>
   </v-app-bar>
 </template>
 
 <script setup lang="ts">
 /**
- * Barre d'outils de la vue de nettoyage : retour, nom de la trace, progression
- * de la validation, tolérance de cap (paramètre `Nettoyage.Cap.toleranceDeg`)
- * et actions Enregistrer / Réinitialiser / Finaliser.
- *
- * La **finalisation** (remplacement du GPX original) n'est possible que quand
- * l'utilisateur a validé **tous** les cas (bouton désactivé sinon).
+ * Barre d'outils de la vue de nettoyage : retour, nom de la trace, widget
+ * « boîte à états » (3 étapes du pipeline), tolérance de cap (étapes 1/3),
+ * et actions Enregistrer (sauvegarde partielle) / Réinitialiser /
+ * **Valider l'étape** (applique les corrections de la phase, réécrit le GPX
+ * et passe à l'étape suivante).
  */
 import { ref, computed } from 'vue'
-import { useCleaningStore } from '../../stores/cleaning'
+import { useCleaningStore, CLEANING_PHASES } from '../../stores/cleaning'
 import { useTracesStore } from '../../stores/traces'
+import CleaningPhaseStepper from './CleaningPhaseStepper.vue'
 
 const cleaning = useCleaningStore()
 const tracesStore = useTracesStore()
@@ -88,18 +84,18 @@ const props = withDefaults(
   defineProps<{
     /** État de chargement du bouton Enregistrer (piloté par la vue). */
     saving?: boolean
-    /** État de chargement du bouton Finaliser (piloté par la vue). */
-    finalizing?: boolean
+    /** État de chargement du bouton Valider l'étape (piloté par la vue). */
+    validating?: boolean
   }>(),
-  { saving: false, finalizing: false },
+  { saving: false, validating: false },
 )
-void props // exposé au template par nom (saving / finalizing)
+void props // exposé au template par nom (saving / validating)
 
 const emit = defineEmits<{
   (e: 'back'): void
   (e: 'save'): void
   (e: 'reset'): void
-  (e: 'finalize'): void
+  (e: 'validate'): void
 }>()
 
 /** Nom de la trace sélectionnée (pour le titre). */
@@ -108,9 +104,27 @@ const traceName = computed(() => {
   return t ? t.name : '…'
 })
 
-const totalCases = computed(() => cleaning.state?.cases.length ?? 0)
-const currentIndex = computed(() => cleaning.currentCaseIndex)
-const validatedCount = computed(() => cleaning.validatedCount)
+/** Étape 3 atteinte → rien à valider (bouton désactivé). */
+const canValidate = computed(() => cleaning.allValidated)
+
+const currentPhaseNum = computed(
+  () => CLEANING_PHASES.find(p => p.id === cleaning.currentPhase)?.num ?? 1,
+)
+
+const validateLabel = computed(() => {
+  if (cleaning.currentPhase === 'out_and_back') return 'Étape 3 à venir'
+  return `Valider l'étape ${currentPhaseNum.value}`
+})
+
+const validateTitle = computed(() => {
+  if (cleaning.currentPhase === 'out_and_back') {
+    return 'Étape « Aller/Retour » non implémentée : elle produira un autre type de fichier'
+  }
+  if (cleaning.allValidated) {
+    return 'Appliquer les corrections de cette étape, enregistrer le GPX et passer à l\'étape suivante'
+  }
+  return 'Tous les cas de cette étape doivent être validés avant de valider l\'étape'
+})
 
 /** Saisie locale de la tolérance (appliquée au change). */
 const toleranceInput = ref(String(cleaning.toleranceDeg))

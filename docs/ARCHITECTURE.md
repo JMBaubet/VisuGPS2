@@ -268,7 +268,7 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `gestionMode.rs` : Gestion des modes d'exécution (CRUD, sélection, fichier `.env`)
 - `settings.rs` : Système de paramètres de configuration (TOML, chiffrement des secrets)
 - `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces, points avec distance cumulée, persistance des keyframes)
-- `cleaning.rs` : Nettoyage de trace GPX (détection d'anomalies, persistance des décisions, finalisation)
+- `cleaning.rs` : Nettoyage en 3 étapes (pts hors trace, ronds-points, aller/retour), validation d.étape
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -331,7 +331,7 @@ src/
 │   ├── traces.ts     # Store des traces GPX importées
 │   ├── keyframes.ts  # Store de persistance des keyframes (loadKeyframes, saveKeyframes, clearKeyframes)
 │   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
-│   ├── cleaning.ts   # Store de la vue de nettoyage de trace (détection, corrections, finalisation)
+│   ├── cleaning.ts   # Store du nettoyage en 3 étapes (détections par phase, validation d.étape)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
 │   ├── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra (simple + délégation frustum)
@@ -366,7 +366,8 @@ src/
    │   │   ├── DistanceHud.vue      # Overlay — HUD distance parcourue/total (barre bas, orange)
    │   │   └── CameraEditor.vue     # Composant B — édition des keyframes (widgets manipulation directe)
 │   ├── Cleaning/     # Composants de la vue de nettoyage de trace
-│   │   ├── CleaningToolbar.vue    # Barre d'outils (retour accueil, titre trace, Enregistrer, Finaliser)
+│   │   ├── CleaningToolbar.vue    # Barre d'outils (retour, titre, widget étapes, tolérance, Enregistrer, Valider l'étape)
+│   │   ├── CleaningPhaseStepper.vue # Widget « boîte à états » (3 étapes ✓/✗, navigation séquentielle)
 │   │   ├── CleaningMap.vue        # Carte Mapbox — trace complète (verte), linestring corrigé (jaune), segment surligné, branches décalées, labels anti-revouvrement, points supprimés en rouge, drag direct des points (cas manuels)
 │   │   ├── CleaningCasesPanel.vue # Panneau (liste des cas + poubelle, bouton « Modifier un segment », validation « Valider » / « Faux positif », « Restaurer »)
 │   │   └── CleaningPointTable.vue # Table simplifiée des points (numéro, suppression, case d'en-tête tout suppr./remettre, indicateur « Déplacé »)
@@ -398,7 +399,7 @@ src-tauri/
 │   ├── gestionMode.rs    # Gestion des modes d'exécution
 │   ├── settings.rs       # Système de paramètres de configuration
 │   ├── import_gpx.rs     # Import de fichiers GPX
-│   ├── cleaning.rs       # Nettoyage de trace GPX (détection, persistance, finalisation)
+│   ├── cleaning.rs       # Nettoyage en 3 étapes (détections par phase, validation d'étape)
 │   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
 │   │   └── default.json  # Permissions pour les fenêtres
@@ -416,7 +417,7 @@ src-tauri/
 - `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
-- `cleaning.rs` : Détection d'anomalies (rebroussement ~180°), persistance des décisions (`cleaning/{trace_id}.json`), finalisation (GPX nettoyé + backup + régénération geojson/stats/hash)
+- `cleaning.rs` : Pipeline de nettoyage en 3 étapes (pts hors trace, ronds-points, aller/retour) — détections par phase (`detect_spikes`/`detect_roundabouts`/`detect_out_and_backs`), persistance par phase (`cleaning/{trace_id}.{phase}.json`), validation d'étape (GPX réécrit + backup + régénération geojson/stats/hash)
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -790,50 +791,63 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 ## Nettoyage de trace GPX (`/nettoyage`)
 
-Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946) ou **aller-retours inutiles** (ex. points 711/791) — détectables par un **changement de cap proche de 180°** au point de demi-tour. Une trace non « clean » ne peut **pas** entrer en édition caméra.
+Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946), **tours soutenus de rond-point** (plus d'un tour), ou **aller-retours inutiles** (ex. points 711/791). Le nettoyage est organisé en un **pipeline de 3 étapes séquentielles**, chacune avec sa détection, sa correction et sa validation :
 
-### État de nettoyage (`cleaning_status`)
+1. **Pts hors trace** (étape 1) — points isolés hors trace (rebroussement ~180°, branche courte). Correction = suppression → **modifie le GPX**.
+2. **Rond-Points** (étape 2) — tours soutenus (cumul d'angle de virage). Correction **manuelle** (suppression/déplacement des points dans la zone élargie d'une marge) → **modifie le GPX**.
+3. **Aller/Retour** (étape 3) — branches aller-retour avec retraçage. **Traitement et sortie différents** (produira un autre type de fichier, pas une modification du GPX) — **non implémentée** dans cette itération : simple emplacement dans la toolbar.
 
-`TraceMetadata` porte un champ `cleaning_status` (Rust + TS) : `"clean" | "needs_review" | "in_progress"`, défaut **`"clean"`** (`#[serde(default)]`, rétrocompatibilité avec les registres antérieurs). Il est posé **à l'import** : détection automatique des anomalies (§ ci-dessous) → `"needs_review"` si anomalies, sinon `"clean"`.
+Le seuil de longueur de branche (100 m) est une **heuristique interne** de la détection de rebroussement, **pas** un critère d'architecture entre les étapes 1 et 3 (types d'erreur distincts).
 
-**Blocage de l'édition caméra** : une trace non « clean » ne peut pas entrer dans la vue d'édition caméra. Le bouton Éditer de l'accueil (`Circuit.vue`) redirige vers `/nettoyage` ; `EditionCamera.vue` dispose d'un **garde-fou** qui redirige également vers `/nettoyage` au montage si `cleaning_status !== 'clean'`.
+### État de nettoyage (`cleaning_status` + `cleaning_phase`)
+
+`TraceMetadata` porte deux champs (Rust + TS) :
+- `cleaning_status` : `"clean" | "needs_review" | "in_progress"`, défaut **`"clean"`** (`#[serde(default)]`, rétrocompatibilité).
+- `cleaning_phase` : étape en cours — `"spike"`, `"roundabout"`, `"out_and_back"`, ou chaîne vide si la trace est propre. Normalisée au chargement du registre (`clean` → `""`, sinon → `"spike"` pour les registres antérieurs).
+
+Posés **à l'import** : détection de l'**étape 1** (points hors trace) → `"needs_review"` + `cleaning_phase = "spike"` si anomalies, sinon `"clean"`. **Blocage de l'édition caméra** : une trace non « clean » ne peut pas entrer dans la vue d'édition caméra (bouton Éditer de l'accueil et garde-fou d'`EditionCamera` redirigent vers `/nettoyage`). Tant que l'étape 3 n'existe pas, une trace **reste `needs_review`** même après les étapes 1 et 2 (comportement voulu).
 
 ### Architecture
 
 1. **Module backend** (`src-tauri/src/cleaning.rs`) :
-   - **Détection** : pour chaque point, le cap vers le point précédent et vers le point suivant sont comparés ; s'ils sont quasi identiques (différence ≤ tolérance), le point est un **rebroussement** (~180°). Les rebroussements proches (fenêtre de 25 index) sont regroupés en un **cas** ; la zone de déviation est délimitée par retraçage symétrique (points jumeaux aller/retour). Classification : branche courte (< 100 m) → `spike` (point isolé, suggestion : supprimer l'apex) ; sinon → `out_and_back` (suggestion : supprimer le demi-tour + le retour). Le type `manual` (créé par l'utilisateur) n'est jamais produit par la détection.
-   - **Tolérance paramétrable** : `Nettoyage.Cap.toleranceDeg` (float, défaut 5.0, min 1.0, max 20.0, step 0.5, unité `°`), lu via `read_tolerance_deg` (repli sur 5° si absent). Déclaré dans `src-tauri/settings.default.toml` avec l'entrée `[_meta.views.nettoyage]` (icône `mdi-broom`) et le groupe `[_meta.groups."Nettoyage.Cap"]` (« Nettoyage — Détection »).
-   - **Persistance des décisions** : fichier de travail `{mode}/cleaning/{trace_id}.json` (écriture atomique). Chaque cas porte un état de validation `pending` / `corrected` / `kept`, des plages de suppression et des points **déplacés** (`MovedPoint` : index original + nouvelles coordonnées — les index sont **originaux**).
-   - **Cycle de vie** : `needs_review` (anomalies à l'import) → `in_progress` (première sauvegarde partielle) → `clean` (finalisation). `reset_cleaning` ramène à `needs_review`.
-   - **Finalisation** : refuse tant que **tous** les cas ne sont pas validés ; applique les corrections (suppressions + déplacements), génère le **GPX nettoyé** (1.1, `<trkseg>` unique, lat/lon 6 décimales, altitude et timestamp préservés), sauvegarde l'original en **`{filename}.gpx.orig`** (une seule fois, jamais écrasé), régénère les dérivés (geojson, stats, hash) et supprime le fichier de travail.
+   - **Détections par phase** (les utilitaires `bearing`/`angle_distance`/`haversine` sont partagés) :
+     - `detect_spikes` / `detect_out_and_backs` : **rebroussements** ~180° (cap précédent ≈ cap suivant sous tolérance), regroupement en cas (fenêtre 25 index), zone délimitée par retraçage symétrique ; classification interne par longueur de branche (spike < 100 m / out_and_back sinon).
+     - `detect_roundabouts` : **portage de l'outil de référence** — cumul des virages (différence de cap normalisée [−180, 180]) tant que chaque virage ≥ `angleMinDeg` et que la fenêtre ≤ `pointsMax` ; cas retenu quand `|angle cumulé| > angleSeuilDeg` avec `pointsMin ≤ count ≤ pointsMax`. Produit un cas `roundabout` (`start_index`/`end_index` du tour, `total_angle_deg` signé → tours = `|angle|/360`, sens = signe).
+     - `detect_cases_for_phase` : dispatch par phase (`"roundabout"` → ronds-points, `"out_and_back"` → aller-retour, sinon étape 1).
+   - **Tolérance de cap** : `Nettoyage.Cap.toleranceDeg` (défaut 5.0), lue via `read_tolerance_deg` (repli 5°, jamais de panic).
+   - **Paramètres ronds-points** : groupe `Nettoyage.RondPoints` — `angleMinDeg` (5), `pointsMin` (5), `pointsMax` (50), `angleSeuilDeg` (210), `margePoints` (5, points de contexte avant/après le segment). Transmis au backend par le frontend (`RoundaboutParams`).
+   - **Persistance par phase** : fichier de travail `{mode}/cleaning/{trace_id}.{phase}.json` (écriture atomique) — les index de cas sont propres à la version du GPX traitée. Chaque cas porte `pending` / `corrected` / `kept`, plages de suppression et points **déplacés** (`MovedPoint`).
+   - **Cycle de vie** : à l'import `needs_review` + étape 1 ; à chaque **validation d'étape** (`validate_phase`), les corrections de la phase sont appliquées et le **GPX est réécrit** (entrée de l'étape suivante) ; `cleaning_phase` avance (`spike → roundabout → out_and_back`) et la trace **reste `needs_review`** tant que l'étape 3 n'est pas implémentée. **Auto-validation** : une étape sans anomalie est validée automatiquement (avancement de phase sans réécriture).
+   - **Backup `.orig`** : pris **une seule fois** à l'étape 1 (`{filename}.gpx.orig`, jamais écrasé) ; dérivés (geojson, stats, hash) régénérés à chaque réécriture.
 
 2. **Store Frontend** (`src/stores/cleaning.ts`) — Pattern Setup Store :
-   - Types miroir des structs Rust (`CleaningCaseKind`, `CleaningCase`, `Correction`, `MovedPoint`, `CleaningState`).
-   - État : `selectedTraceId`, `state` (détection + décisions), `points` (index GPX), `currentCaseIndex`, `toleranceDeg` + état UI éphémère `createMode` / `createStartIndex` / `movePointIndex`.
-   - Getters : `hasCases`, `currentCase`, `currentZone`, `correctedZoneCoords` (linestring corrigé : suppressions retirées, déplacements appliqués), `allValidated` (tous les cas ≠ `pending`), `validatedCount`, `isDeletedCount`.
-   - Actions : `load` (reprise du travail en cours via `get_cleaning_state`, sinon détection via `detect_trace_anomalies`), `reDetect`, validation manuelle des cas (« Valider » / « Faux positif » — la suppression suggérée est appliquée automatiquement à la validation), `toggleDeletePoint`/`addDeleteRange`/`clearCorrection`/`setZoneDeleted`/`isZoneFullyDeleted` (suppressions — `clearCorrection` **remet aussi le cas à « À traiter »**, même s'il était validé), `setMovedPoint`/`clearMovedPoint`/`startMovePoint`/`stopMovePoint` (déplacements), `toggleCreateMode`/`cancelCreate`/`createManualCase`/`removeCase` (cas manuels « Modification de segment », **supprimables même après validation**), `save` (sauvegarde partielle via `save_cleaning_state`, le GPX original reste intact), `finalize` (`finalize_cleaning`), `reset` (`reset_cleaning`).
+   - Types miroir des structs Rust (`CleaningCaseKind` avec `roundabout`, `CleaningCase` avec `total_angle_deg`, `CleaningState` avec `phase`, `Correction`, `MovedPoint`, `RoundaboutParams`) + définitions `CLEANING_PHASES` / `CLEANING_PHASE_NEXT`.
+   - État : `selectedTraceId`, `state`, `points`, `currentCaseIndex`, **`currentPhase`**, `toleranceDeg`, **`roundaboutParams`** + état UI éphémère `createMode` / `createStartIndex` / `movePointIndex`.
+   - Getters : `hasCases`, `currentCase`, `currentZone` / **`zoneStart` / `zoneEnd`** (zone **élargie de la marge** pour les ronds-points), `correctedZoneCoords`, `allValidated`, `validatedCount`, `isDeletedCount`.
+   - Actions : `load` (détection de la phase courante depuis `cleaning_phase` + **auto-validation des étapes vides**), `goToPhase` (navigation du widget, étape 3 exclue), `phaseValidated`, `reDetect`, validation manuelle des cas (« Valider » / « Faux positif »), `toggleDeletePoint`/`addDeleteRange`/`clearCorrection`/`setZoneDeleted`/`isZoneFullyDeleted` (suppressions, zone élargie), `setMovedPoint`/`clearMovedPoint`/`startMovePoint`/`stopMovePoint` (déplacements), `createManualCase`/`removeCase` (cas « Modification de segment », supprimables même après validation), `save` (sauvegarde partielle), **`validatePhase`** (ex-`finalize` : applique la phase, réécrit le GPX, avance la phase, recharge), `reset`.
 
 3. **Vue** (`src/views/Cleaning.vue`, route `/nettoyage`) :
    - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des cas + table des points + drawer Paramètres.
-   - Garde-fou : sans trace sélectionnée → retour à l'accueil. Détection de modifications non sauvegardées (dialog de retour), boutons **Enregistrer** (sauvegarde partielle) et **Finaliser** (actif uniquement quand tous les cas sont validés).
+   - Garde-fou : sans trace sélectionnée → retour à l'accueil. Détection de modifications non sauvegardées (dialog de retour), boutons **Enregistrer** (sauvegarde partielle) et **Valider l'étape** (actif quand tous les cas de la phase sont validés ; réécrit le GPX et passe à l'étape suivante).
 
 4. **Composants** (`src/components/Cleaning/`) :
-   - `CleaningToolbar.vue` : barre d'outils (retour accueil, titre « Nettoyage — {trace} », Enregistrer, Finaliser).
-   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte** (contexte global, bouton flottant « Trace complète » pour le cadrage), **segment courant** (zone du cas) surligné, **linestring corrigé** (ligne jaune à halo blanc : résultat réel des suppressions/déplacements, mis à jour en direct), branches **aller/retour** décalées perpendiculairement (`line-offset`) et colorées différemment pour les passages superposés, points numérotés (index GPX) **cliquables** avec **anti-revouvrement des labels** (positions **mémorisées par cas** : une fois affichés, les labels restent stables pour un clic fiable), points supprimés en **rouge**, **déplacement direct à la souris** des points des cas **manuels** (drag ; un simple clic bascule la suppression), **sélecteur des points proches du curseur** (liste cliquable des N° d'ordre, verrouillée après un clic ambigu, quand plusieurs points sont superposés), **mode « Modifier un segment »** (2 clics : début puis fin, snap au point de trace le plus proche).
-   - `CleaningCasesPanel.vue` : liste des anomalies (n°/total validés, type, écart de cap, zone) avec **poubelle rouge** par cas (supprimable : cas « Modification de segment » toujours, cas « Point hors trace » tant que non validés, cas « Aller-retour » **jamais** — ils se traitent via Valider / Faux positif), bouton **« Modifier un segment »** placé **sous la liste** (désignation d'un segment sur la carte) et validation de chaque cas (« Valider » / « Faux positif », avec **« Restaurer »** sur la même ligne — retire les corrections **et remet le cas à « À traiter »**, même s'il était validé).
-   - `CleaningPointTable.vue` : table **simplifiée** des points du segment courant (numéro, case de suppression, **case d'en-tête « tout supprimer / tout remettre »**, indicateur **« Déplacé »** cliquable pour annuler) — le déplacement se fait directement sur la carte, pas dans le tableau.
+   - `CleaningToolbar.vue` : barre d'outils (retour accueil, titre « Nettoyage — {trace} », **widget `CleaningPhaseStepper`**, tolérance de cap masquée en phase rond-point, Enregistrer, Réinitialiser, **Valider l'étape N**).
+   - `CleaningPhaseStepper.vue` : **boîte à états** des 3 étapes — pastilles `1 Pts hors trace` → `2 Rond-Points` → `3 Aller/Retour` reliées par `→`, badge **✓** (validée, verte) / **✗** (à faire), étape courante surlignée (primaire). Étape 3 **non cliquable** (à venir). Navigation séquentielle (une étape nécessite la précédente validée).
+   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte**, **segment courant** surligné (zone du cas, élargie de la marge pour les ronds-points), **linestring corrigé** (jaune), branches **aller/retour** décalées (`line-offset`), points numérotés **cliquables** avec anti-revouvrement, points supprimés en **rouge**, déplacement direct des points des cas manuels, sélecteur des points proches du curseur, mode « Modifier un segment ».
+   - `CleaningCasesPanel.vue` : liste des anomalies (n°/total validés, type, zone) avec **poubelle rouge** (cas « Modification de segment » toujours, « Point hors trace » et « Rond-point » tant que non validés, « Aller-retour » **jamais**), bouton **« Modifier un segment »**, affichage **« Angle cumulé · tours · sens »** pour les ronds-points (au lieu de « écart de cap »), validation « Valider » / « Faux positif » + « Restaurer ».
+   - `CleaningPointTable.vue` : table des points du segment courant (numéro, suppression avec case d'en-tête « tout supprimer / tout remettre », indicateur « Déplacé ») — la zone affichée est élargie de la marge pour les ronds-points.
 
-5. **Responsabilité de validation** : la détection est **propositive** — chaque cas (détecté ou « Modification de segment ») doit être **validé par l'utilisateur** (« Valider » ou « Faux positif ») avant de passer au suivant ; la **finalisation n'est possible que quand tous les cas sont validés**. Le GPX original n'est remplacé qu'à la finalisation.
+5. **Responsabilité de validation** : la détection est **propositive** — chaque cas de la phase doit être **validé par l'utilisateur** (« Valider » ou « Faux positif ») avant de passer au suivant ; la **validation d'étape** n'est possible que quand **tous** les cas de la phase sont validés. Le GPX n'est réécrit qu'à la validation de l'étape (et devient l'entrée de l'étape suivante).
 
 ### Commandes Tauri du module Nettoyage
 
 | Commande | Description |
 |----------|-------------|
-| `detect_trace_anomalies` | Re-parse le GPX original et retourne les anomalies détectées (aucune persistance). |
-| `get_cleaning_state` | Retourne le fichier de travail `cleaning/{trace_id}.json` s'il existe, sinon une détection fraîche. |
-| `save_cleaning_state` | Sauvegarde partielle du travail (écriture atomique) et passe la trace en `"in_progress"`. |
-| `reset_cleaning` | Abandonne les corrections en cours (supprime le fichier) et repasse en `"needs_review"`. |
-| `finalize_cleaning` | Applique les corrections validées, génère le GPX nettoyé + backup `.orig`, régénère geojson/stats/hash, repasse la trace en `"clean"`. Refuse tant que des cas sont `pending`. |
+| `detect_trace_anomalies(trace_id, phase, tolerance_deg, roundabout_params?)` | Détecte les anomalies de la **phase** demandée sur le GPX courant (aucune persistance). |
+| `get_cleaning_state(trace_id, phase, tolerance_deg, roundabout_params?)` | Fichier de travail `cleaning/{trace_id}.{phase}.json` s'il est valide (phase cohérente), sinon détection fraîche. |
+| `save_cleaning_state(trace_id, phase, state_json)` | Sauvegarde partielle (écriture atomique), passe en `"in_progress"`, mémorise la phase. |
+| `reset_cleaning(trace_id)` | Abandonne les corrections (toutes phases) et repasse à l'étape 1, `"needs_review"`. |
+| `validate_phase(trace_id, phase, state_json)` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`). Refuse tant qu'un cas est `pending` ; refuse l'étape 3 (non implémentée). Sans correction → simple avancement de phase. |
 
 ## Vue d'édition caméra (`/edition-camera`)
 
@@ -948,4 +962,4 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-08-18
+**Dernière mise à jour** : 2026-08-19

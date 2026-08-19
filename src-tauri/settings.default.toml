@@ -56,7 +56,7 @@ groups = ["Edition.Generation", "Edition.Camera", "Edition.Playback", "Edition.C
 [_meta.views.nettoyage]
 label = "Nettoyage"
 icon = "mdi-broom"
-groups = ["Nettoyage.Cap"]
+groups = ["Nettoyage.Cap", "Nettoyage.RondPoints"]
 
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
 # Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
@@ -103,6 +103,10 @@ icon = "mdi-palette"
 [_meta.groups."Nettoyage.Cap"]
 label = "Nettoyage — Détection"
 icon = "mdi-compass-outline"
+
+[_meta.groups."Nettoyage.RondPoints"]
+label = "Nettoyage — Rond-Points"
+icon = "mdi-rotate-360"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -511,6 +515,88 @@ max = 20.0
 step = 0.5
 unit = "°"
 icon = "mdi-compass-outline"
+
+# --- Étape 2 : détection des ronds-points (Nettoyage.RondPoints) -----------
+# Portage de l'algorithme de l'outil de référence (cumul de l'angle de virage
+# le long des points ; un rond-point est signalé quand l'angle cumulé dépasse
+# le seuil avec un nombre de points dans la fenêtre [pointsMin, pointsMax]).
+
+[Nettoyage.RondPoints.angleMinDeg]
+description = "Virage minimal par point pour prolonger la détection de rond-point"
+documentation = """
+Virage minimal (en degrés) entre deux segments consécutifs pour que la
+progression du tour se poursuive. En dessous de ce seuil, la séquence est
+considérée comme une ligne droite et la détection s'arrête.
+
+Plus la valeur est **faible**, plus la détection est **sensible** (les
+virages légers participent au cumul). Plus elle est élevée, plus seuls les
+tours marqués sont pris en compte.
+"""
+type = "float"
+default = 5.0
+min = 1.0
+max = 20.0
+step = 1.0
+unit = "°"
+icon = "mdi-rotate-360"
+
+[Nettoyage.RondPoints.pointsMin]
+description = "Nombre de points minimum pour un rond-point"
+documentation = """
+Nombre de points minimum d'une séquence pour être retenue comme rond-point.
+En dessous, une rotation courte (ex. un demi-tour) n'est pas signalée.
+"""
+type = "int"
+default = 5
+min = 2
+max = 20
+step = 1
+icon = "mdi-counter"
+
+[Nettoyage.RondPoints.pointsMax]
+description = "Nombre de points maximum (fenêtre de détection)"
+documentation = """
+Nombre de points maximum pris en compte pour une séquence. Au-delà, la
+détection s'arrête (une longue courbe n'est pas un rond-point).
+"""
+type = "int"
+default = 50
+min = 10
+max = 100
+step = 5
+icon = "mdi-counter"
+
+[Nettoyage.RondPoints.angleSeuilDeg]
+description = "Angle cumulé au-delà duquel un tour soutenu est signalé"
+documentation = """
+Angle cumulé (en degrés) au-delà duquel une rotation soutenue est considérée
+comme un **tour de rond-point** anormal. Le nombre de tours correspond à
+`|angle cumulé| / 360`.
+
+Défaut 210° : un tour soutenu de plus de ~½ tour est signalé (les cas où
+l'on fait plus d'un tour du rond-point sont naturellement détectés).
+"""
+type = "float"
+default = 210.0
+min = 180.0
+max = 720.0
+step = 30.0
+unit = "°"
+icon = "mdi-rotate-360"
+
+[Nettoyage.RondPoints.margePoints]
+description = "Nombre de points affichés avant/après le segment détecté"
+documentation = """
+Nombre de points de **contexte** affichés dans l'IHM **avant et après** le
+segment de rond-point détecté, pour permettre de supprimer ou de déplacer
+manuellement les points du tour excédentaire.
+"""
+type = "int"
+default = 5
+min = 0
+max = 30
+step = 1
+icon = "mdi-select-multiple"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.

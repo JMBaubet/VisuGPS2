@@ -104,11 +104,15 @@ const current = computed(() => cleaning.currentCase)
 /** Points de la zone du cas courant (avec leur index original implicite). */
 const zone = computed(() => cleaning.currentZone)
 
-/** Lignes du tableau : index original + identifiant affiché. */
+/** Lignes du tableau : index original + identifiant affiché. La zone peut être
+ * élargie de la marge (ronds-points) — les index se déduisent de `zoneStart`. */
 const items = computed(() => {
   const c = cleaning.currentCase
   if (!c) return []
-  return zone.value.map((_, idx) => ({ i: c.start_index + idx, id: c.start_index + idx + 1 }))
+  return zone.value.map((_, idx) => ({
+    i: cleaning.zoneStart + idx,
+    id: cleaning.zoneStart + idx + 1,
+  }))
 })
 
 const headers = [

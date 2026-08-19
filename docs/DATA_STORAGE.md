@@ -111,14 +111,17 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "hash": "sha256:91a5d3aa7185523b717b4169884d6ee48afa613cd10c0a9bdae75d18a900becb",
     "favorite": false,
     "is_displayed": false,
-    "cleaning_status": "clean"
+    "cleaning_status": "needs_review",
+    "cleaning_phase": "spike"
   }
 ]
 ```
 
 **Statut de nettoyage** (`cleaning_status`) : `"clean"` (aucune anomalie détectée ou trace déjà nettoyée), `"needs_review"` (anomalies détectées à l'import, corrections en attente), `"in_progress"` (corrections commencées, fichier de travail présent). Une trace non `"clean"` **n'est pas candidate** à l'édition caméra (la vue `/nettoyage` est présentée à la place).
 
-**Rétrocompatibilité** : les champs `favorite` et `is_displayed` ont `#[serde(default)]` et `cleaning_status` a `#[serde(default = "default_cleaning_status")]` en Rust. Un `traces.json` antérieur (sans ces champs) se charge avec `false`/`false`/`"clean"` sans erreur. En complément, `load_registry` **normalise** toute chaîne vide en `"clean"` (registres intermédiaires ou corrompus).
+**Phase de nettoyage** (`cleaning_phase`) : étape du pipeline en cours — `"spike"` (pts hors trace), `"roundabout"` (ronds-points), `"out_and_back"` (aller/retour, étape 3 à venir), ou `""` quand la trace est propre. Posée à l'import (`"spike"` si anomalies) et avancée à chaque **validation d'étape** (`validate_phase`). Tant que l'étape 3 n'est pas implémentée, une trace **reste `needs_review`** même après les étapes 1 et 2.
+
+**Rétrocompatibilité** : les champs `favorite` et `is_displayed` ont `#[serde(default)]`, `cleaning_status` a `#[serde(default = "default_cleaning_status")]` et `cleaning_phase` a `#[serde(default)]` en Rust. Un `traces.json` antérieur se charge sans erreur. En complément, `load_registry` **normalise** toute chaîne vide en `"clean"` et déduit `cleaning_phase` : `""` pour une trace « clean », sinon `"spike"` (re-détection en chaîne).
 
 ### `geojson/{uuid}.geojson` — LineString GeoJSON
 
@@ -148,37 +151,39 @@ Verrous et marques sont réinitialisés à la régénération des keyframes.
 Le backend traite le JSON de manière transparente (`serde_json::Value`), sans validation structurelle côté Rust.
 Écriture atomique (tmp + rename). Le dossier `keyframes/` est créé automatiquement à la première sauvegarde.
 
-> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), les deux fichiers keyframes (`{uuid}_169.json` et `{uuid}_43.json`, plus l'ancien `{uuid}.json` non suffixé des versions antérieures) sont supprimés en même temps que le `.gpx`, le `.geojson`, le fichier de travail `cleaning/{uuid}.json` et le backup `{filename}.gpx.orig`.
+> **Suppression en cascade** : quand une trace est supprimée (`delete_trace`), les deux fichiers keyframes (`{uuid}_169.json` et `{uuid}_43.json`, plus l'ancien `{uuid}.json` non suffixé des versions antérieures) sont supprimés en même temps que le `.gpx`, le `.geojson`, les fichiers de travail `cleaning/{uuid}.*.json` (toutes phases + ancien nom non suffixé) et le backup `{filename}.gpx.orig`.
 
-### `cleaning/{uuid}.json` — Fichier de travail du nettoyage
+### `cleaning/{uuid}.{phase}.json` — Fichiers de travail du nettoyage (par étape)
 
-Décisions de correction d'une trace, persistées à chaque **sauvegarde partielle** (commande `save_cleaning_state`, écriture atomique tmp + rename). Le GPX original reste **intact** tant que la finalisation n'a pas eu lieu.
+Décisions de correction d'une trace, persistées à chaque **sauvegarde partielle** de la phase (commande `save_cleaning_state`, écriture atomique tmp + rename). **Un fichier par phase** (`{trace_id}.spike.json`, `{trace_id}.roundabout.json`, `{trace_id}.out_and_back.json`) : les index de cas sont propres à la version du GPX traitée, donc re-créés à chaque étape. Le GPX reste **intact** tant que la phase n'est pas validée.
 
 ```json
 {
   "trace_id": "cd9e49cb-…",
   "tolerance_deg": 5.0,
+  "phase": "roundabout",
   "cases": [
     {
-      "id": "c1",
-      "kind": "out_and_back",
-      "start_index": 710,
-      "end_index": 790,
-      "apex_indices": [710],
-      "bearing_delta_deg": 0.0,
-      "suggested_delete_ranges": [[710, 790]],
+      "id": "rp1",
+      "kind": "roundabout",
+      "start_index": 4100,
+      "end_index": 4115,
+      "apex_indices": [],
+      "bearing_delta_deg": 450.0,
+      "total_angle_deg": 450.0,
+      "suggested_delete_ranges": [],
       "state": "corrected",
-      "correction": { "delete_ranges": [[710, 790]], "moved_points": [{ "index": 4100, "lat": 41.58477, "lon": 2.54636 }] }
+      "correction": { "delete_ranges": [[4103, 4112]], "moved_points": [] }
     }
   ]
 }
 ```
 
-- `state` : `"pending"` (à traiter), `"corrected"` (corrigé par l'utilisateur), `"kept"` (conservé tel quel — faux positif). La **validation de chaque cas est de la responsabilité de l'utilisateur**.
-- `correction.delete_ranges` : plages d'index **originaux** à supprimer ; `correction.moved_points` : points dont les coordonnées sont **remplacées** (déplacement géographique, ex. remettre la trace sur la bonne route).
-- Les cas `manual` (« Modification de segment », créés via le bouton éponyme sous la liste) sont persistés comme les autres et peuvent être supprimés **même après validation** (avant finalisation).
-- La présence du fichier pose `cleaning_status = "in_progress"`.
-- À la **finalisation** (`finalize_cleaning`), le GPX original est remplacé par la version nettoyée, l'original est sauvegardé en `{filename}.gpx.orig`, les dérivés (geojson, stats, hash) sont régénérés, la trace passe en `"clean"` et le fichier de travail est supprimé.
+- `state` : `"pending"` (à traiter), `"corrected"` (corrigé par l'utilisateur), `"kept"` (faux positif). La **validation de chaque cas est de la responsabilité de l'utilisateur**.
+- `correction.delete_ranges` : plages d'index **originaux** à supprimer ; `correction.moved_points` : points dont les coordonnées sont **remplacées** (déplacement géographique).
+- Les cas `manual` (« Modification de segment », créés via le bouton éponyme sous la liste) sont persistés comme les autres et peuvent être supprimés **même après validation**.
+- La présence d'un fichier pose `cleaning_status = "in_progress"` et `cleaning_phase = phase`.
+- À la **validation d'étape** (`validate_phase`), le GPX est remplacé par la version nettoyée (entrée de l'étape suivante), l'original est sauvegardé en `{filename}.gpx.orig` (**une seule fois**, à l'étape 1), les dérivés (geojson, stats, hash) sont régénérés, `cleaning_phase` avance et le fichier de travail de la phase est supprimé. Une étape sans anomalie est **auto-validée** (avancement de phase sans réécriture).
 
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
@@ -207,7 +212,7 @@ get_keyframes_dir(mode_dir) → {mode_dir}/keyframes             // créé si ab
 get_keyframes_path(mode_dir, trace_id, viewport_aspect) → {mode_dir}/keyframes/{trace_id}_169.json | {trace_id}_43.json
 get_traces_path(mode_dir)  → {mode_dir}/traces.json
 get_cleaning_dir(mode_dir) → {mode_dir}/cleaning                // créé si absent (cleaning.rs)
-get_cleaning_path(mode_dir, trace_id) → {mode_dir}/cleaning/{trace_id}.json
+get_cleaning_path(mode_dir, trace_id, phase) → {mode_dir}/cleaning/{trace_id}.{phase}.json
 ```
 
 Le mode actif est déterminé par `gestionMode::read_active_mode(app_data_dir, is_dev)` qui lit `.env`.
@@ -241,4 +246,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-08-18
+**Dernière mise à jour** : 2026-08-19

@@ -73,6 +73,12 @@ export interface TraceMetadata {
    * « clean » ne peut pas entrer en édition caméra.
    */
   cleaning_status: string
+  /**
+   * Phase du pipeline de nettoyage en cours : `"spike"` (pts hors trace),
+   * `"roundabout"` (ronds-points), `"out_and_back"` (aller/retour — étape 3 à
+   * venir), ou chaîne vide quand la trace est propre.
+   */
+  cleaning_phase: string
 }
 
 // --- Store ---

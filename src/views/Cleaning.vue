@@ -2,15 +2,18 @@
 /**
  * Vue de nettoyage d'une trace GPX (plein écran, style Accueil/EditionCamera).
  *
- * Une trace qui contient des anomalies (points hors trace, aller-retours)
- * n'est pas **valide** et ne peut pas entrer en édition caméra. Cette vue
- * présente chaque anomalie sur une carte MapBox et permet à l'utilisateur de
- * corriger **segment par segment** (suppression de points), avec validation
- * manuelle obligatoire avant de passer au suivant.
+ * Une trace qui contient des anomalies (points hors trace, ronds-points,
+ * aller-retours) n'est pas **valide** et ne peut pas entrer en édition caméra.
+ * Le nettoyage est organisé en **3 étapes séquentielles** (widget « boîte à
+ * états » dans la toolbar) : cette vue présente chaque anomalie de la phase
+ * courante sur une carte MapBox et permet de corriger **segment par segment**
+ * (suppression/déplacement de points), avec validation manuelle obligatoire
+ * avant de passer au suivant.
  *
- * Sauvegardes **partielles** à tout moment (bouton Enregistrer) : le GPX
- * original reste intact. La **finalisation** (bouton Finaliser, actif quand
- * tous les cas sont validés) remplace le GPX original par la version nettoyée.
+ * Sauvegardes **partielles** à tout moment (bouton Enregistrer) : le GPX reste
+ * intact. La **validation d'étape** (bouton « Valider l'étape N », actif quand
+ * tous les cas de la phase sont validés) applique les corrections, réécrit le
+ * GPX (entrée de l'étape suivante) et avance la phase.
  */
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -28,9 +31,9 @@ const appStore = useAppStore()
 const cleaning = useCleaningStore()
 const ui = useUiStore()
 
-/** État des boutons Enregistrer / Finaliser du toolbar. */
+/** État des boutons Enregistrer / Valider l'étape du toolbar. */
 const saving = ref(false)
-const finalizing = ref(false)
+const validating = ref(false)
 
 /** État initial sérialisé (pour détecter des modifications non sauvegardées). */
 let initialStateJson = ''
@@ -122,21 +125,22 @@ async function onReset() {
   }
 }
 
-async function onFinalize() {
+async function onValidate() {
   try {
-    finalizing.value = true
-    const ok = await cleaning.finalize()
+    validating.value = true
+    const ok = await cleaning.validatePhase()
     if (ok) {
-      ui.showSuccess('GPX nettoyé généré : la trace est maintenant valide.')
-      router.push({ name: 'accueil' })
+      initialStateJson = JSON.stringify(cleaning.state ?? null)
+      dirty.value = false
+      ui.showSuccess('Étape validée : le GPX nettoyé est enregistré, étape suivante chargée.')
     } else {
-      ui.showWarning('Finalisation impossible : tous les cas doivent être validés.')
+      ui.showWarning("Validation impossible : tous les cas de cette étape doivent être validés.")
     }
   } catch (error) {
-    const msg = typeof error === 'string' ? error : 'Finalisation impossible.'
+    const msg = typeof error === 'string' ? error : "Validation de l'étape impossible."
     ui.showError(msg)
   } finally {
-    finalizing.value = false
+    validating.value = false
   }
 }
 </script>
@@ -146,11 +150,11 @@ async function onFinalize() {
     <v-layout>
       <CleaningToolbar
         :saving="saving"
-        :finalizing="finalizing"
+        :validating="validating"
         @back="onBack"
         @save="save"
         @reset="onReset"
-        @finalize="onFinalize"
+        @validate="onValidate"
       />
 
       <!-- Panneau latéral : liste des cas + tableau des points -->

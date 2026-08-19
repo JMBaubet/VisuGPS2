@@ -129,7 +129,8 @@ function pointFeatures(): GeoJSON.FeatureCollection {
   if (!c || pts.length === 0) return { type: 'FeatureCollection', features: [] }
 
   const features: GeoJSON.Feature[] = []
-  for (let i = c.start_index; i <= c.end_index && i < pts.length; i++) {
+  // Zone affichée (élargie de la marge pour les ronds-points).
+  for (let i = cleaning.zoneStart; i <= Math.min(cleaning.zoneEnd, pts.length - 1); i++) {
     const p = effectivePoint(i)
     if (!p) continue
     const status = cleaning.movePointIndex === i
@@ -338,7 +339,7 @@ function renderZone() {
     return
   }
   const zone = pts
-    .slice(c.start_index, c.end_index + 1)
+    .slice(cleaning.zoneStart, cleaning.zoneEnd + 1)
     .map(p => [p.lon, p.lat] as number[])
   setData(ZONE_SOURCE, lineFeature(zone))
 
@@ -432,8 +433,8 @@ function computeNearbyPoints(px: { x: number; y: number }): { i: number; label: 
   let start = 0
   let end = pts.length - 1
   if (!cleaning.createMode && c) {
-    start = c.start_index
-    end = Math.min(c.end_index, pts.length - 1)
+    start = cleaning.zoneStart
+    end = Math.min(cleaning.zoneEnd, pts.length - 1)
   }
 
   const candidates: { i: number; label: string; dist: number }[] = []
@@ -493,7 +494,7 @@ function fitZone() {
   const pts = cleaning.points
   if (!map || !c || pts.length === 0) return
   const bounds = new mapboxgl.LngLatBounds()
-  for (let i = c.start_index; i <= c.end_index && i < pts.length; i++) {
+  for (let i = cleaning.zoneStart; i <= cleaning.zoneEnd && i < pts.length; i++) {
     bounds.extend([pts[i].lon, pts[i].lat])
   }
   map.fitBounds(bounds, { padding: 80, maxZoom: 18, duration: 600 })

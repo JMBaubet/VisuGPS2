@@ -111,10 +111,18 @@
           Cas {{ cleaning.currentCaseIndex + 1 }} — {{ kindLabel(current.kind) }}
         </div>
 
-        <!-- Écart de cap mesuré -->
+        <!-- Mesure du cas : écart de cap (rebroussements) ou angle cumulé /
+             tours (rond-point) -->
         <div class="text-caption text-medium-emphasis mb-2">
-          Écart de cap mesuré : {{ current.bearing_delta_deg.toFixed(1) }}° (seuil
-          {{ cleaning.toleranceDeg.toFixed(1) }}°)
+          <template v-if="current.kind === 'roundabout'">
+            Angle cumulé : {{ Math.abs(current.total_angle_deg).toFixed(0) }}° ·
+            {{ (Math.abs(current.total_angle_deg) / 360).toFixed(1) }} tour(s) ·
+            {{ current.total_angle_deg >= 0 ? 'horaire' : 'anti-horaire' }}
+          </template>
+          <template v-else>
+            Écart de cap mesuré : {{ current.bearing_delta_deg.toFixed(1) }}° (seuil
+            {{ cleaning.toleranceDeg.toFixed(1) }}°)
+          </template>
         </div>
 
         <!-- Suppression d'un cas (dans la liste, poubelle à gauche de l'état) -->
@@ -209,6 +217,8 @@ function kindIcon(kind: CleaningCaseKind): string {
   switch (kind) {
     case 'spike':
       return 'mdi-dots-hexagon'
+    case 'roundabout':
+      return 'mdi-rotate-360'
     case 'out_and_back':
       return 'mdi-arrow-u-left-bottom'
     case 'manual':
@@ -220,8 +230,10 @@ function kindColor(kind: CleaningCaseKind): string {
   switch (kind) {
     case 'spike':
       return 'purple'
-    case 'out_and_back':
+    case 'roundabout':
       return 'orange'
+    case 'out_and_back':
+      return 'deep-orange'
     case 'manual':
       return 'green'
   }
@@ -231,6 +243,8 @@ function kindLabel(kind: CleaningCaseKind): string {
   switch (kind) {
     case 'spike':
       return 'Point hors trace'
+    case 'roundabout':
+      return 'Rond-point'
     case 'out_and_back':
       return 'Aller-retour'
     case 'manual':

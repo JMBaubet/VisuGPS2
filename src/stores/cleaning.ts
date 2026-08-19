@@ -1,18 +1,19 @@
 /**
  * Store Pinia du nettoyage de trace GPX.
  *
- * Gère l'état de la vue `/nettoyage` : détection des anomalies (points hors
- * trace, aller-retours), corrections appliquées par l'utilisateur, sauvegardes
- * partielles et finalisation.
+ * Gère l'état de la vue `/nettoyage` : pipeline de **3 étapes séquentielles**
+ * (pts hors trace → ronds-points → aller/retour), détection par phase,
+ * corrections appliquées par l'utilisateur, sauvegardes partielles et
+ * **validation d'étape**.
  *
  * Principe : la détection (backend) ne fait que **proposer** des cas ; chaque
  * cas doit être **validé par l'utilisateur** (`corrected` ou `kept`) avant de
- * passer au suivant. Le GPX original n'est remplacé qu'à la finalisation, une
- * fois **tous** les cas validés.
+ * passer au suivant. La validation d'une étape réécrit le GPX (entrée de
+ * l'étape suivante) une fois **tous** les cas de la phase validés.
  *
  * Pattern Setup Store (cf. traces.ts, edition.ts). Toute communication avec le
  * disque passe par les commandes Tauri (`detect_trace_anomalies`,
- * `get_cleaning_state`, `save_cleaning_state`, `finalize_cleaning`,
+ * `get_cleaning_state`, `save_cleaning_state`, `validate_phase`,
  * `reset_cleaning`).
  */
 
@@ -24,9 +25,12 @@ import { useSettingsStore } from './settings'
 
 // --- Types (miroir exact des structs Rust cleaning.rs, snake_case) ---
 
-export type CleaningCaseKind = 'spike' | 'out_and_back' | 'manual'
+export type CleaningCaseKind = 'spike' | 'roundabout' | 'out_and_back' | 'manual'
 
 export type CleaningCaseState = 'pending' | 'corrected' | 'kept'
+
+/** Phase du pipeline de nettoyage (identifiants partagés avec le backend). */
+export type CleaningPhaseId = 'spike' | 'roundabout' | 'out_and_back'
 
 /** Point de la trace déplacé géographiquement (index original + coordonnées). */
 export interface MovedPoint {
@@ -49,16 +53,60 @@ export interface CleaningCase {
   end_index: number
   apex_indices: number[]
   bearing_delta_deg: number
+  /** Angle cumulé **signé** d'un rond-point (degrés) — 0 hors rond-point. */
+  total_angle_deg: number
   suggested_delete_ranges: [number, number][]
   state: CleaningCaseState
   correction: Correction
 }
 
-/** État complet du nettoyage d'une trace (persisté par `save_cleaning_state`). */
+/** État complet du nettoyage d'une phase (persisté par `save_cleaning_state`). */
 export interface CleaningState {
   trace_id: string
   tolerance_deg: number
+  /** Phase en cours (« spike » | « roundabout » | « out_and_back »). */
+  phase: CleaningPhaseId
   cases: CleaningCase[]
+}
+
+/** Paramètres de détection des ronds-points (`Nettoyage.RondPoints.*`). */
+export interface RoundaboutParams {
+  angle_min_deg: number
+  points_min: number
+  points_max: number
+  angle_seuil_deg: number
+  marge_points: number
+}
+
+/** Définition d'une étape du pipeline de nettoyage. */
+export interface CleaningPhaseDef {
+  id: CleaningPhaseId
+  num: number
+  label: string
+  icon: string
+}
+
+/** Les 3 étapes, dans l'ordre du pipeline. */
+export const CLEANING_PHASES: CleaningPhaseDef[] = [
+  { id: 'spike', num: 1, label: 'Pts hors trace', icon: 'mdi-dots-hexagon' },
+  { id: 'roundabout', num: 2, label: 'Rond-Points', icon: 'mdi-rotate-360' },
+  { id: 'out_and_back', num: 3, label: 'Aller/Retour', icon: 'mdi-arrow-u-left-bottom' },
+]
+
+/** Étape suivante dans le pipeline (l'étape 3 est la dernière). */
+export const CLEANING_PHASE_NEXT: Record<CleaningPhaseId, CleaningPhaseId> = {
+  spike: 'roundabout',
+  roundabout: 'out_and_back',
+  out_and_back: 'out_and_back',
+}
+
+/** Valeurs par défaut des paramètres de détection des ronds-points. */
+export const DEFAULT_ROUNDABOUT_PARAMS: RoundaboutParams = {
+  angle_min_deg: 5,
+  points_min: 5,
+  points_max: 50,
+  angle_seuil_deg: 210,
+  marge_points: 5,
 }
 
 // --- Store ---
@@ -77,6 +125,10 @@ export const useCleaningStore = defineStore('cleaning', () => {
   const currentCaseIndex = ref(0)
   /** Tolérance de cap (degrés) — paramètre Nettoyage.Cap.toleranceDeg. */
   const toleranceDeg = ref(5.0)
+  /** Phase du pipeline en cours (reflet de `cleaning_phase` de la trace). */
+  const currentPhase = ref<CleaningPhaseId>('spike')
+  /** Paramètres de détection des ronds-points (Nettoyage.RondPoints.*). */
+  const roundaboutParams = ref<RoundaboutParams>({ ...DEFAULT_ROUNDABOUT_PARAMS })
   const loading = ref(false)
 
   // --- État UI éphémère (non persisté) ---
@@ -99,11 +151,37 @@ export const useCleaningStore = defineStore('cleaning', () => {
     return cases[idx]
   })
 
+  /**
+   * Borne de début de la zone affichée du cas courant. Pour un rond-point, la
+   * zone est **élargie de la marge** (`Nettoyage.RondPoints.margePoints`)
+   * avant/après le segment détecté — l'utilisateur voit les points de contexte
+   * pour supprimer/déplacer le tour excédentaire. Sinon, la zone = `[start, end]`.
+   */
+  const zoneStart = computed(() => {
+    const c = currentCase.value
+    if (!c) return 0
+    if (c.kind === 'roundabout')
+      return Math.max(0, c.start_index - roundaboutParams.value.marge_points)
+    return c.start_index
+  })
+
+  /** Borne de fin de la zone affichée du cas courant (voir `zoneStart`). */
+  const zoneEnd = computed(() => {
+    const c = currentCase.value
+    if (!c) return 0
+    if (c.kind === 'roundabout')
+      return Math.min(
+        Math.max(0, points.value.length - 1),
+        c.end_index + roundaboutParams.value.marge_points,
+      )
+    return c.end_index
+  })
+
   /** Zone d'intérêt du cas courant (points de la trace, index originaux). */
   const currentZone = computed(() => {
     const c = currentCase.value
     if (!c || points.value.length === 0) return []
-    return points.value.slice(c.start_index, c.end_index + 1)
+    return points.value.slice(zoneStart.value, zoneEnd.value + 1)
   })
 
   /**
@@ -117,8 +195,8 @@ export const useCleaningStore = defineStore('cleaning', () => {
     const c = currentCase.value
     const pts = points.value
     if (!c || pts.length === 0) return []
-    const start = Math.max(0, c.start_index - 1)
-    const end = Math.min(pts.length - 1, c.end_index + 1)
+    const start = Math.max(0, zoneStart.value - 1)
+    const end = Math.min(pts.length - 1, zoneEnd.value + 1)
 
     const movedByIndex = new Map<number, MovedPoint>()
     for (const mp of c.correction.moved_points) movedByIndex.set(mp.index, mp)
@@ -159,9 +237,46 @@ export const useCleaningStore = defineStore('cleaning', () => {
     selectedTraceId.value = traceId
   }
 
+  /** Lit la tolérance de cap et les paramètres ronds-points depuis les réglages. */
+  async function readParams(): Promise<void> {
+    try {
+      const raw = await settingsStore.getSettingValue('Nettoyage.Cap.toleranceDeg')
+      toleranceDeg.value = typeof raw === 'number' ? raw : 5.0
+    } catch {
+      toleranceDeg.value = 5.0
+    }
+    const keys = Object.keys(DEFAULT_ROUNDABOUT_PARAMS) as (keyof RoundaboutParams)[]
+    const paths: Record<keyof RoundaboutParams, string> = {
+      angle_min_deg: 'Nettoyage.RondPoints.angleMinDeg',
+      points_min: 'Nettoyage.RondPoints.pointsMin',
+      points_max: 'Nettoyage.RondPoints.pointsMax',
+      angle_seuil_deg: 'Nettoyage.RondPoints.angleSeuilDeg',
+      marge_points: 'Nettoyage.RondPoints.margePoints',
+    }
+    for (const k of keys) {
+      try {
+        const raw = await settingsStore.getSettingValue(paths[k])
+        if (typeof raw === 'number') roundaboutParams.value[k] = raw
+      } catch {
+        // repli sur la valeur par défaut
+      }
+    }
+  }
+
+  /** Phase de départ depuis les métadonnées persistées de la trace. */
+  function initialPhase(id: string): CleaningPhaseId {
+    const p = tracesStore.traces.find(t => t.id === id)?.cleaning_phase
+    return p === 'spike' || p === 'roundabout' || p === 'out_and_back' ? p : 'spike'
+  }
+
   /**
-   * Charge l'état de nettoyage : tolérance paramétrée, points bruts et fichier
-   * de travail s'il existe (corrections déjà en cours), sinon détection fraîche.
+   * Charge l'état de nettoyage : paramètres, points bruts et état de la **phase
+   * courante** (fichier de travail s'il existe, sinon détection fraîche).
+   *
+   * **Auto-validation des étapes vides** : une étape qui ne détecte aucune
+   * anomalie est validée automatiquement (avancement de phase sans réécriture
+   * du GPX), jusqu'à l'étape 3 « Aller/Retour » — non implémentée, simple
+   * emplacement dans la toolbar (on ne lance aucune détection à ce stade).
    */
   async function load(traceId?: string) {
     const id = traceId ?? selectedTraceId.value
@@ -169,25 +284,68 @@ export const useCleaningStore = defineStore('cleaning', () => {
     selectedTraceId.value = id
     loading.value = true
     try {
-      // Tolérance paramétrée (Nettoyage.Cap.toleranceDeg).
-      try {
-        const raw = await settingsStore.getSettingValue('Nettoyage.Cap.toleranceDeg')
-        toleranceDeg.value = typeof raw === 'number' ? raw : 5.0
-      } catch {
-        toleranceDeg.value = 5.0
+      await readParams()
+      const pts = await tracesStore.getTracePoints(id)
+      points.value = pts.map(p => ({ lat: p.lat, lon: p.lon, alt: p.alt }))
+
+      let phase = initialPhase(id)
+      let st: CleaningState | null = null
+      for (let guard = 0; guard < CLEANING_PHASES.length; guard++) {
+        if (phase === 'out_and_back') {
+          // Étape 3 : non implémentée — état vide, aucune détection.
+          st = { trace_id: id, tolerance_deg: toleranceDeg.value, phase, cases: [] }
+          break
+        }
+        st = await invoke<CleaningState>('get_cleaning_state', {
+          traceId: id,
+          phase,
+          toleranceDeg: toleranceDeg.value,
+          roundaboutParams: roundaboutParams.value,
+        })
+        currentPhase.value = phase
+        if (st.cases.length > 0) break
+        // Étape sans anomalie → auto-validation (avancement de phase).
+        await invoke('validate_phase', {
+          traceId: id,
+          phase,
+          stateJson: JSON.parse(JSON.stringify(st)),
+        })
+        phase = CLEANING_PHASE_NEXT[phase]
       }
 
-      const [pts, st] = await Promise.all([
-        tracesStore.getTracePoints(id),
-        invoke<CleaningState>('get_cleaning_state', {
-          traceId: id,
-          toleranceDeg: toleranceDeg.value,
-        }),
-      ])
-
-      points.value = pts.map(p => ({ lat: p.lat, lon: p.lon, alt: p.alt }))
       state.value = st
+      currentPhase.value = phase
       // Repositionner sur le premier cas non validé (ou le premier cas).
+      const firstPending = st?.cases.findIndex(c => c.state === 'pending') ?? -1
+      currentCaseIndex.value = firstPending >= 0 ? firstPending : 0
+      // La phase a pu avancer (auto-validation) → rafraîchir le registre.
+      await tracesStore.loadTraces()
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Navigue vers une **étape précise** du pipeline (widget de la toolbar), sans
+   * auto-validation : la détection de cette étape sur le GPX courant est
+   * affichée telle quelle. L'étape 3 (Aller/Retour) n'est pas cliquable.
+   */
+  async function goToPhase(phase: CleaningPhaseId) {
+    const id = selectedTraceId.value
+    if (!id || phase === 'out_and_back') return
+    loading.value = true
+    try {
+      await readParams()
+      const pts = await tracesStore.getTracePoints(id)
+      points.value = pts.map(p => ({ lat: p.lat, lon: p.lon, alt: p.alt }))
+      const st = await invoke<CleaningState>('get_cleaning_state', {
+        traceId: id,
+        phase,
+        toleranceDeg: toleranceDeg.value,
+        roundaboutParams: roundaboutParams.value,
+      })
+      currentPhase.value = phase
+      state.value = st
       const firstPending = st.cases.findIndex(c => c.state === 'pending')
       currentCaseIndex.value = firstPending >= 0 ? firstPending : 0
     } finally {
@@ -195,19 +353,30 @@ export const useCleaningStore = defineStore('cleaning', () => {
     }
   }
 
+  /** Étape validée ? (d'après `cleaning_phase` persistée de la trace.) */
+  function phaseValidated(phaseId: CleaningPhaseId): boolean {
+    const tp = tracesStore.traces.find(t => t.id === selectedTraceId.value)?.cleaning_phase
+    if (phaseId === 'spike') return tp === 'roundabout' || tp === 'out_and_back'
+    if (phaseId === 'roundabout') return tp === 'out_and_back'
+    return false // étape 3 : jamais validée
+  }
+
   /**
-   * Re-détecte avec la tolérance courante. Les cas **déjà validés** dont un
-   * apex subsiste dans la nouvelle détection sont conservés (état + corrections) ;
-   * les autres cas repartent de la détection.
+   * Re-détecte la phase courante avec les paramètres actuels. Les cas **déjà
+   * validés** dont un apex subsiste dans la nouvelle détection sont conservés
+   * (état + corrections) ; les autres cas repartent de la détection.
    */
   async function reDetect() {
     const id = selectedTraceId.value
     if (!id || !state.value) return
     loading.value = true
     try {
+      await readParams()
       const fresh = await invoke<CleaningCase[]>('detect_trace_anomalies', {
         traceId: id,
+        phase: currentPhase.value,
         toleranceDeg: toleranceDeg.value,
+        roundaboutParams: roundaboutParams.value,
       })
       const previous = state.value.cases
       const merged = fresh.map(freshCase => {
@@ -286,33 +455,34 @@ export const useCleaningStore = defineStore('cleaning', () => {
     c.correction.delete_ranges = toRanges([...flattenRanges(c.correction.delete_ranges), ...idx])
   }
 
-  /** Tous les points de la zone du cas courant sont-ils marqués à supprimer ? */
+  /** Tous les points de la zone affichée du cas courant sont-ils marqués à
+   * supprimer ? (La zone est élargie de la marge pour les ronds-points.) */
   function isZoneFullyDeleted(): boolean {
     const c = currentCase.value
     if (!c) return false
-    const len = c.end_index - c.start_index + 1
+    const len = zoneEnd.value - zoneStart.value + 1
     let count = 0
     for (const [from, to] of c.correction.delete_ranges) {
-      const lo = Math.max(from, c.start_index)
-      const hi = Math.min(to, c.end_index)
+      const lo = Math.max(from, zoneStart.value)
+      const hi = Math.min(to, zoneEnd.value)
       if (lo <= hi) count += hi - lo + 1
     }
     return count >= len
   }
 
   /**
-   * Sélectionne (`true`) ou désélectionne (`false`) **tous** les points du
-   * segment courant (case à cocher d'en-tête du tableau des points).
+   * Sélectionne (`true`) ou désélectionne (`false`) **tous** les points de la
+   * zone affichée du cas courant (case à cocher d'en-tête du tableau).
    */
   function setZoneDeleted(deleted: boolean) {
     const c = currentCase.value
     if (!c) return
     if (deleted) {
-      addDeleteRange(c.start_index, c.end_index)
+      addDeleteRange(zoneStart.value, zoneEnd.value)
     } else {
       // Tout remettre : retirer les index de la zone des plages de suppression.
       const kept = flattenRanges(c.correction.delete_ranges).filter(
-        i => i < c.start_index || i > c.end_index,
+        i => i < zoneStart.value || i > zoneEnd.value,
       )
       c.correction.delete_ranges = toRanges(kept)
     }
@@ -414,6 +584,7 @@ export const useCleaningStore = defineStore('cleaning', () => {
       end_index: hi,
       apex_indices: [],
       bearing_delta_deg: 0,
+      total_angle_deg: 0,
       suggested_delete_ranges: [],
       state: 'pending',
       correction: { delete_ranges: [], moved_points: [] },
@@ -467,48 +638,57 @@ export const useCleaningStore = defineStore('cleaning', () => {
 
   // --- Persistance ---
 
-  /** Sauvegarde partielle du travail (le GPX original reste intact). */
+  /** Sauvegarde partielle du travail de la phase courante (le GPX reste intact). */
   async function save(): Promise<void> {
     const id = selectedTraceId.value
     if (!id || !state.value) return
     state.value.tolerance_deg = toleranceDeg.value
+    state.value.phase = currentPhase.value
     await invoke('save_cleaning_state', {
       traceId: id,
+      phase: currentPhase.value,
       stateJson: JSON.parse(JSON.stringify(state.value)),
     })
     await tracesStore.loadTraces()
   }
 
   /**
-   * Finalise le nettoyage : remplace le GPX original par la version nettoyée.
-   * Ne doit être appelé que quand tous les cas sont validés (bouton inactif
-   * sinon) — le backend refuse sinon. Retourne les métadonnées à jour.
+   * Valide l'**étape courante** : applique les corrections validées de la
+   * phase, réécrit le GPX (qui devient l'entrée de l'étape suivante) et avance
+   * la phase. Ne doit être appelé que quand tous les cas de la phase sont
+   * validés (bouton inactif sinon). L'étape 3 n'est pas validable (non
+   * implémentée).
    */
-  async function finalize(): Promise<boolean> {
+  async function validatePhase(): Promise<boolean> {
     const id = selectedTraceId.value
     if (!id || !state.value) return false
     if (!allValidated.value) return false
+    if (currentPhase.value === 'out_and_back') return false
     state.value.tolerance_deg = toleranceDeg.value
-    await invoke('finalize_cleaning', {
+    state.value.phase = currentPhase.value
+    await invoke('validate_phase', {
       traceId: id,
+      phase: currentPhase.value,
       stateJson: JSON.parse(JSON.stringify(state.value)),
     })
     // Réinitialiser l'état local, invalider la géométrie mise en cache (le GPX
-    // source a changé) et recharger le registre (statut « clean »).
+    // source a changé) et recharger l'étape suivante (avec auto-validation des
+    // étapes vides).
     state.value = null
     currentCaseIndex.value = 0
     tracesStore.invalidateGeometry(id)
-    await tracesStore.loadTraces()
+    await load()
     return true
   }
 
-  /** Abandonne les corrections en cours (retour « needs_review »). */
+  /** Abandonne les corrections en cours (retour à l'étape 1, `needs_review`). */
   async function reset(): Promise<void> {
     const id = selectedTraceId.value
     if (!id) return
     await invoke('reset_cleaning', { traceId: id })
     state.value = null
     currentCaseIndex.value = 0
+    currentPhase.value = 'spike'
     await tracesStore.loadTraces()
   }
 
@@ -549,7 +729,9 @@ export const useCleaningStore = defineStore('cleaning', () => {
     state,
     points,
     currentCaseIndex,
+    currentPhase,
     toleranceDeg,
+    roundaboutParams,
     loading,
     // État UI éphémère
     createMode,
@@ -559,6 +741,8 @@ export const useCleaningStore = defineStore('cleaning', () => {
     hasCases,
     currentCase,
     currentZone,
+    zoneStart,
+    zoneEnd,
     correctedZoneCoords,
     allValidated,
     validatedCount,
@@ -566,6 +750,8 @@ export const useCleaningStore = defineStore('cleaning', () => {
     // Actions
     selectTrace,
     load,
+    goToPhase,
+    phaseValidated,
     reDetect,
     goToCase,
     applySuggestion,
@@ -586,7 +772,7 @@ export const useCleaningStore = defineStore('cleaning', () => {
     removeCase,
     validateCurrentCase,
     save,
-    finalize,
+    validatePhase,
     reset,
   }
 })

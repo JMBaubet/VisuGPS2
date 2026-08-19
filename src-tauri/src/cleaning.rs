@@ -40,7 +40,10 @@ use crate::settings::{get_toml_value_by_path, SettingsState};
 pub enum CleaningCaseKind {
     /// Point isolé qui sort de la trace et revient immédiatement (ex. 946).
     Spike,
-    /// Branche aller-retour avec retraçage (ex. 711 / 791).
+    /// Tour soutenu dans un rond-point (angle cumulé > seuil, ex. plus d'un
+    /// tour du rond-point) — étape 2 du pipeline de nettoyage.
+    Roundabout,
+    /// Branche aller-retour avec retraçage (ex. 711 / 791) — étape 3.
     OutAndBack,
     /// Cas créé **manuellement** par l'utilisateur (plage `[start, end]`
     /// désignée sur la carte) — jamais produit par la détection.
@@ -86,6 +89,11 @@ pub struct CleaningCase {
     /// Écart de cap maximal mesuré dans le cas (degrés).
     #[serde(default)]
     pub bearing_delta_deg: f64,
+    /// Angle cumulé **signé** d'un rond-point (degrés ; négatif = sens
+    /// anti-horaire). Utile uniquement pour le type `Roundabout` (nombre de
+    /// tours = `|angle| / 360`, sens = signe).
+    #[serde(default)]
+    pub total_angle_deg: f64,
     /// Plages de suppression **suggérées** par la détection (pré-remplissage
     /// de `correction.delete_ranges` au premier affichage du cas).
     #[serde(default)]
@@ -98,13 +106,70 @@ pub struct CleaningCase {
     pub correction: Correction,
 }
 
-/// État complet du nettoyage d'une trace (persisté dans `cleaning/{id}.json`).
+/// État complet du nettoyage d'une trace (persisté dans
+/// `cleaning/{trace_id}.{phase}.json`).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct CleaningState {
     pub trace_id: String,
     pub tolerance_deg: f64,
+    /// Phase du pipeline en cours : `"spike"` (pts hors trace), `"roundabout"`
+    /// (ronds-points) ou `"out_and_back"` (aller/retour — étape 3 à venir).
+    #[serde(default)]
+    pub phase: String,
     #[serde(default)]
     pub cases: Vec<CleaningCase>,
+}
+
+/// Paramètres de détection des ronds-points (miroir des sliders de l'outil de
+/// référence fourni). Lus par le frontend depuis `Nettoyage.RondPoints.*` et
+/// transmis aux commandes, comme la tolérance de cap.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct RoundaboutParams {
+    /// Virage minimal entre deux points consécutifs pour prolonger le tour
+    /// (degrés).
+    #[serde(default = "default_angle_min_deg")]
+    pub angle_min_deg: f64,
+    /// Nombre de points minimum d'un rond-point.
+    #[serde(default = "default_points_min")]
+    pub points_min: usize,
+    /// Nombre de points maximum (fenêtre de détection).
+    #[serde(default = "default_points_max")]
+    pub points_max: usize,
+    /// Angle cumulé au-delà duquel un tour soutenu est signalé (degrés).
+    #[serde(default = "default_angle_seuil_deg")]
+    pub angle_seuil_deg: f64,
+    /// Nombre de points affichés **avant/après** le segment détecté dans l'IHM
+    /// (suppression/déplacement manuels).
+    #[serde(default = "default_marge_points")]
+    pub marge_points: usize,
+}
+
+fn default_angle_min_deg() -> f64 {
+    5.0
+}
+fn default_points_min() -> usize {
+    5
+}
+fn default_points_max() -> usize {
+    50
+}
+fn default_angle_seuil_deg() -> f64 {
+    210.0
+}
+fn default_marge_points() -> usize {
+    5
+}
+
+impl Default for RoundaboutParams {
+    fn default() -> Self {
+        Self {
+            angle_min_deg: default_angle_min_deg(),
+            points_min: default_points_min(),
+            points_max: default_points_max(),
+            angle_seuil_deg: default_angle_seuil_deg(),
+            marge_points: default_marge_points(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +243,8 @@ fn extract_full_points(gpx: &gpx::Gpx) -> Vec<GpxPoint> {
 /// considérés comme deux cas distincts.
 const U_TURN_GROUP_WINDOW: usize = 25;
 
-/// Détecte les anomalies sur une liste de coordonnées (lat, lon).
+/// Détecte les **rebroussements** (changement de cap ≈ 180°) sur une liste de
+/// coordonnées (lat, lon) et construit les cas de type `Spike` / `OutAndBack`.
 ///
 /// Algorithme (inspiré de l'outil de détection fourni par l'utilisateur) :
 /// 1. Pour chaque point, on compare le cap vers le point précédent et le cap
@@ -189,7 +255,12 @@ const U_TURN_GROUP_WINDOW: usize = 25;
 ///    retour sont des jumeaux des points de l'aller) et on classe le cas :
 ///    - branche courte (< 100 m) → `spike` (suggestion : supprimer l'apex) ;
 ///    - sinon → `out_and_back` (suggestion : supprimer le demi-tour + le retour).
-pub fn detect_anomalies(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
+///
+/// Le seuil de longueur de branche est une **heuristique de travail interne**,
+/// pas un critère d'architecture : les étapes 1 et 3 sont deux types d'erreur
+/// distincts (point isolé hors trace vs branche aller-retour) avec des
+/// traitements et des sorties différents.
+fn detect_uturn_cases(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
     let n = points.len();
     if n < 3 {
         return Vec::new();
@@ -270,6 +341,7 @@ pub fn detect_anomalies(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<Cleani
             end_index: end,
             apex_indices: group.clone(),
             bearing_delta_deg: max_delta,
+            total_angle_deg: 0.0,
             suggested_delete_ranges: suggested,
             state: "pending".to_string(),
             correction: Correction::default(),
@@ -279,13 +351,138 @@ pub fn detect_anomalies(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<Cleani
     cases
 }
 
-/// Détecte les anomalies directement depuis un GPX parsé.
+/// Détection **combinée** (spike + out_and_back) — conservée uniquement pour
+/// les tests (dont le scan des traces réelles). Le pipeline réel utilise les
+/// détections par phase (`detect_cases_for_phase`).
+#[cfg(test)]
+pub fn detect_anomalies(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
+    detect_uturn_cases(points, tolerance_deg)
+}
+
+/// Points isolés hors trace — **étape 1** du pipeline de nettoyage.
+pub fn detect_spikes(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
+    detect_uturn_cases(points, tolerance_deg)
+        .into_iter()
+        .filter(|c| c.kind == CleaningCaseKind::Spike)
+        .collect()
+}
+
+/// Branches aller-retour — **étape 3** du pipeline (non appelée dans cette
+/// itération : son traitement et son fichier de sortie seront différents).
+pub fn detect_out_and_backs(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
+    detect_uturn_cases(points, tolerance_deg)
+        .into_iter()
+        .filter(|c| c.kind == CleaningCaseKind::OutAndBack)
+        .collect()
+}
+
+/// Détecte les **ronds-points** (tours soutenus) sur une liste de coordonnées.
+///
+/// Portage fidèle de l'algorithme `analyzeRondpoints` de l'outil fourni :
+/// on cumule les virages (différence de cap normalisée [−180, 180]) tant que
+/// chaque virage reste ≥ `angle_min_deg` et que la fenêtre ne dépasse pas
+/// `points_max`. Un rond-point est retenu quand l'angle cumulé dépasse
+/// `±angle_seuil_deg` avec un nombre de points dans `[points_min, points_max]`.
+///
+/// Contrairement aux rebroussements, il s'agit d'une **rotation soutenue**
+/// (sans rebroussement ~180°) : les étapes 1 et 3 (pts hors trace / aller-
+/// retour) ne produisent pas ce type de cas.
+pub fn detect_roundabouts(points: &[(f64, f64)], params: &RoundaboutParams) -> Vec<CleaningCase> {
+    let n = points.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    let mut cases = Vec::new();
+    let mut analyzed = vec![false; n];
+
+    for i in 0..n.saturating_sub(2) {
+        if analyzed[i] {
+            continue;
+        }
+        let mut total_angle = 0.0f64;
+        let mut j = i;
+        let mut end_index = i;
+
+        while j < n - 2 {
+            if end_index - i + 1 > params.points_max {
+                break;
+            }
+            let b1 = bearing(points[j].0, points[j].1, points[j + 1].0, points[j + 1].1);
+            let b2 = bearing(points[j + 1].0, points[j + 1].1, points[j + 2].0, points[j + 2].1);
+            let mut angle_diff = b2 - b1;
+            if angle_diff > 180.0 {
+                angle_diff -= 360.0;
+            }
+            if angle_diff < -180.0 {
+                angle_diff += 360.0;
+            }
+            if angle_diff.abs() < params.angle_min_deg {
+                break;
+            }
+            total_angle += angle_diff;
+            end_index = j + 1;
+
+            if total_angle.abs() > params.angle_seuil_deg {
+                let point_count = end_index - i + 1;
+                if point_count >= params.points_min && point_count <= params.points_max {
+                    cases.push(CleaningCase {
+                        id: format!("rp{}", cases.len() + 1),
+                        kind: CleaningCaseKind::Roundabout,
+                        start_index: i,
+                        end_index,
+                        apex_indices: vec![],
+                        bearing_delta_deg: total_angle.abs(),
+                        total_angle_deg: total_angle,
+                        suggested_delete_ranges: vec![],
+                        state: "pending".to_string(),
+                        correction: Correction::default(),
+                    });
+                    for k in i..=end_index {
+                        analyzed[k] = true;
+                    }
+                }
+                break;
+            }
+            j += 1;
+        }
+    }
+    cases
+}
+
+/// Détecte les anomalies de la **phase demandée** du pipeline de nettoyage.
+/// Phase inconnue → repli sur l'étape 1 (points hors trace).
+pub fn detect_cases_for_phase(
+    points: &[(f64, f64)],
+    phase: &str,
+    tolerance_deg: f64,
+    params: &RoundaboutParams,
+) -> Vec<CleaningCase> {
+    match phase {
+        "roundabout" => detect_roundabouts(points, params),
+        "out_and_back" => detect_out_and_backs(points, tolerance_deg),
+        _ => detect_spikes(points, tolerance_deg),
+    }
+}
+
+/// Détecte les anomalies directement depuis un GPX parsé (détection combinée,
+/// utilisée par le test de scan des traces réelles).
+#[cfg(test)]
 pub fn detect_anomalies_from_gpx(gpx: &gpx::Gpx, tolerance_deg: f64) -> Vec<CleaningCase> {
     let coords: Vec<(f64, f64)> = extract_full_points(gpx)
         .iter()
         .map(|p| (p.lat, p.lon))
         .collect();
     detect_anomalies(&coords, tolerance_deg)
+}
+
+/// Détecte les **points hors trace** (étape 1) directement depuis un GPX
+/// parsé — utilisée à l'import pour poser le statut « à nettoyer ».
+pub fn detect_spikes_from_gpx(gpx: &gpx::Gpx, tolerance_deg: f64) -> Vec<CleaningCase> {
+    let coords: Vec<(f64, f64)> = extract_full_points(gpx)
+        .iter()
+        .map(|p| (p.lat, p.lon))
+        .collect();
+    detect_spikes(&coords, tolerance_deg)
 }
 
 /// Lit la tolérance de cap paramétrée (`Nettoyage.Cap.toleranceDeg`), avec
@@ -360,9 +557,30 @@ fn get_cleaning_dir(mode_dir: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Chemin du fichier de travail de nettoyage d'une trace.
-fn get_cleaning_path(mode_dir: &Path, trace_id: &str) -> PathBuf {
-    mode_dir.join("cleaning").join(format!("{}.json", trace_id))
+/// Chemin du fichier de travail de nettoyage d'une trace **pour une phase**
+/// (`cleaning/{trace_id}.{phase}.json`). Chaque phase dispose de son propre
+/// fichier : les index de cas sont propres à la version du GPX traitée.
+fn get_cleaning_path(mode_dir: &Path, trace_id: &str, phase: &str) -> PathBuf {
+    mode_dir
+        .join("cleaning")
+        .join(format!("{}.{}.json", trace_id, phase))
+}
+
+/// Supprime tous les fichiers de travail de nettoyage d'une trace (par phase
+/// `{id}.{phase}.json` et l'ancien nom sans suffixe `{id}.json`). Tolérant.
+pub(crate) fn remove_cleaning_files(mode_dir: &Path, trace_id: &str) {
+    let dir = mode_dir.join("cleaning");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let legacy = name == format!("{}.json", trace_id);
+        let phased = name.starts_with(&format!("{}.", trace_id)) && name.ends_with(".json");
+        if legacy || phased {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Écriture atomique d'un contenu (fichier tmp + rename).
@@ -384,6 +602,19 @@ fn set_cleaning_status(app: &tauri::AppHandle, trace_id: &str, status: &str) -> 
         .find(|t| t.id == trace_id)
         .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
     trace.cleaning_status = status.to_string();
+    save_registry(&traces_path, &registry)
+}
+
+/// Met à jour la phase de nettoyage en cours d'une trace dans le registre.
+fn set_cleaning_phase(app: &tauri::AppHandle, trace_id: &str, phase: &str) -> Result<(), String> {
+    let mode_dir = get_mode_dir(app)?;
+    let traces_path = get_traces_path(&mode_dir);
+    let mut registry = load_registry(&traces_path);
+    let trace = registry
+        .iter_mut()
+        .find(|t| t.id == trace_id)
+        .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
+    trace.cleaning_phase = phase.to_string();
     save_registry(&traces_path, &registry)
 }
 
@@ -480,37 +711,53 @@ fn build_cleaned_gpx(points: &[GpxPoint], name: &str) -> String {
 // Commandes Tauri
 // ---------------------------------------------------------------------------
 
-/// Détecte les anomalies d'une trace (re-parse le GPX original, aucune
-/// persistance). La tolérance de cap est fournie par le frontend (paramètre
-/// paramétrable `Nettoyage.Cap.toleranceDeg`).
+/// Détecte les anomalies d'une trace **pour une phase donnée** du pipeline de
+/// nettoyage (re-parse le GPX courant, aucune persistance). La tolérance de cap
+/// et les paramètres de rond-point sont fournis par le frontend (paramètres
+/// `Nettoyage.Cap.toleranceDeg` / `Nettoyage.RondPoints.*`).
 #[tauri::command]
 pub async fn detect_trace_anomalies(
     app: tauri::AppHandle,
     trace_id: String,
+    phase: String,
     tolerance_deg: f64,
+    roundabout_params: Option<RoundaboutParams>,
 ) -> Result<Vec<CleaningCase>, String> {
     let (gpx, _) = load_trace_gpx(&app, &trace_id)?;
-    Ok(detect_anomalies_from_gpx(&gpx, tolerance_deg))
+    let coords: Vec<(f64, f64)> = extract_full_points(&gpx)
+        .iter()
+        .map(|p| (p.lat, p.lon))
+        .collect();
+    let params = roundabout_params.unwrap_or_default();
+    Ok(detect_cases_for_phase(&coords, &phase, tolerance_deg, &params))
 }
 
-/// Retourne l'état de nettoyage d'une trace : le fichier de travail s'il
-/// existe et est **valide** (corrections déjà en cours), sinon une détection
-/// fraîche avec la tolérance fournie. Un fichier de travail illisible ou
-/// invalide (ex. index négatif) est ignoré et régénéré par détection — il ne
-/// doit jamais bloquer l'IHM.
+/// Retourne l'état de nettoyage d'une trace **pour une phase** : le fichier de
+/// travail de cette phase s'il existe et est **valide** (corrections déjà en
+/// cours), sinon une détection fraîche. Un fichier illisible, invalide ou d'une
+/// autre phase est ignoré et régénéré par détection — il ne doit jamais
+/// bloquer l'IHM.
 #[tauri::command]
 pub async fn get_cleaning_state(
     app: tauri::AppHandle,
     trace_id: String,
+    phase: String,
     tolerance_deg: f64,
+    roundabout_params: Option<RoundaboutParams>,
 ) -> Result<CleaningState, String> {
     let mode_dir = get_mode_dir(&app)?;
-    let state_path = get_cleaning_path(&mode_dir, &trace_id);
+    let state_path = get_cleaning_path(&mode_dir, &trace_id, &phase);
 
     if state_path.exists() {
         match std::fs::read_to_string(&state_path) {
             Ok(content) => match serde_json::from_str::<CleaningState>(&content) {
-                Ok(state) => return Ok(state),
+                Ok(state) if state.phase == phase => return Ok(state),
+                Ok(_) => {
+                    eprintln!(
+                        "[cleaning] Fichier de travail d'une autre phase ({}), re-détection.",
+                        phase
+                    );
+                }
                 Err(e) => {
                     eprintln!("[cleaning] Fichier de travail invalide ({}), re-détection.", e);
                 }
@@ -522,139 +769,192 @@ pub async fn get_cleaning_state(
     }
 
     let (gpx, _) = load_trace_gpx(&app, &trace_id)?;
-    let cases = detect_anomalies_from_gpx(&gpx, tolerance_deg);
+    let coords: Vec<(f64, f64)> = extract_full_points(&gpx)
+        .iter()
+        .map(|p| (p.lat, p.lon))
+        .collect();
+    let params = roundabout_params.unwrap_or_default();
+    let cases = detect_cases_for_phase(&coords, &phase, tolerance_deg, &params);
     Ok(CleaningState {
         trace_id,
         tolerance_deg,
+        phase,
         cases,
     })
 }
 
-/// Sauvegarde partielle du travail de nettoyage (fichier
-/// `cleaning/{trace_id}.json`). Le GPX original reste intact. Passe la trace
-/// en `"in_progress"` (première sauvegarde).
+/// Sauvegarde partielle du travail d'une phase (fichier
+/// `cleaning/{trace_id}.{phase}.json`). Le GPX reste intact. Passe la trace en
+/// `"in_progress"` et mémorise la phase en cours.
 #[tauri::command]
 pub async fn save_cleaning_state(
     app: tauri::AppHandle,
     trace_id: String,
+    phase: String,
     state_json: serde_json::Value,
 ) -> Result<(), String> {
     let mode_dir = get_mode_dir(&app)?;
     let dir = get_cleaning_dir(&mode_dir)?;
-    let path = dir.join(format!("{}.json", trace_id));
+    let path = dir.join(format!("{}.{}.json", trace_id, phase));
 
     let content = serde_json::to_string_pretty(&state_json)
         .map_err(|e| format!("Sérialisation du fichier de travail : {}", e))?;
     write_atomic(&path, content.as_bytes())?;
 
     set_cleaning_status(&app, &trace_id, "in_progress")?;
+    set_cleaning_phase(&app, &trace_id, &phase)?;
     Ok(())
 }
 
-/// Abandonne les corrections en cours : supprime le fichier de travail et
-/// remet la trace en `"needs_review"`.
+/// Abandonne les corrections en cours : supprime les fichiers de travail (toutes
+/// phases) et remet la trace en `"needs_review"` à la première étape.
 #[tauri::command]
 pub async fn reset_cleaning(app: tauri::AppHandle, trace_id: String) -> Result<(), String> {
     let mode_dir = get_mode_dir(&app)?;
-    let state_path = get_cleaning_path(&mode_dir, &trace_id);
-    if state_path.exists() {
-        std::fs::remove_file(&state_path)
-            .map_err(|e| format!("Suppression du fichier de travail : {}", e))?;
-    }
-    set_cleaning_status(&app, &trace_id, "needs_review")
+    remove_cleaning_files(&mode_dir, &trace_id);
+    set_cleaning_status(&app, &trace_id, "needs_review")?;
+    set_cleaning_phase(&app, &trace_id, "spike")
 }
 
-/// Finalise le nettoyage : applique les corrections validées, génère le GPX
-/// nettoyé, sauvegarde l'original en `{filename}.orig`, régénère les dérivés
-/// (geojson, stats, hash) et passe la trace en `"clean"`.
+/// Valide une **étape** du pipeline de nettoyage : applique les corrections
+/// validées de la phase, génère le GPX nettoyé (entrée de l'étape suivante),
+/// sauvegarde l'original en `{filename}.gpx.orig` **une seule fois** (étape 1),
+/// régénère les dérivés (geojson, stats, hash) et avance `cleaning_phase`.
 ///
-/// Refuse la finalisation tant que **tous** les cas ne sont pas validés par
-/// l'utilisateur (`state != "pending"`).
+/// Refuse la validation tant que **tous** les cas de la phase ne sont pas
+/// validés (`state != "pending"`). L'étape 3 (« Aller/Retour ») n'est **pas
+/// implémentée** dans cette itération : elle produira un autre type de fichier
+/// (pas une modification du GPX) et est refusée ici.
+///
+/// Si aucune correction n'est à appliquer (aucune anomalie — auto-validation —
+/// ou tout conservé tel quel), la phase avance **sans réécrire le GPX**.
 #[tauri::command]
-pub async fn finalize_cleaning(
+pub async fn validate_phase(
     app: tauri::AppHandle,
     trace_id: String,
+    phase: String,
     state_json: serde_json::Value,
 ) -> Result<TraceMetadata, String> {
+    if phase == "out_and_back" {
+        return Err(
+            "Étape « Aller/Retour » non implémentée : elle produira un autre type de fichier (pas une modification du GPX).".to_string(),
+        );
+    }
     let state: CleaningState = serde_json::from_value(state_json)
         .map_err(|e| format!("État de nettoyage invalide : {}", e))?;
+    if !state.phase.is_empty() && state.phase != phase {
+        return Err(format!(
+            "Phase incohérente : état « {} », phase demandée « {} ».",
+            state.phase, phase
+        ));
+    }
 
-    // 1. Tous les cas doivent être validés (corrigé ou conservé tel quel).
+    // 1. Tous les cas de la phase doivent être validés.
     let pending = state.cases.iter().filter(|c| c.state == "pending").count();
     if pending > 0 {
         return Err(format!(
-            "Finalisation impossible : {} cas restent à valider.",
+            "Validation impossible : {} cas restent à traiter.",
             pending
         ));
     }
 
-    // 2. Charger le GPX original et ses points complets.
+    // 2. Phase suivante du pipeline (défini par l'ordre des étapes).
+    let next_phase = match phase.as_str() {
+        "spike" => "roundabout".to_string(),
+        "roundabout" => "out_and_back".to_string(),
+        _ => return Err(format!("Phase inconnue : {}", phase)),
+    };
+
     let mode_dir = get_mode_dir(&app)?;
     let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
-    let (gpx, trace) = load_trace_gpx(&app, &trace_id)?;
-    let original_points = extract_full_points(&gpx);
 
-    // 3. Appliquer les corrections.
-    let (final_points, removed_count) = apply_corrections(&original_points, &state.cases)?;
+    // Y a-t-il réellement des corrections à appliquer ?
+    let has_changes = state.cases.iter().any(|c| {
+        c.state != "kept"
+            && (!c.correction.delete_ranges.is_empty() || !c.correction.moved_points.is_empty())
+    });
 
-    // 4. Générer et écrire le GPX nettoyé.
-    let trace_name = trace.name.clone();
-    let cleaned_gpx = build_cleaned_gpx(&final_points, &trace_name);
-    let gpx_file = gpx_dir.join(&trace.filename);
+    if has_changes {
+        // 3. Charger le GPX courant et appliquer les corrections de la phase.
+        let (gpx, trace) = load_trace_gpx(&app, &trace_id)?;
+        let original_points = extract_full_points(&gpx);
+        let (final_points, removed_count) = apply_corrections(&original_points, &state.cases)?;
 
-    // 5. Backup de l'original (une seule fois, ne pas écraser un backup).
-    let backup_path = gpx_file.with_extension("gpx.orig");
-    if !backup_path.exists() {
-        std::fs::copy(&gpx_file, &backup_path)
-            .map_err(|e| format!("Sauvegarde de l'original (backup) : {}", e))?;
+        // 4. Générer et écrire le GPX nettoyé (entrée de l'étape suivante).
+        let trace_name = trace.name.clone();
+        let cleaned_gpx = build_cleaned_gpx(&final_points, &trace_name);
+        let gpx_file = gpx_dir.join(&trace.filename);
+
+        // 5. Backup de l'original (une seule fois, ne pas écraser un backup).
+        let backup_path = gpx_file.with_extension("gpx.orig");
+        if !backup_path.exists() {
+            std::fs::copy(&gpx_file, &backup_path)
+                .map_err(|e| format!("Sauvegarde de l'original (backup) : {}", e))?;
+        }
+
+        // 6. Écraser le GPX (écriture atomique).
+        write_atomic(&gpx_file, cleaned_gpx.as_bytes())?;
+
+        // 7. Régénérer les dérivés depuis le GPX nettoyé.
+        let file = std::fs::File::open(&gpx_file).map_err(|e| format!("Ouverture du fichier : {}", e))?;
+        let reader = BufReader::new(file);
+        let cleaned_gpx_obj = gpx::read(reader).map_err(|e| format!("GPX nettoyé invalide : {}", e))?;
+        let (stats, _) = compute_stats(&cleaned_gpx_obj)?;
+        let coords = extract_line_coordinates(&cleaned_gpx_obj)?;
+        let geojson_path = get_geojson_path(&mode_dir, &trace_id);
+        let feature = build_geojson_feature(coords, &trace_id, &trace_name);
+        let geojson_content = serde_json::to_string_pretty(&feature)
+            .map_err(|e| format!("Sérialisation GeoJSON : {}", e))?;
+        write_atomic(&geojson_path, geojson_content.as_bytes())?;
+        let hash = compute_file_hash(&gpx_file)?;
+
+        // 8. Mettre à jour le registre : stats/hash, avancer la phase, la trace
+        //    reste « needs_review » (l'étape 3 n'existe pas encore → jamais
+        //    « clean » dans cette itération).
+        let mut registry = load_registry(&traces_path);
+        {
+            let trace = registry
+                .iter_mut()
+                .find(|t| t.id == trace_id)
+                .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
+            trace.stats = stats;
+            trace.hash = hash;
+            trace.cleaning_phase = next_phase.clone();
+            trace.cleaning_status = "needs_review".to_string();
+        }
+        save_registry(&traces_path, &registry)?;
+
+        println!(
+            "[cleaning] Étape « {} » validée pour « {} » : {} point(s) supprimé(s), {} → {} points. Prochaine étape : « {} ».",
+            phase,
+            trace_name,
+            removed_count,
+            original_points.len(),
+            final_points.len(),
+            next_phase
+        );
+    } else {
+        // Aucune correction (aucune anomalie ou tout conservé) : on avance la
+        // phase sans réécrire le GPX ni régénérer les dérivés.
+        set_cleaning_phase(&app, &trace_id, &next_phase)?;
+        println!(
+            "[cleaning] Étape « {} » validée sans correction (auto-validation). Prochaine étape : « {} ».",
+            phase, next_phase
+        );
     }
 
-    // 6. Écraser le GPX original (écriture atomique).
-    write_atomic(&gpx_file, cleaned_gpx.as_bytes())?;
-
-    // 7. Régénérer les dérivés depuis le GPX nettoyé.
-    let file = std::fs::File::open(&gpx_file).map_err(|e| format!("Ouverture du fichier : {}", e))?;
-    let reader = BufReader::new(file);
-    let cleaned_gpx_obj = gpx::read(reader).map_err(|e| format!("GPX nettoyé invalide : {}", e))?;
-
-    let (stats, _) = compute_stats(&cleaned_gpx_obj)?;
-    let coords = extract_line_coordinates(&cleaned_gpx_obj)?;
-    let geojson_path = get_geojson_path(&mode_dir, &trace_id);
-    let feature = build_geojson_feature(coords, &trace_id, &trace_name);
-    let geojson_content = serde_json::to_string_pretty(&feature)
-        .map_err(|e| format!("Sérialisation GeoJSON : {}", e))?;
-    write_atomic(&geojson_path, geojson_content.as_bytes())?;
-
-    let hash = compute_file_hash(&gpx_file)?;
-
-    // 8. Mettre à jour le registre.
-    let mut registry = load_registry(&traces_path);
-    {
-        let trace = registry
-            .iter_mut()
-            .find(|t| t.id == trace_id)
-            .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
-        trace.stats = stats;
-        trace.hash = hash;
-        trace.cleaning_status = "clean".to_string();
-    }
-    save_registry(&traces_path, &registry)?;
-
-    // 9. Supprimer le fichier de travail.
-    let state_path = get_cleaning_path(&mode_dir, &trace_id);
+    // 9. Supprimer le fichier de travail de la phase validée (+ ancien nom).
+    let state_path = get_cleaning_path(&mode_dir, &trace_id, &phase);
     if state_path.exists() {
         let _ = std::fs::remove_file(&state_path);
     }
+    let legacy_path = mode_dir.join("cleaning").join(format!("{}.json", trace_id));
+    if legacy_path.exists() {
+        let _ = std::fs::remove_file(&legacy_path);
+    }
 
-    println!(
-        "[cleaning] Trace « {} » finalisée : {} point(s) supprimé(s), {} → {} points.",
-        trace_name,
-        removed_count,
-        original_points.len(),
-        final_points.len()
-    );
-
+    let registry = load_registry(&traces_path);
     registry
         .into_iter()
         .find(|t| t.id == trace_id)
@@ -752,6 +1052,80 @@ mod tests {
         assert_eq!(detect_anomalies(&pts, 20.0).len(), 1);
     }
 
+    /// Cas « rond-point » : un tour soutenu de ~1,25 tour. Les points suivent
+    /// un petit cercle (~30 m de rayon), 8 points par tour (pas de 45°).
+    fn roundabout_trace() -> Vec<(f64, f64)> {
+        let center_lat = 41.62000f64;
+        let center_lon = 2.55000f64;
+        let radius = 0.0003f64;
+        (0..=10)
+            .map(|k| {
+                let angle = (k as f64) * 45.0f64.to_radians();
+                (
+                    center_lat + radius * angle.cos(),
+                    center_lon + radius * angle.sin(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn roundabout_is_detected_and_classified() {
+        let pts = roundabout_trace();
+        let cases = detect_roundabouts(&pts, &RoundaboutParams::default());
+
+        assert_eq!(cases.len(), 1, "un seul rond-point doit être détecté");
+        let c = &cases[0];
+        assert_eq!(c.kind, CleaningCaseKind::Roundabout);
+        assert_eq!(c.start_index, 0);
+        // Angle cumulé au-delà du seuil (210°) : ~225° pour 5 pas de 45°.
+        assert!(c.total_angle_deg.abs() > 210.0, "angle cumulé = {}", c.total_angle_deg);
+        assert_eq!(c.bearing_delta_deg, c.total_angle_deg.abs());
+        // Correction **manuelle** : aucune suggestion automatique.
+        assert!(c.suggested_delete_ranges.is_empty());
+        // Pas de rebroussement : ni spike ni aller-retour ne le signalent.
+        assert!(detect_spikes(&pts, 5.0).is_empty());
+        assert!(detect_out_and_backs(&pts, 5.0).is_empty());
+    }
+
+    #[test]
+    fn roundabout_no_false_positive_on_straight_line() {
+        let straight: Vec<(f64, f64)> = (0..30)
+            .map(|i| (41.6, 2.50 + i as f64 * 0.001))
+            .collect();
+        assert!(detect_roundabouts(&straight, &RoundaboutParams::default()).is_empty());
+    }
+
+    #[test]
+    fn roundabout_params_control_detection() {
+        let pts = roundabout_trace();
+        // Un seuil d'angle cumulé trop haut → aucune détection.
+        let mut params = RoundaboutParams::default();
+        params.angle_seuil_deg = 1000.0;
+        assert!(detect_roundabouts(&pts, &params).is_empty());
+        // Un virage minimal trop strict → la progression s'arrête d'emblée.
+        let mut params = RoundaboutParams::default();
+        params.angle_min_deg = 90.0;
+        assert!(detect_roundabouts(&pts, &params).is_empty());
+    }
+
+    /// Les phases 1 et 3 sont des détections **distinctes** : `detect_spikes`
+    /// ne produit que des points isolés, `detect_out_and_backs` que des
+    /// branches aller-retour (le seuil de longueur est une heuristique interne,
+    /// pas un critère entre étapes).
+    #[test]
+    fn phases_split_spike_and_out_and_back() {
+        let spikes = detect_spikes(&spike_trace(), 5.0);
+        assert_eq!(spikes.len(), 1);
+        assert_eq!(spikes[0].kind, CleaningCaseKind::Spike);
+        assert!(detect_out_and_backs(&spike_trace(), 5.0).is_empty());
+
+        let oabs = detect_out_and_backs(&out_and_back_trace(), 5.0);
+        assert_eq!(oabs.len(), 1);
+        assert_eq!(oabs[0].kind, CleaningCaseKind::OutAndBack);
+        assert!(detect_spikes(&out_and_back_trace(), 5.0).is_empty());
+    }
+
     /// Vérifie l'application des corrections (suppressions) et la génération
     /// du GPX nettoyé.
     #[test]
@@ -777,6 +1151,7 @@ mod tests {
             end_index: 12,
             apex_indices: vec![6],
             bearing_delta_deg: 0.0,
+            total_angle_deg: 0.0,
             suggested_delete_ranges: vec![[6, 12]],
             state: "corrected".to_string(),
             correction,
@@ -843,6 +1218,7 @@ mod tests {
         let state = CleaningState {
             trace_id: "t".to_string(),
             tolerance_deg: 5.0,
+            phase: "spike".to_string(),
             cases: vec![CleaningCase {
                 id: "c1".to_string(),
                 kind: CleaningCaseKind::Spike,
@@ -850,6 +1226,7 @@ mod tests {
                 end_index: 2,
                 apex_indices: vec![1],
                 bearing_delta_deg: 0.0,
+                total_angle_deg: 0.0,
                 suggested_delete_ranges: vec![],
                 state: "pending".to_string(),
                 correction: Correction::default(),

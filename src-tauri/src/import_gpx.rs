@@ -95,6 +95,11 @@ pub struct TraceMetadata {
     /// registres antérieurs → `"clean"` (rétrocompatibilité).
     #[serde(default = "default_cleaning_status")]
     pub cleaning_status: String,
+    /// Phase du pipeline de nettoyage en cours : `"spike"` (pts hors trace),
+    /// `"roundabout"` (ronds-points), `"out_and_back"` (aller/retour — étape 3
+    /// à venir), ou chaîne vide quand la trace est propre (aucun nettoyage).
+    #[serde(default)]
+    pub cleaning_phase: String,
 }
 
 /// Valeur par défaut du statut de nettoyage pour les registres antérieurs :
@@ -658,11 +663,22 @@ pub(crate) fn load_registry(traces_path: &Path) -> Vec<TraceMetadata> {
     match std::fs::read_to_string(traces_path) {
         Ok(content) => match serde_json::from_str::<Vec<TraceMetadata>>(&content) {
             Ok(mut registry) => {
-                // Rétrocompatibilité : normalise le statut de nettoyage des
-                // registres antérieurs ou corrompus (chaîne vide → "clean").
+                // Rétrocompatibilité : normalise le statut de nettoyage et la
+                // phase des registres antérieurs ou corrompus.
+                //  - statut vide → "clean" ;
+                //  - trace « clean » → phase vide (aucun nettoyage requis) ;
+                //  - trace à nettoyer (needs_review / in_progress) sans phase
+                //    persistée → première étape (re-détection en chaîne).
                 for trace in &mut registry {
                     if trace.cleaning_status.is_empty() {
                         trace.cleaning_status = "clean".to_string();
+                    }
+                    if trace.cleaning_phase.is_empty() {
+                        trace.cleaning_phase = if trace.cleaning_status == "clean" {
+                            String::new()
+                        } else {
+                            "spike".to_string()
+                        };
                     }
                 }
                 registry
@@ -763,10 +779,11 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     let detection = detect_editor(&gpx);
     let (stats, _) = compute_stats(&gpx)?;
 
-    // 6bis. Détecter les anomalies de trace (points hors trace, aller-retours)
-    //       via la tolérance de cap paramétrable (Nettoyage.Cap.toleranceDeg).
-    //       Une trace avec anomalies n'est pas valide et ne peut pas être
-    //       candidate aux traitements (édition caméra) avant nettoyage.
+    // 6bis. Détecter les anomalies de l'**étape 1** du pipeline de nettoyage
+    //       (points hors trace) via la tolérance de cap paramétrable
+    //       (Nettoyage.Cap.toleranceDeg). Les étapes suivantes (ronds-points,
+    //       aller-retours) sont détectées dans la vue Nettoyage, chacune sur le
+    //       GPX produit par l'étape précédente.
     //
     //       La détection est **protégée contre tout panic imprévu** : un panic
     //       dans une commande async laisserait l'appelant (le frontend) bloqué
@@ -777,13 +794,19 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     }))
     .unwrap_or(5.0);
     let anomalies = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::cleaning::detect_anomalies_from_gpx(&gpx, tolerance)
+        crate::cleaning::detect_spikes_from_gpx(&gpx, tolerance)
     }))
     .unwrap_or_default();
     let cleaning_status = if anomalies.is_empty() {
         "clean".to_string()
     } else {
         "needs_review".to_string()
+    };
+    // Phase initiale : étape 1 si anomalies, sinon aucune (trace propre).
+    let cleaning_phase = if anomalies.is_empty() {
+        String::new()
+    } else {
+        "spike".to_string()
     };
     if !anomalies.is_empty() {
         println!(
@@ -837,6 +860,7 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         favorite: false,
         is_displayed: false,
         cleaning_status,
+        cleaning_phase,
     };
 
     // 9. Ajouter au registre et sauvegarder (écriture atomique)
@@ -922,11 +946,9 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
         let _ = std::fs::remove_file(&legacy_keyframes_file);
     }
 
-    // 2ter) Supprimer le fichier de travail de nettoyage (tolérant si absent).
-    let cleaning_file = mode_dir.join("cleaning").join(format!("{}.json", trace_id_owned));
-    if cleaning_file.exists() {
-        let _ = std::fs::remove_file(&cleaning_file);
-    }
+    // 2ter) Supprimer les fichiers de travail de nettoyage (toutes phases,
+    //       tolérant si absents) — gère aussi l'ancien nom sans suffixe.
+    crate::cleaning::remove_cleaning_files(&mode_dir, &trace_id_owned);
 
     // 2quater) Supprimer le backup d'origine `{filename}.gpx.orig` créé par la
     //          finalisation du nettoyage (tolérant si absent).

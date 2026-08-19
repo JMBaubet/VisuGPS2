@@ -84,7 +84,7 @@ pub struct ModeInfo {
 |---|---|---|
 | `import_gpx_file` | `async (app) -> Result<TraceMetadata, String>` | Sélecteur natif, parse, hash, copie, stats, màj registre. |
 | `get_traces` | `async (app) -> Result<Vec<TraceMetadata>, String>` | Liste les traces du mode actif depuis `traces.json`. |
-| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les **deux** fichiers keyframes (`_169`/`_43`, + l'ancien non suffixé) + le fichier de travail `cleaning/{id}.json` + le backup `{filename}.gpx.orig` + l'entrée du registre (écriture atomique). |
+| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le fichier GPX + le GeoJSON + les **deux** fichiers keyframes (`_169`/`_43`, + l'ancien non suffixé) + les fichiers de travail `cleaning/{id}.*.json` (toutes phases, + ancien nom non suffixé) + le backup `{filename}.gpx.orig` + l'entrée du registre (écriture atomique). |
 | `update_trace` | `async (app, trace_id, favorite: Option<bool>, is_displayed: Option<bool>) -> Result<(), String>` | Mise à jour partielle (PATCH) d'une trace. Seuls les champs `Some(...)` sont modifiés. |
 | `get_trace_geometry` | `async (app, trace_id) -> Result<TraceGeometry, String>` | Géométrie GeoJSON d'une trace (lu depuis le cache, ou régénéré depuis le GPX en cas de migration). |
 | `get_trace_points` | `async (app, trace_id) -> Result<TracePoints, String>` | Points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX original à la demande). |
@@ -94,25 +94,44 @@ pub struct ModeInfo {
 
 ### Nettoyage de trace (`cleaning.rs`)
 
-> Une trace n'est **valide** que si elle est « propre » (`cleaning_status = "clean"`). La détection ne fait que **proposer** des cas ; la **validation de chaque cas est de la responsabilité de l'utilisateur** (`corrected` / `kept`), et le GPX original n'est remplacé qu'à la finalisation, une fois **tous** les cas validés.
+> Le nettoyage est un **pipeline de 3 étapes séquentielles** (pts hors trace → ronds-points → aller/retour). Chaque commande prend une **phase** (`"spike"` / `"roundabout"` / `"out_and_back"`) et, pour les ronds-points, des paramètres `RoundaboutParams`. Une trace n'est **valide** que si elle est « propre » (`cleaning_status = "clean"`) ; elle reste `needs_review` tant que l'étape 3 n'est pas implémentée.
 
 | Commande | Signature Rust | Retour |
 |---|---|---|
-| `detect_trace_anomalies` | `async (app, trace_id, tolerance_deg: f64) -> Result<Vec<CleaningCase>, String>` | Détecte les anomalies (rebroussements ~180° sous la tolérance de cap) en re-parsant le GPX original. Aucune persistance. |
-| `get_cleaning_state` | `async (app, trace_id, tolerance_deg: f64) -> Result<CleaningState, String>` | État de nettoyage : le fichier de travail `cleaning/{trace_id}.json` s'il existe et est **valide** (corrections en cours), sinon une détection fraîche. Un fichier illisible/invalide est ignoré (re-détection) pour ne jamais bloquer l'IHM. |
-| `save_cleaning_state` | `async (app, trace_id, state_json: Value) -> Result<(), String>` | Sauvegarde partielle (écriture atomique) ; passe la trace en `"in_progress"`. Le GPX original reste intact. |
-| `reset_cleaning` | `async (app, trace_id) -> Result<(), String>` | Abandonne les corrections (supprime le fichier de travail) et remet la trace en `"needs_review"`. |
-| `finalize_cleaning` | `async (app, trace_id, state_json: Value) -> Result<TraceMetadata, String>` | Applique les corrections validées, génère le GPX nettoyé, **sauvegarde l'original en `{filename}.gpx.orig`**, régénère geojson/stats/hash, passe la trace en `"clean"`. Refuse tant qu'un cas est `"pending"`. |
+| `detect_trace_anomalies` | `async (app, trace_id, phase: String, tolerance_deg: f64, roundabout_params: Option<RoundaboutParams>) -> Result<Vec<CleaningCase>, String>` | Détecte les anomalies de la **phase** demandée sur le GPX courant (étape 1 : rebroussements ~180° ; étape 2 : ronds-points — cumul d'angle). Aucune persistance. |
+| `get_cleaning_state` | `async (app, trace_id, phase: String, tolerance_deg: f64, roundabout_params: Option<RoundaboutParams>) -> Result<CleaningState, String>` | État de nettoyage de la phase : fichier de travail `cleaning/{trace_id}.{phase}.json` s'il est **valide** (phase cohérente), sinon détection fraîche. Un fichier illisible/invalide/d'une autre phase est ignoré (re-détection). |
+| `save_cleaning_state` | `async (app, trace_id, phase: String, state_json: Value) -> Result<(), String>` | Sauvegarde partielle de la phase (écriture atomique) ; passe en `"in_progress"`, mémorise `cleaning_phase`. Le GPX reste intact. |
+| `reset_cleaning` | `async (app, trace_id) -> Result<(), String>` | Abandonne les corrections (tous les fichiers de travail) et repasse à l'étape 1, `"needs_review"`. |
+| `validate_phase` | `async (app, trace_id, phase: String, state_json: Value) -> Result<TraceMetadata, String>` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `{filename}.gpx.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`). Refuse tant qu'un cas est `"pending"` ; refuse l'étape 3 (non implémentée). Sans correction → avancement de phase sans réécriture. |
+
+**Type `RoundaboutParams`** (miroir TS dans `src/stores/cleaning.ts`) — paramètres de l'étape 2, lus depuis `Nettoyage.RondPoints.*` :
+```rust
+pub struct RoundaboutParams {
+    pub angle_min_deg: f64,    // virage minimal par point (défaut 5.0)
+    pub points_min: usize,     // points minimum (défaut 5)
+    pub points_max: usize,     // points maximum / fenêtre (défaut 50)
+    pub angle_seuil_deg: f64,  // angle cumulé seuil (défaut 210.0)
+    pub marge_points: usize,   // points de contexte avant/après le segment (défaut 5)
+}
+```
 
 **Type `CleaningState`** (miroir TS `CleaningState` dans `src/stores/cleaning.ts`) :
 ```rust
+pub struct CleaningState {
+    pub trace_id: String,
+    pub tolerance_deg: f64,        // tolérance de cap (étape 1/3)
+    pub phase: String,             // "spike" | "roundabout" | "out_and_back"
+    pub cases: Vec<CleaningCase>,
+}
+
 pub struct CleaningCase {
-    pub id: String,                    // "c1", "c2", "manual1", …
-    pub kind: CleaningCaseKind,        // spike | out_and_back | manual
+    pub id: String,                    // "c1", "c2", "rp1", "manual1", …
+    pub kind: CleaningCaseKind,        // spike | roundabout | out_and_back | manual
     pub start_index: usize,            // zone d'intérêt (index originaux)
     pub end_index: usize,
     pub apex_indices: Vec<usize>,      // points de rebroussement
     pub bearing_delta_deg: f64,        // écart de cap max mesuré
+    pub total_angle_deg: f64,          // angle cumulé signé d'un rond-point (0 sinon)
     pub suggested_delete_ranges: Vec<[usize; 2]>, // proposition (pré-remplissage)
     pub state: String,                 // "pending" | "corrected" | "kept"
     pub correction: Correction,
@@ -167,10 +186,12 @@ pub struct TraceMetadata {
     pub is_displayed: bool,               // afficher sur la carte (persisté)
     #[serde(default = "default_cleaning_status")]
     pub cleaning_status: String,          // "clean" | "needs_review" | "in_progress"
+    #[serde(default)]
+    pub cleaning_phase: String,           // "spike" | "roundabout" | "out_and_back" | "" (propre)
 }
 ```
 
-> `#[serde(default)]` sur `favorite`/`is_displayed` et `#[serde(default = "default_cleaning_status")]` sur `cleaning_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`"clean"`). En outre, `load_registry` **normalise** toute chaîne vide en `"clean"` (registres corrompus ou intermédiaires).
+> `#[serde(default)]` sur `favorite`/`is_displayed` et `#[serde(default = "default_cleaning_status")]` sur `cleaning_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`"clean"`). En outre, `load_registry` **normalise** toute chaîne vide en `"clean"` (registres corrompus ou intermédiaires) et déduit `cleaning_phase` : `""` pour une trace « clean », sinon `"spike"` (re-détection en chaîne).
 
 ## Exemples d'appel côté frontend
 
@@ -201,4 +222,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-08-18
+**Dernière mise à jour** : 2026-08-19
