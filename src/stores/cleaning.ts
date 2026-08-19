@@ -379,9 +379,17 @@ export const useCleaningStore = defineStore('cleaning', () => {
         roundaboutParams: roundaboutParams.value,
       })
       const previous = state.value.cases
+      // Les cas déjà validés dont la **zone** recouvre un cas re-détecté du
+      // même type sont conservés (état + corrections). La correspondance par
+      // chevauchement de zone remplace l'appariement par apex, qui ne
+      // fonctionne pas pour les ronds-points (apex_indices vide).
       const merged = fresh.map(freshCase => {
         const prev = previous.find(
-          p => p.state !== 'pending' && p.apex_indices.some(a => freshCase.apex_indices.includes(a)),
+          p =>
+            p.state !== 'pending' &&
+            p.kind === freshCase.kind &&
+            p.start_index <= freshCase.end_index &&
+            freshCase.start_index <= p.end_index,
         )
         return prev ?? freshCase
       })

@@ -185,6 +185,18 @@ Décisions de correction d'une trace, persistées à chaque **sauvegarde partiel
 - La présence d'un fichier pose `cleaning_status = "in_progress"` et `cleaning_phase = phase`.
 - À la **validation d'étape** (`validate_phase`), le GPX est remplacé par la version nettoyée (entrée de l'étape suivante), l'original est sauvegardé en `{filename}.gpx.orig` (**une seule fois**, à l'étape 1), les dérivés (geojson, stats, hash) sont régénérés, `cleaning_phase` avance et le fichier de travail de la phase est supprimé. Une étape sans anomalie est **auto-validée** (avancement de phase sans réécriture).
 
+### `cleaning/{uuid}.{phase}.decisions.json` — Décisions validées par phase (faux positifs)
+
+Persiste, à chaque **validation d'étape** (`validate_phase`), les cas validés **sans modification effective** (conservés tel quel, ou corrigés sans correction) : leur **coordonnée représentative** (apex ou centroïde de la zone) + état. Écriture atomique. Le fichier **survit** à la validation (le fichier de travail, lui, est supprimé) et **n'est effacé qu'au `reset_cleaning`** (ou à la suppression de la trace, via le glob `{id}.*.json`).
+
+À la **re-détection** d'une étape déjà validée (retour via le widget de la toolbar), les cas détectés dont la coordonnée représentative est à moins de ~40 m d'une décision `"kept"` sont **automatiquement re-marqués « faux positif »** — l'utilisateur retrouve ses décisions. Exemple :
+
+```json
+[
+  { "kind": "roundabout", "state": "kept", "lat": 41.58477, "lon": 2.54636 }
+]
+```
+
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
 - Ne contiennent **que les valeurs modifiées** par rapport au défaut (pas de recopie intégrale).

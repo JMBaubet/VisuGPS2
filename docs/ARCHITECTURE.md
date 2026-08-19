@@ -816,7 +816,7 @@ Posés **à l'import** : détection de l'**étape 1** (points hors trace) → `"
      - `detect_cases_for_phase` : dispatch par phase (`"roundabout"` → ronds-points, `"out_and_back"` → aller-retour, sinon étape 1).
    - **Tolérance de cap** : `Nettoyage.Cap.toleranceDeg` (défaut 5.0), lue via `read_tolerance_deg` (repli 5°, jamais de panic).
    - **Paramètres ronds-points** : groupe `Nettoyage.RondPoints` — `angleMinDeg` (5), `pointsMin` (5), `pointsMax` (50), `angleSeuilDeg` (210), `margePoints` (5, points de contexte avant/après le segment). Transmis au backend par le frontend (`RoundaboutParams`).
-   - **Persistance par phase** : fichier de travail `{mode}/cleaning/{trace_id}.{phase}.json` (écriture atomique) — les index de cas sont propres à la version du GPX traitée. Chaque cas porte `pending` / `corrected` / `kept`, plages de suppression et points **déplacés** (`MovedPoint`).
+   - **Persistance par phase** : fichier de travail `{mode}/cleaning/{trace_id}.{phase}.json` (écriture atomique) — les index de cas sont propres à la version du GPX traitée. Chaque cas porte `pending` / `corrected` / `kept`, plages de suppression et points **déplacés** (`MovedPoint`). **Décisions mémorisées** : à la validation d'étape, les cas « faux positif » (sans modification effective) sont persistés dans `cleaning/{trace_id}.{phase}.decisions.json` (coordonnée représentative + état) ; à la re-détection d'une étape déjà validée, les cas dont la zone correspond (~40 m) sont **re-marqués automatiquement**.
    - **Cycle de vie** : à l'import `needs_review` + étape 1 ; à chaque **validation d'étape** (`validate_phase`), les corrections de la phase sont appliquées et le **GPX est réécrit** (entrée de l'étape suivante) ; `cleaning_phase` avance (`spike → roundabout → out_and_back`) et la trace **reste `needs_review`** tant que l'étape 3 n'est pas implémentée. **Auto-validation** : une étape sans anomalie est validée automatiquement (avancement de phase sans réécriture).
    - **Backup `.orig`** : pris **une seule fois** à l'étape 1 (`{filename}.gpx.orig`, jamais écrasé) ; dérivés (geojson, stats, hash) régénérés à chaque réécriture.
 
@@ -844,10 +844,10 @@ Posés **à l'import** : détection de l'**étape 1** (points hors trace) → `"
 | Commande | Description |
 |----------|-------------|
 | `detect_trace_anomalies(trace_id, phase, tolerance_deg, roundabout_params?)` | Détecte les anomalies de la **phase** demandée sur le GPX courant (aucune persistance). |
-| `get_cleaning_state(trace_id, phase, tolerance_deg, roundabout_params?)` | Fichier de travail `cleaning/{trace_id}.{phase}.json` s'il est valide (phase cohérente), sinon détection fraîche. |
+| `get_cleaning_state(trace_id, phase, tolerance_deg, roundabout_params?)` | Fichier de travail `cleaning/{trace_id}.{phase}.json` s'il est valide (phase cohérente), sinon détection fraîche **fusionnée avec les décisions mémorisées** (`{phase}.decisions.json` — faux positifs re-marqués). |
 | `save_cleaning_state(trace_id, phase, state_json)` | Sauvegarde partielle (écriture atomique), passe en `"in_progress"`, mémorise la phase. |
-| `reset_cleaning(trace_id)` | Abandonne les corrections (toutes phases) et repasse à l'étape 1, `"needs_review"`. |
-| `validate_phase(trace_id, phase, state_json)` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`). Refuse tant qu'un cas est `pending` ; refuse l'étape 3 (non implémentée). Sans correction → simple avancement de phase. |
+| `reset_cleaning(trace_id)` | Abandonne les corrections (toutes phases, **y compris les décisions**) et repasse à l'étape 1, `"needs_review"`. |
+| `validate_phase(trace_id, phase, state_json)` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`) et **persiste les faux positifs** dans `{phase}.decisions.json`. Refuse tant qu'un cas est `pending` ; refuse l'étape 3 (non implémentée). Sans correction → simple avancement de phase. |
 
 ## Vue d'édition caméra (`/edition-camera`)
 

@@ -485,6 +485,109 @@ pub fn detect_spikes_from_gpx(gpx: &gpx::Gpx, tolerance_deg: f64) -> Vec<Cleanin
     detect_spikes(&coords, tolerance_deg)
 }
 
+// ---------------------------------------------------------------------------
+// Décisions persistées par phase (faux positifs mémorisés)
+// ---------------------------------------------------------------------------
+//
+// Quand une étape est **validée**, son fichier de travail est supprimé : les
+// décisions « faux positif » ne doivent pas être perdues. On persiste par
+// phase un fichier `cleaning/{trace_id}.{phase}.decisions.json` contenant les
+// zones décidées (coordonnée représentative + état). À la re-détection
+// ultérieure (retour sur une étape déjà validée), les cas détectés dont la
+// zone correspond à une décision « kept » sont re-marqués automatiquement.
+
+/// Décision validée par l'utilisateur, persistée par phase.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PhaseDecision {
+    pub kind: CleaningCaseKind,
+    /// État validé — « kept » (faux positif) pour le moment.
+    pub state: String,
+    /// Coordonnée représentative de la zone décidée (apex ou centroïde).
+    pub lat: f64,
+    pub lon: f64,
+}
+
+fn get_decisions_path(mode_dir: &Path, trace_id: &str, phase: &str) -> PathBuf {
+    mode_dir
+        .join("cleaning")
+        .join(format!("{}.{}.decisions.json", trace_id, phase))
+}
+
+fn load_decisions(mode_dir: &Path, trace_id: &str, phase: &str) -> Vec<PhaseDecision> {
+    let path = get_decisions_path(mode_dir, trace_id, phase);
+    if !path.exists() {
+        return Vec::new();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_decisions(
+    mode_dir: &Path,
+    trace_id: &str,
+    phase: &str,
+    decisions: &[PhaseDecision],
+) -> Result<(), String> {
+    let path = get_decisions_path(mode_dir, trace_id, phase);
+    let content = serde_json::to_string_pretty(decisions)
+        .map_err(|e| format!("Sérialisation des décisions : {}", e))?;
+    write_atomic(&path, content.as_bytes())
+}
+
+/// Coordonnée représentative d'un cas : l'apex s'il existe, sinon le
+/// **centroïde** de la zone `[start_index, end_index]` (ronds-points).
+fn case_representative(points: &[(f64, f64)], case: &CleaningCase) -> Option<(f64, f64)> {
+    if let Some(&a) = case.apex_indices.first() {
+        if a < points.len() {
+            return Some(points[a]);
+        }
+    }
+    if points.is_empty() {
+        return None;
+    }
+    let lo = case.start_index.min(points.len() - 1);
+    let hi = case.end_index.min(points.len() - 1);
+    if lo > hi {
+        return None;
+    }
+    let (mut lat, mut lon, mut n) = (0.0f64, 0.0f64, 0.0f64);
+    for p in &points[lo..=hi] {
+        lat += p.0;
+        lon += p.1;
+        n += 1.0;
+    }
+    if n == 0.0 {
+        None
+    } else {
+        Some((lat / n, lon / n))
+    }
+}
+
+/// Re-marque comme « kept » (faux positif) les cas détectés dont la zone
+/// correspond à une décision persistée (dans un rayon de ~40 m).
+fn merge_decisions(points: &[(f64, f64)], cases: &mut [CleaningCase], decisions: &[PhaseDecision]) {
+    if decisions.is_empty() {
+        return;
+    }
+    for c in cases.iter_mut() {
+        if c.state != "pending" {
+            continue;
+        }
+        let Some((lat, lon)) = case_representative(points, c) else {
+            continue;
+        };
+        let kept = decisions.iter().any(|d| {
+            d.state == "kept" && haversine(lat, lon, d.lat, d.lon) < 40.0
+        });
+        if kept {
+            c.state = "kept".to_string();
+            c.correction = Correction::default();
+        }
+    }
+}
+
 /// Lit la tolérance de cap paramétrée (`Nettoyage.Cap.toleranceDeg`), avec
 /// repli sur 5° si le paramètre est absent ou illisible.
 ///
@@ -774,7 +877,10 @@ pub async fn get_cleaning_state(
         .map(|p| (p.lat, p.lon))
         .collect();
     let params = roundabout_params.unwrap_or_default();
-    let cases = detect_cases_for_phase(&coords, &phase, tolerance_deg, &params);
+    let mut cases = detect_cases_for_phase(&coords, &phase, tolerance_deg, &params);
+    // Retour sur une étape déjà validée : re-marquer les faux positifs mémorisés.
+    let decisions = load_decisions(&mode_dir, &trace_id, &phase);
+    merge_decisions(&coords, &mut cases, &decisions);
     Ok(CleaningState {
         trace_id,
         tolerance_deg,
@@ -869,6 +975,16 @@ pub async fn validate_phase(
     let gpx_dir = get_gpx_dir(&mode_dir)?;
     let traces_path = get_traces_path(&mode_dir);
 
+    // Charger le GPX courant et ses points (réutilisés pour les corrections et
+    // pour mémoriser les décisions de la phase).
+    let (gpx, trace) = load_trace_gpx(&app, &trace_id)?;
+    let original_points = extract_full_points(&gpx);
+    let coords: Vec<(f64, f64)> = original_points
+        .iter()
+        .map(|p| (p.lat, p.lon))
+        .collect();
+    let trace_name = trace.name.clone();
+
     // Y a-t-il réellement des corrections à appliquer ?
     let has_changes = state.cases.iter().any(|c| {
         c.state != "kept"
@@ -876,13 +992,10 @@ pub async fn validate_phase(
     });
 
     if has_changes {
-        // 3. Charger le GPX courant et appliquer les corrections de la phase.
-        let (gpx, trace) = load_trace_gpx(&app, &trace_id)?;
-        let original_points = extract_full_points(&gpx);
+        // 3. Appliquer les corrections de la phase.
         let (final_points, removed_count) = apply_corrections(&original_points, &state.cases)?;
 
         // 4. Générer et écrire le GPX nettoyé (entrée de l'étape suivante).
-        let trace_name = trace.name.clone();
         let cleaned_gpx = build_cleaned_gpx(&final_points, &trace_name);
         let gpx_file = gpx_dir.join(&trace.filename);
 
@@ -944,7 +1057,36 @@ pub async fn validate_phase(
         );
     }
 
-    // 9. Supprimer le fichier de travail de la phase validée (+ ancien nom).
+    // 9. Mémoriser les décisions de la phase (faux positifs) : les cas validés
+    //    **sans modification effective** (conservés tel quel, ou corrigés sans
+    //    correction) gardent leur zone dans le GPX — on la persiste pour la
+    //    re-marquer automatiquement si l'utilisateur revient sur l'étape.
+    let decisions: Vec<PhaseDecision> = state
+        .cases
+        .iter()
+        .filter_map(|c| {
+            if c.state == "pending" {
+                return None;
+            }
+            let unchanged = c.state == "kept"
+                || (c.correction.delete_ranges.is_empty() && c.correction.moved_points.is_empty());
+            if !unchanged {
+                return None;
+            }
+            case_representative(&coords, c)
+                .map(|(lat, lon)| PhaseDecision {
+                    kind: c.kind.clone(),
+                    state: c.state.clone(),
+                    lat,
+                    lon,
+                })
+        })
+        .collect();
+    if !decisions.is_empty() {
+        save_decisions(&mode_dir, &trace_id, &phase, &decisions)?;
+    }
+
+    // 10. Supprimer le fichier de travail de la phase validée (+ ancien nom).
     let state_path = get_cleaning_path(&mode_dir, &trace_id, &phase);
     if state_path.exists() {
         let _ = std::fs::remove_file(&state_path);
@@ -1107,6 +1249,38 @@ mod tests {
         let mut params = RoundaboutParams::default();
         params.angle_min_deg = 90.0;
         assert!(detect_roundabouts(&pts, &params).is_empty());
+    }
+
+    /// Les décisions persistées (« faux positif ») re-marquent les cas détectés
+    /// dont la zone correspond (retour sur une étape déjà validée).
+    #[test]
+    fn decisions_merge_remarks_kept_cases() {
+        let pts = roundabout_trace();
+        let mut cases = detect_roundabouts(&pts, &RoundaboutParams::default());
+        assert_eq!(cases.len(), 1);
+
+        // Décision au centroïde du rond-point → le cas re-détecté est « kept ».
+        let rep = case_representative(&pts, &cases[0]).unwrap();
+        let decisions = vec![PhaseDecision {
+            kind: CleaningCaseKind::Roundabout,
+            state: "kept".to_string(),
+            lat: rep.0,
+            lon: rep.1,
+        }];
+        merge_decisions(&pts, &mut cases, &decisions);
+        assert_eq!(cases[0].state, "kept");
+        assert!(cases[0].correction.delete_ranges.is_empty());
+
+        // Une décision éloignée (~1 km) ne marque pas le cas.
+        let mut cases2 = detect_roundabouts(&pts, &RoundaboutParams::default());
+        let far = vec![PhaseDecision {
+            kind: CleaningCaseKind::Roundabout,
+            state: "kept".to_string(),
+            lat: rep.0 + 0.01,
+            lon: rep.1 + 0.01,
+        }];
+        merge_decisions(&pts, &mut cases2, &far);
+        assert_eq!(cases2[0].state, "pending");
     }
 
     /// Les phases 1 et 3 sont des détections **distinctes** : `detect_spikes`
