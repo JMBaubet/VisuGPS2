@@ -779,11 +779,11 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     let detection = detect_editor(&gpx);
     let (stats, _) = compute_stats(&gpx)?;
 
-    // 6bis. Détecter les anomalies de l'**étape 1** du pipeline de nettoyage
-    //       (points hors trace) via la tolérance de cap paramétrable
-    //       (Nettoyage.Cap.toleranceDeg). Les étapes suivantes (ronds-points,
-    //       aller-retours) sont détectées dans la vue Nettoyage, chacune sur le
-    //       GPX produit par l'étape précédente.
+    // 6bis. Détecter les anomalies des **3 étapes** du pipeline de nettoyage
+    //       (points hors trace, ronds-points, aller-retours) : une trace est
+    //       signalée « à nettoyer » dès qu'une anomalie existe, quelle que soit
+    //       son étape. Tolérance de cap `Nettoyage.Cap.toleranceDeg` et
+    //       paramètres `Nettoyage.RondPoints.*` lus depuis les réglages.
     //
     //       La détection est **protégée contre tout panic imprévu** : un panic
     //       dans une commande async laisserait l'appelant (le frontend) bloqué
@@ -793,26 +793,31 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         crate::cleaning::read_tolerance_deg(&app)
     }))
     .unwrap_or(5.0);
-    let anomalies = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::cleaning::detect_spikes_from_gpx(&gpx, tolerance)
+    let roundabout_params = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::cleaning::read_roundabout_params(&app)
     }))
     .unwrap_or_default();
-    let cleaning_status = if anomalies.is_empty() {
+    let (spikes, roundabouts, out_and_backs) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::cleaning::detect_all_phases_from_gpx(&gpx, tolerance, &roundabout_params)
+        }))
+        .unwrap_or_default();
+    let total_anomalies = spikes.len() + roundabouts.len() + out_and_backs.len();
+    let cleaning_status = if total_anomalies == 0 {
         "clean".to_string()
     } else {
         "needs_review".to_string()
     };
     // Phase initiale : étape 1 si anomalies, sinon aucune (trace propre).
-    let cleaning_phase = if anomalies.is_empty() {
+    let cleaning_phase = if total_anomalies == 0 {
         String::new()
     } else {
         "spike".to_string()
     };
-    if !anomalies.is_empty() {
+    if total_anomalies > 0 {
         println!(
-            "[import_gpx] Trace « {} » : {} anomalie(s) détectée(s), statut « needs_review ».",
-            name,
-            anomalies.len()
+            "[import_gpx] Trace « {} » : {} anomalie(s) détectée(s) ({} pts hors trace, {} rond(s)-point(s), {} aller-retour(s)), statut « needs_review ».",
+            name, total_anomalies, spikes.len(), roundabouts.len(), out_and_backs.len()
         );
     }
 

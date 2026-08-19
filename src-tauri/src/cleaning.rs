@@ -351,15 +351,16 @@ fn detect_uturn_cases(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<Cleaning
     cases
 }
 
-/// Détection **combinée** (spike + out_and_back) — conservée uniquement pour
-/// les tests (dont le scan des traces réelles). Le pipeline réel utilise les
-/// détections par phase (`detect_cases_for_phase`).
-#[cfg(test)]
+/// Détection **combinée** (points hors trace + aller-retours) — c'est la
+/// détection de l'**étape 1** « Pts hors trace » du pipeline : elle conserve
+/// le fonctionnement d'origine (avant l'étape 2), où les deux types d'anomalies
+/// de rebroussement étaient proposés et corrigés ensemble (modification du GPX).
 pub fn detect_anomalies(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
     detect_uturn_cases(points, tolerance_deg)
 }
 
-/// Points isolés hors trace — **étape 1** du pipeline de nettoyage.
+/// Points isolés hors trace — sous-détection de l'étape 1 (utilisée par
+/// l'import pour le décompte, et par les tests).
 pub fn detect_spikes(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
     detect_uturn_cases(points, tolerance_deg)
         .into_iter()
@@ -367,8 +368,9 @@ pub fn detect_spikes(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningC
         .collect()
 }
 
-/// Branches aller-retour — **étape 3** du pipeline (non appelée dans cette
-/// itération : son traitement et son fichier de sortie seront différents).
+/// Branches aller-retour — sous-détection de l'étape 1 (utilisée par l'import
+/// pour le décompte, et par les tests). L'**étape 3** « Aller/Retour » (à
+/// venir) produira un autre type de fichier : elle ne modifiera pas le GPX.
 pub fn detect_out_and_backs(points: &[(f64, f64)], tolerance_deg: f64) -> Vec<CleaningCase> {
     detect_uturn_cases(points, tolerance_deg)
         .into_iter()
@@ -450,7 +452,7 @@ pub fn detect_roundabouts(points: &[(f64, f64)], params: &RoundaboutParams) -> V
 }
 
 /// Détecte les anomalies de la **phase demandée** du pipeline de nettoyage.
-/// Phase inconnue → repli sur l'étape 1 (points hors trace).
+/// Phase inconnue → repli sur l'étape 1.
 pub fn detect_cases_for_phase(
     points: &[(f64, f64)],
     phase: &str,
@@ -460,7 +462,9 @@ pub fn detect_cases_for_phase(
     match phase {
         "roundabout" => detect_roundabouts(points, params),
         "out_and_back" => detect_out_and_backs(points, tolerance_deg),
-        _ => detect_spikes(points, tolerance_deg),
+        // Étape 1 « Pts hors trace » : détection **combinée** d'origine (points
+        // hors trace + aller-retours) — le GPX est modifié à la validation.
+        _ => detect_anomalies(points, tolerance_deg),
     }
 }
 
@@ -475,14 +479,46 @@ pub fn detect_anomalies_from_gpx(gpx: &gpx::Gpx, tolerance_deg: f64) -> Vec<Clea
     detect_anomalies(&coords, tolerance_deg)
 }
 
+/// Coordonnées (lat, lon) extraites d'un GPX parsé (aplatissement complet).
+fn coords_from_gpx(gpx: &gpx::Gpx) -> Vec<(f64, f64)> {
+    extract_full_points(gpx)
+        .iter()
+        .map(|p| (p.lat, p.lon))
+        .collect()
+}
+
 /// Détecte les **points hors trace** (étape 1) directement depuis un GPX
 /// parsé — utilisée à l'import pour poser le statut « à nettoyer ».
 pub fn detect_spikes_from_gpx(gpx: &gpx::Gpx, tolerance_deg: f64) -> Vec<CleaningCase> {
-    let coords: Vec<(f64, f64)> = extract_full_points(gpx)
-        .iter()
-        .map(|p| (p.lat, p.lon))
-        .collect();
-    detect_spikes(&coords, tolerance_deg)
+    detect_spikes(&coords_from_gpx(gpx), tolerance_deg)
+}
+
+/// Détecte les **ronds-points** (étape 2) directement depuis un GPX parsé.
+pub fn detect_roundabouts_from_gpx(gpx: &gpx::Gpx, params: &RoundaboutParams) -> Vec<CleaningCase> {
+    detect_roundabouts(&coords_from_gpx(gpx), params)
+}
+
+/// Détecte les **aller-retours** (étape 3) directement depuis un GPX parsé.
+pub fn detect_out_and_backs_from_gpx(
+    gpx: &gpx::Gpx,
+    tolerance_deg: f64,
+) -> Vec<CleaningCase> {
+    detect_out_and_backs(&coords_from_gpx(gpx), tolerance_deg)
+}
+
+/// Détection **combinée des 3 étapes** pour l'import : la trace doit être
+/// signalée « à nettoyer » dès qu'une anomalie existe, quelle que soit son
+/// étape (points hors trace, ronds-points ou aller-retours).
+pub fn detect_all_phases_from_gpx(
+    gpx: &gpx::Gpx,
+    tolerance_deg: f64,
+    roundabout_params: &RoundaboutParams,
+) -> (Vec<CleaningCase>, Vec<CleaningCase>, Vec<CleaningCase>) {
+    (
+        detect_spikes_from_gpx(gpx, tolerance_deg),
+        detect_roundabouts_from_gpx(gpx, roundabout_params),
+        detect_out_and_backs_from_gpx(gpx, tolerance_deg),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +652,89 @@ fn tolerance_from_settings(default_toml: &toml::Table, user_overrides: &toml::Ta
         Some(toml::Value::Float(f)) => *f,
         Some(toml::Value::Integer(i)) => *i as f64,
         _ => 5.0,
+    }
+}
+
+/// Lit les paramètres de détection des ronds-points
+/// (`Nettoyage.RondPoints.*`) avec repli sur les valeurs par défaut. Ne
+/// **panique jamais** (`try_state`), comme `read_tolerance_deg`.
+pub fn read_roundabout_params(app: &tauri::AppHandle) -> RoundaboutParams {
+    let state = match app.try_state::<Arc<RwLock<SettingsState>>>() {
+        Some(s) => s,
+        None => return RoundaboutParams::default(),
+    };
+    let guard = match state.read() {
+        Ok(g) => g,
+        Err(_) => return RoundaboutParams::default(),
+    };
+    roundabout_params_from_settings(&guard.default_toml, &guard.user_overrides)
+}
+
+/// Résout un paramètre flottant depuis les tables TOML (surcharge utilisateur
+/// prioritaire, puis valeur par défaut, repli sur `fallback`).
+fn read_f64_setting(
+    default_toml: &toml::Table,
+    user_overrides: &toml::Table,
+    path: &str,
+    fallback: f64,
+) -> f64 {
+    let value = get_toml_value_by_path(user_overrides, path)
+        .or_else(|| get_toml_value_by_path(default_toml, path));
+    match value {
+        Some(toml::Value::Float(f)) => *f,
+        Some(toml::Value::Integer(i)) => *i as f64,
+        _ => fallback,
+    }
+}
+
+/// Résout un paramètre entier depuis les tables TOML (même logique).
+fn read_usize_setting(
+    default_toml: &toml::Table,
+    user_overrides: &toml::Table,
+    path: &str,
+    fallback: usize,
+) -> usize {
+    read_f64_setting(default_toml, user_overrides, path, fallback as f64)
+        .round()
+        .max(0.0) as usize
+}
+
+/// Résout les paramètres ronds-points depuis les tables TOML. Pure et testable.
+pub fn roundabout_params_from_settings(
+    default_toml: &toml::Table,
+    user_overrides: &toml::Table,
+) -> RoundaboutParams {
+    RoundaboutParams {
+        angle_min_deg: read_f64_setting(
+            default_toml,
+            user_overrides,
+            "Nettoyage.RondPoints.angleMinDeg",
+            5.0,
+        ),
+        points_min: read_usize_setting(
+            default_toml,
+            user_overrides,
+            "Nettoyage.RondPoints.pointsMin",
+            5,
+        ),
+        points_max: read_usize_setting(
+            default_toml,
+            user_overrides,
+            "Nettoyage.RondPoints.pointsMax",
+            50,
+        ),
+        angle_seuil_deg: read_f64_setting(
+            default_toml,
+            user_overrides,
+            "Nettoyage.RondPoints.angleSeuilDeg",
+            210.0,
+        ),
+        marge_points: read_usize_setting(
+            default_toml,
+            user_overrides,
+            "Nettoyage.RondPoints.margePoints",
+            5,
+        ),
     }
 }
 
@@ -1537,5 +1656,31 @@ mod tests {
     fn tolerance_from_settings_missing_key_falls_back() {
         let default = toml::Table::new();
         assert_eq!(tolerance_from_settings(&default, &toml::Table::new()), 5.0);
+    }
+
+    /// Les paramètres ronds-points sont lus depuis le TOML (défauts si absents).
+    #[test]
+    fn roundabout_params_from_settings_reads_defaults() {
+        let default: toml::Table = toml::from_str(
+            "[Nettoyage.RondPoints]\nangleMinDeg = 7.0\npointsMin = 6\npointsMax = 60\nangleSeuilDeg = 300.0\nmargePoints = 8\n",
+        )
+        .unwrap();
+        let p = roundabout_params_from_settings(&default, &toml::Table::new());
+        assert_eq!(p.angle_min_deg, 7.0);
+        assert_eq!(p.points_min, 6);
+        assert_eq!(p.points_max, 60);
+        assert_eq!(p.angle_seuil_deg, 300.0);
+        assert_eq!(p.marge_points, 8);
+    }
+
+    /// Tables vides → valeurs par défaut de `RoundaboutParams`.
+    #[test]
+    fn roundabout_params_from_settings_falls_back() {
+        let p = roundabout_params_from_settings(&toml::Table::new(), &toml::Table::new());
+        assert_eq!(p.angle_min_deg, 5.0);
+        assert_eq!(p.points_min, 5);
+        assert_eq!(p.points_max, 50);
+        assert_eq!(p.angle_seuil_deg, 210.0);
+        assert_eq!(p.marge_points, 5);
     }
 }

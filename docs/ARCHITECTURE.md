@@ -417,7 +417,7 @@ src-tauri/
 - `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
-- `cleaning.rs` : Pipeline de nettoyage en 3 étapes (pts hors trace, ronds-points, aller/retour) — détections par phase (`detect_spikes`/`detect_roundabouts`/`detect_out_and_backs`), persistance par phase (`cleaning/{trace_id}.{phase}.json`), validation d'étape (GPX réécrit + backup + régénération geojson/stats/hash)
+- `cleaning.rs` : Pipeline de nettoyage en 3 étapes (étape 1 combinée pts hors trace + aller-retours, ronds-points, aller/retour à venir) — `detect_anomalies`/`detect_roundabouts`/`detect_cases_for_phase`, persistance par phase (`cleaning/{trace_id}.{phase}.json` + décisions), validation d'étape (GPX réécrit + backup + régénération geojson/stats/hash)
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -791,13 +791,13 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 ## Nettoyage de trace GPX (`/nettoyage`)
 
-Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946), **tours soutenus de rond-point** (plus d'un tour), ou **aller-retours inutiles** (ex. points 711/791). Le nettoyage est organisé en un **pipeline de 3 étapes séquentielles**, chacune avec sa détection, sa correction et sa validation :
+Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946), **aller-retours inutiles** (ex. points 711/791), ou **tours soutenus de rond-point** (plus d'un tour). Le nettoyage est organisé en un **pipeline de 3 étapes séquentielles**, chacune avec sa détection, sa correction et sa validation :
 
-1. **Pts hors trace** (étape 1) — points isolés hors trace (rebroussement ~180°, branche courte). Correction = suppression → **modifie le GPX**.
+1. **Pts hors trace** (étape 1) — **détection combinée d'origine** : points isolés hors trace **et** aller-retours (rebroussement ~180°). Correction (suppression des points isolés, du demi-tour + du retour) → **modifie le GPX**. C'est l'étape qui nettoie physiquement la trace.
 2. **Rond-Points** (étape 2) — tours soutenus (cumul d'angle de virage). Correction **manuelle** (suppression/déplacement des points dans la zone élargie d'une marge) → **modifie le GPX**.
-3. **Aller/Retour** (étape 3) — branches aller-retour avec retraçage. **Traitement et sortie différents** (produira un autre type de fichier, pas une modification du GPX) — **non implémentée** dans cette itération : simple emplacement dans la toolbar.
+3. **Aller/Retour** (étape 3) — **traitement et sortie différents** : elle produira un autre type de fichier, **pas** une modification du GPX — **non implémentée** dans cette itération : simple emplacement dans la toolbar.
 
-Le seuil de longueur de branche (100 m) est une **heuristique interne** de la détection de rebroussement, **pas** un critère d'architecture entre les étapes 1 et 3 (types d'erreur distincts).
+Le seuil de longueur de branche (100 m) est une **heuristique interne** de la détection de rebroussement (classification spike / aller-retour au sein de l'étape 1), **pas** un critère d'architecture entre les étapes.
 
 ### État de nettoyage (`cleaning_status` + `cleaning_phase`)
 
@@ -811,9 +811,10 @@ Posés **à l'import** : détection de l'**étape 1** (points hors trace) → `"
 
 1. **Module backend** (`src-tauri/src/cleaning.rs`) :
    - **Détections par phase** (les utilitaires `bearing`/`angle_distance`/`haversine` sont partagés) :
-     - `detect_spikes` / `detect_out_and_backs` : **rebroussements** ~180° (cap précédent ≈ cap suivant sous tolérance), regroupement en cas (fenêtre 25 index), zone délimitée par retraçage symétrique ; classification interne par longueur de branche (spike < 100 m / out_and_back sinon).
-     - `detect_roundabouts` : **portage de l'outil de référence** — cumul des virages (différence de cap normalisée [−180, 180]) tant que chaque virage ≥ `angleMinDeg` et que la fenêtre ≤ `pointsMax` ; cas retenu quand `|angle cumulé| > angleSeuilDeg` avec `pointsMin ≤ count ≤ pointsMax`. Produit un cas `roundabout` (`start_index`/`end_index` du tour, `total_angle_deg` signé → tours = `|angle|/360`, sens = signe).
-     - `detect_cases_for_phase` : dispatch par phase (`"roundabout"` → ronds-points, `"out_and_back"` → aller-retour, sinon étape 1).
+     - **Étape 1** : `detect_anomalies` (alias de `detect_uturn_cases`) — détection **combinée d'origine** des rebroussements ~180° (points isolés `spike` + aller-retours `out_and_back`), regroupement en cas (fenêtre 25 index), zone délimitée par retraçage symétrique, classification interne par longueur de branche (spike < 100 m / out_and_back sinon). `detect_spikes` / `detect_out_and_backs` en sont les sous-détections (décompte à l'import, tests).
+     - **Étape 2** : `detect_roundabouts` — **portage de l'outil de référence** — cumul des virages (différence de cap normalisée [−180, 180]) tant que chaque virage ≥ `angleMinDeg` et que la fenêtre ≤ `pointsMax` ; cas retenu quand `|angle cumulé| > angleSeuilDeg` avec `pointsMin ≤ count ≤ pointsMax`. Produit un cas `roundabout` (`start_index`/`end_index` du tour, `total_angle_deg` signé → tours = `|angle|/360`, sens = signe).
+     - `detect_cases_for_phase` : dispatch par phase (`"roundabout"` → ronds-points, `"out_and_back"` → sous-détection aller-retour, sinon **étape 1 combinée**).
+   - **Import** : `detect_all_phases_from_gpx` (spikes + ronds-points + aller-retours) — la trace est signalée « à nettoyer » dès qu'une anomalie existe, quelle que soit son étape.
    - **Tolérance de cap** : `Nettoyage.Cap.toleranceDeg` (défaut 5.0), lue via `read_tolerance_deg` (repli 5°, jamais de panic).
    - **Paramètres ronds-points** : groupe `Nettoyage.RondPoints` — `angleMinDeg` (5), `pointsMin` (5), `pointsMax` (50), `angleSeuilDeg` (210), `margePoints` (5, points de contexte avant/après le segment). Transmis au backend par le frontend (`RoundaboutParams`).
    - **Persistance par phase** : fichier de travail `{mode}/cleaning/{trace_id}.{phase}.json` (écriture atomique) — les index de cas sont propres à la version du GPX traitée. Chaque cas porte `pending` / `corrected` / `kept`, plages de suppression et points **déplacés** (`MovedPoint`). **Décisions mémorisées** : à la validation d'étape, les cas « faux positif » (sans modification effective) sont persistés dans `cleaning/{trace_id}.{phase}.decisions.json` (coordonnée représentative + état) ; à la re-détection d'une étape déjà validée, les cas dont la zone correspond (~40 m) sont **re-marqués automatiquement**.
