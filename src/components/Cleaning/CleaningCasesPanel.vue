@@ -112,16 +112,16 @@
         </div>
 
         <!-- Mesure du cas : écart de cap (rebroussements) ou angle cumulé /
-             tours (rond-point) -->
+             tours (rond-point), + delta d'altitude du segment -->
         <div class="text-caption text-medium-emphasis mb-2">
           <template v-if="current.kind === 'roundabout'">
             Angle cumulé : {{ Math.abs(current.total_angle_deg).toFixed(0) }}° ·
             {{ (Math.abs(current.total_angle_deg) / 360).toFixed(1) }} tour(s) ·
-            {{ current.total_angle_deg >= 0 ? 'horaire' : 'anti-horaire' }}
+            {{ current.total_angle_deg >= 0 ? 'horaire' : 'anti-horaire' }}{{ altDeltaText }}
           </template>
           <template v-else>
             Écart de cap mesuré : {{ current.bearing_delta_deg.toFixed(1) }}° (seuil
-            {{ cleaning.toleranceDeg.toFixed(1) }}°)
+            {{ cleaning.toleranceDeg.toFixed(1) }}°){{ altDeltaText }}
           </template>
         </div>
 
@@ -198,6 +198,27 @@ const deletedCount = computed(() => {
   if (!c) return 0
   return c.correction.delete_ranges.reduce((acc, [from, to]) => acc + (to - from + 1), 0)
 })
+
+/**
+ * Delta d'altitude du segment courant (m) : point le plus haut − point le
+ * plus bas de la zone (points sans altitude ignorés). `null` si aucune
+ * altitude disponible.
+ */
+const altDelta = computed<number | null>(() => {
+  let min: number | null = null
+  let max: number | null = null
+  for (const p of cleaning.currentZone) {
+    if (p.alt === null || p.alt === undefined) continue
+    if (min === null || p.alt < min) min = p.alt
+    if (max === null || p.alt > max) max = p.alt
+  }
+  return min === null || max === null ? null : max - min
+})
+
+/** Suffixe « Δ alt : X m » (omis si aucune altitude). */
+const altDeltaText = computed(() =>
+  altDelta.value === null ? '' : ` · Δ alt : ${altDelta.value.toFixed(0)} m`,
+)
 
 /**
  * Confirme puis supprime un cas (poubelle de la liste). Les cas « Modification
