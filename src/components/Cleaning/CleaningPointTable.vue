@@ -81,6 +81,11 @@
             Déplacé
           </v-btn>
         </template>
+
+        <!-- Colonne « Élévation » : altitude du point (mètres) -->
+        <template #item.alt="{ internalItem }">
+          <span class="text-caption">{{ formatAlt(internalItem.raw.alt) }}</span>
+        </template>
       </v-data-table>
     </div>
   </div>
@@ -90,9 +95,9 @@
 /**
  * Tableau des points de la zone du cas courant (composant Vuetify
  * `v-data-table`) : numéro, **sélection intégrée** (case d'en-tête
- * « tout sélectionner / tout désélectionner ») et indicateur « Déplacé »
- * (cliquable pour annuler). Le déplacement lui-même se fait directement sur
- * la carte (cas manuels).
+ * « tout supprimer / tout remettre »), indicateur « Déplacé » (cliquable
+ * pour annuler) et **élévation** de chaque point (mètres, « — » si absente).
+ * Le déplacement lui-même se fait directement sur la carte (cas manuels).
  */
 import { computed } from 'vue'
 import { useCleaningStore } from '../../stores/cleaning'
@@ -104,14 +109,16 @@ const current = computed(() => cleaning.currentCase)
 /** Points de la zone du cas courant (avec leur index original implicite). */
 const zone = computed(() => cleaning.currentZone)
 
-/** Lignes du tableau : index original + identifiant affiché. La zone peut être
- * élargie de la marge (ronds-points) — les index se déduisent de `zoneStart`. */
+/** Lignes du tableau : index original + identifiant affiché + altitude. La
+ * zone peut être élargie de la marge (ronds-points) — les index se déduisent
+ * de `zoneStart`. */
 const items = computed(() => {
   const c = cleaning.currentCase
   if (!c) return []
-  return zone.value.map((_, idx) => ({
+  return zone.value.map((p, idx) => ({
     i: cleaning.zoneStart + idx,
     id: cleaning.zoneStart + idx + 1,
+    alt: p.alt,
   }))
 })
 
@@ -119,7 +126,13 @@ const headers = [
   { title: 'Ident. du point', key: 'id', align: 'center' },
   { title: 'Suppr.', key: 'select', align: 'center' },
   { title: 'Déplacé', key: 'deplace', align: 'center' },
+  { title: 'Élévation', key: 'alt', align: 'center' },
 ] as const
+
+/** Altitude formatée en mètres (arrondie à l'entier), « — » si absente. */
+function formatAlt(alt: number | null | undefined): string {
+  return alt === null || alt === undefined ? '—' : `${Math.round(alt)} m`
+}
 
 /** Nombre de points marqués à supprimer dans le segment courant. */
 const deletedCount = computed(() => {
