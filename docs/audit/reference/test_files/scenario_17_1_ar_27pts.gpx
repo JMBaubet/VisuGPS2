@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="VisuGPS2-Test" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Scenario 17.1 - Detecteur AR (27 points)</name>
+    <desc>Trace synthetique pour valider detect_ar. Apres consolidation 0.5m : 23 points, 1 finding AR au sommet pt 12 (working), emprise pts 8-16, 3 paires miroir aux distances 0m, 0m, 40m. Fichier points 6, 11, 12, 15 (base 1) supprimes par consolidation (fichier indices 5, 10, 11, 14 base 0).</desc>
+  </metadata>
+  <trk>
+    <name>AR 17.1</name>
+    <trkseg>
+      <trkpt lat="45.0000000" lon="2.0000000"/>
+      <trkpt lat="45.0000000" lon="2.0005000"/>
+      <trkpt lat="45.0000000" lon="2.0010000"/>
+      <trkpt lat="45.0000000" lon="2.0015000"/>
+      <trkpt lat="45.0000000" lon="2.0020000"/>
+      <trkpt lat="45.0000000" lon="2.0020050"/>
+      <trkpt lat="45.0000000" lon="2.0025000"/>
+      <trkpt lat="45.0000000" lon="2.0032000"/>
+      <trkpt lat="45.0000000" lon="2.0035000"/>
+      <trkpt lat="45.0000000" lon="2.0040000"/>
+      <trkpt lat="45.0000000" lon="2.0040050"/>
+      <trkpt lat="45.0000000" lon="2.0039950"/>
+      <trkpt lat="45.0000000" lon="2.0045000"/>
+      <trkpt lat="45.0000000" lon="2.0050000"/>
+      <trkpt lat="45.0000000" lon="2.0050050"/>
+      <trkpt lat="45.0000000" lon="2.0055000"/>
+      <trkpt lat="45.0000000" lon="2.0050000"/>
+      <trkpt lat="45.0000000" lon="2.0045000"/>
+      <trkpt lat="45.0000000" lon="2.0040000"/>
+      <trkpt lat="45.0000000" lon="2.0029920"/>
+      <trkpt lat="45.0000000" lon="2.0025000"/>
+      <trkpt lat="45.0000000" lon="2.0020000"/>
+      <trkpt lat="45.0000000" lon="2.0015000"/>
+      <trkpt lat="45.0000000" lon="2.0010000"/>
+      <trkpt lat="45.0000000" lon="2.0005000"/>
+      <trkpt lat="45.0000000" lon="2.0000000"/>
+      <trkpt lat="45.0000000" lon="1.9995000"/>
+    </trkseg>
+  </trk>
+</gpx>

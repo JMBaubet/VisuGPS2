@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPX Extractor" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>RP-Santa_Susanna — 1 segment(s) : 539→563</name>
+    <trkseg>
+      <trkpt lat="41.5792000" lon="2.5530000"><ele>13</ele></trkpt>
+      <trkpt lat="41.5790300" lon="2.5526500"><ele>10</ele></trkpt>
+      <trkpt lat="41.5787900" lon="2.5520000"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787300" lon="2.5517400"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787500" lon="2.5517200"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787700" lon="2.5516700"><ele>8</ele></trkpt>
+      <trkpt lat="41.5787600" lon="2.5516000"><ele>8</ele></trkpt>
+      <trkpt lat="41.5787400" lon="2.5515700"><ele>8</ele></trkpt>
+      <trkpt lat="41.5787000" lon="2.5515500"><ele>8</ele></trkpt>
+      <trkpt lat="41.5786800" lon="2.5515500"><ele>8</ele></trkpt>
+      <trkpt lat="41.5786500" lon="2.5515600"><ele>7</ele></trkpt>
+      <trkpt lat="41.5786200" lon="2.5516200"><ele>7</ele></trkpt>
+      <trkpt lat="41.5786200" lon="2.5516800"><ele>6</ele></trkpt>
+      <trkpt lat="41.5786400" lon="2.5517400"><ele>6</ele></trkpt>
+      <trkpt lat="41.5786600" lon="2.5517500"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787400" lon="2.5519000"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787900" lon="2.5520000"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787300" lon="2.5517400"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787500" lon="2.5517200"><ele>7</ele></trkpt>
+      <trkpt lat="41.5787700" lon="2.5516700"><ele>8</ele></trkpt>
+      <trkpt lat="41.5790100" lon="2.5514500"><ele>11</ele></trkpt>
+      <trkpt lat="41.5790400" lon="2.5514400"><ele>11</ele></trkpt>
+      <trkpt lat="41.5790800" lon="2.5514200"><ele>12</ele></trkpt>
+      <trkpt lat="41.5791100" lon="2.5514700"><ele>12</ele></trkpt>
+      <trkpt lat="41.5791500" lon="2.5514700"><ele>12</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
