@@ -6,7 +6,10 @@
 pub mod anchor;
 pub mod ar;
 pub mod consolidation;
+pub mod corrections;
+pub mod export;
 pub mod geometry;
+pub mod migration;
 pub mod rp;
 pub mod types;
 

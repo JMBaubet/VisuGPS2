@@ -258,7 +258,7 @@ fn e5_fixture() -> (ResampledGeo, Vec<f64>, Vec<f64>, Vec<u32>) {
 
 /// Paramètres RP par défaut (ANALYSE §3.1) : σ = 0,5 m, p-close = 15 m,
 /// p-angle = 270°.
-fn rp_params() -> AuditParams {
+pub(crate) fn rp_params() -> AuditParams {
     AuditParams {
         consol_m: 0.5,
         tol_deg: 20.0,
@@ -274,7 +274,7 @@ fn rp_params() -> AuditParams {
 /// selon le système de fichiers, les noms peuvent être stockés en NFC ou en NFD
 /// (macOS utilise NFD pour « AR_Detecté aussi en RP.gpx ») et Rust ne normalise
 /// pas Unicode sans dépendance externe.
-fn load_gpx(prefix: &str) -> Vec<AuditPoint> {
+pub(crate) fn load_gpx(prefix: &str) -> Vec<AuditPoint> {
     let dir = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../docs/audit/reference/test_files"
