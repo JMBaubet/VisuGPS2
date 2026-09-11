@@ -384,8 +384,8 @@ fn test_detect_ar_immobile() {
    - ctx.dn          = 16  (pt 17)
    - summary         = "sommet pt 12 · 3 paires · écart 0°"
    - ecart           = 0.0
-   - d1              = 100.0 (branche amont, m)
-   - d2              = 100.0 (branche aval, m)
+   - d1              = 39.36 (branche amont, m)
+   - d2              = 39.36 (branche aval, m)
    - status          = FindingStatus::Pending
    - correction      = None
    - undo            = None

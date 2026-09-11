@@ -4,6 +4,11 @@ mod gestionMode;
 mod settings;
 mod import_gpx;
 mod cleaning;
+// Module Audit GPX — câblé à la Phase 4 (commandes Tauri). L'attribut `dead_code`
+// est temporaire : tant qu'aucune commande ne référence le module, tout son
+// contenu est considéré inutilisé. Il sera retiré à l'intégration.
+#[allow(dead_code)]
+mod gpx_audit;
 
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;
