@@ -247,7 +247,7 @@ Fichiers de régression utilisés par les tests Rust :
 | `RP_Santa_Susanna.gpx` | RP — tour + réengagement | ~175° lissé + ~164° de coin → 360° |
 | `AR_Santa_Susanna.gpx` | AR — aiguille | Rejeté par RP (anti-aiguille) + détecté par AR |
 | `AR_Detecté_aussi_en_RP.gpx` | AR — aiguille ambiguë | Rejeté par RP + détecté par AR |
-| `RP_erreur_Magny.gpx` | RP — A/R macroscopique + giratoire 4 tours | 1440°, fenêtre bornée |
+| `RP_erreur_Magny.gpx` | RP — A/R macroscopique + giratoire 4 tours | 776° « 2 tours complets + 1/4 de tour », fenêtre bornée (cf. `spec/ANALYSE.md` §18) |
 
 Ces fichiers sont utilisés par les tests `ar_test.rs`, `rp_test.rs`
 et les scénarios d'intégration.

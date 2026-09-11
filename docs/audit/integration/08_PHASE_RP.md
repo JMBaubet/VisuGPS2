@@ -663,3 +663,37 @@ code ou note dans le commit) avant de passer à la Phase 3.
   n'est pas évidente (ex. justifier le `+ 540 % 360 - 180`).
 - **Logging** : aucun log dans `detect_rp` (fonction pure). Les
   commandes Tauri se chargent du logging (Livrable 4).
+
+---
+
+## 13. Avenant du 2026-09-11 — verdict `RP_erreur_Magny`
+
+**Objet.** Le verdict « **1440° “4 tours complets”** » annoncé au §7
+(tableau des scénarios) et repris au §10 (critère de passage) **n'est pas
+reproductible avec l'artefact gelé**.
+
+**Constat.** Sur `RP_erreur_Magny.gpx`, l'implémentation de référence
+(`reference/verifgpx-V3.0.html`, extraite **verbatim** — l'artefact n'a pas
+été modifié — et exécutée sur le même fichier) publie **776° « 2 tours
+complets + 1/4 de tour »** : une seule anomalie, fenêtre retenue des
+échantillons 231 à 275 (périmètre 172,6 m, drapeau « propre », `csRef = 39`,
+`ceRef = 61`). Le portage Rust produit exactement les mêmes valeurs,
+intermédiaires compris (trace consolidée 210 pts / 4285,0 m, n = 1071,
+2688 candidats, 1 groupe fusionné, 665 paires raffinées, dMin = 0,00,
+182 fenêtres, 1 retenue). Aucune fenêtre de 3 ou 4 tours n'existe, même à
+l'état de candidat.
+
+**Conséquence normative.** La spécification `spec/ANALYSE.md` a été amendée
+(avenant §18, version V1.1), ainsi que le récapitulatif
+`README.md` / `integration/11_README.md`. Les deux emplacements du présent
+livrable cités ci-dessus sont donc **supplantés** par le présent avenant :
+il n'y a pas lieu de viser 1440°, et le critère de passage du §10 se lit
+désormais « 776° sur une fenêtre bornée au giratoire (≈ 173 m ≪ `RP_LMAX`) ».
+
+**Nom du test.** `test_scenario_rp_erreur_magny_4_turns` est conservé : il
+désigne le **motif du fichier** (giratoire à 4 tours), pas le verdict
+algorithmique. Ses assertions portent sur les valeurs réellement produites.
+
+**Non modifié.** Le §9 (points de vigilance) et le §12 (style de portage)
+restent valides : le portage reproduit `detectRP` à l'identique, seule la
+description documentaire du verdict était erronée.

@@ -1,7 +1,8 @@
 
 # Spécification algorithmique — Détection d'anomalies AR et RP
 
-> **ANALYSE — V1.0**
+> **ANALYSE — V1.1**
+> (avenant du 2026-09-11 : verdict `RP_erreur_Magny` corrigé — cf. §18)
 > Spécification complète et autonome des deux algorithmes de détection
 > d'anomalies de trace GPX :
 > · **AR** — artefacts « aller-retour » ponctuels (zigzag, aiguille de
@@ -43,6 +44,7 @@
 15. [Cas limites et comportements attendus](#15)
 16. [Justification des choix algorithmiques](#16)
 17. [Scénarios de validation](#17)
+18. [Avenant — correction du verdict `RP_erreur_Magny`](#18)
 
 ---
 
@@ -1074,7 +1076,7 @@ Vérifiables mécaniquement sur toute sortie :
 | Tour complet, sortie sur autre branche | Publié, « tour complet (1×) » | quantification ±40° |
 | Tour complet + réengagement branche d'entrée | Publié 360° | `closingTurn` restitue le coin |
 | Double tour (720°) | Un seul cœur « 2 tours complets » | quantification k=2 ; fusion É3 |
-| Quadruple tour dans un A/R macroscopique | 1440°, fenêtre bornée au giratoire seul | LMAX + glouton disjoint |
+| Quadruple tour dans un A/R macroscopique | Rotation mesurée sur la fenêtre **bornée** au giratoire seul — 776° « 2 tours complets + 1/4 de tour » sur le jeu de régression (cf. §18) | LMAX + glouton disjoint |
 | Aiguille / demi-tour avec re-parcours exact | Rejetée | anti-aiguille (circularité OU miroir) |
 | Fenêtre débordant sur la voie de sortie | Écartée si une fenêtre propre existe | `closingDelta` + préférence de sélection |
 | Créneau en U sans voie de retour < `p-close` | Non détecté | aucun candidat géométrique |
@@ -1170,7 +1172,7 @@ Sortie exacte attendue :
 | rondpoints (g3) | refermeture non exacte (~12 m) | 330–350° bruts → **360°** après quantification |
 | RP-Santa Susanna | tour complet + **réengagement** branche d'entrée | ~175° lissé + ~164° de coin → 360°, détecté au seuil par défaut |
 | AR-Santa Susanna | **aiguille** (aller-retour exact) | rejetée par le RP (anti-aiguille : circularité ≈ 0 ET miroir ≈ 1,0) — et captée par le détecteur AR |
-| RP_erreur_Magny | aller-retour macroscopique + giratoire réel à 4 tours | **1 anomalie** : 1440° « 4 tours complets », fenêtre bornée au giratoire, méga-paire exclue par LMAX, aiguille locale rejetée |
+| RP_erreur_Magny | aller-retour macroscopique + giratoire réel à 4 tours | **1 anomalie** : 776° « 2 tours complets + 1/4 de tour » (fenêtre bornée au giratoire, ≈ 173 m, **propre** — cf. §18), méga-paire exclue par LMAX, aiguille locale rejetée |
 | « rondpoints » (ancres radiales) | 3 boucles consécutives | ancres attendues — IN pt 1 / OUT pt 26 · IN pt 30 / OUT pt 62 · IN pt 80 / OUT pt 116 |
 | épingles à re-parcours partiel | ni anneau ni aiguille pure | publiées (miroir ≈ 0,7 < 0,95 ; circularité ≈ 0,4 > 0,10) — traitement par l'hôte |
 | Workflow complet | audit de bout en bout | analyse mixte AR + RP → corrections (cf. CORRECTIONS/IHM) → export → re-analyse propre sur le GPX corrigé |
@@ -1188,7 +1190,52 @@ Sortie exacte attendue :
 
 ---
 
-**Fin du document ANALYSE V1.0.**
+<a name="18"></a>
+## 18. Avenant — correction du verdict `RP_erreur_Magny` (2026-09-11)
+
+**Origine.** Le portage du détecteur RP (phase 2 du plan d'intégration) a
+reproduit le §17.2 point par point. Six des sept verdicts du jeu RP ont été
+obtenus à l'identique ; le verdict `RP_erreur_Magny` ne l'a pas été : le
+détecteur publie **776° « 2 tours complets + 1/4 de tour »** là où la
+version 1.0 du présent document annonçait 1440° « 4 tours complets ».
+
+**Vérification.** L'implémentation de référence gelée
+(`reference/verifgpx-V3.0.html`) a été extraite **verbatim** (aucune
+modification de l'artefact) et exécutée sur le même fichier de régression.
+Elle produit exactement le résultat du portage, y compris tous les
+intermédiaires : trace consolidée 210 points / 4285,0 m, n = 1071
+échantillons (pas 4,0009 m), 2688 candidats, 1 groupe fusionné, 665 paires
+raffinées, dMin = 0,00, 182 fenêtres construites, 1 fenêtre retenue. Cette
+fenêtre va des échantillons 231 à 275 (périmètre 172,6 m, rotation 776,4°,
+drapeau « propre », bornes de référence `csRef = 39`, `ceRef = 61`) et le
+finding publié porte `peak = 39`, `totalAngle = 776`, emprise 35..65, cœur
+39..61, contexte 34/66. Aucune fenêtre de 3 ou 4 tours n'existe, même à
+l'état de candidat : sur ce relevé, la rotation mesurable dans une fenêtre
+bornée vaut ≈ 2,16 tours.
+
+**Décision.** Le comportement de l'artefact de référence prévaut : le présent
+document est amendé en conséquence (§15.3 et §17.2). L'écart n'était pas un
+défaut de portage mais une divergence entre la version 1.0 du texte et
+l'implémentation gelée. Les autres assertions du verdict (« 1 anomalie »,
+fenêtre bornée au giratoire, méga-paire exclue par LMAX, aiguille locale
+rejetée) étaient exactes et sont conservées.
+
+**Portée.** Cet avenant ne modifie **aucune** constante, aucun seuil ni aucun
+mécanisme (§3, §6 à §13) : il constate le comportement de référence.
+
+**Points laissés en l'état.**
+
+- Les lignes du §17.2 « rondpoints (ancres radiales) », « épingles à
+  re-parcours partiel » et « Workflow complet » n'ont pas de fichier de
+  régression dans `reference/test_files/` : elles n'ont pas pu être vérifiées
+  et restent telles quelles.
+- La mention « la méga-paire englobait 8 tours du vrai giratoire » (§16) est
+  une observation historique du défaut d'origine, non reproductible sur le jeu
+  gelé ; elle n'a pas été modifiée.
+
+---
+
+**Fin du document ANALYSE V1.1.**
 Documents associés : **IHM V1.0** (présentation, interactions,
 prévisualisations, échanges) ; **CORRECTIONS V1.0** (moteur de
 correction : réalignement, transformations, annulation, invariants).
