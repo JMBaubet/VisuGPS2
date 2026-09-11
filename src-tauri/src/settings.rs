@@ -615,6 +615,12 @@ pub async fn update_setting(
                 .ok_or_else(|| format!("Valeur invalide pour un booléen : {:?}", value))?;
             toml::Value::Boolean(val_bool)
         }
+        // Type `string` : texte libre, non chiffré, sans borne (décision 12).
+        "string" => {
+            let val_str = value.as_str()
+                .ok_or_else(|| format!("Valeur invalide pour un texte : {:?}", value))?;
+            toml::Value::String(val_str.to_string())
+        }
         "list" => {
             let val_str = value.as_str()
                 .ok_or_else(|| format!("Valeur invalide pour une liste (chaîne attendue) : {:?}", value))?

@@ -79,6 +79,14 @@ export interface TraceMetadata {
    * venir), ou chaîne vide quand la trace est propre.
    */
   cleaning_phase: string
+  /**
+   * Statut d'audit de la trace (module Audit GPX) :
+   * `"clean"` (auditée sans anomalie, ou corrections appliquées),
+   * `"needs_review"` (anomalies détectées à l'import), `"in_progress"`.
+   * Une trace non « clean » ne peut pas entrer en édition caméra : elle est
+   * redirigée vers `/audit`.
+   */
+  audit_status: string
 }
 
 // --- Store ---

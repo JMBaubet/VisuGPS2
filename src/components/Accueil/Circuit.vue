@@ -36,7 +36,7 @@
         <v-btn
           class="action-btn"
           :class="{ 'action-btn--hidden': !(isEditionIncomplete || isHovering) }"
-          :icon="needsCleaning ? 'mdi-broom' : 'mdi-pencil'"
+          :icon="needsAudit ? 'mdi-map-marker-path' : 'mdi-pencil'"
           :color="editColor"
           variant="text"
           density="comfortable"
@@ -200,7 +200,6 @@ import { useAppStore } from '../../stores/app'
 import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
-import { useCleaningStore } from '../../stores/cleaning'
 import { useSettingsStore } from '../../stores/settings'
 import { useKeyframesStore } from '../../stores/keyframes'
 import type { ViewportAspect } from '../../algorithms/keyframeGenerator'
@@ -226,7 +225,6 @@ const appStore = useAppStore()
 const router = useRouter()
 const tracesStore = useTracesStore()
 const editionStore = useEditionStore()
-const cleaningStore = useCleaningStore()
 const settingsStore = useSettingsStore()
 const keyframesStore = useKeyframesStore()
 
@@ -272,11 +270,11 @@ onMounted(async () => {
  * le bouton ViewPort de la toolbar d'édition) : vert si **tous** les segments
  * sont verrouillés, jaune si **> 50 %**, orange si **≥ 10 %**, rouge sinon.
  *
- * Une trace non « clean » (anomalies à nettoyer) est toujours affichée en
+ * Une trace non « clean » (anomalies à auditer) est toujours affichée en
  * orange : elle n'est pas candidate à l'édition caméra.
  */
 const editColor = computed(() => {
-  if (needsCleaning.value) return '#FF9800' // orange — à nettoyer
+  if (needsAudit.value) return '#FF9800' // orange — à auditer
   const r = lockRatio.value
   if (r >= 1) return '#4CAF50' // vert
   if (r > 0.5) return '#FFEB3B' // jaune
@@ -285,10 +283,10 @@ const editColor = computed(() => {
 })
 
 /**
- * `true` si la trace doit être nettoyée avant toute édition (anomalies
- * détectées à l'import ou corrections en cours).
+ * `true` si la trace doit être auditée avant toute édition (anomalies
+ * détectées à l'import, ou audit non encore appliqué).
  */
-const needsCleaning = computed(() => props.trace.cleaning_status !== 'clean')
+const needsAudit = computed(() => props.trace.audit_status !== 'clean')
 
 /**
  * `true` si l'édition de la trace est **incomplète** pour le viewport paramétré
@@ -299,7 +297,7 @@ const isEditionIncomplete = computed(() => lockRatio.value < 1)
 
 /** Tooltip de l'icône Éditer (ratio viewport + % de segments verrouillés). */
 const pencilTitle = computed(() => {
-  if (needsCleaning.value) return 'Nettoyer la trace (anomalies détectées)'
+  if (needsAudit.value) return 'Auditer la trace (anomalies détectées)'
   const pct = Math.round(lockRatio.value * 100)
   const vp = viewportAspect.value
   return lockRatio.value >= 1
@@ -402,15 +400,17 @@ async function ouvrirSource() {
 
 /**
  * Sélectionne la trace puis navigue vers la vue adaptée :
- * - trace non « clean » → vue de nettoyage (`/nettoyage`) : la trace contient
- *   des anomalies (points hors trace, aller-retours) et n'est **pas candidate**
- *   à l'édition caméra tant qu'elles ne sont pas corrigées et validées ;
+ * - trace non « clean » → vue d'audit (`/audit?traceId=…`) : la trace contient
+ *   des anomalies (aller-retours, boucles giratoires) et n'est **pas candidate**
+ *   à l'édition caméra tant qu'elles ne sont pas traitées et validées ;
  * - sinon → édition caméra (`/edition-camera`).
+ *
+ * La trace auditée est désignée par la **query** de la route : plus de store
+ * intermédiaire (Livrable 5 §7.1).
  */
 function editerCircuit() {
-  if (needsCleaning.value) {
-    cleaningStore.selectTrace(props.trace.id)
-    router.push({ name: 'nettoyage' })
+  if (needsAudit.value) {
+    router.push({ name: 'audit', query: { traceId: props.trace.id } })
     return
   }
   editionStore.selectTrace(props.trace.id)

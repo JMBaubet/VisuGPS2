@@ -4,10 +4,6 @@ mod gestionMode;
 mod settings;
 mod import_gpx;
 mod cleaning;
-// Module Audit GPX — câblé à la Phase 4 (commandes Tauri). L'attribut `dead_code`
-// est temporaire : tant qu'aucune commande ne référence le module, tout son
-// contenu est considéré inutilisé. Il sera retiré à l'intégration.
-#[allow(dead_code)]
 mod gpx_audit;
 
 use display::{get_displays, open_second_window, close_second_window};
@@ -62,7 +58,17 @@ pub fn run() {
             cleaning::get_cleaning_state,
             cleaning::save_cleaning_state,
             cleaning::reset_cleaning,
-            cleaning::validate_phase
+            cleaning::validate_phase,
+            gpx_audit::commands::audit_run_detection,
+            gpx_audit::commands::audit_map_overlay,
+            gpx_audit::commands::audit_delete_preview,
+            gpx_audit::commands::audit_routes_identical,
+            gpx_audit::commands::audit_apply_delete,
+            gpx_audit::commands::audit_apply_route,
+            gpx_audit::commands::audit_mark_fp,
+            gpx_audit::commands::audit_unmark_fp,
+            gpx_audit::commands::audit_undo_correction,
+            gpx_audit::commands::audit_validate
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

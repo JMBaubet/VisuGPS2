@@ -3,11 +3,14 @@ import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 // Union des types de paramètres pris en charge.
-// `string` reste autorisé pour tolérer d'éventuels types non listés (ex: "monitor").
+// `string` est un type à part entière (décision 12) ; la branche ouverte
+// `(string & {})` reste autorisée pour tolérer d'éventuels types non listés
+// (ex: "monitor").
 export type SettingType =
   | 'int'
   | 'float'
   | 'bool'
+  | 'string'
   | 'secret'
   | 'list'
   | 'rgba'

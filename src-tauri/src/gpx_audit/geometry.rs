@@ -35,6 +35,9 @@ impl Projector {
     }
 
     /// Projection inverse : (x, y) métriques → coordonnées géographiques.
+    ///
+    /// Contrat ANALYSE §2.2 (`inv ∘ fwd = id`) — consommée par le rendu des
+    /// ancres de routage (`overlay::rp_anchors`, centre du cercle ajusté).
     pub fn inv(&self, x: f64, y: f64) -> (f64, f64) {
         let lat = self.lat0 + y / self.ky;
         let lon = self.lon0 + x / self.kx;

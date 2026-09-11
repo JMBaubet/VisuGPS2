@@ -10,6 +10,7 @@ const TYPE_ICONS: Record<string, string> = {
   int: 'mdi-numeric',
   float: 'mdi-decimal',
   bool: 'mdi-toggle-switch-outline',
+  string: 'mdi-form-textbox',
   secret: 'mdi-form-textbox-password',
   list: 'mdi-format-list-bulleted',
   rgba: 'mdi-palette',

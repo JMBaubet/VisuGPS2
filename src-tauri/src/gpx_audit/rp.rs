@@ -1255,6 +1255,9 @@ pub(super) struct Candidate {
 /// Groupe de candidats fusionnés par l'É3 (conteneur, jamais une anomalie).
 #[derive(Debug, Clone)]
 pub(super) struct MergedGroup {
+    // Début du groupe : posé par l'É3, consommé par les tests de fusion ; la
+    // publication s'appuie sur `e` et sur les paires/croisements.
+    #[allow(dead_code)]
     pub(super) s: usize,
     pub(super) e: usize,
     pub(super) paires: Vec<(usize, usize)>,

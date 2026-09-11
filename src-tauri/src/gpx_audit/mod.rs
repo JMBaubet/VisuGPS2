@@ -5,12 +5,20 @@
 
 pub mod anchor;
 pub mod ar;
+pub mod commands;
 pub mod consolidation;
 pub mod corrections;
 pub mod export;
 pub mod geometry;
+// D1 / D2c : câblage reporté à la Phase 5 (migration complète) — les fonctions
+// sont prêtes mais aucun point d'appel ne les utilise encore.
+#[allow(dead_code)]
 pub mod migration;
+pub mod overlay;
+pub mod pipeline;
+pub mod preview;
 pub mod rp;
+pub mod routing;
 pub mod types;
 
 #[cfg(test)]

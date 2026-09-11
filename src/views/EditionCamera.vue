@@ -20,7 +20,6 @@ import { useAppStore } from '../stores/app'
 import { useSettingsStore } from '../stores/settings'
 import { useTracesStore } from '../stores/traces'
 import { useEditionStore } from '../stores/edition'
-import { useCleaningStore } from '../stores/cleaning'
 import EditionMap from '../components/Edition/EditionMap.vue'
 import EditionToolbar from '../components/Edition/EditionToolbar.vue'
 import ViewportFrame from '../components/Edition/ViewportFrame.vue'
@@ -35,7 +34,6 @@ const appStore = useAppStore()
 const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const editionStore = useEditionStore()
-const cleaningStore = useCleaningStore()
 
 onMounted(async () => {
   // Garde-fou : pas de trace sélectionnée → retour à l'accueil.
@@ -50,13 +48,12 @@ onMounted(async () => {
   await settingsStore.loadSettings()
   await tracesStore.loadTraces()
 
-  // Garde-fou « validité » : une trace non « clean » (anomalies détectées,
-  // nettoyage non finalisé) n'est pas candidate à l'édition caméra — on
-  // redirige vers la vue de nettoyage.
+  // Garde-fou « validité » : une trace non « clean » (anomalies détectées, audit
+  // non appliqué) n'est pas candidate à l'édition caméra — on redirige vers la
+  // vue d'audit, qui reçoit la trace par la query de la route.
   const trace = tracesStore.traces.find(t => t.id === editionStore.selectedTraceId)
-  if (trace && trace.cleaning_status !== 'clean') {
-    cleaningStore.selectTrace(trace.id)
-    router.replace({ name: 'nettoyage' })
+  if (trace && trace.audit_status !== 'clean') {
+    router.replace({ name: 'audit', query: { traceId: trace.id } })
     return
   }
 

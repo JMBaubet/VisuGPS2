@@ -101,6 +101,11 @@ pub fn sync_indexes(points: &[AuditPoint], findings: &mut Vec<Finding>) {
 /// (`geo.ids[i] == working[i].id`) — ainsi que les re-rendus et les verrous :
 /// la reconstruction de la géométrie est du ressort de la couche commande, les
 /// re-rendus du frontend. Au niveau des données, la chaîne se réduit à §3.
+///
+/// Étape publique du contrat CORRECTIONS §3 : sa logique est appelée en interne
+/// par `apply_delete` / `apply_route`, et la fonction elle-même est couverte par
+/// les tests de la sous-étape 3.1.
+#[allow(dead_code)]
 pub fn after_trace_edit(points: &[AuditPoint], findings: &mut Vec<Finding>) {
     sync_indexes(points, findings);
 }

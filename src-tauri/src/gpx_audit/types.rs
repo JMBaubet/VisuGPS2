@@ -1,5 +1,12 @@
 // Contrat de données du module Audit GPX.
 // Miroir exact des interfaces TypeScript définies dans src/stores/audit.ts.
+//
+// Avenant au Livrable 1 : toutes les **structs** portent
+// `#[serde(rename_all = "camelCase")]`. Tauri 2.x convertit les **arguments**
+// d'appel (`traceId` → `trace_id`) mais **pas** les champs imbriqués ni les
+// retours de commande : sans cet attribut, les paramètres envoyés par le store
+// (`{ consolM, tolDeg, … }`) échoueraient à se désérialiser et le front
+// recevrait du snake_case. Les **enums** conservent leur propre `rename_all`.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +45,7 @@ pub enum PartRole {
 // ─── Contenu d'un finding ─────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FindingPair {
     pub aid: u32, // id stable du point amont
     pub bid: u32, // id stable du point aval
@@ -47,6 +55,7 @@ pub struct FindingPair {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FindingPart {
     pub s: usize,
     pub e: usize,
@@ -55,12 +64,14 @@ pub struct FindingPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FindingContext {
     pub up: Option<usize>,
     pub dn: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FindingContextIds {
     pub up: Option<u32>,
     pub dn: Option<u32>,
@@ -69,6 +80,7 @@ pub struct FindingContextIds {
 // ─── Finding complet (contrat ANALYSE §4.2) ───────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub id: String,     // "ar-1", "rp-2", ...
     pub kind: FindingKind,
@@ -112,6 +124,7 @@ pub enum UndoRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UndoDelete {
     pub orig_pts: Vec<AuditPoint>,
     pub anchor_left_id: Option<u32>,
@@ -121,6 +134,7 @@ pub struct UndoDelete {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UndoRoute {
     pub orig_pts: Vec<AuditPoint>,
     pub inserted_ids: Vec<u32>,
@@ -132,6 +146,7 @@ pub struct UndoRoute {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LatLon {
     pub lat: f64,
     pub lon: f64,
@@ -140,6 +155,7 @@ pub struct LatLon {
 // ─── Point et résultat de détection ───────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditPoint {
     pub id: u32,
     pub lat: f64,
@@ -148,6 +164,7 @@ pub struct AuditPoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditDetectionResult {
     pub trace_id: String,
     pub points: Vec<AuditPoint>, // trace consolidée (working initial)
@@ -158,6 +175,7 @@ pub struct AuditDetectionResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditParams {
     pub consol_m: f64,
     pub tol_deg: f64,
@@ -171,6 +189,7 @@ pub struct AuditParams {
 // ─── État retourné par les commandes de correction ────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditState {
     pub points: Vec<AuditPoint>,
     pub findings: Vec<Finding>,

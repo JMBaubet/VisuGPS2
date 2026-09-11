@@ -29,6 +29,12 @@ const router = createRouter({
       component: Cleaning
     },
     {
+      // Lazy loading : Mapbox GL ne doit pas alourdir le bundle principal.
+      path: '/audit',
+      name: 'audit',
+      component: () => import('../views/Audit.vue')
+    },
+    {
       path: '/screen-bis',
       name: 'screenBis',
       component: ScreenBis

@@ -58,6 +58,18 @@ label = "Nettoyage"
 icon = "mdi-broom"
 groups = ["Nettoyage.Cap", "Nettoyage.RondPoints"]
 
+# --- Vue : Audit GPX (module d'audit — remplace à terme la vue Nettoyage) ---
+[_meta.views.audit]
+label = "Audit GPX"
+icon = "mdi-map-marker-path"
+groups = [
+  "Audit.Consolidation",
+  "Audit.AR",
+  "Audit.RP",
+  "Audit.OpenRouteService",
+  "Audit.Application",
+]
+
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
 # Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
 [_meta.groups."Systeme.Key"]
@@ -107,6 +119,26 @@ icon = "mdi-compass-outline"
 [_meta.groups."Nettoyage.RondPoints"]
 label = "Nettoyage — Rond-Points"
 icon = "mdi-rotate-360"
+
+[_meta.groups."Audit.Consolidation"]
+label = "Audit — Consolidation"
+icon = "mdi-vector-polyline"
+
+[_meta.groups."Audit.AR"]
+label = "Audit — Détecteur aller-retours"
+icon = "mdi-swap-horizontal"
+
+[_meta.groups."Audit.RP"]
+label = "Audit — Détecteur boucles giratoires"
+icon = "mdi-rotate-360"
+
+[_meta.groups."Audit.OpenRouteService"]
+label = "Audit — OpenRouteService"
+icon = "mdi-routes"
+
+[_meta.groups."Audit.Application"]
+label = "Audit — Application"
+icon = "mdi-application"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -597,6 +629,195 @@ min = 0
 max = 30
 step = 1
 icon = "mdi-select-multiple"
+
+# ---------------------------------------------------------------------------
+# AUDIT GPX — Paramètres d'analyse et de routage
+# ---------------------------------------------------------------------------
+#
+# Ce namespace pilote le module Audit GPX (qui remplace à terme l'ancien module
+# Nettoyage — les paramètres `Nettoyage.*` restent déclarés jusqu'à la bascule).
+# Il est consommé par le store Pinia `src/stores/audit.ts`, les commandes Tauri
+# `gpx_audit::commands::*` et le drawer de la vue `/audit`.
+#
+# Le paramètre `Systeme.Key.mapBox` (existant) est réutilisé pour la carte :
+# aucun paramètre Mapbox spécifique n'est ajouté ici.
+# ---------------------------------------------------------------------------
+
+# --- Consolidation ---
+
+[Audit.Consolidation.seuil]
+description = "Seuil de consolidation des points (m)"
+documentation = """
+Points consécutifs à moins de ce seuil sont fusionnés avant analyse.
+0 désactive la consolidation (trace brute).
+
+Un seuil plus élevé produit une trace plus lissée, éliminant les
+micro-segments. Un seuil trop élevé peut masquer certaines anomalies
+fines (notamment les paires miroir à faible distance).
+"""
+type = "float"
+default = 0.5
+min = 0.0
+max = 5.0
+step = 0.1
+unit = "m"
+
+# --- Détecteur AR (aller-retours) ---
+
+[Audit.AR.toleranceDeg]
+description = "Tolérance angulaire pour un retournement AR (°)"
+documentation = """
+Écart maximal au demi-tour parfait pour valider un retournement.
+20° accepte les retournements approximatifs (bruit GPS courant),
+0° n'accepte que les demi-tours quasi exacts (déconseillé en production,
+sensible aux arrondis flottants).
+"""
+type = "float"
+default = 20.0
+min = 0.0
+max = 90.0
+step = 1.0
+unit = "°"
+icon = "mdi-angle-acute"
+
+[Audit.AR.seuilPaireM]
+description = "Seuil de distance pour une paire miroir (m)"
+documentation = """
+Distance maximale entre deux points symétriques autour d'un sommet
+pour former une paire miroir.
+
+Un seuil plus élevé détecte des paires plus larges (emprises AR plus
+étendues). Un seuil trop faible ne retient que les superpositions
+exactes. La valeur de 50 m couvre la majorité des cas réels.
+"""
+type = "float"
+default = 50.0
+min = 0.0
+max = 500.0
+step = 5.0
+unit = "m"
+icon = "mdi-arrow-expand-horizontal"
+
+[Audit.AR.maxPaires]
+description = "Nombre max de paires par sommet AR"
+documentation = """
+Budget maximal de paires symétriques testées autour d'un sommet.
+
+Une valeur plus élevée étend l'emprise du finding (plus de points
+inclus dans la zone d'anomalie). Une valeur plus faible réduit
+l'emprise au voisinage immédiat du sommet.
+"""
+type = "int"
+default = 5
+min = 1
+max = 10
+step = 1
+icon = "mdi-counter"
+
+[Audit.AR.branchesMaxM]
+description = "Longueur max des branches du sommet AR (m)"
+documentation = """
+Longueur maximale des deux branches (amont/aval) encadrant un sommet
+AR. Sert de garde anti-« vrai virage en épingle » : un virage routier
+normal a des branches > 200 m et ne doit pas être confondu avec un
+retournement de traceur.
+
+Une valeur plus élevée tolère des branches longues (risque de faux
+positifs sur virages serrés). Une valeur plus faible exclut les
+branches longues (risque de faux négatifs sur traces de traceur).
+"""
+type = "float"
+default = 200.0
+min = 10.0
+max = 1000.0
+step = 10.0
+unit = "m"
+icon = "mdi-source-branch"
+
+# --- Détecteur RP (boucles giratoires) ---
+
+[Audit.RP.seuilFermetureM]
+description = "Seuil de refermeture des boucles RP (m)"
+documentation = """
+Distance maximale entre deux points non consécutifs pour créer une
+paire candidate. Aussi utilisé par l'anti-aiguille (test miroir) et
+pour la zone de superposition des ancres.
+
+Attention : un seuil trop grand réhabilite les aiguilles larges (le
+test miroir de l'anti-aiguille est calé sur ce seuil). Un seuil trop
+petit empêche la détection des mini-giratoires (rayon < seuil).
+"""
+type = "float"
+default = 15.0
+min = 5.0
+max = 60.0
+step = 1.0
+unit = "m"
+icon = "mdi-vector-circle-variant"
+
+[Audit.RP.angleMinDeg]
+description = "Angle cumulé minimal pour valider une boucle RP (°)"
+documentation = """
+Angle cumulé minimal (après quantification) pour publier une fenêtre.
+- 270° = « trois-quarts de tour et plus » (détecte les 3/4 de tour)
+- 360° = tours complets et multiples uniquement (filtre strict)
+
+La quantification aligne un tour complet sur exactement 360° quand la
+mesure brute est dans la plage 320–400°, ce qui correspond à la
+physique de la refermeture à l'angle vif.
+"""
+type = "int"
+default = 270
+min = 270
+max = 360
+step = 5
+unit = "°"
+icon = "mdi-rotate-360"
+
+# --- OpenRouteService (secrets chiffrés) ---
+
+[Audit.OpenRouteService.clePrimaire]
+description = "Clé API OpenRouteService n°1 (principale)"
+documentation = """
+Clé utilisée pour les demandes de routage (profil voiture et vélo de
+route, deux requêtes parallèles). En cas de quota épuisé (HTTP 403 ou
+429), bascule automatique sur la clé secondaire.
+
+Format : chaîne de 40+ caractères fournie par OpenRouteService.
+Chiffrée en AES-256-GCM avant écriture disque (clé maîtresse gérée
+par le keyring OS en production).
+"""
+type = "secret"
+default = ""
+
+[Audit.OpenRouteService.cleSecondaire]
+description = "Clé API OpenRouteService n°2 (secours)"
+documentation = """
+Clé utilisée en repli si la clé principale est refusée (403/429).
+Si les deux clés sont refusées, le routage est impossible jusqu'à
+la prochaine remise à zéro du quota (minuit UTC pour le plan gratuit).
+
+Chiffrée en AES-256-GCM avant écriture disque.
+"""
+type = "secret"
+default = ""
+
+# --- Application (nom d'export) ---
+
+[Audit.Application.nom]
+description = "Nom d'application pour l'export GPX"
+documentation = """
+Nom inséré dans les métadonnées du GPX exporté (bloc audit) :
+- élément <tool> du bloc <extensions><audit>
+- élément <desc> du <metadata>
+- attribut creator de la balise <gpx> (uniquement en cas de source
+  sans attribut, cas pathologique)
+
+Si vide, la valeur par défaut « VérificationGPX » est utilisée.
+"""
+type = "string"
+default = "VérificationGPX"
+icon = "mdi-application"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.

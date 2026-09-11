@@ -100,6 +100,22 @@ pub struct TraceMetadata {
     /// à venir), ou chaîne vide quand la trace est propre (aucun nettoyage).
     #[serde(default)]
     pub cleaning_phase: String,
+    /// Statut d'audit de la trace (module Audit GPX) : `"clean"` (auditée sans
+    /// anomalie, ou corrections appliquées), `"needs_review"` (anomalies
+    /// détectées à l'import), `"in_progress"`.
+    ///
+    /// Phase 4 : champ **additif** — `cleaning_status` / `cleaning_phase`
+    /// restent maintenus pour l'ancien module jusqu'à la bascule de la Phase 5.
+    /// Absent dans les registres antérieurs → `"needs_review"` (une trace
+    /// jamais auditée doit l'être).
+    #[serde(default = "default_audit_status")]
+    pub audit_status: String,
+}
+
+/// Valeur par défaut du statut d'audit pour les registres antérieurs :
+/// `"needs_review"` — aucune trace n'a été auditée avant la Phase 4.
+fn default_audit_status() -> String {
+    "needs_review".to_string()
 }
 
 /// Valeur par défaut du statut de nettoyage pour les registres antérieurs :
@@ -897,6 +913,30 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         );
     }
 
+    // 6ter. Audit GPX (module `gpx_audit`) : détection AR + RP sur les mêmes
+    //       points, avec les paramètres `Audit.*`. La trace est « à auditer »
+    //       dès qu'une anomalie est détectée. Protégé contre tout panic, comme
+    //       la détection de nettoyage ci-dessus (un panic laisserait l'import
+    //       sans réponse).
+    //
+    //       Phase 4 : les deux statuts coexistent (cf. `TraceMetadata`) ; la
+    //       détection d'audit est la seule à piloter le gate de la Phase 5.
+    let audit_params = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::gpx_audit::commands::read_audit_params(&app)
+    }))
+    .unwrap_or_else(|_| crate::gpx_audit::commands::default_audit_params());
+    let audit_status = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let raw = crate::gpx_audit::pipeline::raw_points_from_gpx(&gpx);
+        crate::gpx_audit::pipeline::detect_all(raw, &audit_params)
+    }))
+    .map(|outcome| match outcome {
+        // Trace trop courte après consolidation : aucune anomalie AR/RP
+        // possible, la trace est réputée propre.
+        Ok(outcome) if !outcome.findings.is_empty() => "needs_review".to_string(),
+        Ok(_) | Err(_) => "clean".to_string(),
+    })
+    .unwrap_or_else(|_| "needs_review".to_string());
+
     // 7. Générer l'UUID de la trace et créer son dossier
     //    (`traces/{id}/` — le dossier est le discriminant de la trace).
     let id = uuid::Uuid::new_v4().to_string();
@@ -945,6 +985,7 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         is_displayed: false,
         cleaning_status,
         cleaning_phase,
+        audit_status,
     };
 
     // 9. Ajouter au registre et sauvegarder (écriture atomique)
@@ -1310,6 +1351,7 @@ mod tests {
             is_displayed: false,
             cleaning_status: "needs_review".to_string(),
             cleaning_phase: "spike".to_string(),
+            audit_status: "needs_review".to_string(),
         }
     }
 

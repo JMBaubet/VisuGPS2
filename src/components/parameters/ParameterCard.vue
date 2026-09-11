@@ -14,6 +14,7 @@ import { renderMarkdown } from '../../utils/markdown'
 import InputBool from './InputBool.vue'
 import InputInt from './InputInt.vue'
 import InputFloat from './InputFloat.vue'
+import InputString from './InputString.vue'
 import InputSecret from './InputSecret.vue'
 import InputList from './InputList.vue'
 import InputRgba from './InputRgba.vue'
@@ -146,6 +147,7 @@ const docHtml = computed(() => renderMarkdown(def.value?.documentation ?? ''))
       <InputBool v-if="def.type === 'bool'" v-model="draftValue" :def="def" />
       <InputInt v-else-if="def.type === 'int'" v-model.number="draftValue" :def="def" />
       <InputFloat v-else-if="def.type === 'float'" v-model.number="draftValue" :def="def" />
+      <InputString v-else-if="def.type === 'string'" v-model="draftValue" :def="def" />
       <InputSecret v-else-if="def.type === 'secret'" v-model="draftValue" :def="def" />
       <InputList v-else-if="def.type === 'list'" v-model="draftValue" :def="def" />
       <InputRgba v-else-if="def.type === 'rgba'" v-model="draftValue" :def="def" />
