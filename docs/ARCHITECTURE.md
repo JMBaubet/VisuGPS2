@@ -731,7 +731,7 @@ L'application intègre un système robuste de gestion des paramètres de configu
 
 1. **Définition (Backend Rust)** :
    - Les paramètres par défaut sont définis dans `src-tauri/settings.default.toml` (embarqué dans l'exécutable). Chaque paramètre porte `description`, `documentation` (Markdown), `type`, `default`, et optionnellement `min`/`max`/`step`/`unit`/`choices`/`critical`/`icon` (icône MDI pour le drawer).
-   - Ce même fichier contient une **table spéciale `[_meta]`** qui décrit l'organisation du drawer : vues (associées aux noms de routes), groupes système communs à toutes les vues, actions (entrées non-paramètres comme les modes d'exécution), handlers (catégories à carte dédiée, ex. `Affichage.moniteurs`), et libellés/icônes des catégories. Cette table est **exclue du « flatten »** des paramètres et exposée par la commande `get_settings_meta`.
+   - Ce même fichier contient une **table spéciale `[_meta]`** qui décrit l'organisation du drawer : vues (associées aux noms de routes), groupes système communs à toutes les vues (ex. `Systeme.Key`, qui regroupe les clés de licence Mapbox et OpenRouteService), actions (entrées non-paramètres comme les modes d'exécution), handlers (catégories à carte dédiée, ex. `Affichage.moniteurs`), et libellés/icônes des catégories. Cette table est **exclue du « flatten »** des paramètres et exposée par la commande `get_settings_meta`.
    - Les paramètres modifiés par l'utilisateur sont sauvegardés dans un fichier `config-dev.toml` (en mode dev) ou `config.toml` (en production) dans le dossier de configuration de l'OS (`Application Support` sur macOS).
 
 2. **Sécurité (Secrets)** :
@@ -878,7 +878,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 
 4. **Composants** (`src/components/Audit/`) : `AuditToolbar.vue`, `AuditProgressChip.vue`, `AuditFindingsPanel.vue`, `AuditSynthesis.vue`, `AuditActionPanel.vue`, `AuditMap.vue` (3ᵉ instance Mapbox GL, avec `auditMapFeatures.ts` et `auditMapLayers.ts`), et `dialogs/` (`ConfirmExitDialog.vue`, `ConfirmApplyDialog.vue`).
 
-5. **Composable réseau** (`src/composables/useAuditOrs.ts`) : requêtes OpenRouteService (profils voiture et vélo, deux clés en bascule automatique sur quota épuisé — `Audit.OpenRouteService.*`, chiffrées en AES-256-GCM).
+5. **Composable réseau** (`src/composables/useAuditOrs.ts`) : requêtes OpenRouteService (profils voiture et vélo, deux clés en bascule automatique sur quota épuisé — `Systeme.Key.openRouteServiceClePrimaire` / `Systeme.Key.openRouteServiceCleSecondaire`, chiffrées en AES-256-GCM).
 
 6. **Carte** (`AuditMap.vue`) : 3ᵉ instance Mapbox GL, **distincte** de `Accueil/Map.vue` et de `Edition/EditionMap.vue`. Elle affiche la trace de travail, les zones d'anomalie, les aperçus de suppression et les ancres de routage. Chaque vue monte et détruit sa propre instance (`onUnmounted` → `map.remove()`).
 
@@ -915,7 +915,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 
 ### Paramètres (`Audit.*`)
 
-Le namespace `Audit.*` de `settings.default.toml` expose 5 catégories dans le drawer de la vue
+Le namespace `Audit.*` de `settings.default.toml` expose 4 catégories dans le drawer de la vue
 `/audit` :
 
 | Catégorie | Paramètres |
@@ -923,12 +923,15 @@ Le namespace `Audit.*` de `settings.default.toml` expose 5 catégories dans le d
 | `Audit.Consolidation` | `seuil` (0,5 m) — seuil de fusion des points consécutifs avant analyse. |
 | `Audit.AR` | `toleranceDeg` (20°), `seuilPaireM` (50 m), `maxPaires` (5), `branchesMaxM` (200 m). |
 | `Audit.RP` | `seuilFermetureM` (15 m), `angleMinDeg` (270°). |
-| `Audit.OpenRouteService` | `clePrimaire`, `cleSecondaire` — type `secret`, chiffrées AES-256-GCM. |
 | `Audit.Application` | `nom` — type `string` (type ajouté au système de paramètres pour ce besoin), nom inséré dans le bloc d'audit du GPX exporté. |
 
 Les paramètres sont assemblés en `AuditParams` par la vue (`buildParams()`) et transmis à
-`audit_run_detection`. Le token Mapbox reste `Systeme.Key.mapBox` — aucun paramètre spécifique
-n'a été ajouté.
+`audit_run_detection`. Les **clés de licence Mapbox et OpenRouteService** ne sont pas dans ce
+namespace : elles sont regroupées dans le groupe **système** `Systeme.Key`
+(`mapBox`, `openRouteServiceClePrimaire`, `openRouteServiceCleSecondaire`), donc saisies depuis le
+drawer de la vue Accueil et lues **par chemin** partout ailleurs (`useAuditOrs.ts` pour le routage,
+`Map.vue` / `AuditMap.vue` / `EditionMap.vue` pour le token Mapbox). La vue `/audit` masque les
+sections système (`show-system=false`) : elle consomme les clés sans les exposer.
 
 ## Vue d'édition caméra (`/edition-camera`)
 

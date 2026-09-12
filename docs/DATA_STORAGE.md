@@ -189,6 +189,14 @@ réécrit** (la trace de travail y est écrite telle quelle, invariant C10) et l
 > namespace de l'ancien module de nettoyage, supprimé du schéma — sont **sans effet** : elles ne
 > correspondent à aucun paramètre déclaré et sont ignorées au chargement (aucune erreur, aucun
 > avertissement). Elles peuvent être supprimées manuellement si souhaité.
+>
+> **Clés de licence (2026-09-12)** : les clés OpenRouteService ont été déplacées de
+> `Audit.OpenRouteService.clePrimaire` / `cleSecondaire` vers le groupe système `Systeme.Key`
+> (`Systeme.Key.openRouteServiceClePrimaire` / `openRouteServiceCleSecondaire`), aux côtés de
+> `Systeme.Key.mapBox` — chemin, lui, **inchangé**. Une surcharge `Audit.OpenRouteService.*`
+> présente dans `config.toml` / `config-dev.toml` devient donc **orpheline** et sans effet : le
+> routage OpenRouteService réclame une ressaisie des deux clés (les valeurs restent lisibles en
+> clair dans le fichier de surcharge, elles n'y sont pas supprimées).
 
 ### `settings.default.toml` — Schéma de paramètres
 

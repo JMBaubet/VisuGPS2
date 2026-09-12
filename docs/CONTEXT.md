@@ -325,7 +325,8 @@ Si vous modifiez les scripts :
 ### Fonctionnalités
 - Import/suppression/mise à jour de traces GPX (favoris et affichage persistés)
 - **Audit GPX** : détection des **aller-retours ponctuels** (AR) et des **boucles de giratoire** (RP) avec les paramètres `Audit.*` (consolidation, seuils AR/RP). Corrections : **suppression de points**, **routage OpenRouteService** (deux clés chiffrées en bascule), **faux positif** — toutes **annulables par anomalie**. Les **findings sont volatils** (aucune persistance). Le GPX n'est réécrit qu'au bouton **« Appliquer »** (strict : `pending === 0`, ferme la vue, non annulable), avec backup `{filename}.gpx.orig` posé une seule fois. Une trace non `"clean"` ne peut pas entrer en édition caméra.
-- Carte Mapbox GL avec **clustering** des points de départ (token via paramètre `Systeme.Key.mapBox`)
+- Carte Mapbox GL avec **clustering** des points de départ (token via le paramètre `Systeme.Key.mapBox`)
+- **Clés de licence regroupées** : les trois clés API — `Systeme.Key.mapBox`, `Systeme.Key.openRouteServiceClePrimaire`, `Systeme.Key.openRouteServiceCleSecondaire` (type `secret`, chiffrées AES-256-GCM, critiques) — forment le groupe **système** `Systeme.Key` (libellé « Licences », icône de paramètre `mdi-account-key-outline`). Elles se saisissent donc depuis le **drawer de la vue Accueil**, les vues Audit et Édition masquant les sections système (`show-system=false`) tout en continuant de les lire par chemin.
 - Affichage des traces favorites et forcées (dégradé bleu → rouge, couches Mapbox dédiées)
 - **Synchronisation carte ↔ liste** : la liste des circuits est triée par distance au centre courant de la carte (Haversine), recalculée en temps réel sur `moveend` (debounce 150 ms)
 - **Focus carte** : clic sur Info d'un circuit isole et cadre la trace (`fitBounds`), puis revient à la vue précédente (`flyTo`) — durée paramétrable (`Carte.Traces.dureeFlyTo`)

@@ -11,6 +11,17 @@ module Nettoyage désormais obsolète.
 - Décision 12 : ajout du type `"string"` au système de paramètres
 - Décision 4 : suppression du namespace `Nettoyage.*`
 
+> **Révision du 2026-09-12 — regroupement des clés de licence.**
+> Ce document est le **relevé de la spécification du livrable 6** : il est conservé comme
+> historique. Depuis, les deux clés OpenRouteService ont quitté le namespace `Audit.*` pour le
+> groupe **système** `Systeme.Key` (`Systeme.Key.openRouteServiceClePrimaire` /
+> `Systeme.Key.openRouteServiceCleSecondaire`), aux côtés de `Systeme.Key.mapBox` (chemin, lui,
+> inchangé). Elles se saisissent désormais depuis le drawer de la vue **Accueil**, et la catégorie
+> `Audit — OpenRouteService` a été retirée du TOML. Les blocs `[Audit.OpenRouteService.*]`
+> ci-dessous sont donc **obsolètes** ; les compteurs et vérifications des §6 et §9 ont été
+> actualisés. État courant : [ARCHITECTURE.md](../../ARCHITECTURE.md) § Paramètres (`Audit.*`) et
+> [CONTEXT.md](../../CONTEXT.md).
+
 ---
 
 ## 1. Vue d'ensemble
@@ -20,7 +31,7 @@ module Nettoyage désormais obsolète.
 | **Ajoutés** | 10 paramètres (`Audit.*`) + 1 vue `_meta` + 5 groupes `_meta` |
 | **Supprimés** | ~7 paramètres (`Nettoyage.*`) + 1 vue + 2 groupes |
 | **Nouveau type** | `"string"` (à implémenter dans `settings.rs`) |
-| **Mapbox** | Réutilise `Systeme.Key.mapBox` existant — **aucun ajout** |
+| **Mapbox** | Réutilise `Systeme.Key.mapBox` existant — **aucun ajout** (ce groupe système `Systeme.Key` accueille depuis le 2026-09-12 les 2 clés ORS — voir la révision en tête de document) |
 
 ---
 
@@ -175,6 +186,10 @@ step = 5
 unit = "°"
 icon = "mdi-rotate-360"
 
+# ⚠️ OBSOLÈTE (2026-09-12) — ces deux tables vivent désormais dans le groupe
+# système `Systeme.Key`, aux côtés de `Systeme.Key.mapBox` (voir la révision
+# en tête de document). Conservées ci-dessous comme relevé du livrable 6.
+
 # ─── OpenRouteService (secrets chiffrés) ──────────────────────────────
 
 [Audit.OpenRouteService.clePrimaire]
@@ -268,6 +283,13 @@ icon = "mdi-application"
 **Note** : le libellé et l'icône du groupe reflètent ce que
 `useSettingsTree.ts` utilisera pour construire l'arbre de catégories
 du drawer sur la vue `/audit`. Aucun composant Vue à modifier.
+
+**Révision (2026-09-12)** : l'entrée `"Audit.OpenRouteService"` de
+`[_meta.views.audit].groups` et la métadonnée
+`[_meta.groups."Audit.OpenRouteService"]` ont été **supprimées** du TOML — la
+catégorie n'ayant plus aucun paramètre (les deux clés ORS sont dans le groupe
+système `Systeme.Key`), elle était de toute façon filtrée à l'affichage. La vue
+`/audit` expose donc **4** catégories.
 
 ---
 
@@ -467,7 +489,8 @@ Après modification, s'assurer que :
 - Chaque groupe déclaré dans `[_meta.views.audit].groups` a son entrée
   correspondante dans `[_meta.groups."..."]`
 - Chaque paramètre est référencé par un groupe (`Audit.Consolidation`,
-  `Audit.AR`, `Audit.RP`, `Audit.OpenRouteService`, `Audit.Application`)
+  `Audit.AR`, `Audit.RP`, `Audit.Application`) — les clés ORS vivent dans le
+  groupe système `Systeme.Key`
 - Aucune référence à `Nettoyage.*` ne subsiste
 
 ### 6.2 Commandes de vérification
@@ -478,11 +501,16 @@ grep -i "nettoyage" src-tauri/settings.default.toml
 
 # Vérifier que tous les paramètres Audit sont bien dans _meta
 grep -E "^\[Audit\." src-tauri/settings.default.toml | sort
-# Doit afficher 10 lignes (1 seuil + 4 AR + 2 RP + 2 ORS + 1 app)
+# Doit afficher 8 lignes (1 seuil + 4 AR + 2 RP + 1 app)
+# — les 2 clés ORS sont dans le groupe système `Systeme.Key`
 
 # Vérifier les groupes _meta
 grep -E "^\[_meta\.groups\.\"Audit" src-tauri/settings.default.toml
-# Doit afficher 5 lignes
+# Doit afficher 4 lignes
+
+# Vérifier les clés de licence (groupe système, saisies sur la vue Accueil)
+grep -E "^\[Systeme\.Key\." src-tauri/settings.default.toml | sort
+# Doit afficher 3 lignes (mapBox + 2 clés OpenRouteService)
 
 # Vérifier la vue _meta
 grep -A3 "^\[_meta\.views\.audit\]" src-tauri/settings.default.toml
@@ -493,12 +521,15 @@ grep -A3 "^\[_meta\.views\.audit\]" src-tauri/settings.default.toml
 Lancer l'application, ouvrir une trace, cliquer sur « Éditer » pour
 arriver sur `/audit`, ouvrir le drawer Paramètres :
 
-- Les 5 catégories doivent apparaître :
+- Les 4 catégories doivent apparaître :
   - **Consolidation** (1 paramètre)
   - **Détecteur aller-retours** (4 paramètres)
   - **Détecteur boucles giratoires** (2 paramètres)
-  - **OpenRouteService** (2 clés masquées)
   - **Application** (1 champ texte)
+
+- Les deux clés ORS **n'apparaissent pas** ici : elles sont dans le groupe
+  système `Systeme.Key`, saisissable depuis le drawer de la vue **Accueil**
+  (libellé « Licences »).
 
 - La vue `Nettoyage` **ne doit plus apparaître** dans le sélecteur de
   vue du drawer.
@@ -534,7 +565,7 @@ commits facilite le rollback en cas de problème.
 | 2 | Paramètre `[Audit.Application.nom]` non listé dans `[_meta.views.audit].groups` | Vérifier la cohérence `_meta` ↔ paramètres |
 | 3 | `[_meta.groups."Audit.AR"]` et `[_meta.groups."Audit.RP"]` mal nommés (point vs tiret) | Les noms de groupes doivent matcher exactement le préfixe du paramètre |
 | 4 | Surcout de l'AES sur la clé ORS vide (`""`) | Le chiffrement d'une chaîne vide est un cas particulier — soit autoriser, soit ne pas chiffrer si vide |
-| 5 | Le drawer affiche `[Audit.OpenRouteService.clePrimaire]` sous forme « *** » sans distinction | Les deux clés ont des descriptions distinctes — pas de confusion possible |
+| 5 | Le drawer affiche `[Systeme.Key.openRouteServiceClePrimaire]` sous forme « *** » sans distinction | Les deux clés ont des descriptions distinctes — pas de confusion possible (elles se saisissent sur la vue Accueil depuis le 2026-09-12) |
 | 6 | `Audit.Application.nom` : si l'utilisateur efface le champ, la valeur par défaut doit s'appliquer | `settings.rs` retourne `""` ; c'est `export.rs` qui applique `"VérificationGPX"` si vide |
 | 7 | Le paramètre `Audit.AR.toleranceDeg` avec `min = 0.0` : valeur 0 possible (déconseillée) | Documenter dans la `documentation` (fait ci-dessus) |
 | 8 | Les surcharges `Nettoyage.*` dans `config.toml` restent orphelines | Documenter dans `DATA_STORAGE.md` — sans effet, peuvent être supprimées manuellement |
@@ -545,8 +576,9 @@ commits facilite le rollback en cas de problème.
 
 - [ ] `settings.default.toml` est un TOML valide (démarrage de l'app OK)
 - [ ] Le type `"string"` est reconnu par `settings.rs`
-- [ ] Les 10 paramètres `Audit.*` sont présents
-- [ ] Les 5 groupes `_meta` sont présents
+- [ ] Les 8 paramètres `Audit.*` sont présents
+- [ ] Les 4 groupes `_meta` de la vue audit sont présents
+- [ ] Les 2 clés ORS sont déclarées dans le groupe système `Systeme.Key`
 - [ ] La vue `Audit GPX` apparaît dans le drawer de `/audit`
 - [ ] Aucune trace de `Nettoyage.*` dans le TOML
 - [ ] Le champ `Audit.Application.nom` est éditable et sauvegardable

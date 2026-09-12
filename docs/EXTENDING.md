@@ -914,7 +914,9 @@ icon = "mdi-tune"
 
 > **Exemple dans le projet** : le paramètre **`Audit.AR.toleranceDeg`** (float, défaut 20.0, min 0.0, max 90.0, step 1.0, unité `°`) suit exactement ce pattern : déclaré dans `src-tauri/settings.default.toml`, référencé sur la vue `audit` (`[_meta.views.audit]`, icône `mdi-map-marker-path`, `groups = ["Audit.AR", …]`) et affiché via `[_meta.groups."Audit.AR"]` (« Audit — Détecteur aller-retours »).
 >
-> Le module Audit illustre aussi le **type `"string"`** (ajouté au système de paramètres pour ce besoin) avec **`Audit.Application.nom`** : texte libre, non chiffré, sans borne — à distinguer du type `"secret"` (chiffré AES-256-GCM) utilisé par les deux clés OpenRouteService `Audit.OpenRouteService.clePrimaire` / `cleSecondaire`. Le composant d'entrée correspondant est `InputString.vue`, branché dans `ParameterCard.vue`.
+> Le module Audit illustre aussi le **type `"string"`** (ajouté au système de paramètres pour ce besoin) avec **`Audit.Application.nom`** : texte libre, non chiffré, sans borne — à distinguer du type `"secret"` (chiffré AES-256-GCM) utilisé par les deux clés OpenRouteService `Systeme.Key.openRouteServiceClePrimaire` / `Systeme.Key.openRouteServiceCleSecondaire`. Le composant d'entrée correspondant est `InputString.vue`, branché dans `ParameterCard.vue`.
+>
+> **Clés de licence regroupées** : ces deux clés ORS ne sont pas dans le namespace `Audit.*` — elles forment, avec `Systeme.Key.mapBox`, le groupe **système** `Systeme.Key` (« Licences »), déclaré dans `[_meta.system.groups]` et donc saisissable **uniquement depuis le drawer de la vue Accueil** (les vues Audit et Édition passent `show-system=false` à `SettingsDrawer`). Le code qui les consomme les lit par chemin, sans passer par le drawer : `useAuditOrs.ts` pour le routage, `Map.vue` / `AuditMap.vue` / `EditionMap.vue` pour le token Mapbox.
 
 > **Handlers spéciaux** : si une catégorie ne doit pas ouvrir `ParameterCard`
 > paramètre par paramètre (ex: `Affichage.moniteurs` → carte double), déclarez-le
