@@ -60,7 +60,6 @@ groups = [
   "Audit.Consolidation",
   "Audit.AR",
   "Audit.RP",
-  "Audit.OpenRouteService",
   "Audit.Application",
 ]
 
@@ -118,10 +117,6 @@ icon = "mdi-swap-horizontal"
 label = "Audit — Détecteur boucles giratoires"
 icon = "mdi-rotate-360"
 
-[_meta.groups."Audit.OpenRouteService"]
-label = "Audit — OpenRouteService"
-icon = "mdi-routes"
-
 [_meta.groups."Audit.Application"]
 label = "Audit — Application"
 icon = "mdi-application"
@@ -140,6 +135,13 @@ min = 1
 max = 20
 step = 2
 
+# --- Clés API (regroupées) ---
+# Groupe système : les trois clés de licence de l'application (Mapbox +
+# OpenRouteService) sont saisies au même endroit, dans le drawer de la vue
+# Accueil. Les vues Audit et Édition masquent les sections système
+# (`show-system=false`) : les clés ne s'y éditent pas, mais elles continuent
+# d'y être lues par chemin (carte Mapbox, routage OpenRouteService).
+
 [Systeme.Key.mapBox]
 description = "Clé API MapBox"
 documentation = """
@@ -149,6 +151,37 @@ Pour obtenir votre clé API veuillez vous rendre sur le site https://www.mapbox.
 type = "secret"
 default = ""
 critical = true
+icon = "mdi-account-key-outline"
+
+[Systeme.Key.openRouteServiceClePrimaire]
+description = "Clé API OpenRouteService n°1 (principale)"
+documentation = """
+Clé utilisée pour les demandes de routage (profil voiture et vélo de
+route, deux requêtes parallèles). En cas de quota épuisé (HTTP 403 ou
+429), bascule automatique sur la clé secondaire.
+
+Format : chaîne de 40+ caractères fournie par OpenRouteService.
+Chiffrée en AES-256-GCM avant écriture disque (clé maîtresse gérée
+par le keyring OS en production).
+"""
+type = "secret"
+default = ""
+critical = true
+icon = "mdi-account-key-outline"
+
+[Systeme.Key.openRouteServiceCleSecondaire]
+description = "Clé API OpenRouteService n°2 (secours)"
+documentation = """
+Clé utilisée en repli si la clé principale est refusée (403/429).
+Si les deux clés sont refusées, le routage est impossible jusqu'à
+la prochaine remise à zéro du quota (minuit UTC pour le plan gratuit).
+
+Chiffrée en AES-256-GCM avant écriture disque.
+"""
+type = "secret"
+default = ""
+critical = true
+icon = "mdi-account-key-outline"
 
 [Affichage.moniteurs.principal]
 description = "Écran pour la fenêtre principale"
@@ -515,13 +548,14 @@ icon = "mdi-format-line-weight"
 # AUDIT GPX — Paramètres d'analyse et de routage
 # ---------------------------------------------------------------------------
 #
-# Ce namespace pilote le module Audit GPX : détection AR/RP, routage
-# OpenRouteService et export. Il est consommé par le store Pinia
-# `src/stores/audit.ts`, les commandes Tauri `gpx_audit::commands::*` et le
-# drawer de la vue `/audit`.
+# Ce namespace pilote le module Audit GPX : détection AR/RP et export. Il est
+# consommé par le store Pinia `src/stores/audit.ts`, les commandes Tauri
+# `gpx_audit::commands::*` et le drawer de la vue `/audit`.
 #
-# Le paramètre `Systeme.Key.mapBox` (existant) est réutilisé pour la carte :
-# aucun paramètre Mapbox spécifique n'est ajouté ici.
+# Les clés de licence ne vivent pas ici : celles de Mapbox et
+# d'OpenRouteService sont regroupées dans le groupe système `Systeme.Key`
+# (drawer de la vue Accueil) et lues par chemin — `useAuditOrs.ts` y lit les
+# deux clés du routage.
 # ---------------------------------------------------------------------------
 
 # --- Consolidation ---
@@ -654,34 +688,6 @@ max = 360
 step = 5
 unit = "°"
 icon = "mdi-rotate-360"
-
-# --- OpenRouteService (secrets chiffrés) ---
-
-[Audit.OpenRouteService.clePrimaire]
-description = "Clé API OpenRouteService n°1 (principale)"
-documentation = """
-Clé utilisée pour les demandes de routage (profil voiture et vélo de
-route, deux requêtes parallèles). En cas de quota épuisé (HTTP 403 ou
-429), bascule automatique sur la clé secondaire.
-
-Format : chaîne de 40+ caractères fournie par OpenRouteService.
-Chiffrée en AES-256-GCM avant écriture disque (clé maîtresse gérée
-par le keyring OS en production).
-"""
-type = "secret"
-default = ""
-
-[Audit.OpenRouteService.cleSecondaire]
-description = "Clé API OpenRouteService n°2 (secours)"
-documentation = """
-Clé utilisée en repli si la clé principale est refusée (403/429).
-Si les deux clés sont refusées, le routage est impossible jusqu'à
-la prochaine remise à zéro du quota (minuit UTC pour le plan gratuit).
-
-Chiffrée en AES-256-GCM avant écriture disque.
-"""
-type = "secret"
-default = ""
 
 # --- Application (nom d'export) ---
 

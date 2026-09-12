@@ -5,9 +5,9 @@
  * délai maximal de 12 s, l'annulation par l'utilisateur, et la bascule
  * automatique sur la clé de secours en cas de refus de quota (403/429).
  *
- * Les clés proviennent du système de paramètres, chiffrées (`Audit.OpenRouteService.*`,
- * décision 5) — là où le HTML de référence les stockait en clair dans
- * `localStorage`.
+ * Les clés proviennent du système de paramètres, chiffrées (`Systeme.Key.*`,
+ * groupe système saisi depuis la vue Accueil) — là où le HTML de référence les
+ * stockait en clair dans `localStorage`.
  *
  * Le test d'identité des deux tracés est métrique : il est délégué à Rust
  * (`audit_routes_identical`).
@@ -72,8 +72,8 @@ export function useAuditOrs() {
       }
     }
     return {
-      primary: await read('Audit.OpenRouteService.clePrimaire'),
-      secondary: await read('Audit.OpenRouteService.cleSecondaire'),
+      primary: await read('Systeme.Key.openRouteServiceClePrimaire'),
+      secondary: await read('Systeme.Key.openRouteServiceCleSecondaire'),
     }
   }
 

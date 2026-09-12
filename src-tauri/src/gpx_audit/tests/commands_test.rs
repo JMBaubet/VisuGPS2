@@ -541,8 +541,6 @@ fn test_audit_settings_keys_exist_in_default_toml() {
         "Audit.RP.seuilFermetureM",
         "Audit.RP.angleMinDeg",
         "Audit.Application.nom",
-        "Audit.OpenRouteService.clePrimaire",
-        "Audit.OpenRouteService.cleSecondaire",
     ] {
         assert!(
             get_toml_value_by_path(&table, path).is_some(),

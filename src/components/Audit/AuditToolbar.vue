@@ -21,18 +21,6 @@
       />
 
       <v-btn
-        icon="mdi-cog-outline"
-        variant="text"
-        :color="appStore.isSettingsDrawerOpen ? 'primary' : ''"
-        :title="
-          appStore.isSettingsDrawerOpen
-            ? 'Fermer les paramètres'
-            : 'Paramètres de la vue Audit'
-        "
-        @click="emit('open-settings')"
-      />
-
-      <v-btn
         color="success"
         :disabled="!canApply"
         prepend-icon="mdi-check"
@@ -45,6 +33,18 @@
       >
         Appliquer
       </v-btn>
+
+      <v-btn
+        icon="mdi-cog-outline"
+        variant="text"
+        :color="appStore.isSettingsDrawerOpen ? 'primary' : ''"
+        :title="
+          appStore.isSettingsDrawerOpen
+            ? 'Fermer les paramètres'
+            : 'Paramètres de la vue Audit'
+        "
+        @click="emit('open-settings')"
+      />
     </template>
   </v-app-bar>
 </template>

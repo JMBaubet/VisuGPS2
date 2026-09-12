@@ -745,6 +745,24 @@ mod tests {
         // du TOML), pour que le drawer l'affiche en orange.
         let mapbox = defs.iter().find(|d| d.path == "Systeme.Key.mapBox").unwrap();
         assert_eq!(mapbox.critical, Some(true), "Systeme.Key.mapBox doit être critique");
+        // Les deux clés OpenRouteService ont migré de `Audit.OpenRouteService.*`
+        // vers le groupe système `Systeme.Key` (regroupement des licences) :
+        // elles y restent chiffrées et critiques.
+        for path in [
+            "Systeme.Key.openRouteServiceClePrimaire",
+            "Systeme.Key.openRouteServiceCleSecondaire",
+        ] {
+            let def = defs
+                .iter()
+                .find(|d| d.path == path)
+                .unwrap_or_else(|| panic!("paramètre `{path}` absent de settings.default.toml"));
+            assert_eq!(def.setting_type, "secret", "`{path}` doit rester un secret");
+            assert_eq!(def.critical, Some(true), "`{path}` doit être critique");
+        }
+        assert!(
+            !defs.iter().any(|d| d.path.starts_with("Audit.OpenRouteService.")),
+            "les clés OpenRouteService ne doivent plus vivre sous `Audit.*`"
+        );
 
         // 2. Les métadonnées sont extraites.
         let meta = extract_meta(&table);
@@ -802,8 +820,10 @@ mod tests {
         }
 
         // 3. Chaque paramètre `Audit.*` appartient à un groupe de la vue.
+        //    Les 2 clés OpenRouteService n'en font plus partie : elles vivent
+        //    dans le groupe système `Systeme.Key` (licences regroupées).
         let audit_defs: Vec<_> = defs.iter().filter(|d| d.path.starts_with("Audit.")).collect();
-        assert_eq!(audit_defs.len(), 10, "10 paramètres `Audit.*` attendus");
+        assert_eq!(audit_defs.len(), 8, "8 paramètres `Audit.*` attendus");
         for def in &audit_defs {
             let group = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
             assert!(
