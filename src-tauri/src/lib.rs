@@ -3,7 +3,6 @@ mod display;
 mod gestionMode;
 mod settings;
 mod import_gpx;
-mod cleaning;
 mod gpx_audit;
 
 use display::{get_displays, open_second_window, close_second_window};
@@ -54,11 +53,6 @@ pub fn run() {
             import_gpx::save_keyframes,
             import_gpx::get_keyframes,
             import_gpx::delete_keyframes,
-            cleaning::detect_trace_anomalies,
-            cleaning::get_cleaning_state,
-            cleaning::save_cleaning_state,
-            cleaning::reset_cleaning,
-            cleaning::validate_phase,
             gpx_audit::commands::audit_run_detection,
             gpx_audit::commands::audit_map_overlay,
             gpx_audit::commands::audit_delete_preview,

@@ -772,4 +772,63 @@ mod tests {
         // Au moins la vue `accueil` est déclarée.
         assert!(meta.views.contains_key("accueil"));
     }
+
+    /// Livrable 6 — le namespace `Audit.*` est déclaré, cohérent avec sa vue
+    /// `_meta`, et le namespace `Nettoyage.*` de l'ancien module a disparu.
+    #[test]
+    fn audit_namespace_is_declared_and_consistent() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        let meta = extract_meta(&table);
+
+        // 1. La vue `/audit` est déclarée, avec son libellé et son icône.
+        let audit = meta.views.get("audit").expect("vue `audit` déclarée");
+        assert_eq!(audit.label, "Audit GPX");
+
+        // 2. Chaque groupe de la vue a sa métadonnée d'affichage — et
+        //    réciproquement, aucun groupe `Audit.*` n'est orphelin.
+        for group in &audit.groups {
+            let g = meta
+                .groups
+                .get(group)
+                .unwrap_or_else(|| panic!("groupe `{}` déclaré dans la vue audit sans métadonnée", group));
+            assert!(g.label.is_some(), "groupe `{}` sans libellé", group);
+        }
+
+        // 3. Chaque paramètre `Audit.*` appartient à un groupe de la vue.
+        let audit_defs: Vec<_> = defs.iter().filter(|d| d.path.starts_with("Audit.")).collect();
+        assert_eq!(audit_defs.len(), 10, "10 paramètres `Audit.*` attendus");
+        for def in &audit_defs {
+            let group = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
+            assert!(
+                audit.groups.contains(&group),
+                "paramètre `{}` rattaché au groupe `{}`, absent de la vue audit",
+                def.path,
+                group
+            );
+        }
+
+        // 4. Le type `string` (décision 12) est bien déclaré sur le nom d'export.
+        let nom = audit_defs
+            .iter()
+            .find(|d| d.path == "Audit.Application.nom")
+            .expect("paramètre `Audit.Application.nom` déclaré");
+        assert_eq!(nom.setting_type, "string");
+
+        // 5. Aucun reliquat du namespace de l'ancien module.
+        assert!(
+            !defs.iter().any(|d| d.path.starts_with("Nettoyage.")),
+            "aucun paramètre `Nettoyage.*` ne doit subsister"
+        );
+        assert!(
+            !meta.views.contains_key("nettoyage"),
+            "la vue `nettoyage` ne doit plus être déclarée"
+        );
+    }
 }

@@ -149,13 +149,14 @@ docs/
 ├── README.md                  # Ce fichier (index)
 ├── CONTEXT.md                 # Contexte général
 ├── ARCHITECTURE.md            # Architecture technique
-├── COMMANDS.md                # Référence des 29 commandes Tauri
+├── COMMANDS.md                # Référence des 34 commandes Tauri
 ├── DATA_STORAGE.md            # Schéma de stockage des données
 ├── CONVENTIONS.md             # Conventions de code
 ├── EXTENDING.md               # Guide d'extension
 ├── SPEC_IMPORT_GPX.md         # Spécification du module GPX
 ├── SPEC_AFFICHAGE_TRACES.md   # Spécification favoris & affichage carte (à implémenter)
-└── CLAUDE-CODE-GUIDE.md       # Guide d'utilisation avec IA
+├── CLAUDE-CODE-GUIDE.md       # Guide d'utilisation avec IA
+└── audit/                     # Module Audit GPX (specs normatives, référence gelée, plan d'intégration)
 ```
 
 ## Maintenance de la documentation
@@ -170,6 +171,7 @@ Mettre à jour la documentation quand :
 - ✅ Ajout d'un utilitaire dans `src/utils/` → **CONVENTIONS.md** + **EXTENDING.md**
 - ✅ Ajout d'une convention ou d'un pattern important → **CONVENTIONS.md**
 - ✅ Nouvelle dépendance majeure ou nouvelle fonctionnalité → **CONTEXT.md**
+- ✅ Changement notable pour l'utilisateur, rupture de compatibilité ou migration de données → **`CHANGELOG.md`** (racine du dépôt)
 
 ### Comment mettre à jour
 

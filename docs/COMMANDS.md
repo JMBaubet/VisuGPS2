@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (29 commandes)
+## Catalogue (34 commandes)
 
 ### Application
 
@@ -92,64 +92,103 @@ pub struct ModeInfo {
 | `get_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<Option<Value>, String>` | Charge les keyframes persistés d'une trace **pour un ratio donné** (`"16:9"`/`"4:3"`). Retourne `None` si le fichier est absent. |
 | `delete_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<(), String>` | Supprime le fichier `keyframes/{trace_id}_{ratio}.json` d'un ratio donné (tolérant si absent). |
 
-### Nettoyage de trace (`cleaning.rs`)
+### Audit GPX (`gpx_audit/commands.rs`)
 
-> Le nettoyage est un **pipeline de 3 étapes séquentielles** (pts hors trace → ronds-points → aller/retour). Chaque commande prend une **phase** (`"spike"` / `"roundabout"` / `"out_and_back"`) et, pour les ronds-points, des paramètres `RoundaboutParams`. Une trace n'est **valide** que si elle est « propre » (`cleaning_status = "clean"`) ; elle reste `needs_review` tant que l'étape 3 n'est pas implémentée.
+> Le module Audit GPX **remplace** l'ancien module Nettoyage. Il détecte deux
+> familles d'anomalies sur la trace consolidée : les **aller-retours** ponctuels
+> (AR — rebonds, aiguilles de traceur) et les **boucles de giratoire** (RP — 270°,
+> 360° et plus). Les corrections disponibles sont la **suppression de points**, le
+> **routage OpenRouteService** et le marquage en **faux positif**, chacune
+> annulable par anomalie. Une trace n'est **valide** que si elle est auditée
+> (`audit_status = "clean"`) ; elle est sinon redirigée vers la vue `/audit`.
+>
+> **Les findings sont volatils** (décision 6) : l'état de travail vit dans le
+> store Pinia `src/stores/audit.ts` et n'est **pas persisté** entre deux sessions.
+> Seuls le GPX réécrit et `audit_status` survivent à la fermeture.
+>
+> Les commandes `audit_map_overlay`, `audit_delete_preview`,
+> `audit_routes_identical` sont **pures** (aucun accès disque, aucun `AppHandle`) :
+> ce sont des calculs délégués au backend parce qu'ils sont métriques.
 
 | Commande | Signature Rust | Retour |
 |---|---|---|
-| `detect_trace_anomalies` | `async (app, trace_id, phase: String, tolerance_deg: f64, roundabout_params: Option<RoundaboutParams>) -> Result<Vec<CleaningCase>, String>` | Détecte les anomalies de la **phase** demandée sur le GPX courant (étape 1 : rebroussements ~180° ; étape 2 : ronds-points — cumul d'angle). Aucune persistance. |
-| `get_cleaning_state` | `async (app, trace_id, phase: String, tolerance_deg: f64, roundabout_params: Option<RoundaboutParams>) -> Result<CleaningState, String>` | État de nettoyage de la phase : fichier de travail `traces/{trace_id}/cleaning.{phase}.json` s'il est **valide** (phase cohérente), sinon détection fraîche. Un fichier illisible/invalide/d'une autre phase est ignoré (re-détection). |
-| `save_cleaning_state` | `async (app, trace_id, phase: String, state_json: Value) -> Result<(), String>` | Sauvegarde partielle de la phase (écriture atomique) ; passe en `"in_progress"`, mémorise `cleaning_phase`. Le GPX reste intact. |
-| `reset_cleaning` | `async (app, trace_id) -> Result<(), String>` | Abandonne les corrections (tous les fichiers de travail) et repasse à l'étape 1, `"needs_review"`. |
-| `validate_phase` | `async (app, trace_id, phase: String, state_json: Value) -> Result<TraceMetadata, String>` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `{filename}.gpx.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`). Refuse tant qu'un cas est `"pending"` ; refuse l'étape 3 (non implémentée). Sans correction → avancement de phase sans réécriture. |
+| `audit_run_detection` | `async (app, trace_id: String, params: AuditParams) -> Result<AuditDetectionResult, String>` | Charge le GPX de la trace, **consolide** les points (seuil `Audit.Consolidation.seuil`), exécute `detect_ar` puis `detect_rp` et retourne la trace de travail (`points`), les findings et la distance totale. Aucune persistance. Seule commande à lire le GPX. |
+| `audit_map_overlay` | `(points: Vec<AuditPoint>, findings: Vec<Finding>, close_m: f64) -> Result<Vec<FindingOverlay>, String>` | Éléments de rendu des anomalies : ancres de routage des boucles RP et étiquettes des points. Recalculé à chaque rendu de carte (lazy, à l'image de `rpAnchors` du HTML de référence). |
+| `audit_delete_preview` | `(points: Vec<AuditPoint>, finding: Finding, start: usize, end: usize, close_m: f64) -> Result<DeletePreview, String>` | Aperçu **prospectif** d'une suppression sur `[start, end]` — la trace de travail n'est pas modifiée. Recalculé à chaque mouvement de curseur. |
+| `audit_routes_identical` | `(car: Vec<LatLon>, car_distance: f64, bike: Vec<LatLon>, bike_distance: f64) -> bool` | Compare les deux tracés ORS (voiture / vélo) : longueurs à **2 %** près et distance de Hausdorff discrète ≤ **15 m** dans les deux sens. Calcul métrique ; la requête réseau vit dans la composable `useAuditOrs`. |
+| `audit_apply_delete` | `(trace_id: String, points, findings, finding_id: String, ds: usize, de: usize, next_point_id: u32) -> Result<AuditState, String>` | Applique la suppression des points `[ds, de]` : retire les points, resynchronise les index, absorbe les findings faux positifs **imbriqués** (garde de nesting) et enregistre l'undo. Retourne l'état d'audit complet. |
+| `audit_apply_route` | `(trace_id: String, points, findings, finding_id: String, start: usize, end: usize, coords: Vec<LatLon>, profile: String, next_point_id: u32) -> Result<AuditState, String>` | Remplace le segment `[start, end]` par le tracé OpenRouteService `coords` (profil `"car"` / `"bike"`), avec les mêmes resynchronisation, absorption et undo que la suppression. |
+| `audit_mark_fp` | `(findings: Vec<Finding>, finding_id: String) -> Result<Vec<Finding>, String>` | Marque une anomalie en **faux positif** (`status = Fp`). Refuse si elle est déjà `Fp`. |
+| `audit_unmark_fp` | `(findings: Vec<Finding>, finding_id: String) -> Result<Vec<Finding>, String>` | Symétrique de `audit_mark_fp` : repasse une anomalie `Fp` en `Pending`. |
+| `audit_undo_correction` | `(trace_id: String, points, findings, finding_id: String) -> Result<AuditState, String>` | Annule la correction portée par une anomalie (restaure les points d'origine, retire les points insérés, réintègre les faux positifs absorbés). |
+| `audit_validate` | `async (app, trace_id: String, points: Vec<AuditPoint>, findings: Vec<Finding>) -> Result<TraceMetadata, String>` | **Point de non-retour.** Refuse tant qu'un finding est `pending`. Réécrit le GPX (backup `{filename}.gpx.orig` posé **une seule fois**, jamais écrasé), régénère geojson/stats/hash et pose `audit_status = "clean"`. Le GPX est écrit **avant** `traces.json` : un échec de réécriture laisse le statut intact. |
 
-**Type `RoundaboutParams`** (miroir TS dans `src/stores/cleaning.ts`) — paramètres de l'étape 2, lus depuis `Nettoyage.RondPoints.*` :
+**Type `AuditParams`** (miroir TS `AuditParams` dans `src/stores/audit.ts`) — assemblé par la vue depuis les réglages `Audit.*` :
 ```rust
-pub struct RoundaboutParams {
-    pub angle_min_deg: f64,    // virage minimal par point (défaut 5.0)
-    pub points_min: usize,     // points minimum (défaut 5)
-    pub points_max: usize,     // points maximum / fenêtre (défaut 50)
-    pub angle_seuil_deg: f64,  // angle cumulé seuil (défaut 210.0)
-    pub marge_points: usize,   // points de contexte avant/après le segment (défaut 5)
+pub struct AuditParams {
+    pub consol_m: f64,   // Audit.Consolidation.seuil      (défaut 0.5 m)
+    pub tol_deg: f64,    // Audit.AR.toleranceDeg          (défaut 20°)
+    pub pair_m: f64,     // Audit.AR.seuilPaireM           (défaut 50 m)
+    pub maxpairs: u32,   // Audit.AR.maxPaires             (défaut 5)
+    pub seg_m: f64,      // Audit.AR.branchesMaxM          (défaut 200 m)
+    pub close_m: f64,    // Audit.RP.seuilFermetureM       (défaut 15 m)
+    pub angle_deg: u32,  // Audit.RP.angleMinDeg           (défaut 270°)
 }
 ```
 
-**Type `CleaningState`** (miroir TS `CleaningState` dans `src/stores/cleaning.ts`) :
+**Type `AuditPoint`** — point de la trace de travail, identifié par un **id stable** (et non par son index) :
 ```rust
-pub struct CleaningState {
-    pub trace_id: String,
-    pub tolerance_deg: f64,        // tolérance de cap (étape 1/3)
-    pub phase: String,             // "spike" | "roundabout" | "out_and_back"
-    pub cases: Vec<CleaningCase>,
-}
-
-pub struct CleaningCase {
-    pub id: String,                    // "c1", "c2", "rp1", "manual1", …
-    pub kind: CleaningCaseKind,        // spike | roundabout | out_and_back | manual
-    pub start_index: usize,            // zone d'intérêt (index originaux)
-    pub end_index: usize,
-    pub apex_indices: Vec<usize>,      // points de rebroussement
-    pub bearing_delta_deg: f64,        // écart de cap max mesuré
-    pub total_angle_deg: f64,          // angle cumulé signé d'un rond-point (0 sinon)
-    pub suggested_delete_ranges: Vec<[usize; 2]>, // proposition (pré-remplissage)
-    pub state: String,                 // "pending" | "corrected" | "kept"
-    pub correction: Correction,
-}
-
-pub struct Correction {
-    pub delete_ranges: Vec<[usize; 2]>,   // index originaux à supprimer
-    pub moved_points: Vec<MovedPoint>,    // points déplacés géographiquement
-}
-
-pub struct MovedPoint {
-    pub index: usize,                 // index original du point
-    pub lat: f64,                     // nouvelles coordonnées
+pub struct AuditPoint {
+    pub id: u32,           // id stable, jamais réutilisé (next_point_id)
+    pub lat: f64,
     pub lon: f64,
+    pub ele: Option<f64>,
 }
 ```
 
-> Le type `manual` désigne un cas créé **manuellement** par l'utilisateur (plage `[start, end]` désignée sur la carte) — jamais produit par la détection automatique ; il peut être supprimé avant validation.
+**Type `Finding`** — une anomalie détectée. Les index `peak` / `pairs` / `parts` / `core_ids` / `zone_ids` sont exprimés **dans l'espace de la trace de travail courante** (invariant C4) ; les `*_ids` sont les identifiants **stables** qui survivent à une suppression :
+```rust
+pub struct Finding {
+    pub id: String,                    // "ar-1", "rp-2", …
+    pub kind: FindingKind,             // Ar | Rp
+    pub label: String,
+    pub summary: String,
+    pub peak: usize,                   // index du sommet
+    pub peak_id: u32,
+    pub pairs: Vec<FindingPair>,       // paires miroir (aid, bid, a, b, d)
+    pub pair_idx: Vec<usize>,          // [a1, b1, a2, b2, …]
+    pub ecart: Option<f64>,            // écart de cap (AR)
+    pub total_angle: Option<i32>,      // angle cumulé signé (RP)
+    pub turn_text: Option<String>,     // « 1 tour », « 3/4 de tour »…
+    pub core_ids: Vec<u32>,
+    pub zone_ids: Vec<u32>,
+    pub ctx_ids: FindingContextIds,
+    pub ctx: FindingContext,
+    pub parts: Vec<FindingPart>,       // segments colorés (PartRole)
+    pub status: FindingStatus,         // Pending | Corrected | Fp
+    pub correction: Option<CorrectionType>,  // Delete | Route | Fp
+    pub undo: Option<UndoRecord>,      // Delete | Route — pour l'annulation
+}
+```
+
+**Types `AuditState` et `AuditDetectionResult`** — respectivement l'état de travail retourné par les commandes de correction, et le résultat de la détection initiale :
+```rust
+pub struct AuditDetectionResult {
+    pub trace_id: String,
+    pub points: Vec<AuditPoint>,       // trace consolidée (trace de travail initiale)
+    pub total_distance_m: f64,
+    pub findings: Vec<Finding>,
+    pub params: AuditParams,
+    pub duration_ms: u64,
+}
+
+pub struct AuditState {
+    pub trace_id: String,
+    pub points: Vec<AuditPoint>,
+    pub findings: Vec<Finding>,
+    pub next_point_id: u32,
+}
+```
 
 ### Paramètres / Settings (`settings.rs`)
 
@@ -184,14 +223,14 @@ pub struct TraceMetadata {
     pub favorite: bool,                   // marquer comme favori (persisté)
     #[serde(default)]
     pub is_displayed: bool,               // afficher sur la carte (persisté)
-    #[serde(default = "default_cleaning_status")]
-    pub cleaning_status: String,          // "clean" | "needs_review" | "in_progress"
-    #[serde(default)]
-    pub cleaning_phase: String,           // "spike" | "roundabout" | "out_and_back" | "" (propre)
+    #[serde(default = "default_audit_status")]
+    pub audit_status: String,             // "clean" | "needs_review"
 }
 ```
 
-> `#[serde(default)]` sur `favorite`/`is_displayed` et `#[serde(default = "default_cleaning_status")]` sur `cleaning_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`"clean"`). En outre, `load_registry` **normalise** toute chaîne vide en `"clean"` (registres corrompus ou intermédiaires) et déduit `cleaning_phase` : `""` pour une trace « clean », sinon `"spike"` (re-détection en chaîne).
+> `#[serde(default)]` sur `favorite`/`is_displayed` et `#[serde(default = "default_audit_status")]` sur `audit_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`"needs_review"`).
+>
+> **Registres pré-audit (D1)** : `load_registry` détecte la présence de la clé `"cleaning_status"` (format des versions antérieures au module Audit) et retourne alors une liste **vide**, sans jamais réécrire le fichier. Les traces concernées disparaissent de l'interface, mais leurs fichiers GPX restent intacts sur disque — voir [DATA_STORAGE.md](./DATA_STORAGE.md). Le registre est réécrit au prochain import, au nouveau format.
 
 ## Exemples d'appel côté frontend
 

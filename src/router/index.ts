@@ -3,7 +3,6 @@ import Accueil from '../views/Accueil.vue'
 import Visualisation from '../views/Visualisation.vue'
 import EditionCamera from '../views/EditionCamera.vue'
 import ScreenBis from '../views/ScreenBis.vue'
-import Cleaning from '../views/Cleaning.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -22,11 +21,6 @@ const router = createRouter({
       path: '/edition-camera',
       name: 'editionCamera',
       component: EditionCamera
-    },
-    {
-      path: '/nettoyage',
-      name: 'nettoyage',
-      component: Cleaning
     },
     {
       // Lazy loading : Mapbox GL ne doit pas alourdir le bundle principal.

@@ -89,23 +89,10 @@ pub struct TraceMetadata {
     /// Indique si la trace est affichée sur la carte.
     #[serde(default)]
     pub is_displayed: bool,
-    /// Statut de nettoyage de la trace : `"clean"` (aucune anomalie détectée ou
-    /// déjà nettoyée), `"needs_review"` (anomalies à corriger), `"in_progress"`
-    /// (corrections commencées, fichier de travail présent). Absent dans les
-    /// registres antérieurs → `"clean"` (rétrocompatibilité).
-    #[serde(default = "default_cleaning_status")]
-    pub cleaning_status: String,
-    /// Phase du pipeline de nettoyage en cours : `"spike"` (pts hors trace),
-    /// `"roundabout"` (ronds-points), `"out_and_back"` (aller/retour — étape 3
-    /// à venir), ou chaîne vide quand la trace est propre (aucun nettoyage).
-    #[serde(default)]
-    pub cleaning_phase: String,
     /// Statut d'audit de la trace (module Audit GPX) : `"clean"` (auditée sans
     /// anomalie, ou corrections appliquées), `"needs_review"` (anomalies
-    /// détectées à l'import), `"in_progress"`.
+    /// détectées à l'import).
     ///
-    /// Phase 4 : champ **additif** — `cleaning_status` / `cleaning_phase`
-    /// restent maintenus pour l'ancien module jusqu'à la bascule de la Phase 5.
     /// Absent dans les registres antérieurs → `"needs_review"` (une trace
     /// jamais auditée doit l'être).
     #[serde(default = "default_audit_status")]
@@ -118,12 +105,6 @@ fn default_audit_status() -> String {
     "needs_review".to_string()
 }
 
-/// Valeur par défaut du statut de nettoyage pour les registres antérieurs :
-/// `"clean"` (et non la chaîne vide produite par `String::default()`).
-fn default_cleaning_status() -> String {
-    "clean".to_string()
-}
-
 // ---------------------------------------------------------------------------
 // Résolution des chemins en fonction du mode d'exécution actif
 // ---------------------------------------------------------------------------
@@ -133,7 +114,8 @@ fn default_cleaning_status() -> String {
 ///
 /// Point de passage unique de toutes les commandes : déclenche la **migration
 /// du stockage** vers « un dossier par trace » au premier accès au mode
-/// (idempotente — no-op si `{mode}/traces` existe déjà).
+/// (idempotente — no-op si `{mode}/traces` existe déjà), puis la suppression
+/// des artefacts obsolètes de l'ancien module de nettoyage (D2c — silencieux).
 pub(crate) fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let is_dev = cfg!(debug_assertions);
     let app_data_dir = app
@@ -150,6 +132,10 @@ pub(crate) fn get_mode_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
 
     migrate_mode_storage(&mode_dir)?;
+
+    // D2c : suppression des fichiers de travail orphelins de l'ancien module
+    // de nettoyage (`cleaning.*.json`) — idempotent et silencieux (D3b).
+    crate::gpx_audit::migration::cleanup_obsolete_cleaning_files(&mode_dir);
 
     Ok(mode_dir)
 }
@@ -244,15 +230,16 @@ fn sanitize_filename(name: &str) -> String {
 /// déjà.
 ///
 /// Pour chaque trace du registre, déplace depuis l'ancien agencement plat
-/// (`gpx/`, `geojson/`, `keyframes/`, `cleaning/`) vers son dossier :
+/// (`gpx/`, `geojson/`, `keyframes/`) vers son dossier :
 /// - `gpx/{filename}` (+ `.gpx.orig`) → `traces/{id}/{filename}` ;
 /// - `geojson/{id}.geojson` → `traces/{id}/trace.geojson` ;
-/// - `keyframes/{id}_169|_43|.json` → `traces/{id}/keyframes_169|_43|.json` ;
-/// - `cleaning/{id}.{phase}*.json` → `traces/{id}/cleaning.{phase}*.json`.
+/// - `keyframes/{id}_169|_43|.json` → `traces/{id}/keyframes_169|_43|.json`.
 ///
-/// Les anciens dossiers, une fois vidés, sont supprimés. Les fichiers légués
-/// non migrés (ex. `cleaning/{id}.json` sans phase, déjà invalides) restent
-/// dans l'ancien dossier et disparaissent avec lui.
+/// Les anciens dossiers, une fois vidés, sont supprimés.
+///
+/// Le dossier hérité `cleaning/` (ancien module de nettoyage) n'est **plus
+/// migré** : ses fichiers de travail sont obsolètes (décision 10 — base vierge)
+/// et supprimés avec lui.
 pub(crate) fn migrate_mode_storage(mode_dir: &Path) -> Result<(), String> {
     let new_root = mode_dir.join("traces");
     if new_root.exists() {
@@ -311,22 +298,10 @@ pub(crate) fn migrate_mode_storage(mode_dir: &Path) -> Result<(), String> {
                 &trace_dir.join(new_name),
             )?;
         }
-
-        // Fichiers de nettoyage par phase (`{id}.{phase}*.json`).
-        if let Ok(entries) = std::fs::read_dir(mode_dir.join("cleaning")) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let prefix = format!("{id}.");
-                if name.starts_with(&prefix) && name.ends_with(".json") {
-                    let rest = &name[id.len() + 1..]; // "spike.json", "spike.decisions.json"
-                    move_into(&entry.path(), &trace_dir.join(format!("cleaning.{rest}")))?;
-                }
-            }
-        }
     }
 
     // Retirer les anciens dossiers s'ils sont vides.
-    for dir in ["gpx", "geojson", "keyframes", "cleaning"] {
+    for dir in ["gpx", "geojson", "keyframes"] {
         let p = mode_dir.join(dir);
         let empty = p
             .read_dir()
@@ -335,6 +310,13 @@ pub(crate) fn migrate_mode_storage(mode_dir: &Path) -> Result<(), String> {
         if empty {
             let _ = std::fs::remove_dir(&p);
         }
+    }
+
+    // Dossier hérité de l'ancien module de nettoyage : supprimé intégralement
+    // (ses fichiers de travail ne sont plus produits ni lus — décision 10).
+    let legacy_work_dir = mode_dir.join("cleaning");
+    if legacy_work_dir.is_dir() {
+        let _ = std::fs::remove_dir_all(&legacy_work_dir);
     }
 
     println!("[storage] Migration vers « un dossier par trace » effectuée ({} trace(s)).", registry.len());
@@ -748,39 +730,29 @@ fn extract_points_with_distance(gpx: &gpx::Gpx) -> Result<Vec<TracePoint>, Strin
 
 /// Charge le registre des traces depuis le fichier JSON.
 /// Retourne un vecteur vide si le fichier n'existe pas ou est illisible.
+///
+/// **D1** : un registre au format pré-audit (contenant le champ
+/// `"cleaning_status"`) est **ignoré** — la liste retournée est vide et le
+/// fichier n'est **jamais écrasé par cette fonction**. Silencieux (D3b).
 pub(crate) fn load_registry(traces_path: &Path) -> Vec<TraceMetadata> {
     if !traces_path.exists() {
         return Vec::new();
     }
 
     match std::fs::read_to_string(traces_path) {
-        Ok(content) => match serde_json::from_str::<Vec<TraceMetadata>>(&content) {
-            Ok(mut registry) => {
-                // Rétrocompatibilité : normalise le statut de nettoyage et la
-                // phase des registres antérieurs ou corrompus.
-                //  - statut vide → "clean" ;
-                //  - trace « clean » → phase vide (aucun nettoyage requis) ;
-                //  - trace à nettoyer (needs_review / in_progress) sans phase
-                //    persistée → première étape (re-détection en chaîne).
-                for trace in &mut registry {
-                    if trace.cleaning_status.is_empty() {
-                        trace.cleaning_status = "clean".to_string();
-                    }
-                    if trace.cleaning_phase.is_empty() {
-                        trace.cleaning_phase = if trace.cleaning_status == "clean" {
-                            String::new()
-                        } else {
-                            "spike".to_string()
-                        };
-                    }
+        Ok(content) => {
+            // D1 : registre obsolète (format pré-audit) → ignoré, sans log.
+            if crate::gpx_audit::migration::is_obsolete_registry(&content) {
+                return Vec::new();
+            }
+            match serde_json::from_str::<Vec<TraceMetadata>>(&content) {
+                Ok(registry) => registry,
+                Err(e) => {
+                    eprintln!("Erreur de lecture du registre traces.json : {}", e);
+                    Vec::new()
                 }
-                registry
             }
-            Err(e) => {
-                eprintln!("Erreur de lecture du registre traces.json : {}", e);
-                Vec::new()
-            }
-        },
+        }
         Err(e) => {
             eprintln!("Impossible de lire traces.json : {}", e);
             Vec::new()
@@ -871,56 +843,15 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     let detection = detect_editor(&gpx);
     let (stats, _) = compute_stats(&gpx)?;
 
-    // 6bis. Détecter les anomalies des **3 étapes** du pipeline de nettoyage
-    //       (points hors trace, ronds-points, aller-retours) : une trace est
-    //       signalée « à nettoyer » dès qu'une anomalie existe, quelle que soit
-    //       son étape. Tolérance de cap `Nettoyage.Cap.toleranceDeg` et
-    //       paramètres `Nettoyage.RondPoints.*` lus depuis les réglages.
+    // 6bis. Audit GPX (module `gpx_audit`) : détection AR + RP sur les points
+    //       du GPX, avec les paramètres `Audit.*`. La trace est « à auditer »
+    //       dès qu'une anomalie est détectée.
     //
     //       La détection est **protégée contre tout panic imprévu** : un panic
     //       dans une commande async laisserait l'appelant (le frontend) bloqué
     //       sans réponse — l'import resterait muet après la sélection du
-    //       fichier. En cas de défaillance, on replie sur « aucune anomalie ».
-    let tolerance = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::cleaning::read_tolerance_deg(&app)
-    }))
-    .unwrap_or(5.0);
-    let roundabout_params = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::cleaning::read_roundabout_params(&app)
-    }))
-    .unwrap_or_default();
-    let (spikes, roundabouts, out_and_backs) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::cleaning::detect_all_phases_from_gpx(&gpx, tolerance, &roundabout_params)
-        }))
-        .unwrap_or_default();
-    let total_anomalies = spikes.len() + roundabouts.len() + out_and_backs.len();
-    let cleaning_status = if total_anomalies == 0 {
-        "clean".to_string()
-    } else {
-        "needs_review".to_string()
-    };
-    // Phase initiale : étape 1 si anomalies, sinon aucune (trace propre).
-    let cleaning_phase = if total_anomalies == 0 {
-        String::new()
-    } else {
-        "spike".to_string()
-    };
-    if total_anomalies > 0 {
-        println!(
-            "[import_gpx] Trace « {} » : {} anomalie(s) détectée(s) ({} pts hors trace, {} rond(s)-point(s), {} aller-retour(s)), statut « needs_review ».",
-            name, total_anomalies, spikes.len(), roundabouts.len(), out_and_backs.len()
-        );
-    }
-
-    // 6ter. Audit GPX (module `gpx_audit`) : détection AR + RP sur les mêmes
-    //       points, avec les paramètres `Audit.*`. La trace est « à auditer »
-    //       dès qu'une anomalie est détectée. Protégé contre tout panic, comme
-    //       la détection de nettoyage ci-dessus (un panic laisserait l'import
-    //       sans réponse).
-    //
-    //       Phase 4 : les deux statuts coexistent (cf. `TraceMetadata`) ; la
-    //       détection d'audit est la seule à piloter le gate de la Phase 5.
+    //       fichier. En cas de défaillance, on replie sur « needs_review »
+    //       (une trace non auditée doit l'être).
     let audit_params = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::gpx_audit::commands::read_audit_params(&app)
     }))
@@ -983,8 +914,6 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         hash,
         favorite: false,
         is_displayed: false,
-        cleaning_status,
-        cleaning_phase,
         audit_status,
     };
 
@@ -1349,14 +1278,13 @@ mod tests {
             hash: "sha256:test".to_string(),
             favorite: false,
             is_displayed: false,
-            cleaning_status: "needs_review".to_string(),
-            cleaning_phase: "spike".to_string(),
             audit_status: "needs_review".to_string(),
         }
     }
 
     /// La migration déplace chaque fichier de l'ancien agencement plat vers le
-    /// dossier de la trace, puis retire les anciens dossiers vides.
+    /// dossier de la trace, retire les anciens dossiers vides, et **supprime**
+    /// le dossier hérité de l'ancien module de nettoyage (fichiers obsolètes).
     #[test]
     fn migrate_mode_storage_moves_files_to_trace_dir() {
         let mode = test_mode_dir("migrate");
@@ -1373,6 +1301,7 @@ mod tests {
         fs::write(mode.join("geojson").join(format!("{}.geojson", id)), "geo").unwrap();
         fs::write(mode.join("keyframes").join(format!("{}_169.json", id)), "k169").unwrap();
         fs::write(mode.join("keyframes").join(format!("{}_43.json", id)), "k43").unwrap();
+        // Fichiers de travail de l'ancien module : obsolètes (décision 10).
         fs::write(mode.join("cleaning").join(format!("{}.spike.json", id)), "w1").unwrap();
         fs::write(mode.join("cleaning").join(format!("{}.spike.decisions.json", id)), "d1").unwrap();
 
@@ -1389,14 +1318,58 @@ mod tests {
         assert_eq!(fs::read_to_string(td.join("trace.geojson")).unwrap(), "geo");
         assert_eq!(fs::read_to_string(td.join("keyframes_169.json")).unwrap(), "k169");
         assert_eq!(fs::read_to_string(td.join("keyframes_43.json")).unwrap(), "k43");
-        assert_eq!(fs::read_to_string(td.join("cleaning.spike.json")).unwrap(), "w1");
-        assert_eq!(fs::read_to_string(td.join("cleaning.spike.decisions.json")).unwrap(), "d1");
-        // Anciens dossiers retirés (vides).
+        // Les fichiers de travail de l'ancien module ne sont plus migrés.
+        assert!(!td.join("cleaning.spike.json").exists());
+        assert!(!td.join("cleaning.spike.decisions.json").exists());
+        // Anciens dossiers retirés (vides), dossier de travail hérité supprimé.
         for d in ["gpx", "geojson", "keyframes", "cleaning"] {
             assert!(!mode.join(d).exists(), "{} devrait avoir été retiré", d);
         }
         // traces.json reste au niveau du mode.
         assert!(traces_path.exists());
+    }
+
+    /// D1 — un registre au format pré-audit (contenant `"cleaning_status"`) est
+    /// ignoré : liste vide, fichier jamais écrasé.
+    #[test]
+    fn load_registry_ignores_obsolete_registry() {
+        let mode = test_mode_dir("obsolete");
+        fs::create_dir_all(&mode).unwrap();
+        let traces_path = mode.join("traces.json");
+        let registry = vec![make_trace("id-1", "a.gpx")];
+
+        // Registre au format pré-audit : on réinjecte le champ retiré dans le
+        // JSON sérialisé, comme le produisaient les versions antérieures.
+        let json = serde_json::to_string(&registry).unwrap();
+        let obsolete = json.replace(
+            "\"audit_status\"",
+            "\"cleaning_status\":\"clean\",\"audit_status\"",
+        );
+        assert!(obsolete.contains("\"cleaning_status\""));
+        fs::write(&traces_path, &obsolete).unwrap();
+
+        assert!(load_registry(&traces_path).is_empty());
+        // Le fichier n'est pas modifié (D1 : jamais écrasé par le chargement).
+        assert_eq!(fs::read_to_string(&traces_path).unwrap(), obsolete);
+
+        // Registre au format courant : chargé normalement.
+        fs::write(&traces_path, &json).unwrap();
+        let loaded = load_registry(&traces_path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "id-1");
+    }
+
+    /// Un registre absent ou illisible retourne une liste vide (pas de panic).
+    #[test]
+    fn load_registry_handles_missing_and_invalid_files() {
+        let mode = test_mode_dir("invalid");
+        fs::create_dir_all(&mode).unwrap();
+        let traces_path = mode.join("traces.json");
+
+        assert!(load_registry(&traces_path).is_empty());
+
+        fs::write(&traces_path, "{ pas du json").unwrap();
+        assert!(load_registry(&traces_path).is_empty());
     }
 
     /// La migration est **idempotente** : un second appel ne fait rien (et ne

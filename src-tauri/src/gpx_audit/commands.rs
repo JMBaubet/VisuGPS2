@@ -34,9 +34,9 @@ use super::types::{
 // ─── Lecture des paramètres ───────────────────────────────────────────
 
 /// Lit les paramètres du détecteur (`Audit.*`) avec repli sur les valeurs par
-/// défaut du livrable 6. Ne **panique jamais** (`try_state`), comme
-/// `cleaning::read_tolerance_deg` : l'import s'appuie dessus, une défaillance
-/// du système de paramètres ne doit pas bloquer l'import.
+/// défaut du livrable 6. Ne **panique jamais** (`try_state`) : l'import
+/// s'appuie dessus, une défaillance du système de paramètres ne doit pas
+/// bloquer l'import.
 pub fn read_audit_params(app: &tauri::AppHandle) -> AuditParams {
     let state = match app.try_state::<Arc<RwLock<SettingsState>>>() {
         Some(s) => s,

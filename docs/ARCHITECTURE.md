@@ -81,7 +81,7 @@ const router = createRouter({
     { path: '/', name: 'accueil', component: Accueil },
     { path: '/visualisation', name: 'visualisation', component: Visualisation },
     { path: '/edition-camera', name: 'editionCamera', component: EditionCamera },
-    { path: '/nettoyage', name: 'nettoyage', component: Nettoyage },
+    { path: '/audit', name: 'audit', component: () => import('../views/Audit.vue') },
     { path: '/screen-bis', name: 'screenBis', component: ScreenBis }
   ]
 })
@@ -90,7 +90,8 @@ const router = createRouter({
 **Stratégie de routing** :
 - `createWebHistory()` : URLs propres sans `#`
 - Navigation par `name` recommandée (plus stable que `path`)
-- 5 routes : `accueil`, `visualisation`, `editionCamera`, `nettoyage`, `screenBis`
+- 5 routes : `accueil`, `visualisation`, `editionCamera`, `audit`, `screenBis`
+- Seule la route `audit` est en **lazy loading** (contrairement aux autres, chargées statiquement) : Mapbox GL ne doit pas alourdir le bundle principal au démarrage.
 
 **Ajout de routes** :
 ```typescript
@@ -250,9 +251,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 29 commandes : voir COMMANDS.md pour le catalogue complet
+            // 34 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
-            gestionMode::*, settings::*, import_gpx::*, cleaning::*
+            gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -268,7 +269,7 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `gestionMode.rs` : Gestion des modes d'exécution (CRUD, sélection, fichier `.env`)
 - `settings.rs` : Système de paramètres de configuration (TOML, chiffrement des secrets)
 - `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces, points avec distance cumulée, persistance des keyframes)
-- `cleaning.rs` : Nettoyage en 3 étapes (pts hors trace, ronds-points, aller/retour), validation d.étape
+- `gpx_audit/` : Module Audit GPX (détection AR/RP, corrections, export, commandes Tauri) — voir § « Audit GPX » ci-dessous
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -331,7 +332,7 @@ src/
 │   ├── traces.ts     # Store des traces GPX importées
 │   ├── keyframes.ts  # Store de persistance des keyframes (loadKeyframes, saveKeyframes, clearKeyframes)
 │   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
-│   ├── cleaning.ts   # Store du nettoyage en 3 étapes (détections par phase, validation d.étape)
+│   ├── audit.ts      # Store du module Audit GPX (détection, findings volatils, corrections)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
 │   ├── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra (simple + délégation frustum)
@@ -344,7 +345,7 @@ src/
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
 │   ├── Home.vue
-│   ├── Cleaning.vue  # Nettoyage de trace GPX (route `/nettoyage`) — carte, panneau des cas, table des points
+│   ├── Audit.vue     # Audit GPX (route `/audit`) — carte, panneau des anomalies, panneau d'action
 │   └── About.vue
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
@@ -365,18 +366,26 @@ src/
    │   │   ├── HeadingChangesPanel.vue # Overlay — tableau des changements de cap brutaux (à la demande)
    │   │   ├── DistanceHud.vue      # Overlay — HUD distance parcourue/total (barre bas, orange)
    │   │   └── CameraEditor.vue     # Composant B — édition des keyframes (widgets manipulation directe)
-│   ├── Cleaning/     # Composants de la vue de nettoyage de trace
-│   │   ├── CleaningToolbar.vue    # Barre d'outils (retour, titre, widget étapes, tolérance, Enregistrer, Valider l'étape)
-│   │   ├── CleaningPhaseStepper.vue # Widget « boîte à états » (3 étapes ✓/✗, navigation séquentielle)
-│   │   ├── CleaningMap.vue        # Carte Mapbox — trace complète (verte), linestring corrigé (jaune), segment surligné, branches décalées, labels anti-revouvrement, points supprimés en rouge, drag direct des points (cas manuels)
-│   │   ├── CleaningCasesPanel.vue # Panneau (liste des cas + poubelle, bouton « Modifier un segment », validation « Valider » / « Faux positif », « Restaurer »)
-│   │   └── CleaningPointTable.vue # Table simplifiée des points (numéro, suppression, case d'en-tête tout suppr./remettre, indicateur « Déplacé »)
+│   ├── Audit/        # Composants de la vue d'audit GPX
+│   │   ├── AuditToolbar.vue       # Barre d'outils (retour, titre, progression, paramètres)
+│   │   ├── AuditProgressChip.vue  # Indicateur de progression de l'audit (anomalies traitées / total)
+│   │   ├── AuditFindingsPanel.vue # Panneau latéral — liste des anomalies (sélection)
+│   │   ├── AuditSynthesis.vue     # Synthèse de l'audit (compteurs AR / RP / faux positifs)
+│   │   ├── AuditActionPanel.vue   # Panneau d'action — 6 vues (suppression, routage ORS, faux positif…)
+│   │   ├── AuditMap.vue           # Carte Mapbox GL (3ᵉ instance) — trace, findings, aperçus
+│   │   ├── auditMapFeatures.ts    # Construction des features GeoJSON de la carte
+│   │   ├── auditMapLayers.ts      # Déclaration et style des couches Mapbox
+│   │   └── dialogs/
+│   │       ├── ConfirmExitDialog.vue   # Avertissement avant de quitter avec un travail en cours
+│   │       └── ConfirmApplyDialog.vue  # Confirmation du point de non-retour (« Appliquer »)
 │   ├── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
 │       └── …
 ├── composables/      # Logique réutilisable (Composition API)
-│   └── useSettingsTree.ts       # Construit l'arbre catégories/params du drawer (filtré par route)
+│   ├── useSettingsTree.ts  # Construit l'arbre catégories/params du drawer (filtré par route)
+│   ├── useAuditOrs.ts      # Requêtes OpenRouteService du module Audit (2 clés en bascule)
+│   └── useEditionMap.ts    # Logique partagée de la carte d'édition caméra
 ├── assets/           # Ressources statiques
 │   └── styles/
 ├── App.vue          # Layout racine
@@ -399,7 +408,7 @@ src-tauri/
 │   ├── gestionMode.rs    # Gestion des modes d'exécution
 │   ├── settings.rs       # Système de paramètres de configuration
 │   ├── import_gpx.rs     # Import de fichiers GPX
-│   ├── cleaning.rs       # Nettoyage en 3 étapes (détections par phase, validation d'étape)
+│   ├── gpx_audit/        # Module Audit GPX (11 fichiers + tests)
 │   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
 │   │   └── default.json  # Permissions pour les fenêtres
@@ -417,7 +426,7 @@ src-tauri/
 - `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
-- `cleaning.rs` : Pipeline de nettoyage en 3 étapes (étape 1 combinée pts hors trace + aller-retours, ronds-points, aller/retour à venir) — `detect_anomalies`/`detect_roundabouts`/`detect_cases_for_phase`, persistance par phase (`traces/{trace_id}/cleaning.{phase}.json` + décisions), validation d'étape (GPX réécrit + backup + régénération geojson/stats/hash)
+- `gpx_audit/` : Module Audit GPX (détection AR/RP, moteur de correction, réécriture GPX) — 11 fichiers : `types.rs`, `geometry.rs`, `consolidation.rs`, `ar.rs`, `rp.rs`, `anchor.rs`, `corrections.rs`, `migration.rs`, `export.rs`, `overlay.rs`, `preview.rs`, `routing.rs`, `pipeline.rs`, `commands.rs`. Détails au § « Audit GPX » ci-dessous.
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -748,7 +757,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 1. **Backend Rust** (`src-tauri/src/import_gpx.rs`) :
    - Le sélecteur de fichier natif est ouvert via le plugin `tauri-plugin-dialog` (pas d'API Tauri 1.x).
    - Le parsing utilise le crate `gpx` (version 0.10) et les calculs géodésiques le crate `geo` (Haversine).
-   - Les données sont stockées dans le **dossier du mode d'exécution actif** : **un dossier par trace** `{app_data_dir}/{active_mode}/traces/{trace_id}/` (GPX, GeoJSON, keyframes, nettoyage) + `traces.json` pour le registre. La migration depuis l'ancien agencement plat (`gpx/`, `geojson/`, `keyframes/`, `cleaning/`) est automatique au premier accès au mode (`migrate_mode_storage`).
+   - Les données sont stockées dans le **dossier du mode d'exécution actif** : **un dossier par trace** `{app_data_dir}/{active_mode}/traces/{trace_id}/` (GPX, GeoJSON, keyframes) + `traces.json` pour le registre. La migration depuis l'ancien agencement plat (`gpx/`, `geojson/`, `keyframes/`) est automatique au premier accès au mode (`migrate_mode_storage`) ; le dossier hérité `cleaning/` de l'ancien module est supprimé au passage, et les fichiers `cleaning.*.json` résiduels effacés par la purge D2c (cf. § « Audit GPX »).
    - Le registre est sauvegardé avec une **écriture atomique** (fichier `.tmp` + `rename`).
    - Les doublons sont détectés par **empreinte SHA256** du contenu binaire.
 
@@ -770,7 +779,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
-   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Badge de nettoyage** : un `v-chip` orange « À nettoyer » est affiché tant que `cleaning_status !== 'clean'`, et l'icône Éditer devient **`mdi-broom`** (au lieu de `mdi-pencil`). Le bouton **Éditer** sélectionne la trace (`editionStore.selectTrace`) puis navigue vers la vue `editionCamera` — ou vers la vue `/nettoyage` si la trace n'est pas « clean » (cf. § « Nettoyage de trace GPX » ci-dessous). **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / jaune > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Badge d'audit** : un `v-chip` orange « À auditer » est affiché tant que `audit_status !== 'clean'`, et l'icône Éditer devient **`mdi-map-marker-path`** (au lieu de `mdi-pencil`). Le bouton **Éditer** sélectionne la trace (`editionStore.selectTrace`) puis navigue vers la vue `editionCamera` — ou vers la vue `/audit` si la trace n'est pas « clean » (cf. § « Audit GPX » ci-dessous). **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / jaune > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
    - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).
@@ -789,66 +798,137 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 5. **Notifications** (`src/stores/ui.ts`) :
    - Store mutualisé pour les snackbars Vuetify (succès, erreur, avertissement, info).
 
-## Nettoyage de trace GPX (`/nettoyage`)
+## Audit GPX (`/audit`)
 
-Une trace GPX n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946), **aller-retours inutiles** (ex. points 711/791), ou **tours soutenus de rond-point** (plus d'un tour). Le nettoyage est organisé en un **pipeline de 3 étapes séquentielles**, chacune avec sa détection, sa correction et sa validation :
+Une trace GPX n'est **valide** que si elle est auditée. Les fichiers GPX édités (OpenRunner,
+etc.) contiennent souvent des anomalies de relevé : **aller-retours ponctuels** (AR — rebonds,
+aiguilles de traceur) ou **boucles de giratoire** (RP — 270°, 360° et plus). Le module Audit
+GPX **remplace** l'ancien module Nettoyage (pipeline de 3 étapes) : il détecte les deux
+familles d'anomalies, propose des corrections (suppression de points, routage OpenRouteService,
+faux positif) et réécrit le GPX après validation.
 
-1. **Pts hors trace** (étape 1) — **détection combinée d'origine** : points isolés hors trace **et** aller-retours (rebroussement ~180°). Correction (suppression des points isolés, du demi-tour + du retour) → **modifie le GPX**. C'est l'étape qui nettoie physiquement la trace.
-2. **Rond-Points** (étape 2) — tours soutenus (cumul d'angle de virage). Correction **manuelle** (suppression/déplacement des points dans la zone élargie d'une marge) → **modifie le GPX**.
-3. **Aller/Retour** (étape 3) — **traitement et sortie différents** : elle produira un autre type de fichier, **pas** une modification du GPX — **non implémentée** dans cette itération : simple emplacement dans la toolbar.
+Les algorithmes sont des **portages fidèles** de l'application HTML de référence
+(`docs/audit/reference/verifgpx-V3.0.html`) ; les spécifications normatives sont
+`docs/audit/spec/ANALYSE.md` (détecteurs) et `docs/audit/spec/CORRECTIONS.md` (moteur de
+correction).
 
-Le seuil de longueur de branche (100 m) est une **heuristique interne** de la détection de rebroussement (classification spike / aller-retour au sein de l'étape 1), **pas** un critère d'architecture entre les étapes.
+### État d'audit (`audit_status`)
 
-### État de nettoyage (`cleaning_status` + `cleaning_phase`)
+`TraceMetadata` porte un unique champ (Rust + TS) :
+- `audit_status` : `"clean" | "needs_review"`, défaut **`"needs_review"`**
+  (`#[serde(default = "default_audit_status")]`).
 
-`TraceMetadata` porte deux champs (Rust + TS) :
-- `cleaning_status` : `"clean" | "needs_review" | "in_progress"`, défaut **`"clean"`** (`#[serde(default)]`, rétrocompatibilité).
-- `cleaning_phase` : étape en cours — `"spike"`, `"roundabout"`, `"out_and_back"`, ou chaîne vide si la trace est propre. Normalisée au chargement du registre (`clean` → `""`, sinon → `"spike"` pour les registres antérieurs).
+Posé **à l'import** : le backend exécute la détection complète (AR + RP) sur les points du GPX
+avec les paramètres `Audit.*` → `"needs_review"` si au moins un finding, `"clean"` sinon. La
+détection est protégée contre tout panic (un panic laisserait l'import sans réponse) : en cas
+de défaillance, repli sur `"needs_review"`.
 
-Posés **à l'import** : détection de l'**étape 1** (points hors trace) → `"needs_review"` + `cleaning_phase = "spike"` si anomalies, sinon `"clean"`. **Blocage de l'édition caméra** : une trace non « clean » ne peut pas entrer dans la vue d'édition caméra (bouton Éditer de l'accueil et garde-fou d'`EditionCamera` redirigent vers `/nettoyage`). Tant que l'étape 3 n'existe pas, une trace **reste `needs_review`** même après les étapes 1 et 2 (comportement voulu).
+**Blocage de l'édition caméra** (gate dur) : une trace non « clean » ne peut pas entrer dans la
+vue d'édition caméra — le bouton Éditer de l'accueil (`Circuit.vue`) et le garde-fou
+d'`EditionCamera.vue` redirigent tous deux vers `/audit?traceId=…`. Le `traceId` circule par la
+**query de la route** (plus de store intermédiaire depuis la migration).
+
+### Findings volatils (décision 6)
+
+L'état de travail — trace de travail (`AuditPoint[]`), findings, corrections et enregistrements
+d'undo — vit **uniquement dans le store Pinia `src/stores/audit.ts`**. Il n'est **pas persisté**
+entre deux sessions : seuls le GPX réécrit et `audit_status` survivent à la fermeture. Aucun
+fichier de travail n'est donc créé sur disque (contrairement aux `cleaning.*.json` de l'ancien
+module, supprimés par la purge D2c).
+
+### Identifiants stables et index
+
+Chaque point porte un **id stable** (`AuditPoint.id`, alloué par `next_point_id` et jamais
+réutilisé). Les index de `Finding` (`peak`, `pairs`, `parts`, `core_ids`, `zone_ids`) sont
+exprimés **dans l'espace de la trace de travail courante** (invariant C4) et sont donc
+resynchronisés à chaque édition par `sync_indexes` ; les `*_ids` (identifiants stables) sont ce
+qui survit à une suppression. C'est ce qui permet à l'annulation (`audit_undo_correction`) et à
+l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs corrections.
 
 ### Architecture
 
-1. **Module backend** (`src-tauri/src/cleaning.rs`) :
-   - **Détections par phase** (les utilitaires `bearing`/`angle_distance`/`haversine` sont partagés) :
-     - **Étape 1** : `detect_anomalies` (alias de `detect_uturn_cases`) — détection **combinée d'origine** des rebroussements ~180° (points isolés `spike` + aller-retours `out_and_back`), regroupement en cas (fenêtre 25 index), zone délimitée par retraçage symétrique, classification interne par longueur de branche (spike < 100 m / out_and_back sinon). `detect_spikes` / `detect_out_and_backs` en sont les sous-détections (décompte à l'import, tests).
-     - **Étape 2** : `detect_roundabouts` — **portage de l'outil de référence** — cumul des virages (différence de cap normalisée [−180, 180]) tant que chaque virage ≥ `angleMinDeg` et que la fenêtre ≤ `pointsMax` ; cas retenu quand `|angle cumulé| > angleSeuilDeg` avec `pointsMin ≤ count ≤ pointsMax`. Produit un cas `roundabout` (`start_index`/`end_index` du tour, `total_angle_deg` signé → tours = `|angle|/360`, sens = signe).
-     - `detect_cases_for_phase` : dispatch par phase (`"roundabout"` → ronds-points, `"out_and_back"` → sous-détection aller-retour, sinon **étape 1 combinée**).
-   - **Import** : `detect_all_phases_from_gpx` (spikes + ronds-points + aller-retours) — la trace est signalée « à nettoyer » dès qu'une anomalie existe, quelle que soit son étape.
-   - **Tolérance de cap** : `Nettoyage.Cap.toleranceDeg` (défaut 5.0), lue via `read_tolerance_deg` (repli 5°, jamais de panic).
-   - **Paramètres ronds-points** : groupe `Nettoyage.RondPoints` — `angleMinDeg` (5), `pointsMin` (5), `pointsMax` (50), `angleSeuilDeg` (210), `margePoints` (5, points de contexte avant/après le segment). Transmis au backend par le frontend (`RoundaboutParams`).
-   - **Persistance par phase** : fichier de travail `{mode}/traces/{trace_id}/cleaning.{phase}.json` (écriture atomique) — les index de cas sont propres à la version du GPX traitée. Chaque cas porte `pending` / `corrected` / `kept`, plages de suppression et points **déplacés** (`MovedPoint`). **Décisions mémorisées** : à la validation d'étape, les cas « faux positif » (sans modification effective) sont persistés dans `traces/{trace_id}/cleaning.{phase}.decisions.json` (coordonnée représentative + état) ; à la re-détection d'une étape déjà validée, les cas dont la zone correspond (~40 m) sont **re-marqués automatiquement**.
-   - **Cycle de vie** : à l'import `needs_review` + étape 1 ; à chaque **validation d'étape** (`validate_phase`), les corrections de la phase sont appliquées et le **GPX est réécrit** (entrée de l'étape suivante) ; `cleaning_phase` avance (`spike → roundabout → out_and_back`) et la trace **reste `needs_review`** tant que l'étape 3 n'est pas implémentée. **Auto-validation** : une étape sans anomalie est validée automatiquement (avancement de phase sans réécriture).
-   - **Backup `.orig`** : pris **une seule fois** à l'étape 1 (`{filename}.gpx.orig`, jamais écrasé) ; dérivés (geojson, stats, hash) régénérés à chaque réécriture.
+1. **Module backend** (`src-tauri/src/gpx_audit/`) — 14 fichiers :
 
-2. **Store Frontend** (`src/stores/cleaning.ts`) — Pattern Setup Store :
-   - Types miroir des structs Rust (`CleaningCaseKind` avec `roundabout`, `CleaningCase` avec `total_angle_deg`, `CleaningState` avec `phase`, `Correction`, `MovedPoint`, `RoundaboutParams`) + définitions `CLEANING_PHASES` / `CLEANING_PHASE_NEXT`.
-   - État : `selectedTraceId`, `state`, `points`, `currentCaseIndex`, **`currentPhase`**, `toleranceDeg`, **`roundaboutParams`** + état UI éphémère `createMode` / `createStartIndex` / `movePointIndex`.
-   - Getters : `hasCases`, `currentCase`, `currentZone` / **`zoneStart` / `zoneEnd`** (zone **élargie de la marge** pour les ronds-points), `correctedZoneCoords`, `allValidated`, `validatedCount`, `isDeletedCount`.
-   - Actions : `load` (détection de la phase courante depuis `cleaning_phase` + **auto-validation des étapes vides**), `goToPhase` (navigation du widget, étape 3 exclue), `phaseValidated`, `reDetect`, validation manuelle des cas (« Valider » / « Faux positif »), `toggleDeletePoint`/`addDeleteRange`/`clearCorrection`/`setZoneDeleted`/`isZoneFullyDeleted` (suppressions, zone élargie), `setMovedPoint`/`clearMovedPoint`/`startMovePoint`/`stopMovePoint` (déplacements), `createManualCase`/`removeCase` (cas « Modification de segment », supprimables même après validation), `save` (sauvegarde partielle), **`validatePhase`** (ex-`finalize` : applique la phase, réécrit le GPX, avance la phase, recharge), `reset`.
+   | Fichier | Rôle |
+   |---|---|
+   | `types.rs` | Modèle de données : `AuditPoint`, `Finding` (`FindingKind`, `FindingStatus`, `FindingPair`, `FindingPart`, `FindingContext`), `AuditParams`, `AuditState`, `AuditDetectionResult`, `LatLon`, `UndoRecord`. |
+   | `geometry.rs` | Projection équirectangulaire locale et construction de la géométrie métrique (ANALYSE §2.2 / §2.4). |
+   | `consolidation.rs` | Consolidation préalable : suppression des points redondants à moins de σ du dernier point conservé (ANALYSE §2.3). |
+   | `ar.rs` | Détecteur **AR** — aller-retours ponctuels (rebonds, aiguilles). |
+   | `rp.rs` | Détecteur **RP** — boucles de giratoire (cumul d'angle, quantification, gardes anti-aiguille). |
+   | `anchor.rs` | Ancres d'accès d'une boucle RP (`rpAnchorIndices`, ANALYSE §13) — calcul dérivé et lazy. |
+   | `pipeline.rs` | Orchestration de la détection : chargement GPX → consolidation → géométrie → AR → RP → fusion et renumérotation des findings (pendant de `runAudit()`). |
+   | `corrections.rs` | Moteur de correction : `sync_indexes`, `apply_delete`, `apply_route`, `mark_fp` / `unmark_fp`, `undo_correction`, garde d'imbrication, absorption des faux positifs (CORRECTIONS §3 à §9). |
+   | `preview.rs` | Aperçu **prospectif** d'une suppression (IHM §8.2 / §9.2), recalculé à chaque mouvement de curseur. |
+   | `overlay.rs` | Éléments de rendu : étiquettes des points et ancres de routage (IHM §5.1 / §5.4) — calculs métriques côté Rust, création des marqueurs côté front. |
+   | `routing.rs` | Contrat d'échange avec OpenRouteService, partie algorithmique : test d'identité des deux tracés (longueurs à 2 %, Hausdorff ≤ 15 m). Le réseau vit côté front (`useAuditOrs.ts`). |
+   | `export.rs` | Réécriture du GPX après audit (CORRECTIONS §5.4, IHM §20) : la trace de travail est écrite **telle quelle** (invariant C10), l'entête du source n'est pas reconstruite. |
+   | `migration.rs` | **D1** (registre pré-audit ignoré) et **D2c** (purge des `cleaning.*.json` hérités) — câblés depuis `import_gpx.rs` (`load_registry` / `get_mode_dir`). |
+   | `commands.rs` | Les **10 commandes Tauri** publiques + leurs implémentations testables sans `AppHandle`. |
 
-3. **Vue** (`src/views/Cleaning.vue`, route `/nettoyage`) :
-   - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des cas + table des points + drawer Paramètres.
-   - Garde-fou : sans trace sélectionnée → retour à l'accueil. Détection de modifications non sauvegardées (dialog de retour), boutons **Enregistrer** (sauvegarde partielle) et **Valider l'étape** (actif uniquement pour l'étape courante du pipeline — pas une étape déjà franchie — quand tous ses cas sont validés ; réécrit le GPX et passe à l'étape suivante).
+2. **Store Frontend** (`src/stores/audit.ts`) — Pattern Setup Store, état volatil :
+   - Types miroir des structs Rust (`AuditParams`, `AuditPoint`, `Finding`, `FindingKind`, `FindingStatus`, `AuditState`, `AuditDetectionResult`, `DeletePreview`, `FindingOverlay`).
+   - Actions de détection (`runAudit`), de sélection (`selectFinding`), de correction (`applyDelete`, `applyRoute`, `markFp`, `unmarkFp`, `undoCorrection`), d'aperçu (`deletePreview`, `mapOverlay`) et **`validate`** (bouton « Appliquer » : refuse tant qu'un finding est `pending`, ferme la vue, non annulable — décision 8).
+   - `reset()` : appelé à la sortie de la vue (décision 9 — les findings sont volatils).
 
-4. **Composants** (`src/components/Cleaning/`) :
-   - `CleaningToolbar.vue` : barre d'outils (retour accueil, titre « Nettoyage — {trace} », **widget `CleaningPhaseStepper`**, tolérance de cap masquée en phase rond-point, Enregistrer, Réinitialiser, **Valider l'étape N**).
-   - `CleaningPhaseStepper.vue` : **boîte à états** des 3 étapes — pastilles `1 Pts hors trace` → `2 Rond-Points` → `3 Aller/Retour` reliées par `→`, badge **✓** (validée, verte) / **✗** (à faire), **étape courante du pipeline surlignée** (primaire, d'après `cleaning_phase`). Navigation séquentielle (une étape nécessite la précédente validée) ; l'étape 3 (à venir) devient cliquable une fois l'étape 2 validée, pour revenir à l'étape courante. Une étape déjà franchie n'est **jamais re-validable** (bouton « Valider l'étape » désactivé).
-   - `CleaningMap.vue` : carte Mapbox GL — **trace complète en ligne continue verte**, **segment courant** surligné (zone du cas, élargie de la marge pour les ronds-points), **linestring corrigé** (jaune), branches **aller/retour** décalées (`line-offset`), points numérotés **cliquables** avec anti-revouvrement, points supprimés en **rouge**, déplacement direct des points des cas manuels, sélecteur des points proches du curseur, mode « Modifier un segment ».
-   - `CleaningCasesPanel.vue` : liste des anomalies (n°/total validés, type, zone) avec **poubelle rouge** (cas « Modification de segment » toujours, « Point hors trace » et « Rond-point » tant que non validés, « Aller-retour » **jamais**), bouton **« Modifier un segment »**, affichage **« Angle cumulé · tours · sens »** pour les ronds-points (au lieu de « écart de cap »), validation « Valider » / « Faux positif » + « Restaurer ».
-   - `CleaningPointTable.vue` : table des points du segment courant (numéro, suppression avec case d'en-tête « tout supprimer / tout remettre », indicateur « Déplacé ») — la zone affichée est élargie de la marge pour les ronds-points.
+3. **Vue** (`src/views/Audit.vue`, route `/audit`, lazy loading) :
+   - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des anomalies + panneau d'action + drawer Paramètres.
+   - Garde-fou : sans `traceId` en query, retour à l'accueil avec notification.
+   - `onBeforeRouteLeave` : **avertissement** si un travail est en cours (`hasWorkInProgress`), puis `auditStore.reset()` (décision 9).
 
-5. **Responsabilité de validation** : la détection est **propositive** — chaque cas de la phase doit être **validé par l'utilisateur** (« Valider » ou « Faux positif ») avant de passer au suivant ; la **validation d'étape** n'est possible que quand **tous** les cas de la phase sont validés. Le GPX n'est réécrit qu'à la validation de l'étape (et devient l'entrée de l'étape suivante).
+4. **Composants** (`src/components/Audit/`) : `AuditToolbar.vue`, `AuditProgressChip.vue`, `AuditFindingsPanel.vue`, `AuditSynthesis.vue`, `AuditActionPanel.vue`, `AuditMap.vue` (3ᵉ instance Mapbox GL, avec `auditMapFeatures.ts` et `auditMapLayers.ts`), et `dialogs/` (`ConfirmExitDialog.vue`, `ConfirmApplyDialog.vue`).
 
-### Commandes Tauri du module Nettoyage
+5. **Composable réseau** (`src/composables/useAuditOrs.ts`) : requêtes OpenRouteService (profils voiture et vélo, deux clés en bascule automatique sur quota épuisé — `Audit.OpenRouteService.*`, chiffrées en AES-256-GCM).
+
+6. **Carte** (`AuditMap.vue`) : 3ᵉ instance Mapbox GL, **distincte** de `Accueil/Map.vue` et de `Edition/EditionMap.vue`. Elle affiche la trace de travail, les zones d'anomalie, les aperçus de suppression et les ancres de routage. Chaque vue monte et détruit sa propre instance (`onUnmounted` → `map.remove()`).
+
+### Migration et purge (D1 / D2c)
+
+- **D1 — registres pré-audit** : `load_registry` détecte la sous-chaîne quoteé `"cleaning_status"`
+  dans `traces.json` et retourne alors une liste **vide**, **sans jamais réécrire le fichier**.
+  Les traces importées avant la migration disparaissent de l'interface ; leurs fichiers GPX
+  restent intacts sur disque. Le registre est réécrit au prochain import, au nouveau format.
+- **D2c — artefacts hérités** : `get_mode_dir` (point de passage unique de toutes les commandes)
+  appelle `cleanup_obsolete_cleaning_files`, qui supprime les fichiers `cleaning.*.json`
+  résiduels de tous les dossiers de traces. **Idempotent** et **silencieux** (D3b — aucun log,
+  aucune erreur remontée). Le dossier hérité `cleaning/` de l'ancien agencement plat est par
+  ailleurs supprimé par `migrate_mode_storage`.
+- **Surcharges orphelines** : d'éventuelles surcharges `Nettoyage.*` dans `config.toml` /
+  `config-dev.toml` sont sans effet (le namespace n'existe plus) et peuvent être supprimées
+  manuellement — voir [DATA_STORAGE.md](./DATA_STORAGE.md).
+
+### Commandes Tauri du module Audit
 
 | Commande | Description |
 |----------|-------------|
-| `detect_trace_anomalies(trace_id, phase, tolerance_deg, roundabout_params?)` | Détecte les anomalies de la **phase** demandée sur le GPX courant (aucune persistance). |
-| `get_cleaning_state(trace_id, phase, tolerance_deg, roundabout_params?)` | Fichier de travail `traces/{trace_id}/cleaning.{phase}.json` s'il est valide (phase cohérente), sinon détection fraîche **fusionnée avec les décisions mémorisées** (`{phase}.decisions.json` — faux positifs re-marqués). |
-| `save_cleaning_state(trace_id, phase, state_json)` | Sauvegarde partielle (écriture atomique), passe en `"in_progress"`, mémorise la phase. |
-| `reset_cleaning(trace_id)` | Abandonne les corrections (toutes phases, **y compris les décisions**) et repasse à l'étape 1, `"needs_review"`. |
-| `validate_phase(trace_id, phase, state_json)` | Applique les corrections validées de la phase, **réécrit le GPX** (backup `.orig` une seule fois), régénère geojson/stats/hash, **avance `cleaning_phase`** (la trace reste `needs_review`) et **persiste les faux positifs** dans `{phase}.decisions.json`. Refuse tant qu'un cas est `pending` ; refuse l'étape 3 (non implémentée). Sans correction → simple avancement de phase. |
+| `audit_run_detection(trace_id, params)` | Charge le GPX, consolide, détecte AR + RP et retourne la trace de travail, les findings et la distance totale. Aucune persistance. Seule commande à lire le GPX. |
+| `audit_map_overlay(points, findings, close_m)` | Éléments de rendu : ancres de routage des boucles RP et étiquettes des points (lazy, recalculé à chaque rendu). |
+| `audit_delete_preview(points, finding, start, end, close_m)` | Aperçu **prospectif** d'une suppression — la trace de travail n'est pas modifiée. |
+| `audit_routes_identical(car, car_distance, bike, bike_distance)` | Test d'identité des deux tracés ORS (2 %, Hausdorff ≤ 15 m dans les deux sens). |
+| `audit_apply_delete(trace_id, …, ds, de, next_point_id)` | Applique la suppression `[ds, de]`, resynchronise les index, absorbe les faux positifs imbriqués, enregistre l'undo. |
+| `audit_apply_route(trace_id, …, coords, profile, next_point_id)` | Remplace le segment par le tracé OpenRouteService (profil `car` / `bike`). |
+| `audit_mark_fp(findings, finding_id)` / `audit_unmark_fp(findings, finding_id)` | Marque / démarque une anomalie en faux positif. |
+| `audit_undo_correction(trace_id, points, findings, finding_id)` | Annule la correction d'une anomalie (restaure les points, retire les points insérés, réintègre les faux positifs absorbés). |
+| `audit_validate(trace_id, points, findings)` | **Point de non-retour.** Refuse tant qu'un finding est `pending`. Réécrit le GPX (backup `.orig` une seule fois), régénère geojson/stats/hash et pose `audit_status = "clean"`. Écrit le GPX **avant** `traces.json`. |
+
+> Référence complète des **34 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
+
+### Paramètres (`Audit.*`)
+
+Le namespace `Audit.*` de `settings.default.toml` expose 5 catégories dans le drawer de la vue
+`/audit` :
+
+| Catégorie | Paramètres |
+|---|---|
+| `Audit.Consolidation` | `seuil` (0,5 m) — seuil de fusion des points consécutifs avant analyse. |
+| `Audit.AR` | `toleranceDeg` (20°), `seuilPaireM` (50 m), `maxPaires` (5), `branchesMaxM` (200 m). |
+| `Audit.RP` | `seuilFermetureM` (15 m), `angleMinDeg` (270°). |
+| `Audit.OpenRouteService` | `clePrimaire`, `cleSecondaire` — type `secret`, chiffrées AES-256-GCM. |
+| `Audit.Application` | `nom` — type `string` (type ajouté au système de paramètres pour ce besoin), nom inséré dans le bloc d'audit du GPX exporté. |
+
+Les paramètres sont assemblés en `AuditParams` par la vue (`buildParams()`) et transmis à
+`audit_run_detection`. Le token Mapbox reste `Systeme.Key.mapBox` — aucun paramètre spécifique
+n'a été ajouté.
 
 ## Vue d'édition caméra (`/edition-camera`)
 
@@ -892,7 +972,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 3. **Vue** (`src/views/EditionCamera.vue`) :
    - `v-main` en **colonne flex** : un wrapper carte (`position: relative`, `flex: 1`) contenant `EditionMap` + overlays `ViewportFrame`, `TelemetryHud` et `DistanceHud`, puis `PlaybackControls` en bandeau bas fixe.
-   - Au montage : précharge `appStore`, `settingsStore`, `tracesStore`. **Garde-fou** : si `selectedTraceId` est `null` (rechargement direct), `router.replace({ name: 'accueil' })` ; si la trace sélectionnée n'est pas « clean » (`cleaning_status !== 'clean'`), `router.replace({ name: 'nettoyage' })` (une trace doit être nettoyée avant l'édition caméra, cf. § « Nettoyage de trace GPX »).
+   - Au montage : précharge `appStore`, `settingsStore`, `tracesStore`. **Garde-fou** : si `selectedTraceId` est `null` (rechargement direct), `router.replace({ name: 'accueil' })` ; si la trace sélectionnée n'est pas « clean » (`audit_status !== 'clean'`), `router.replace({ name: 'audit', query: { traceId: trace.id } })` (une trace doit être auditée avant l'édition caméra, cf. § « Audit GPX »).
 
 4. **Carte + lecture** (`src/components/Edition/EditionMap.vue`) :
    - Carte Mapbox GL **dédiée** (distincte de `Accueil/Map.vue`). Style `standard-satellite` ; **terrain/élévation** via source `raster-dem` (`mapbox-terrain-rgb`) + `setTerrain({ exaggeration: 1.5 })` ; pitch 60° par défaut (spec §7).
@@ -914,7 +994,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
    - `CameraEditor.vue` (Composant B, spec « Interface de contrôle MapBox ») : widgets de manipulation directe superposés sur la carte, **pilotés par la position de lecture** (`currentKeyframe`). **Hors RdV** → bouton « Ajouter un point de RdV » (sous le compas). **Sur un RdV** → widgets : **switch Cible** (pitch à 0° + croix bleue + drag sur carte pour viser, sauvegarde `cam.lng/lat`), **sliders Pitch/Zoom customs** (drag vertical + molette ±1 pas, double-clic ou clic sur valeur orange pour remettre les **valeurs par défaut des paramètres** `Edition.Camera.pitchDefaut`/`zoomDefaut`, **vert** sur la valeur par défaut sinon **bleu**), **CompassBandeau** (bandeau ±90°, défilement **infini** sur 3 copies -360°…720°, drag + molette ±1°, repère rouge fixe). **Barre d'actions** en bas : Undo (restaure la baseline), Supprimer (grisé sur le km 0), Sauvegarder (**grisé tant que non modifié** — sauvegarde explicite). **Verrouillage carte** : sur un RdV, toutes les interactions Mapbox sont désactivées tant que le mode Cible est inactif. **Keyframes verrouillés** : si le keyframe courant borde un segment verrouillé (mode validation), un badge cadenas s'affiche et les widgets (sliders, compas, Cible, Undo/Supprimer, Ajouter) sont **désactivés** — la protection réelle est portée par les gardes du store. Raccourcis : Espace Play/Pause, flèches ←/→ navigation RdV.
 
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
-   - Le bouton **Éditer** appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis — si `cleaning_status !== 'clean'` (trace à nettoyer) → `cleaningStore.selectTrace(trace.id)` + `router.push({ name: 'nettoyage' })` ; sinon → `router.push({ name: 'editionCamera' })`.
+   - Le bouton **Éditer** appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis — si `audit_status !== 'clean'` (trace à auditer) → `router.push({ name: 'audit', query: { traceId: trace.id } })` ; sinon → `router.push({ name: 'editionCamera' })`. La trace auditée est désignée par la **query** de la route : plus de store intermédiaire.
 
 ### Carte satellite + terrain (vs. Accueil/Map.vue)
 
@@ -937,7 +1017,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 └── {active_mode}/           # Ex : OPE, EVAL_essai
     ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
     ├── traces/              # Un dossier par trace (le dossier est le discriminant)
-    │   └── {trace_id}/      #   gpx, .gpx.orig, trace.geojson, keyframes_*, cleaning.*
+    │   └── {trace_id}/      #   gpx, .gpx.orig, trace.geojson, keyframes_169|_43
     ├── config-dev.toml      # Surcharges de paramètres (dev)
     └── config.toml          # Surcharges de paramètres (prod)
 ```
@@ -948,18 +1028,18 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 |----------|-------------|
 | `import_gpx_file` | Ouvre le sélecteur natif, parse le GPX, copie le fichier, met à jour le registre. Retourne `TraceMetadata`. |
 | `get_traces` | Retourne `Vec<TraceMetadata>` pour le mode d'exécution actif. |
-| `delete_trace` | Supprime le fichier GPX + le GeoJSON + les keyframes + l'entrée du registre (écriture atomique). |
+| `delete_trace` | Supprime le **dossier entier** `traces/{trace_id}/` (GPX, backup `.orig`, GeoJSON, keyframes) + l'entrée du registre (écriture atomique). |
 | `update_trace` | Mise à jour partielle (PATCH) d'une trace : `favorite` et/ou `is_displayed` (persistés). |
 | `get_trace_geometry` | Retourne la géométrie GeoJSON d'une trace (cache, ou régénéré depuis le GPX). |
 | `get_trace_points` | Retourne les points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX). |
-| `save_keyframes` | Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}.json` (écriture atomique). |
-| `get_keyframes` | Charge les keyframes persistés d'une trace (`None` si absent). |
-| `delete_keyframes` | Supprime le fichier keyframes d'une trace (tolérant si absent). |
+| `save_keyframes` | Sauvegarde un jeu de keyframes dans `keyframes_{ratio}.json` (écriture atomique). |
+| `get_keyframes` | Charge les keyframes persistés d'une trace pour un ratio (`None` si absent). |
+| `delete_keyframes` | Supprime le fichier keyframes d'un ratio (tolérant si absent). |
 
-> Référence complète des 29 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 34 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-08-19
+**Dernière mise à jour** : 2026-09-12

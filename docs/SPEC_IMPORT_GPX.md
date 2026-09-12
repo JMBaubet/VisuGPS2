@@ -240,16 +240,18 @@ Par priorité décroissante :
    - Ajouter l'entrée au registre.
    - **Écriture atomique** : écrire dans un `.tmp` puis `rename`.
 
-### 4.5-bis Détection automatique des anomalies (statut de nettoyage)
+### 4.5-bis Détection automatique des anomalies (statut d'audit)
 
-Une trace n'est **valide** que si elle est « propre ». Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **points isolés hors trace** (ex. point 946) ou **aller-retours inutiles** (ex. points 711/791) — détectables par un **changement de cap proche de 180°** au point de demi-tour.
+Une trace n'est **valide** que si elle est auditée. Les fichiers GPX édités (OpenRunner, etc.) contiennent souvent des anomalies de relevé : **aller-retours ponctuels** (AR — rebonds, aiguilles de traceur) ou **boucles de giratoire** (RP — 270°, 360° et plus).
 
-À l'import, avant l'enregistrement au registre, le backend lance une **détection automatique** via `cleaning::detect_anomalies_from_gpx`, avec la tolérance de cap paramétrable **`Nettoyage.Cap.toleranceDeg`** (défaut 5°, plage 1–20°, pas 0,5°, unité `°`). Le résultat est porté par le champ **`cleaning_status`** de `TraceMetadata` :
+À l'import, avant l'enregistrement au registre, le backend lance une **détection automatique** via `gpx_audit::pipeline::detect_all`, avec les paramètres du namespace **`Audit.*`** (seuil de consolidation `Audit.Consolidation.seuil`, tolérance `Audit.AR.toleranceDeg`, seuil de paire `Audit.AR.seuilPaireM`, budget `Audit.AR.maxPaires`, garde `Audit.AR.branchesMaxM`, refermeture `Audit.RP.seuilFermetureM`, angle cumulé `Audit.RP.angleMinDeg`). Le résultat est porté par le champ **`audit_status`** de `TraceMetadata` :
 
 - aucune anomalie → `"clean"` ;
 - anomalies détectées → `"needs_review"`.
 
-Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/nettoyage`, et `EditionCamera.vue` redirige également vers `/nettoyage` (garde-fou). Le workflow de nettoyage (3 étapes séquentielles, validation manuelle des cas, sauvegardes partielles par phase dans `traces/{trace_id}/cleaning.{phase}.json`, validation d'étape avec GPX réécrit + backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Nettoyage de trace GPX ».
+La détection est **protégée contre tout panic** : un panic dans la commande d'import laisserait le frontend bloqué sans réponse après la sélection du fichier. En cas de défaillance, repli sur `"needs_review"` (une trace non auditée doit l'être).
+
+Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/audit?traceId=…`, et `EditionCamera.vue` redirige également vers `/audit` (garde-fou). Le module Audit (détection AR/RP, corrections par suppression / routage OpenRouteService / faux positif, findings **volatils**, réécriture du GPX au bouton « Appliquer » avec backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Audit GPX ».
 
 ### 4.6 Structures de données Rust
 
@@ -289,13 +291,14 @@ pub struct TraceMetadata {
     pub favorite: bool,                   // marquer comme favori (persisté)
     #[serde(default)]
     pub is_displayed: bool,               // afficher sur la carte (persisté)
-    #[serde(default)]
-    pub cleaning_status: String,          // "clean" (défaut) | "needs_review" | "in_progress"
+    #[serde(default = "default_audit_status")]
+    pub audit_status: String,             // "clean" | "needs_review" (défaut)
 }
 ```
 
 > ℹ️ Les noms de champs en `snake_case` sérialisés tels quels correspondent exactement aux interfaces TypeScript du frontend (§5.3). Inutile d'ajouter `#[serde(rename_all = …)]`.
-> ℹ️ Le champ `cleaning_status` est posé à l'import (détection automatique, §4.5-bis). Absent dans les registres antérieurs → `"clean"` (rétrocompatibilité via `#[serde(default)]`).
+> ℹ️ Le champ `audit_status` est posé à l'import (détection automatique, §4.5-bis). Absent dans les registres antérieurs → `"needs_review"` (rétrocompatibilité via `#[serde(default = "default_audit_status")]` : une trace jamais auditée doit l'être).
+> ⚠️ Les registres au **format pré-audit** — contenant la clé `"cleaning_status"` — sont **détectés et ignorés** par `load_registry` (D1) : la liste retournée est vide et le fichier n'est pas réécrit. Voir [DATA_STORAGE.md](./DATA_STORAGE.md).
 
 ### 4.7 Gestion des erreurs
 
@@ -688,6 +691,8 @@ export function formatElevation(m: number): string {
 - **Commentaires explicatifs en français**.
 
 ---
+
+**Version** : 1.3 — 2026-09-12. Bascule du module de nettoyage vers le module **Audit GPX** : le champ `cleaning_status` (et `cleaning_phase`) devient `audit_status` (`"clean"` | `"needs_review"`, défaut `"needs_review"`), la détection à l'import passe à `gpx_audit::pipeline::detect_all` avec les paramètres `Audit.*`, et le blocage de l'édition caméra redirige vers la vue `/audit?traceId=…`. Les registres au format pré-audit (contenant `cleaning_status`) sont ignorés (D1) et les fichiers de travail `cleaning.*.json` purgés (D2c).
 
 **Version** : 1.2 — 2026-08-18. Détection automatique des anomalies à l'import : champ `cleaning_status` sur `TraceMetadata` (défaut `"clean"`, `"needs_review"` si anomalies), tolérance `Nettoyage.Cap.toleranceDeg`, blocage de l'édition caméra tant que la trace n'est pas « clean » (vue `/nettoyage`).
 **Version** : 1.1 — 2026-07-10. Ajout des commandes `delete_trace` et `update_trace` (persistance favori/affichage), champs `favorite`/`is_displayed` sur `TraceMetadata` (avec `#[serde(default)]` pour la rétrocompatibilité).

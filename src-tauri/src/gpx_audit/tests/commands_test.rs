@@ -139,8 +139,6 @@ fn make_trace_metadata(id: &str, filename: &str) -> TraceMetadata {
         hash: "sha256:test".to_string(),
         favorite: false,
         is_displayed: false,
-        cleaning_status: "clean".to_string(),
-        cleaning_phase: String::new(),
         audit_status: "needs_review".to_string(),
     }
 }
@@ -409,10 +407,9 @@ fn test_validate_updates_audit_status() {
         .expect("la validation doit aboutir");
     assert_eq!(updated.audit_status, "clean");
 
-    // Le registre relu porte le nouveau statut, l'ancien module est intact.
+    // Le registre relu porte le nouveau statut.
     let registry = load_registry(&get_traces_path(&mode_dir));
     assert_eq!(registry[0].audit_status, "clean");
-    assert_eq!(registry[0].cleaning_status, "clean");
 
     // Le GPX a été réécrit avec les points de travail et son bloc d'audit.
     let gpx_path = get_trace_gpx_path(&mode_dir, trace_id, &filename);

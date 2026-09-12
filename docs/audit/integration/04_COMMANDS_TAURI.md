@@ -580,3 +580,111 @@ fn test_validate_updates_audit_status() {
 | 6 | `audit_validate` : échec de réécriture → `audit_status` reste `needs_review` | Écrire le GPX **avant** de mettre à jour `traces.json` |
 | 7 | `audit_run_detection` : point d'entrée unique, mais le `trace_id` doit être validé (existe dans `traces.json`) | Vérifier avant de charger le GPX |
 | 8 | Format `LatLon` : le front envoie `{ lat, lon }` (camelCase) ; Rust reçoit `LatLon { lat, lon }` (déjà camelCase, pas de conversion) | Vérifier que la struct a bien `#[serde(rename_all = "camelCase")]` |
+---
+
+## 9. Avenant du 2026-09-12 — trois commandes supplémentaires
+
+**Objet.** Le catalogue fixé au §1 et détaillé au §2 compte **7 commandes**.
+L'implémentation en enregistre **10** : s'y ajoutent `audit_map_overlay`,
+`audit_delete_preview` et `audit_routes_identical`. Le présent avenant
+entérine cet écart, après constat sur le code livré et vérifié par les tests.
+
+**Motif.** Ces trois commandes sont nées de la mise en œuvre des phases 2 à 4
+(livrables 8 et 9), pas d'un ajout de périmètre. Deux calculs nécessaires au
+rendu et à l'interaction de la vue `/audit` sont **métriques** : ils relèvent
+donc du portage Rust (décision 1) et non du front, alors que le livrable 4 les
+avait implicitement laissés côté client.
+
+- **`audit_map_overlay`** — les ancres d'accès d'une boucle RP (livrable 8,
+  `anchor.rs`) et les étiquettes des points (`overlay.rs`) supposent une
+  tangente locale, une normale extérieure et un ajustement de cercle. Le HTML
+  de référence les calcule en JavaScript parce qu'il dispose de sa projection
+  locale ; le portage Rust refait ce calcul côté backend et le front se
+  contente de créer les marqueurs aux positions reçues.
+- **`audit_delete_preview`** — l'aperçu d'une suppression (`delUpdate` /
+  `rpDelUpdate` de la référence) doit être recalculé à **chaque mouvement de
+  curseur**. Il produit le chemin bleu des points conservés, le trait rouge de
+  la plage supprimée, les étiquettes et les libellés de compteurs
+  (`countStart` / `countEnd`) : autant d'éléments qui dépendent de la géométrie
+  projetée. Le laisser au front aurait dupliqué la projection métrique.
+- **`audit_routes_identical`** — le test d'identité des deux tracés
+  OpenRouteService (IHM §7.3) compare une distance de **Hausdorff** discrète
+  point→segment dans les deux sens. Même raison : `routing.rs` possède déjà la
+  géométrie. Seule la **requête réseau** reste côté front, dans la composable
+  `src/composables/useAuditOrs.ts` (§5.6 du livrable 9 : « le réseau vit dans
+  le front »).
+
+**Signatures effectives.**
+
+```rust
+#[tauri::command]
+pub fn audit_map_overlay(
+    points: Vec<AuditPoint>,
+    findings: Vec<Finding>,
+    close_m: f64,
+) -> Result<Vec<FindingOverlay>, String>
+
+#[tauri::command]
+pub fn audit_delete_preview(
+    points: Vec<AuditPoint>,
+    finding: Finding,
+    start: usize,
+    end: usize,
+    close_m: f64,
+) -> Result<DeletePreview, String>
+
+#[tauri::command]
+pub fn audit_routes_identical(
+    car: Vec<LatLon>,
+    car_distance: f64,
+    bike: Vec<LatLon>,
+    bike_distance: f64,
+) -> bool
+```
+
+Les trois sont **synchrones** (aucun I/O), conformément au §5.6 : elles
+prolongent la liste des commandes de calcul pur, aux côtés de
+`audit_apply_delete`, `audit_apply_route`, `audit_mark_fp`, `audit_unmark_fp`
+et `audit_undo_correction`. Les commandes **async** restent au nombre de deux
+(`audit_run_detection`, `audit_validate`), seules à toucher le disque.
+
+**Types de retour.** `FindingOverlay` (`overlay.rs`) et `DeletePreview`
+(`preview.rs`) sont déclarés dans leurs modules respectifs, et non dans
+`types.rs` : ils n'appartiennent pas au modèle de données partagé, mais au
+**contrat de rendu** d'une anomalie et d'un aperçu. `FindingOverlay` porte
+`anchors: Option<RpAnchors>` (renseigné pour une boucle RP non corrigée) et
+`labels: Vec<LabelItem>`. `DeletePreview` porte les bornes **clampées** de la
+plage, l'état de chaque point de l'emprise, les tracés `join` et `red`, les
+curseurs et les libellés de compteurs.
+
+**Conséquence sur le livrable.** Le §1 (« Signatures Rust ») et le §2
+(« Catalogue détaillé », qui ne va que jusqu'à `audit_validate` en §2.7) sont
+**complétés**, non contredits, par le présent avenant. Le §3
+(« Enregistrement dans `lib.rs` ») est en revanche **supplanté** : le
+`generate_handler!` effectif enregistre 10 commandes `gpx_audit::commands::*`,
+portant le catalogue total de l'application à **34 commandes** (contre 29 avant
+le module, les 5 commandes du module Nettoyage ayant été retirées au passage).
+
+**Conséquence sur les tests.** Le §7 annonçait « `cargo test --lib
+gpx_audit::commands` : 8 tests verts ». Le compte effectif, tous fichiers
+confondus, est de **200 tests** pour le module `gpx_audit` et **206** pour la
+bibliothèque entière, répartis comme suit :
+
+| Fichier de tests | Tests |
+|---|---|
+| `ar_test.rs` | 18 |
+| `rp_test.rs` | 61 |
+| `corrections_test.rs` | 54 |
+| `commands_test.rs` | 21 |
+| `overlay_test.rs` | 19 |
+| `preview_test.rs` | 14 |
+| `routing_test.rs` | 13 |
+| **Total `gpx_audit`** | **200** |
+
+Les trois fichiers `overlay_test.rs`, `preview_test.rs` et `routing_test.rs`
+sont, comme les trois commandes qu'ils couvrent, **absents de
+l'arborescence cible du livrable 7** et ajoutés par cet avenant.
+
+**Non modifié.** Le §4 (fichiers internes de `mod.rs`), le §5.5 (absence de
+commande `audit_close` — le state reste côté Pinia), le §5.6 (synchrone vs
+async) et le §8 (points de vigilance) restent valides.

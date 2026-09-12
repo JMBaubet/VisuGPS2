@@ -67,22 +67,9 @@ export interface TraceMetadata {
   /** Trace affichée sur la carte. */
   is_displayed: boolean
   /**
-   * Statut de nettoyage de la trace :
-   * `"clean"` (aucune anomalie ou déjà nettoyée), `"needs_review"` (anomalies
-   * à corriger), `"in_progress"` (corrections commencées). Une trace non
-   * « clean » ne peut pas entrer en édition caméra.
-   */
-  cleaning_status: string
-  /**
-   * Phase du pipeline de nettoyage en cours : `"spike"` (pts hors trace),
-   * `"roundabout"` (ronds-points), `"out_and_back"` (aller/retour — étape 3 à
-   * venir), ou chaîne vide quand la trace est propre.
-   */
-  cleaning_phase: string
-  /**
    * Statut d'audit de la trace (module Audit GPX) :
    * `"clean"` (auditée sans anomalie, ou corrections appliquées),
-   * `"needs_review"` (anomalies détectées à l'import), `"in_progress"`.
+   * `"needs_review"` (anomalies détectées à l'import).
    * Une trace non « clean » ne peut pas entrer en édition caméra : elle est
    * redirigée vers `/audit`.
    */
