@@ -808,9 +808,16 @@ familles d'anomalies, propose des corrections (suppression de points, routage Op
 faux positif) et réécrit le GPX après validation.
 
 Les algorithmes sont des **portages fidèles** de l'application HTML de référence
-(`docs/audit/reference/verifgpx-V3.0.html`) ; les spécifications normatives sont
+(`docs/audit/reference/verifgpx-V3.0.html`), dont les spécifications avaient été rédigées dans
 `docs/audit/spec/ANALYSE.md` (détecteurs) et `docs/audit/spec/CORRECTIONS.md` (moteur de
 correction).
+
+> **Le dossier `docs/audit/` est une archive de conception** : il ne fait **plus autorité** et
+> n'est plus mis à jour. La référence du module est désormais le code
+> (`src-tauri/src/gpx_audit/`), complété par la `documentation` de chaque paramètre `Audit.*` de
+> `settings.default.toml` — c'est là que sont décrits l'effet d'un seuil et les risques de faux
+> positifs ou de faux négatifs associés. Les scénarios GPX de régression ont été rapatriés dans
+> `src-tauri/src/gpx_audit/tests/fixtures/`, au contact des tests qui les consomment.
 
 ### État d'audit (`audit_status`)
 
@@ -872,7 +879,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
    - `reset()` : appelé à la sortie de la vue (décision 9 — les findings sont volatils).
 
 3. **Vue** (`src/views/Audit.vue`, route `/audit`, lazy loading) :
-   - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des anomalies + panneau d'action + drawer Paramètres.
+   - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des anomalies (drawer gauche, 340 px) + panneau d'action + drawer Paramètres. Le **panneau d'action** est ancré en **haut à gauche de la carte** (16 px), au contact de la liste des anomalies qu'il complète : choix d'ergonomie assumé, la spec IHM §6 de l'archive de conception prescrivant l'inverse (haut à droite).
    - Garde-fou : sans `traceId` en query, retour à l'accueil avec notification.
    - `onBeforeRouteLeave` : **avertissement** si un travail est en cours (`hasWorkInProgress`), puis `auditStore.reset()` (décision 9).
 

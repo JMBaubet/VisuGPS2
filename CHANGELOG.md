@@ -13,8 +13,10 @@
 Refonte complète du contrôle de validité des traces GPX. L'ancien pipeline de
 **nettoyage en 3 étapes** est retiré et remplacé par le module **Audit GPX**,
 portage en Rust de l'application HTML de référence
-(`docs/audit/reference/verifgpx-V3.0.html`), dont les spécifications normatives
-sont `docs/audit/spec/ANALYSE.md` et `docs/audit/spec/CORRECTIONS.md`.
+(`docs/audit/reference/verifgpx-V3.0.html`), dont les spécifications avaient été
+rédigées dans `docs/audit/spec/ANALYSE.md` et `docs/audit/spec/CORRECTIONS.md`.
+Ce dossier est depuis une **archive de conception** qui ne fait plus autorité
+(voir l'avenant du 2026-09-14).
 
 ### Ajouté
 
@@ -137,9 +139,30 @@ Deux mécanismes automatiques, tous deux **silencieux** (aucun log utilisateur) 
 - `docs/audit/integration/04_COMMANDS_TAURI.md` : avenant du 2026-09-12
   entérinant les 3 commandes supplémentaires (`audit_map_overlay`,
   `audit_delete_preview`, `audit_routes_identical`).
-- `docs/audit/` : dossier du module (spécifications normatives, artefact de
-  référence gelé, fichiers de test de régression, plan d'intégration en
-  11 livrables).
+- `docs/audit/` : dossier du module (spécifications, artefact de référence,
+  plan d'intégration en 11 livrables) — **archive de conception** depuis l'avenant
+  ci-dessous ; les scénarios de régression ont été rapatriés dans les tests.
+
+### Avenant du 2026-09-14
+
+**Panneau d'action de l'audit** (`src/components/Audit/AuditActionPanel.vue`) :
+ancré en **haut à gauche** de la carte au lieu de haut à droite. Il complète la
+liste des anomalies, elle-même à gauche : sélectionner une anomalie puis la
+corriger ne demande plus de traverser la carte. La marge de droite devient une
+marge de gauche (marge haute et largeur inchangées : 16 px / 320 px).
+Divergence assumée avec la spec IHM §6, qui prescrivait l'ancrage à droite.
+
+**Scénarios de régression déplacés** : les 8 fichiers GPX (`rondpoints-g1/g2/g3`,
+`AR`/`RP-Santa_Susanna`, `RP_erreur_Magny`, `scenario_17_1_ar_27pts`,
+`AR_Detecté aussi en RP`) quittent `docs/audit/reference/test_files/` pour
+`src-tauri/src/gpx_audit/tests/fixtures/`. La suite de tests ne dépend plus d'une
+archive documentaire ; `cargo test` reste à **206 tests verts**.
+
+**`docs/audit/` déclaré archive de conception** : le dossier ne fait plus autorité
+et n'est plus mis à jour. La référence du module est le code
+(`src-tauri/src/gpx_audit/`), complété par la `documentation` des paramètres
+`Audit.*` de `settings.default.toml`. Documents realignés : `docs/ARCHITECTURE.md`
+(note d'archive, ancrage du panneau) et `docs/README.md` (arborescence).
 
 ---
 

@@ -156,7 +156,7 @@ docs/
 ├── SPEC_IMPORT_GPX.md         # Spécification du module GPX
 ├── SPEC_AFFICHAGE_TRACES.md   # Spécification favoris & affichage carte (à implémenter)
 ├── CLAUDE-CODE-GUIDE.md       # Guide d'utilisation avec IA
-└── audit/                     # Module Audit GPX (specs normatives, référence gelée, plan d'intégration)
+└── audit/                     # Archive de conception du module Audit GPX (ne fait plus autorité)
 ```
 
 ## Maintenance de la documentation
