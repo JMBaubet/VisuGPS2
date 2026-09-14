@@ -277,7 +277,7 @@ pub(crate) fn rp_params() -> AuditParams {
 pub(crate) fn load_gpx(prefix: &str) -> Vec<AuditPoint> {
     let dir = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../docs/audit/reference/test_files"
+        "/src/gpx_audit/tests/fixtures"
     );
     let path = std::fs::read_dir(dir)
         .expect("dossier de test GPX introuvable")

@@ -36,11 +36,11 @@ fn test_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// Chemin d'un fichier de scénario GPX de `docs/audit/reference/test_files/`.
+/// Chemin d'un fichier de scénario GPX de `src/gpx_audit/tests/fixtures/`.
 fn scenario_path(prefix: &str) -> PathBuf {
     let dir = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../docs/audit/reference/test_files"
+        "/src/gpx_audit/tests/fixtures"
     );
     fs::read_dir(dir)
         .expect("dossier de test GPX introuvable")

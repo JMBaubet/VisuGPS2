@@ -235,7 +235,7 @@ fn assert_close_tol(actual: f64, expected: f64, tol: f64) {
 fn load_scenario_17_1() -> Vec<AuditPoint> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../docs/audit/reference/test_files/scenario_17_1_ar_27pts.gpx"
+        "/src/gpx_audit/tests/fixtures/scenario_17_1_ar_27pts.gpx"
     );
     let file = File::open(path).expect("fichier de scénario introuvable");
     let gpx = gpx::read(BufReader::new(file)).expect("GPX invalide");
