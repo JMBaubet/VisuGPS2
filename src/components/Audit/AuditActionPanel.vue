@@ -624,7 +624,7 @@ async function applyRoute(): Promise<void> {
 .audit-action-panel {
   position: absolute;
   top: 16px;
-  right: 16px;
+  left: 16px;
   width: 320px;
   z-index: 10;
 }
