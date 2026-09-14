@@ -1,8 +1,8 @@
 //! Détecteur RP — boucles de giratoire (270°, 360° ou plus).
 //!
-//! Portage fidèle de `detectRP` du HTML de référence
-//! (`docs/audit/reference/verifgpx-V3.0.html`), spécification normative
-//! `docs/audit/spec/ANALYSE.md` §6 à §12.
+//! Portage fidèle de `detectRP` du HTML de référence, dont l'archive de
+//! conception a été retirée : cette implémentation fait foi. Les seuils sont
+//! les paramètres `Audit.RP.*`, documentés dans `settings.default.toml`.
 
 use std::collections::{HashMap, HashSet};
 

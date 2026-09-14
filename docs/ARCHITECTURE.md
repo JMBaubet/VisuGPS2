@@ -807,17 +807,14 @@ GPX **remplace** l'ancien module Nettoyage (pipeline de 3 étapes) : il détecte
 familles d'anomalies, propose des corrections (suppression de points, routage OpenRouteService,
 faux positif) et réécrit le GPX après validation.
 
-Les algorithmes sont des **portages fidèles** de l'application HTML de référence
-(`docs/audit/reference/verifgpx-V3.0.html`), dont les spécifications avaient été rédigées dans
-`docs/audit/spec/ANALYSE.md` (détecteurs) et `docs/audit/spec/CORRECTIONS.md` (moteur de
-correction).
-
-> **Le dossier `docs/audit/` est une archive de conception** : il ne fait **plus autorité** et
-> n'est plus mis à jour. La référence du module est désormais le code
-> (`src-tauri/src/gpx_audit/`), complété par la `documentation` de chaque paramètre `Audit.*` de
-> `settings.default.toml` — c'est là que sont décrits l'effet d'un seuil et les risques de faux
-> positifs ou de faux négatifs associés. Les scénarios GPX de régression ont été rapatriés dans
-> `src-tauri/src/gpx_audit/tests/fixtures/`, au contact des tests qui les consomment.
+Les algorithmes sont des **portages fidèles** de l'application HTML de référence. Celle-ci et ses
+spécifications (`ANALYSE.md` pour les détecteurs, `CORRECTIONS.md` pour le moteur de correction)
+étaient regroupées dans `docs/audit/`, **supprimé le 2026-09-14** : la référence du module est
+désormais le code (`src-tauri/src/gpx_audit/`), complété par la `documentation` de chaque
+paramètre `Audit.*` de `settings.default.toml` — c'est là que sont décrits l'effet d'un seuil et
+les risques de faux positifs ou de faux négatifs associés. Les scénarios GPX de régression, eux,
+ont été rapatriés dans `src-tauri/src/gpx_audit/tests/fixtures/`, au contact des tests qui les
+consomment.
 
 ### État d'audit (`audit_status`)
 

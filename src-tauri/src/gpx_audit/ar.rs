@@ -1,8 +1,8 @@
 //! Détecteur AR — aller-retours ponctuels (rebonds, aiguilles).
 //!
-//! Portage fidèle de `detectAR` du HTML de référence
-//! (`docs/audit/reference/verifgpx-V3.0.html`), spécification normative
-//! `docs/audit/spec/ANALYSE.md` §5.
+//! Portage fidèle de `detectAR` du HTML de référence, dont l'archive de
+//! conception a été retirée : cette implémentation fait foi. Les seuils sont
+//! les paramètres `Audit.AR.*`, documentés dans `settings.default.toml`.
 
 use super::types::{
     AuditParams, AuditPoint, Finding, FindingContext, FindingContextIds, FindingKind,

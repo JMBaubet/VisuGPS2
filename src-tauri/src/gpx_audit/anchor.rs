@@ -1,7 +1,7 @@
-//! Calcul dérivé — ancres d'accès d'une boucle RP (ANALYSE §13).
+//! Calcul dérivé — ancres d'accès d'une boucle RP.
 //!
-//! Portage fidèle de `rpAnchorIndices` du HTML de référence
-//! (`docs/audit/reference/verifgpx-V3.0.html`).
+//! Portage fidèle de `rpAnchorIndices` du HTML de référence, dont l'archive de
+//! conception a été retirée.
 //!
 //! Calcul **dérivé** et **lazy** : consommé par l'application hôte (bornes par
 //! défaut du routage, élargissement D2 des emprises), recalculé sur la trace

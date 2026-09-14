@@ -1,7 +1,9 @@
 //! Module Audit GPX — détection d'anomalies de trace (AR et RP).
 //!
 //! Remplace l'ancien module de nettoyage. Portage fidèle de l'application HTML
-//! de référence (`docs/audit/reference/verifgpx-V3.0.html`).
+//! de référence, dont l'archive de conception a été retirée : cette
+//! implémentation fait foi, et la `documentation` des paramètres `Audit.*` de
+//! `settings.default.toml` décrit l'effet de chaque seuil.
 
 pub mod anchor;
 pub mod ar;

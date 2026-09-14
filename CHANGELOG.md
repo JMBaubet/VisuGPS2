@@ -15,7 +15,7 @@ Refonte complète du contrôle de validité des traces GPX. L'ancien pipeline de
 portage en Rust de l'application HTML de référence
 (`docs/audit/reference/verifgpx-V3.0.html`), dont les spécifications avaient été
 rédigées dans `docs/audit/spec/ANALYSE.md` et `docs/audit/spec/CORRECTIONS.md`.
-Ce dossier est depuis une **archive de conception** qui ne fait plus autorité
+Ce dossier, archivé puis **supprimé le 2026-09-14**, n'est plus une référence
 (voir l'avenant du 2026-09-14).
 
 ### Ajouté
@@ -140,8 +140,8 @@ Deux mécanismes automatiques, tous deux **silencieux** (aucun log utilisateur) 
   entérinant les 3 commandes supplémentaires (`audit_map_overlay`,
   `audit_delete_preview`, `audit_routes_identical`).
 - `docs/audit/` : dossier du module (spécifications, artefact de référence,
-  plan d'intégration en 11 livrables) — **archive de conception** depuis l'avenant
-  ci-dessous ; les scénarios de régression ont été rapatriés dans les tests.
+  plan d'intégration en 11 livrables) — les scénarios de régression ont été
+  rapatriés dans les tests et le reste **supprimé** (avenant ci-dessous).
 
 ### Avenant du 2026-09-14
 
@@ -158,11 +158,15 @@ Divergence assumée avec la spec IHM §6, qui prescrivait l'ancrage à droite.
 `src-tauri/src/gpx_audit/tests/fixtures/`. La suite de tests ne dépend plus d'une
 archive documentaire ; `cargo test` reste à **206 tests verts**.
 
-**`docs/audit/` déclaré archive de conception** : le dossier ne fait plus autorité
-et n'est plus mis à jour. La référence du module est le code
-(`src-tauri/src/gpx_audit/`), complété par la `documentation` des paramètres
-`Audit.*` de `settings.default.toml`. Documents realignés : `docs/ARCHITECTURE.md`
-(note d'archive, ancrage du panneau) et `docs/README.md` (arborescence).
+**`docs/audit/` supprimé** : le dossier (3 spécifications, l'artefact de référence
+HTML, le plan d'intégration en 11 livrables et son README — 16 fichiers, 612 K) a
+d'abord été déclaré archive de conception, puis retiré du dépôt. La référence du
+module est désormais le code (`src-tauri/src/gpx_audit/`), complété par la
+`documentation` des paramètres `Audit.*` de `settings.default.toml`. Les
+commentaires `//!` des modules `gpx_audit` (`mod`, `ar`, `rp`, `anchor`), qui
+citaient l'archive comme spécification normative, ont été réalignés. Documents mis
+à jour : `docs/ARCHITECTURE.md` (référence du module, ancrage du panneau) et
+`docs/README.md` (arborescence).
 
 ---
 
