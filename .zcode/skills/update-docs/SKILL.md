@@ -59,7 +59,7 @@ Pour chaque doc impacté :
 
 Après les modifications, vérifier systématiquement ces points de cohérence entre docs :
 
-1. **Nombre de commandes Tauri** : vérifier que `COMMANDS.md`, `CLAUDE-CODE-GUIDE.md` et `README.md` mentionnent le même nombre (actuellement 20). Si une commande a été ajoutée ou supprimée, mettre à jour les trois fichiers.
+1. **Nombre de commandes Tauri** : vérifier que `COMMANDS.md`, `CLAUDE-CODE-GUIDE.md` et `README.md` mentionnent le même nombre (actuellement 34 ; source de vérité : la liste `invoke_handler` de `src-tauri/src/lib.rs`, qui compte aussi les noms nus `exit_app` et `display::*`). Si une commande a été ajoutée ou supprimée, mettre à jour les trois fichiers.
 
 2. **Arborescence des fichiers** : vérifier que `ARCHITECTURE.md`, `CONTEXT.md` et `README.md` mentionnent les mêmes dossiers et fichiers clés. Si un nouveau dossier ou fichier important a été créé (ex: `src/composables/`), l'ajouter aux arborescences.
 

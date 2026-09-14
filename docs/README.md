@@ -40,7 +40,7 @@ Plongée approfondie dans l'architecture :
 ### 📡 [COMMANDS.md](./COMMANDS.md)
 **Référence des commandes Tauri**
 
-Catalogue exhaustif des **29 commandes** backend↔frontend :
+Catalogue exhaustif des **34 commandes** backend↔frontend :
 - Application, affichage/multi-écrans, modes d'exécution, paramètres, traces GPX
 - Signatures Rust, types de retour, règles métier
 - Exemples d'appel côté TypeScript
