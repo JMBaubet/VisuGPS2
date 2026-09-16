@@ -20,7 +20,20 @@
         class="mr-3"
       />
 
+      <!-- Consultation : l'audit est déjà appliqué, plus rien ne s'exporte ni
+           ne se corrige — le bouton « Appliquer » laisse place à un chip. -->
+      <v-chip
+        v-if="consultation"
+        color="info"
+        variant="tonal"
+        prepend-icon="mdi-eye-outline"
+        :title="consultationTitle"
+      >
+        Consultation
+      </v-chip>
+
       <v-btn
+        v-else
         color="success"
         :disabled="!canApply"
         prepend-icon="mdi-check"
@@ -55,17 +68,23 @@
  * panneau Paramètres (flip-flop) et bouton « Appliquer ».
  *
  * Le bouton « Appliquer » reste désactivé tant que des anomalies sont à traiter
- * (décision 8 : gate strict `pending === 0`).
+ * (décision 8 : gate strict `pending === 0`). En **consultation** (audit déjà
+ * appliqué, trace `clean`), il cède la place à un chip : rien ne s'applique.
  */
+import { computed } from 'vue'
 import { useAppStore } from '../../stores/app'
 import AuditProgressChip from './AuditProgressChip.vue'
 
-defineProps<{
+const props = defineProps<{
   traceName: string
   pendingCount: number
   correctedCount: number
   fpCount: number
   canApply: boolean
+  /** Audit validé affiché en lecture seule. */
+  consultation: boolean
+  /** Horodatage ISO de la dernière écriture de l'archive, si connue. */
+  archivedAt?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -75,4 +94,13 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+
+/** Info-bulle du chip : date d'archivage de l'audit consulté. */
+const consultationTitle = computed(() => {
+  const date = props.archivedAt ? new Date(props.archivedAt) : null
+  if (!date || Number.isNaN(date.getTime())) {
+    return 'Audit appliqué — corrections en lecture seule'
+  }
+  return `Audit appliqué le ${date.toLocaleString('fr-FR')} — corrections en lecture seule`
+})
 </script>

@@ -529,7 +529,12 @@ export const useAuditStore = defineStore('audit', () => {
   }
 
   /**
-   * Charge l'état de travail depuis l'archive de la trace.
+   * Charge l'état de travail depuis l'archive de la trace et **positionne le
+   * mode** de la session.
+   *
+   * Le mode est posé même sans archive : une trace `clean` reste en lecture
+   * seule quel que soit l'état de son archive (une trace validée ne se
+   * réaudite pas).
    *
    * @param consultation `true` pour un audit **validé** (trace `clean`) :
    * l'état est restitué en lecture seule. `false` pour reprendre une session
@@ -538,6 +543,7 @@ export const useAuditStore = defineStore('audit', () => {
    * décide alors de relancer la détection (ou de n'afficher que la trace).
    */
   async function restore(traceId: string, consultation: boolean): Promise<boolean> {
+    isConsultation.value = consultation
     const archive = await invoke<AuditArchive | null>('audit_load_archive', {
       traceId,
     })
@@ -555,7 +561,6 @@ export const useAuditStore = defineStore('audit', () => {
     deletePreview.value = null
     routePreview.value = null
     routeRange.value = null
-    isConsultation.value = consultation
     archivedAt.value = archive.updatedAt
     syncNextPointId()
     await loadMapOverlays()

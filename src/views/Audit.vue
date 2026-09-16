@@ -12,7 +12,15 @@
  *
  * Le `traceId` arrive par la query de la route (`/audit?traceId=…`), posée par
  * le bouton Éditer de l'accueil ou le garde-fou d'EditionCamera. À la sortie, le
- * store est **réinitialisé** (décision C.2) — les findings sont volatils.
+ * store est **réinitialisé** (décision C.2).
+ *
+ * Trois modes d'entrée, selon le statut de la trace et l'existence d'une
+ * archive (avenant à la décision 6 — les findings sont désormais archivés) :
+ * - trace `needs_review` sans archive → **détection** (comportement d'origine) ;
+ * - trace `needs_review` avec archive → **reprise** de la session interrompue ;
+ * - trace `clean` → **consultation** : l'audit appliqué est restitué depuis
+ *   l'archive, en lecture seule (ni correction, ni annulation, ni nouvelle
+ *   application).
  *
  * Sous-étape 4.1 : squelette (toolbar, liste, dialogues). La carte et le panneau
  * d'action sont intégrés aux sous-étapes 4.2 et 4.3.
@@ -49,6 +57,9 @@ const traceName = computed(
   () => tracesStore.traces.find((t) => t.id === traceId.value)?.name ?? 'Trace',
 )
 
+/** Anomalies traitées (corrigées ou marquées faux positif). */
+const treatedCount = computed(() => auditStore.correctedCount + auditStore.fpCount)
+
 /** Valeur d'un paramètre numérique, avec repli sur la valeur par défaut. */
 function settingNumber(path: string, fallback: number): number {
   const def = settingsStore.settings.find((s) => s.path === path)
@@ -79,7 +90,17 @@ onMounted(async () => {
   loading.value = true
   try {
     await settingsStore.loadSettings()
-    await auditStore.runAudit(traceId.value, buildParams())
+    // Le statut d'audit décide du mode : `clean` → consultation (audit
+    // appliqué, lecture seule) ; sinon reprise de l'archive, ou détection.
+    await tracesStore.loadTraces()
+    const clean =
+      tracesStore.traces.find((t) => t.id === traceId.value)?.audit_status === 'clean'
+    const restored = await auditStore.restore(traceId.value, clean)
+    if (!restored && clean) {
+      ui.showInfo('Aucune anomalie archivée pour cette trace.')
+    } else if (!restored) {
+      await auditStore.runAudit(traceId.value, buildParams())
+    }
   } catch (error) {
     const msg = typeof error === 'string' ? error : "Erreur d'audit."
     ui.showError(msg)
@@ -90,9 +111,18 @@ onMounted(async () => {
 })
 
 onBeforeRouteLeave(() => {
+  // Consultation : rien à perdre ni à créer, on sort sans message.
+  if (auditStore.isConsultation) {
+    auditStore.reset()
+    return true
+  }
   // Décision 9 : avertissement si un travail est en cours, sans boucle infinie
-  // (une fois la sortie confirmée, le dialogue est refermé).
-  if (auditStore.hasWorkInProgress && !dialogExitOpen.value) {
+  // (une fois la sortie confirmée, le dialogue est refermé). Le message diffère
+  // selon que des anomalies restent à traiter ou que le GPX n'a pas été créé.
+  if (
+    (auditStore.pendingCount > 0 || treatedCount.value > 0) &&
+    !dialogExitOpen.value
+  ) {
     dialogExitOpen.value = true
     return false
   }
@@ -155,6 +185,8 @@ async function onApplyConfirmed() {
         :corrected-count="auditStore.correctedCount"
         :fp-count="auditStore.fpCount"
         :can-apply="auditStore.canApply"
+        :consultation="auditStore.isConsultation"
+        :archived-at="auditStore.archivedAt"
         @back="onBackClicked"
         @apply="onApplyClicked"
         @open-settings="appStore.isSettingsDrawerOpen = !appStore.isSettingsDrawerOpen"
@@ -182,6 +214,7 @@ async function onApplyConfirmed() {
           <AuditActionPanel
             v-if="auditStore.selectedFinding"
             :finding="auditStore.selectedFinding"
+            :readonly="auditStore.isConsultation"
             @close="onActionPanelClosed"
           />
         </div>
@@ -192,7 +225,8 @@ async function onApplyConfirmed() {
 
       <ConfirmExitDialog
         v-model="dialogExitOpen"
-        :work-count="auditStore.correctedCount + auditStore.fpCount"
+        :pending-count="auditStore.pendingCount"
+        :treated-count="treatedCount"
         @confirm="onExitConfirmed"
         @cancel="dialogExitOpen = false"
       />

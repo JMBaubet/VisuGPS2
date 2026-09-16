@@ -12,13 +12,24 @@
  *
  * L'aperçu de suppression est **prospectif** : il ne modifie jamais la trace de
  * travail et est abandonné à toute sortie de vue (`delClose` de la référence).
+ *
+ * En **consultation** (`readonly`), le panneau conserve les descriptions — ce
+ * qui a été corrigé et comment — mais masque toutes les actions : une
+ * correction archivée n'est plus annulable.
  */
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useAuditStore, type Finding, type LatLon } from '../../stores/audit'
 import { useUiStore } from '../../stores/ui'
 import { useAuditOrs, type OrsProfile } from '../../composables/useAuditOrs'
 
-const props = defineProps<{ finding: Finding }>()
+const props = defineProps<{
+  finding: Finding
+  /**
+   * Consultation d'un audit validé : le panneau décrit l'anomalie et son
+   * traitement, mais n'offre plus aucune action (ni correction, ni annulation).
+   */
+  readonly?: boolean
+}>()
 const emit = defineEmits<{ close: [] }>()
 
 const auditStore = useAuditStore()
@@ -449,7 +460,10 @@ async function applyRoute(): Promise<void> {
     </v-card-title>
 
     <!-- Vue 1 — Main -->
-    <v-card-actions v-if="currentView === 'main'" class="flex-column align-stretch">
+    <v-card-actions
+      v-if="currentView === 'main' && !readonly"
+      class="flex-column align-stretch"
+    >
       <v-btn
         block
         color="primary"
@@ -605,7 +619,10 @@ async function applyRoute(): Promise<void> {
         Cette anomalie est marquée <b>faux positif</b> : elle sera laissée telle
         quelle dans le GPX généré.
       </p>
-      <v-btn block variant="tonal" prepend-icon="mdi-undo" @click="unmarkFp">
+      <template v-if="readonly">
+        <p class="text-caption">Consultation : les corrections ne peuvent plus être modifiées.</p>
+      </template>
+      <v-btn v-else block variant="tonal" prepend-icon="mdi-undo" @click="unmarkFp">
         Retirer le marqueur
       </v-btn>
     </v-card-text>
@@ -613,7 +630,10 @@ async function applyRoute(): Promise<void> {
     <!-- Vue 6 — UndoMode -->
     <v-card-text v-if="currentView === 'undoMode'">
       <p class="text-body-2 mb-3">{{ undoNote }}</p>
-      <v-btn block color="warning" prepend-icon="mdi-undo" @click="undo">
+      <template v-if="readonly">
+        <p class="text-caption">Consultation : les corrections ne peuvent plus être modifiées.</p>
+      </template>
+      <v-btn v-else block color="warning" prepend-icon="mdi-undo" @click="undo">
         Annuler la correction
       </v-btn>
     </v-card-text>
