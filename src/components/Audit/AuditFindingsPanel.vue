@@ -2,7 +2,7 @@
   <v-navigation-drawer permanent width="340" class="py-1">
     <div class="audit-findings">
       <div class="audit-findings-list">
-        <v-list v-if="findings.length > 0" density="compact" nav>
+        <v-list v-if="findings.length > 0"  nav>
           <v-list-item
             v-for="f in findings"
             :key="f.id"
