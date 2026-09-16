@@ -26,10 +26,10 @@ const CUM_EPS_M: f64 = 1e-6;
 
 /// Trace rééchantillonnée — entrée de la détection des correspondances.
 ///
-/// Les champs de position et de provenance ne sont pas encore lus par le
-/// pipeline : c'est l'appariement des points superposés, puis l'assemblage des
-/// segments, qui s'en serviront. D'où le marqueur temporaire, à retirer quand le
-/// pipeline les lira.
+/// Les coordonnées géographiques et la provenance ne sont pas encore lues par le
+/// pipeline : c'est l'assemblage des segments qui s'en servira pour porter les
+/// bornes des passages et leurs numéros de points GPX. D'où le marqueur
+/// temporaire, à retirer quand le pipeline les lira.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Resample {

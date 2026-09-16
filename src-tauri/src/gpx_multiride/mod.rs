@@ -20,15 +20,17 @@
 //! implémentation en est la référence.
 //!
 //! Pipeline : `detection` (lecture du GPX) → `projection` (géométrie métrique,
-//! dédoublonnage) → `resample` (pas quasi constant) → puis, dans les sous-étapes
-//! suivantes, appariement des points superposés, assemblage en segments et
-//! qualification du sens.
+//! dédoublonnage) → `resample` (pas quasi constant) → `runs` (correspondances et
+//! chaînage) → `direction` (sens de chaque passage) → puis, dans les sous-étapes
+//! suivantes, l'assemblage en segments.
 
 pub mod commands;
 pub mod detection;
+pub mod direction;
 pub mod file;
 pub mod projection;
 pub mod resample;
+pub mod runs;
 pub mod types;
 
 #[cfg(test)]
