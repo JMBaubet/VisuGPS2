@@ -82,6 +82,7 @@ const router = createRouter({
     { path: '/visualisation', name: 'visualisation', component: Visualisation },
     { path: '/edition-camera', name: 'editionCamera', component: EditionCamera },
     { path: '/audit', name: 'audit', component: () => import('../views/Audit.vue') },
+    { path: '/multiride', name: 'multiride', component: () => import('../views/Multiride.vue') },
     { path: '/screen-bis', name: 'screenBis', component: ScreenBis }
   ]
 })
@@ -90,7 +91,7 @@ const router = createRouter({
 **Stratégie de routing** :
 - `createWebHistory()` : URLs propres sans `#`
 - Navigation par `name` recommandée (plus stable que `path`)
-- 5 routes : `accueil`, `visualisation`, `editionCamera`, `audit`, `screenBis`
+- 6 routes : `accueil`, `visualisation`, `editionCamera`, `audit`, `multiride`, `screenBis`
 - Seule la route `audit` est en **lazy loading** (contrairement aux autres, chargées statiquement) : Mapbox GL ne doit pas alourdir le bundle principal au démarrage.
 
 **Ajout de routes** :
@@ -251,7 +252,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 36 commandes : voir COMMANDS.md pour le catalogue complet
+            // 42 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
             gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*
         ])
@@ -270,6 +271,7 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `settings.rs` : Système de paramètres de configuration (TOML, chiffrement des secrets)
 - `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces, points avec distance cumulée, persistance des keyframes)
 - `gpx_audit/` : Module Audit GPX (détection AR/RP, corrections, export, commandes Tauri) — voir § « Audit GPX » ci-dessous
+- `gpx_multiride/` : Module Multiride (détection des portions parcourues plusieurs fois, ajustements, fichier de description) — voir § « Passage multiples » ci-dessous
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -333,6 +335,7 @@ src/
 │   ├── keyframes.ts  # Store de persistance des keyframes (loadKeyframes, saveKeyframes, clearKeyframes)
 │   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
 │   ├── audit.ts      # Store du module Audit GPX (détection, archive, corrections)
+│   ├── multiride.ts  # Store du module Multiride (détection, ajustements, validation)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
 │   ├── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra (simple + délégation frustum)
@@ -346,6 +349,7 @@ src/
 ├── views/            # Pages complètes (routes)
 │   ├── Home.vue
 │   ├── Audit.vue     # Audit GPX (route `/audit`) — carte, panneau des anomalies, panneau d'action
+│   ├── Multiride.vue # Passages multiples (route `/multiride`) — carte, panneau des segments
 │   └── About.vue
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
@@ -378,6 +382,14 @@ src/
 │   │   └── dialogs/
 │   │       ├── ConfirmExitDialog.vue   # Avertissement avant de quitter avec un travail en cours
 │   │       └── ConfirmApplyDialog.vue  # Confirmation du point de non-retour (« Appliquer »)
+│   ├── Multiride/    # Composants de la vue des passages multiples
+│   │   ├── MultirideToolbar.vue   # Barre d'outils (état, relance, validation, paramètres)
+│   │   ├── MultirideSegmentsPanel.vue # Panneau latéral — synthèse, ruban, emprunts, ajustements
+│   │   ├── MultirideMap.vue       # Carte Mapbox GL (4ᵉ instance) — trace, emprunts, bornes
+│   │   ├── multirideMapFeatures.ts # Construction des features (découpage des emprunts)
+│   │   ├── multirideMapLayers.ts  # Contrat de rendu : palette, couches, libellés de sens
+│   │   └── dialogs/
+│   │       └── ConfirmExitDialog.vue   # Sortie avec la barrière encore levée
 │   ├── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
@@ -427,6 +439,7 @@ src-tauri/
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
 - `gpx_audit/` : Module Audit GPX (détection AR/RP, moteur de correction, archive d'audit, réécriture GPX) — 15 fichiers : `types.rs`, `geometry.rs`, `consolidation.rs`, `ar.rs`, `rp.rs`, `anchor.rs`, `corrections.rs`, `migration.rs`, `export.rs`, `archive.rs`, `overlay.rs`, `preview.rs`, `routing.rs`, `pipeline.rs`, `commands.rs`. Détails au § « Audit GPX » ci-dessous.
+- `gpx_multiride/` : Module Multiride (détection des portions répétées, ajustements, fichier de description) — 11 fichiers : `types.rs`, `projection.rs`, `resample.rs`, `runs.rs`, `direction.rs`, `segments.rs`, `adjustments.rs`, `file.rs`, `detection.rs`, `commands.rs`, plus `tests/`. Détails au § « Passage multiples » ci-dessous.
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -947,7 +960,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 | `audit_save_state(trace_id, params, total_distance_m, points, findings, validated)` | Écrit l'**archive d'audit** (`audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection puis après **chaque** traitement ; `validated = true` après une validation réussie. Jamais appelée par les aperçus. |
 | `audit_load_archive(trace_id)` | Relit l'archive d'une trace (`None` si absente, illisible, d'une version inconnue ou d'une autre trace) — reprise d'une session interrompue et consultation d'un audit appliqué. |
 
-> Référence complète des **36 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des **42 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ### Paramètres (`Audit.*`)
 
@@ -968,6 +981,165 @@ namespace : elles sont regroupées dans le groupe **système** `Systeme.Key`
 drawer de la vue Accueil et lues **par chemin** partout ailleurs (`useAuditOrs.ts` pour le routage,
 `Map.vue` / `AuditMap.vue` / `EditionMap.vue` pour le token Mapbox). La vue `/audit` masque les
 sections système (`show-system=false`) : elle consomme les clés sans les exposer.
+
+## Passage multiples (`/multiride`)
+
+Une trace **valide** (auditée) peut contenir des portions **parcourues plusieurs
+fois** : aller-retour sur un tronçon, reconnaissance repassant sur une section,
+boucle locale reprenant un chemin. Le module Multiride les détecte, les qualifie
+par un sens et les fait valider — c'est la **seconde barrière** du parcours,
+entre l'audit et l'édition caméra.
+
+Portage de la spécification « Multi-Sens » : le pipeline rééchantillonne la trace
+à pas quasi constant, apparie les points spatialement superposés, les chaîne en
+*runs*, assemble les runs en segments — en préservant les frontières
+aller/retour — et qualifie le sens de chaque emprunt. Les algorithmes sont des
+**portages** : les documents de référence décrivent la version d'origine, cette
+implémentation fait foi.
+
+### État, barrière et fichier
+
+Deux artefacts, comme pour l'audit — un **fichier de description** dans le
+dossier de la trace (`multiride.json`) et un **statut** dans le registre
+(`multiride_status`) :
+
+| `multiride_status` | Signification | Édition caméra |
+|---|---|---|
+| `null` | Détection jamais jouée (registres antérieurs au module) | **accessible** (permissif) |
+| `"none"` | Détection jouée, aucune portion répétée | accessible |
+| `"pending"` | Au moins un passage reste à valider | **fermée** — redirection vers `/multiride` |
+| `"validated"` | Passages validés par l'utilisateur | accessible |
+
+Le statut vit dans le registre — et non dans le fichier — pour la même raison que
+`audit_archived` : la carte du circuit doit connaître la barrière **sans lire de
+fichier ni appeler l'IPC** au montage de l'accueil. Le fichier, lui, est le
+**contrat de sortie** du module : il sera consommé par la Visualisation, et sert
+en même temps d'état de travail à la vue. Sa description est dans
+[DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idmultiridejson--description-des-passages-multiples).
+
+**Point de contrat** : les bornes `point_entree` / `point_sortie` du fichier sont
+des numéros de points du **GPX d'origine** (1-based), et non des indices de la
+trace nettoyée — un point écarté au dédoublonnage ne décale donc pas la
+correspondance, et la jointure avec le GPX tombe juste (annexe 13.6 de la
+spécification). C'est la raison d'être de la table de provenance conservée par la
+géométrie (`projection::MultirideGeom::raw_index`).
+
+### Déclenchement de la détection
+
+La détection est **automatique**, jamais déclenchée par la seule ouverture de la
+vue :
+
+- à l'**import**, lorsque la détection d'anomalies conclut `"clean"` — la trace
+  entre directement dans le parcours, la détection est jouée dans la foulée ;
+- par **`audit_validate`**, sur le GPX **corrigé** et dans la commande qui le
+  réécrit — ce qui garantit qu'il n'existe aucun état où le GPX est corrigé mais
+  le statut périmé.
+
+Dans les deux cas la détection est **best-effort** : un échec (y compris un
+panic, l'algorithme manipulant des indices calculés) laisse la trace non
+détectée — donc permissive — plutôt que de faire échouer l'import ou l'audit. La
+détection lancée depuis la vue, elle, remonte ses erreurs à l'utilisateur.
+
+### Architecture
+
+1. **Module backend** (`src-tauri/src/gpx_multiride/`) :
+
+   | Fichier | Rôle |
+   |---|---|
+   | `types.rs` | Contrat de données : `MultirideParams`, `MultiridePassage`, `MultirideArchive`, `MultirideSens`, et la dérivation du statut. |
+   | `projection.rs` | Projection équirectangulaire locale, dédoublonnage à 5 cm, provenance (`raw_index`). |
+   | `resample.rs` | Rééchantillonnage à pas quasi constant, curseur de provenance, plafond de 120 000 points. |
+   | `runs.rs` | Appariement des points superposés (index spatial en grille, trois filtres) et chaînage en runs maximaux. |
+   | `segments.rs` | Assemblage : phases A/B/C itérées, préservation des frontières aller/retour, Passe D de fusion intra-segment. |
+   | `direction.rs` | Qualification du sens d'un emprunt, par score cumulé de `cos(Δcap)`. |
+   | `adjustments.rs` | Ajustements manuels : fusion d'un segment avec le précédent, marquage faux positif (fonctions pures). |
+   | `file.rs` | Écriture atomique et lecture tolérante du fichier de description, à la nomenclature de la spécification. |
+   | `detection.rs` | Orchestration du pipeline et projection du résultat sur le contrat. |
+   | `commands.rs` | Les **6 commandes** Tauri et leurs implémentations testables sans `AppHandle`. |
+
+2. **Store Frontend** (`src/stores/multiride.ts`) — Pattern Setup Store :
+   - Types miroir des structs Rust (`MultirideParams`, `MultiridePassage`,
+     `MultirideArchive`, `MultirideDetectionResult`).
+   - État `currentTraceId`, `archive`, `selectedSegment`, `analysisDurationMs`,
+     `loading` ; getters `passages`, `segmentNumbers`, `segmentCount`, `status`,
+     `hasPassages`, `needsValidation`, `hasAdjustments`, `repeatedKm`.
+   - Actions `runDetection`, `restore`, `mergeSegment`, `toggleFp`,
+     `resetAdjustments`, `validate`, `reset`.
+   - Le store ne fait **aucun calcul métier** : tout le travail lourd est délégué
+     aux commandes.
+
+3. **Vue** (`src/views/Multiride.vue`, route `/multiride`, lazy loading) :
+   - Plein écran : toolbar + carte Mapbox + panneau latéral des segments + drawer
+     Paramètres. Le `traceId` circule par la **query** de la route.
+   - **Mode d'entrée** : la vue restitue la description écrite (`multiride_load`)
+     et ne relance la détection que si elle est absente ou inexploitable.
+   - **Sortie** : une confirmation est demandée si des passages restent à valider
+     (l'édition caméra restera inaccessible) ; sinon la sortie est silencieuse.
+     Le store est réinitialisé, le fichier survit.
+   - Depuis la vue, « Valider et éditer » lève la barrière puis poursuit
+     directement vers l'édition caméra — l'intention de l'utilisateur qui a
+     ouvert la vue.
+
+4. **Composants** (`src/components/Multiride/`) :
+   - `MultirideToolbar.vue` : chip d'état, **pastille** de relance (les paramètres
+     ont changé depuis la détection affichée), bouton de relance, CTA de sortie
+     (« Valider et éditer » / « Éditer »), panneau Paramètres.
+   - `MultirideSegmentsPanel.vue` : synthèse (segments, emprunts, faux positifs,
+     fusions, km répétés, paramètres actifs), puis un bloc par segment — badges,
+     **ruban multi-rails** (un rail par emprunt, positionné en pourcentage de la
+     trace et coloré par sens) et liste des emprunts.
+   - `MultirideMap.vue` : **4ᵉ instance Mapbox GL**, distincte des autres. Trace de
+     fond, emprunts en trois couches (une par sens, pour que la référence reste
+     **sous** celles qui la recouvrent), bornes de la trace, popups, survol et
+     cadrage. Chaque vue monte et détruit sa propre instance.
+   - `multirideMapLayers.ts` / `multirideMapFeatures.ts` : contrat de rendu
+     (palette, épaisseurs, libellés) et construction des features — la portion
+     complète d'un emprunt est découpée dans les points de la trace, le fichier ne
+     portant que ses bornes.
+   - `dialogs/ConfirmExitDialog.vue` : confirmation de sortie avec la barrière
+     encore levée.
+
+5. **Ajustements manuels** (`adjustments.rs`) — fonctions **pures**, l'écriture
+   appartenant aux commandes :
+   - **fusion** d'un segment avec le précédent : emprunts repris dans l'ordre de
+     la trace, fusionnés deux à deux **de même sens** et séparés d'au plus **1 km**
+     (`MERGE_MANUAL_TOL_KM`, indépendant du réglage de fusion de la détection) ;
+     le premier emprunt devient la référence, les anciennes références non-tête
+     basculent en « aller » ;
+   - **faux positif** : marque tout le segment, qui est exclu de l'export et des
+     kilomètres répétés ;
+   - **réinitialisation** : la détection est **rejouée** avec les paramètres
+     enregistrés — elle est déterministe — plutôt que conservée en double.
+
+   Aucun ajustement ne touche au **registre** : ils n'ont pas d'incidence sur
+   l'édition caméra, et un état validé le reste. Une **relance** de la détection,
+   en revanche, repasse le statut à `pending` : l'utilisateur n'a pas vu le
+   nouveau résultat.
+
+### Commandes Tauri du module Multiride
+
+| Commande | Description |
+|----------|-------------|
+| `multiride_detect(trace_id, params)` | Relit le GPX, rééchantillonne, apparie, assemble et qualifie les emprunts ; écrit `multiride.json` et pose le statut (`none` / `pending`). |
+| `multiride_load(trace_id)` | Relit la description d'une trace (`null` si absente, illisible, d'une version inconnue ou rattachée à une autre trace). |
+| `multiride_merge_segment(trace_id, archive, segment)` | Fusionne un segment avec le précédent et réécrit la description, **sans toucher au registre**. |
+| `multiride_toggle_fp(trace_id, archive, segment)` | Marque ou démarque un segment en faux positif, et réécrit la description. |
+| `multiride_reset(trace_id, archive)` | Rejoue la détection avec les paramètres enregistrés ; le statut de validation est conservé. |
+| `multiride_validate(trace_id, archive)` | **Point de sortie** : marque l'état `valide` et pose `multiride_status = "validated"`, ce qui lève la barrière. |
+
+### Paramètres (`Multiride.*`)
+
+Le namespace expose une catégorie dans le drawer de la vue `/multiride` :
+
+| Catégorie | Paramètres |
+|---|---|
+| `Multiride.Detection` | `tolerance` (10 m), `longueurMin` (100 m), `pasEchantillonnage` (4 m), `fusionReferences` (100 m). |
+
+Les quatre paramètres portent l'essentiel du réglage de la détection : `tolerance`
+décide que deux points sont « au même endroit », `longueurMin` filtre les
+micro-répétitions, `pasEchantillonnage` règle la granularité de l'analyse, et
+`fusionReferences` recoud les fentes courtes — sans jamais franchir une frontière
+entre deux sens, qui est tranchée par la géométrie et non par ce seuil.
 
 ## Vue d'édition caméra (`/edition-camera`)
 
@@ -1033,8 +1205,9 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
    - `CameraEditor.vue` (Composant B, spec « Interface de contrôle MapBox ») : widgets de manipulation directe superposés sur la carte, **pilotés par la position de lecture** (`currentKeyframe`). **Hors RdV** → bouton « Ajouter un point de RdV » (sous le compas). **Sur un RdV** → widgets : **switch Cible** (pitch à 0° + croix bleue + drag sur carte pour viser, sauvegarde `cam.lng/lat`), **sliders Pitch/Zoom customs** (drag vertical + molette ±1 pas, double-clic ou clic sur valeur orange pour remettre les **valeurs par défaut des paramètres** `Edition.Camera.pitchDefaut`/`zoomDefaut`, **vert** sur la valeur par défaut sinon **bleu**), **CompassBandeau** (bandeau ±90°, défilement **infini** sur 3 copies -360°…720°, drag + molette ±1°, repère rouge fixe). **Barre d'actions** en bas : Undo (restaure la baseline), Supprimer (grisé sur le km 0), Sauvegarder (**grisé tant que non modifié** — sauvegarde explicite). **Verrouillage carte** : sur un RdV, toutes les interactions Mapbox sont désactivées tant que le mode Cible est inactif. **Keyframes verrouillés** : si le keyframe courant borde un segment verrouillé (mode validation), un badge cadenas s'affiche et les widgets (sliders, compas, Cible, Undo/Supprimer, Ajouter) sont **désactivés** — la protection réelle est portée par les gardes du store. Raccourcis : Espace Play/Pause, flèches ←/→ navigation RdV.
 
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
-   - Le bouton **Éditer** appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis — si `audit_status !== 'clean'` (trace à auditer) → `router.push({ name: 'audit', query: { traceId: trace.id } })` ; sinon → `router.push({ name: 'editionCamera' })`. La trace auditée est désignée par la **query** de la route : plus de store intermédiaire.
-   - Le bouton **Voir les anomalies de la source** appelle `voirAnomaliesSource()` : il ouvre la même route `/audit?traceId=…` (mode consultation) si `audit_archived` est vrai, et se contente sinon d'une notification — la vue n'ayant rien à restituer.
+   - Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace à auditer (`audit_status !== 'clean'`) → `router.push({ name: 'audit', query: { traceId: trace.id } })` ; passages multiples à valider (`multiride_status === 'pending'`) → `router.push({ name: 'multiride', query: { traceId: trace.id } })` ; sinon → édition caméra. Son icône porte l'état : `mdi-map-marker-path` **orange** (à auditer) ou **bleu** (passages à valider), et l'icône est **forcée visible** hors survol tant qu'une barrière subsiste. La trace est désignée par la **query** de la route : plus de store intermédiaire.
+   - Le bouton **Voir les anomalies de la source** appelle `voirAnomaliesSource()` : il ouvre la route `/audit?traceId=…` (mode consultation) si `audit_archived` est vrai, et se contente sinon d'une notification — la vue n'ayant rien à restituer.
+   - Le bouton **Passages multiples** (`mdi-repeat`, visible dès que la détection a été jouée) ouvre `/multiride?traceId=…` : **vert** quand les passages sont validés — consultables et ajustables de nouveau —, **bleu** quand ils restent à valider. C'est le **seul chemin** vers la vue une fois la barrière levée, l'icône Éditer menant alors directement à l'édition caméra.
 
 ### Carte satellite + terrain (vs. Accueil/Map.vue)
 
@@ -1057,7 +1230,8 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 └── {active_mode}/           # Ex : OPE, EVAL_essai
     ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
     ├── traces/              # Un dossier par trace (le dossier est le discriminant)
-    │   └── {trace_id}/      #   gpx, .gpx.orig, trace.geojson, keyframes_169|_43
+    │   └── {trace_id}/      #   gpx, .gpx.orig, audit.json, multiride.json,
+    │                        #   trace.geojson, keyframes_169|_43
     ├── config-dev.toml      # Surcharges de paramètres (dev)
     └── config.toml          # Surcharges de paramètres (prod)
 ```
@@ -1076,7 +1250,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | `get_keyframes` | Charge les keyframes persistés d'une trace pour un ratio (`None` si absent). |
 | `delete_keyframes` | Supprime le fichier keyframes d'un ratio (tolérant si absent). |
 
-> Référence complète des 36 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 42 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 

@@ -32,6 +32,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │           ├── {filename}.gpx          # GPX (nom d'origine sanitizé)
 │           ├── {filename}.gpx.orig     # backup de l'original (posé par audit_validate)
 │           ├── audit.json              # archive de l'audit (anomalies + traitements)
+│           ├── multiride.json          # description des passages multiples (contrat)
 │           ├── trace.geojson           # LineString GeoJSON
 │           ├── keyframes_169.json      # keyframes ratio 16:9
 │           └── keyframes_43.json       # keyframes ratio 4:3
@@ -43,6 +44,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
     └── traces/{trace_id}/
         ├── {filename}.gpx
         ├── audit.json
+        ├── multiride.json
         ├── trace.geojson
         └── keyframes_169.json / keyframes_43.json
 ```
@@ -123,7 +125,8 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "favorite": false,
     "is_displayed": false,
     "audit_status": "needs_review",
-    "audit_archived": false
+    "audit_archived": false,
+    "multiride_status": "pending"
   }
 ]
 ```
@@ -131,6 +134,8 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 **Statut d'audit** (`audit_status`) : `"clean"` (auditée sans anomalie, ou corrections appliquées) ou `"needs_review"` (anomalies détectées à l'import). Une trace non `"clean"` **n'est pas candidate** à l'édition caméra : elle est redirigée vers la vue `/audit`. Le statut est posé à l'import (détection AR + RP sur les points du GPX) et repasse à `"clean"` par `audit_validate`.
 
 **Archivage de l'audit** (`audit_archived`) : `true` quand un audit **appliqué** a laissé une archive dans le dossier de la trace (`audit.json`). C'est ce drapeau, lu par la carte du circuit, qui rend le bouton « Voir les anomalies de la source » **vert** (anomalies et traitements consultables) plutôt que gris. Posé par `audit_validate`, en même temps que `"clean"` ; absent des registres antérieurs → `false` (ces audits n'ont pas laissé d'archive, et les corrections ne sont pas restituables).
+
+**Statut des passages multiples** (`multiride_status`) : `"none"` (détection jouée, aucune portion répétée), `"pending"` (au moins un passage reste à valider — **l'édition caméra est fermée**) ou `"validated"` (passages validés). Il vaut `null` pour une trace dont la détection n'a pas été jouée : la valeur est **permissive**, la barrière ne s'appliquant qu'aux traces détectées depuis l'introduction du module. Posé par `multiride_detect` (`none`/`pending`) et par `multiride_validate` (`validated`) ; les ajustements (`multiride_merge_segment`, `multiride_toggle_fp`, `multiride_reset`) le laissent **inchangé**. Comme `audit_archived`, ce champ évite à la carte du circuit de lire un fichier pour connaître l'état de la trace.
 
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
@@ -228,6 +233,88 @@ cette archive. Le backup `{filename}.gpx.orig` est posé par `audit_validate`,
 > l'ancien module de nettoyage sont supprimés par la purge **D2c** (voir la note de migration
 > ci-dessus). Ils ne sont plus lus ni écrits par aucune version du code.
 
+### `traces/{trace_id}/multiride.json` — Description des passages multiples
+
+Portions de trace **parcourues plusieurs fois** : aller-retour sur un tronçon,
+reconnaissance repassant sur une section, boucle locale. Le fichier est le
+**contrat de sortie** du module Multiride — il sera consommé par la Visualisation
+—, et sert en même temps d'état de travail à la vue `/multiride`.
+
+**Quand le fichier est écrit** (écriture **atomique**, tmp + rename) :
+
+| Événement | Effet |
+|---|---|
+| Détection (`multiride_detect`) | État neuf, `valide: false` |
+| Fusion, faux positif (`multiride_merge_segment`, `multiride_toggle_fp`) | État ajusté, `valide` **conservé** |
+| Réinitialisation (`multiride_reset`) | Détection rejouée à l'identique, `valide` conservé |
+| Validation (`multiride_validate`) | `valide: true` |
+
+**Format** : une `FeatureCollection` GeoJSON à la nomenclature de la
+spécification — `properties` global porte le contexte de la trace, les paramètres
+actifs, les compteurs d'ajustements et une note expliquant le format ; **une
+Feature par emprunt**, dont la géométrie est un `LineString` à **exactement deux
+coordonnées** (les bornes `[lon, lat]` d'entrée et de sortie).
+
+```json
+{
+  "type": "FeatureCollection",
+  "properties": {
+    "version": 1,
+    "trace_id": "cd9e49cb-40fb-43a6-896e-ef2fdde357de",
+    "valide": false,
+    "source": "CalpePhoto.gpx",
+    "date": "2026-09-16T13:54:01Z",
+    "trace": { "point_count": 2207, "length_km": 50.54 },
+    "parametres": { "tolerance_m": 10.0, "longueur_min_m": 100.0,
+                    "pas_echantillonnage_m": 4.0, "fusion_references_m": 100.0,
+                    "pas_plafonne": false },
+    "ajustements": { "fusions_manuelles": 0, "faux_positifs_exclus": 0 },
+    "note": "Chaque Feature représente un passage. La géométrie LineString ne contient que les 2 points bornes (entrée, sortie). Pour reconstituer la portion de trace, joindre point_entree / point_sortie avec la trace d'origine."
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "segment": 1, "passage": 1, "sens": "reference",
+        "faux_positif": false,
+        "point_entree": 240, "point_sortie": 842,
+        "km_entree": 7.62, "km_sortie": 23.06,
+        "longueur_km": 15.44, "fusionne": false
+      },
+      "geometry": { "type": "LineString",
+                    "coordinates": [[7.49912, 43.77584], [7.49278, 43.79012]] }
+    }
+  ]
+}
+```
+
+- `sens` vaut `reference` (premier emprunt du segment), `aller` (même sens que
+  celle-ci) ou `retour` (sens inverse) ;
+- `point_entree` / `point_sortie` sont des **numéros de points du GPX d'origine**
+  (1-based) : c'est la clé de jointure avec la trace, et non un index de la trace
+  nettoyée — un point écarté au dédoublonnage ne décale donc pas la
+  correspondance ;
+- `km_entree` / `km_sortie` sont des distances cumulées **le long de la trace**
+  (km), mesurées dans la même métrique que `trace.length_km` ;
+- `faux_positif` marque les emprunts d'un segment écarté par l'utilisateur :
+  ils **restent** dans le fichier (c'est l'export qui les exclut), sinon une
+  réouverture de la vue ne pourrait plus distinguer un segment écarté d'un
+  segment ordinaire ;
+- `fusionne` marque les emprunts d'un segment ayant subi une fusion manuelle.
+
+**Trois ajouts au format de la spécification** : `version` et `trace_id` (version
+du format et rattachement à la trace, sans quoi la lecture ne pourrait pas
+refuser un fichier étranger), `valide` (levée de la barrière) et `faux_positif`
+(conservation des segments écartés, cf. ci-dessus).
+
+**Lecture** (commande `multiride_load`) : **tolérante** — fichier absent,
+illisible, d'une version inconnue ou rattaché à une autre trace → `null`, et la
+vue relance la détection, qui reste la source de vérité. Aucune erreur n'est
+remontée à l'utilisateur.
+
+> **Suppression** : le fichier disparaît avec le dossier de la trace
+> (`delete_trace`), comme les autres artefacts.
+
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
 - Ne contiennent **que les valeurs modifiées** par rapport au défaut (pas de recopie intégrale).
@@ -266,12 +353,14 @@ get_trace_gpx_path(mode_dir, trace_id, filename) → {mode_dir}/traces/{trace_id
 get_geojson_path(mode_dir, trace_id)  → {mode_dir}/traces/{trace_id}/trace.geojson
 get_keyframes_path(mode_dir, trace_id, viewport_aspect) → {mode_dir}/traces/{trace_id}/keyframes_169.json | keyframes_43.json
 archive_path(mode_dir, trace_id)      → {mode_dir}/traces/{trace_id}/audit.json
+file_path(mode_dir, trace_id)         → {mode_dir}/traces/{trace_id}/multiride.json
 get_traces_path(mode_dir)             → {mode_dir}/traces.json
 ```
 
 > Le module Audit GPX utilise **un seul chemin nouveau** — `archive_path`, l'archive d'audit
 > décrite plus haut — en plus du GPX réécrit par `audit_validate` (via `get_trace_gpx_path`) et
-> du registre.
+> du registre. Le module Multiride en ajoute un second : `file_path`, la description des
+> passages multiples (elle aussi dans le dossier de la trace).
 
 Le mode actif est déterminé par `gestionMode::read_active_mode(app_data_dir, is_dev)` qui lit `.env`.
 

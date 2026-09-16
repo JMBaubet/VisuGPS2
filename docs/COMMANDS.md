@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (36 commandes)
+## Catalogue (42 commandes)
 
 ### Application
 
@@ -209,6 +209,82 @@ pub struct AuditArchive {
 }
 ```
 
+### Multiride (`gpx_multiride/commands.rs`)
+
+> Le module Multiride détecte les portions de trace **parcourues plusieurs fois**
+> — aller-retour sur un tronçon, reconnaissance repassant sur une section, boucle
+> locale — et qualifie chaque emprunt par un sens (référence / aller / retour).
+> Portage de la spécification « Multi-Sens » : la détection suit l'audit et
+> **précède** l'édition caméra.
+>
+> **L'état complet est écrit sur disque** (`traces/{trace_id}/multiride.json`) :
+> ce fichier est à la fois l'état de travail de la vue (ajustements compris), le
+> **contrat de sortie** que consommera la Visualisation et le support du verrou.
+> Le statut correspondant vit dans le **registre** (`multiride_status`), ce qui
+> permet à la carte du circuit de connaître la barrière **sans lire de fichier** :
+> tant qu'il vaut `"pending"`, l'édition caméra est inaccessible. Voir
+> [DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idmultiridejson--description-des-passages-multiples).
+>
+> La détection est aussi **déclenchée automatiquement** : à l'import d'une trace
+> sans anomalie, et par `audit_validate` sur le GPX corrigé — en *best-effort*,
+> un échec laissant la trace non détectée (donc permissive) plutôt que de faire
+> échouer l'import ou l'audit. Les ajustements, eux, sont des gestes explicites :
+> ils réécrivent le fichier **sans toucher au registre**, donc sans incidence sur
+> l'édition caméra.
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `multiride_detect` | `async (app, trace_id: String, params: MultirideParams) -> Result<MultirideDetectionResult, String>` | Relit le GPX de la trace, rééchantillonne, apparie les points superposés, assemble les segments et qualifie les sens. Écrit `multiride.json`, pose `multiride_status` (`none` ou `pending`) et retourne l'état, le statut et la durée. Appelée par la vue et par sa relance. |
+| `multiride_load` | `async (app, trace_id: String) -> Result<Option<MultirideArchive>, String>` | Relit la description d'une trace : `null` si elle est absente, illisible, d'une version inconnue ou rattachée à une autre trace — la vue relance alors la détection. |
+| `multiride_merge_segment` | `async (app, trace_id: String, archive: MultirideArchive, segment: usize) -> Result<MultirideArchive, String>` | Fusionne un segment avec le précédent : emprunts repris dans l'ordre de la trace, fusionnés deux à deux **de même sens** et séparés d'au plus **1 km**. Le premier emprunt devient la référence du segment fusionné, les anciennes références non-tête basculent en « aller ». Réécrit le fichier, **sans toucher au registre**. |
+| `multiride_toggle_fp` | `async (app, trace_id: String, archive: MultirideArchive, segment: usize) -> Result<MultirideArchive, String>` | Marque ou démarque un segment en **faux positif** (exclu de l'export et des kilomètres répétés). Réécrit le fichier, sans toucher au registre. |
+| `multiride_reset` | `async (app, trace_id: String, archive: MultirideArchive) -> Result<MultirideArchive, String>` | Rétablit la détection d'origine en la **rejouant** avec les paramètres enregistrés — elle est déterministe, le fichier n'a donc pas à porter de copie de la détection initiale. Le statut de validation est conservé. |
+| `multiride_validate` | `async (app, trace_id: String, archive: MultirideArchive) -> Result<MultirideArchive, String>` | **Point de sortie** : marque l'état `valide`, réécrit le fichier et pose `multiride_status = "validated"`, ce qui lève la barrière de l'édition caméra. Les ajustements ultérieurs restent possibles et **conservent** le statut. |
+
+**Type `MultirideParams`** (miroir TS `MultirideParams` dans `src/stores/multiride.ts`) — assemblé par la vue depuis les réglages `Multiride.Detection.*`, ou lu côté Rust par `read_multiride_params` pour les chaînes automatiques :
+```rust
+pub struct MultirideParams {
+    pub tolerance_m: f64,            // tolérance de superposition (m)
+    pub longueur_min_m: f64,         // longueur minimale d'une portion signalée (m)
+    pub pas_echantillonnage_m: f64,  // pas de rééchantillonnage (m)
+    pub fusion_references_m: f64,    // fusion des références proches (m) ; 0 désactive
+}
+```
+
+**Type `MultirideArchive`** — l'état persisté dans `traces/{trace_id}/multiride.json` (miroir TS `MultirideArchive` dans `src/stores/multiride.ts`) :
+```rust
+pub struct MultirideArchive {
+    pub version: u32,                     // version du format (1) ; autre version → fichier ignoré
+    pub trace_id: String,
+    pub source: String,                   // nom du fichier GPX d'origine
+    pub updated_at: String,               // horodatage ISO 8601 UTC de la dernière écriture
+    pub valide: bool,                     // true après validation (barrière levée)
+    pub params: MultirideParams,          // paramètres ayant produit la détection
+    pub trace_point_count: usize,
+    pub trace_length_km: f64,             // longueur de la trace analysée (km)
+    pub pas_plafonne: bool,               // pas d'échantillonnage relevé automatiquement
+    pub passages: Vec<MultiridePassage>,  // emprunts détectés (segment, sens, bornes)
+}
+```
+
+**Type `MultiridePassage`** — un emprunt : portion de trace continue, qualifiée par un sens. Les bornes du fichier ne portent que ses deux extrémités ; la portion complète se reconstitue en joignant `point_entree` / `point_sortie` avec le GPX d'origine :
+```rust
+pub struct MultiridePassage {
+    pub segment: usize,          // numéro de segment (1-based)
+    pub passage: usize,          // numéro d'emprunt dans son segment (1-based)
+    pub sens: MultirideSens,     // référence | aller | retour
+    pub faux_positif: bool,      // segment écarté par l'utilisateur
+    pub point_entree: usize,     // numéro de point du GPX (1-based)
+    pub point_sortie: usize,
+    pub km_entree: f64,          // distance cumulée le long de la trace (km)
+    pub km_sortie: f64,
+    pub longueur_km: f64,
+    pub fusionne: bool,          // segment ayant subi une fusion manuelle
+    pub entree: MultirideLatLon, // bornes — géométrie du fichier de description
+    pub sortie: MultirideLatLon,
+}
+```
+
 ### Paramètres / Settings (`settings.rs`)
 
 **Types `TracePoint` et `TracePoints`** (miroir TS `TracePoint` dans `src/stores/traces.ts`) :
@@ -244,10 +320,16 @@ pub struct TraceMetadata {
     pub is_displayed: bool,               // afficher sur la carte (persisté)
     #[serde(default = "default_audit_status")]
     pub audit_status: String,             // "clean" | "needs_review"
+    #[serde(default)]
+    pub audit_archived: bool,             // un audit appliqué est archivé (consultable)
+    #[serde(default)]
+    pub multiride_status: Option<String>, // "none" | "pending" | "validated" | null
 }
 ```
 
-> `#[serde(default)]` sur `favorite`/`is_displayed` et `#[serde(default = "default_audit_status")]` sur `audit_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`"needs_review"`).
+> `#[serde(default)]` sur `favorite`/`is_displayed`/`audit_archived`/`multiride_status` et `#[serde(default = "default_audit_status")]` sur `audit_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`false`/`null`/`"needs_review"`).
+>
+> `multiride_status` vaut `null` pour une trace dont la détection des passages multiples n'a pas été jouée : la valeur est **permissive** — la barrière ne s'applique qu'aux traces détectées depuis l'introduction du module.
 >
 > **Registres pré-audit (D1)** : `load_registry` détecte la présence de la clé `"cleaning_status"` (format des versions antérieures au module Audit) et retourne alors une liste **vide**, sans jamais réécrire le fichier. Les traces concernées disparaissent de l'interface, mais leurs fichiers GPX restent intacts sur disque — voir [DATA_STORAGE.md](./DATA_STORAGE.md). Le registre est réécrit au prochain import, au nouveau format.
 
