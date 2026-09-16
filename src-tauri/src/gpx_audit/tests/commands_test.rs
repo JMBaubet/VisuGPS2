@@ -141,6 +141,7 @@ fn make_trace_metadata(id: &str, filename: &str) -> TraceMetadata {
         is_displayed: false,
         audit_status: "needs_review".to_string(),
         audit_archived: false,
+        multiride_status: None,
     }
 }
 

@@ -57,6 +57,14 @@ onMounted(async () => {
     return
   }
 
+  // Garde-fou « passages multiples » : une trace dont les portions répétées ne
+  // sont pas validées reste fermée à l'édition caméra — redirection vers la vue
+  // qui lève la barrière. La détection suit l'audit et précède l'édition.
+  if (trace && trace.multiride_status === 'pending') {
+    router.replace({ name: 'multiride', query: { traceId: trace.id } })
+    return
+  }
+
   // (Le seeding initial des paramètres d'édition est assuré par EditionMap
   // avant la génération des keyframes : `loadSettings` + `applySettings(true)`.)
 })

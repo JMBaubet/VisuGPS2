@@ -28,15 +28,17 @@
       <div class="d-flex align-center">
         <!--
           Éditer : couleur = avancement du verrouillage (vert / jaune / orange /
-          rouge, mêmes seuils que la toolbar d'édition). **Forcée visible** quand
-          l'édition est incomplète (non verte), même sans survol ; masquée
+          rouge, mêmes seuils que la toolbar d'édition), ou barrière non levée —
+          orange pour un audit à faire, bleu pour des passages multiples à
+          valider. **Forcée visible** quand l'édition est incomplète ou qu'une
+          barrière subsiste (icône non verte), même sans survol ; masquée
           uniquement si verte et non survolée ; visible au survol quelle que
           soit la couleur (pour pouvoir lancer l'édition).
         -->
         <v-btn
           class="action-btn"
           :class="{ 'action-btn--hidden': !(isEditionIncomplete || isHovering) }"
-          :icon="needsAudit ? 'mdi-map-marker-path' : 'mdi-pencil'"
+          :icon="needsAudit || needsMultiride ? 'mdi-map-marker-path' : 'mdi-pencil'"
           :color="editColor"
           variant="text"
           density="comfortable"
@@ -296,11 +298,14 @@ onMounted(async () => {
  * le bouton ViewPort de la toolbar d'édition) : vert si **tous** les segments
  * sont verrouillés, jaune si **> 50 %**, orange si **≥ 10 %**, rouge sinon.
  *
- * Une trace non « clean » (anomalies à auditer) est toujours affichée en
- * orange : elle n'est pas candidate à l'édition caméra.
+ * Deux barrières prennent le pas sur cet avancement, car elles ferment l'accès à
+ * l'édition : une trace non « clean » (anomalies à auditer) est toujours en
+ * orange, une trace dont les passages multiples ne sont pas validés toujours en
+ * bleu.
  */
 const editColor = computed(() => {
   if (needsAudit.value) return '#FF9800' // orange — à auditer
+  if (needsMultiride.value) return '#2196F3' // bleu — passages multiples à valider
   const r = lockRatio.value
   if (r >= 1) return '#4CAF50' // vert
   if (r > 0.5) return '#FFEB3B' // jaune
@@ -315,15 +320,29 @@ const editColor = computed(() => {
 const needsAudit = computed(() => props.trace.audit_status !== 'clean')
 
 /**
+ * `true` si la trace porte des passages multiples détectés mais non validés :
+ * l'édition caméra reste inaccessible tant qu'ils n'ont pas été validés dans la
+ * vue `/multiride`. Une trace jamais détectée (`null`) passe librement — la
+ * barrière ne concerne que les traces dont la détection a été jouée.
+ */
+const needsMultiride = computed(() => props.trace.multiride_status === 'pending')
+
+/**
  * `true` si l'édition de la trace est **incomplète** pour le viewport paramétré
  * (ratio < 1 → icône non verte). Dans ce cas l'icône Éditer est **toujours
  * visible** (même sans survol) pour signaler qu'une édition reste à faire.
+ *
+ * Il en va de même d'une barrière non levée : c'est une action à mener, elle
+ * doit se voir.
  */
-const isEditionIncomplete = computed(() => lockRatio.value < 1)
+const isEditionIncomplete = computed(
+  () => lockRatio.value < 1 || needsAudit.value || needsMultiride.value,
+)
 
-/** Tooltip de l'icône Éditer (ratio viewport + % de segments verrouillés). */
+/** Tooltip de l'icône Éditer (barrière à lever, ou avancement du verrouillage). */
 const pencilTitle = computed(() => {
   if (needsAudit.value) return 'Auditer la trace (anomalies détectées)'
+  if (needsMultiride.value) return 'Valider les passages multiples'
   const pct = Math.round(lockRatio.value * 100)
   const vp = viewportAspect.value
   return lockRatio.value >= 1
@@ -439,14 +458,21 @@ async function ouvrirSource() {
  * - trace non « clean » → vue d'audit (`/audit?traceId=…`) : la trace contient
  *   des anomalies (aller-retours, boucles giratoires) et n'est **pas candidate**
  *   à l'édition caméra tant qu'elles ne sont pas traitées et validées ;
+ * - trace dont les passages multiples ne sont pas validés → vue des passages
+ *   multiples (`/multiride?traceId=…`), qui lève la seconde barrière ;
  * - sinon → édition caméra (`/edition-camera`).
  *
- * La trace auditée est désignée par la **query** de la route : plus de store
+ * Les deux barrières s'enchaînent : l'audit d'abord, les passages multiples
+ * ensuite. La trace est désignée par la **query** de la route : plus de store
  * intermédiaire (Livrable 5 §7.1).
  */
 function editerCircuit() {
   if (needsAudit.value) {
     router.push({ name: 'audit', query: { traceId: props.trace.id } })
+    return
+  }
+  if (needsMultiride.value) {
+    router.push({ name: 'multiride', query: { traceId: props.trace.id } })
     return
   }
   editionStore.selectTrace(props.trace.id)

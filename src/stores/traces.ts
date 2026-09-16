@@ -82,6 +82,15 @@ export interface TraceMetadata {
    * auditées avant l'archivage.
    */
   audit_archived: boolean
+  /**
+   * Statut de la détection des passages multiples (module Multiride) :
+   * `"none"` (aucun passage détecté), `"pending"` (au moins un passage reste à
+   * valider — l'édition caméra est fermée) ou `"validated"` (passages validés
+   * par l'utilisateur). `null` pour une trace dont la détection n'a pas encore
+   * été jouée : valeur **permissive** — la détection des passages multiples
+   * suit l'audit, une trace jamais détectée ne doit pas être bloquée.
+   */
+  multiride_status: string | null
 }
 
 // --- Store ---

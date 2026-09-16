@@ -4,6 +4,7 @@ mod gestionMode;
 mod settings;
 mod import_gpx;
 mod gpx_audit;
+mod gpx_multiride;
 
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;
@@ -64,7 +65,10 @@ pub fn run() {
             gpx_audit::commands::audit_undo_correction,
             gpx_audit::commands::audit_validate,
             gpx_audit::commands::audit_save_state,
-            gpx_audit::commands::audit_load_archive
+            gpx_audit::commands::audit_load_archive,
+            gpx_multiride::commands::multiride_detect,
+            gpx_multiride::commands::multiride_load,
+            gpx_multiride::commands::multiride_validate
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

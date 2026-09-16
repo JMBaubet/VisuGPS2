@@ -105,6 +105,16 @@ pub struct TraceMetadata {
     /// `false` : ces audits n'ont pas laissé d'archive.
     #[serde(default)]
     pub audit_archived: bool,
+    /// Statut de la détection des passages multiples (module Multiride) :
+    /// `"none"` (aucun passage détecté), `"pending"` (au moins un passage
+    /// reste à valider — l'édition caméra est fermée) ou `"validated"`
+    /// (passages validés par l'utilisateur).
+    ///
+    /// Absent dans les registres antérieurs à la fonctionnalité → `None`, ce
+    /// qui est **permissif** : la barrière ne s'applique qu'aux traces dont la
+    /// détection a été jouée depuis.
+    #[serde(default)]
+    pub multiride_status: Option<String>,
 }
 
 /// Valeur par défaut du statut d'audit pour les registres antérieurs :
@@ -924,6 +934,10 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         is_displayed: false,
         audit_status,
         audit_archived: false,
+        // La détection des passages multiples suit l'audit : elle est jouée par
+        // la vue Multiride (ou par la chaîne d'import pour une trace déjà
+        // valide), jamais à l'import lui-même.
+        multiride_status: None,
     };
 
     // 9. Ajouter au registre et sauvegarder (écriture atomique)
@@ -1289,6 +1303,7 @@ mod tests {
             is_displayed: false,
             audit_status: "needs_review".to_string(),
             audit_archived: false,
+            multiride_status: None,
         }
     }
 
@@ -1313,6 +1328,31 @@ mod tests {
         let loaded = load_registry(&traces_path);
         assert_eq!(loaded.len(), 1);
         assert!(!loaded[0].audit_archived);
+    }
+
+    /// Un registre antérieur à la détection des passages multiples (sans
+    /// `multiride_status`) se charge sans erreur : le champ retombe à `None`,
+    /// valeur **permissive** — aucune trace existante n'est bloquée par le
+    /// verrou Multiride.
+    #[test]
+    fn load_registry_defaults_multiride_status_to_none() {
+        let mode = test_mode_dir("multiride_status_absent");
+        fs::create_dir_all(&mode).unwrap();
+        let traces_path = mode.join("traces.json");
+
+        // JSON d'un registre écrit avant l'apparition du champ.
+        let mut value = serde_json::to_value(vec![make_trace("id-1", "a.gpx")]).unwrap();
+        value[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("multiride_status");
+        let legacy = serde_json::to_string(&value).unwrap();
+        assert!(!legacy.contains("multiride_status"));
+        fs::write(&traces_path, &legacy).unwrap();
+
+        let loaded = load_registry(&traces_path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].multiride_status, None);
     }
 
     /// La migration déplace chaque fichier de l'ancien agencement plat vers le

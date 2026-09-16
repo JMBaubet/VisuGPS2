@@ -851,4 +851,77 @@ mod tests {
             "la vue `nettoyage` ne doit plus être déclarée"
         );
     }
+
+    /// Le namespace `Multiride.*` est déclaré et cohérent avec sa vue `_meta` :
+    /// chaque groupe affiché a sa métadonnée, et chaque paramètre appartient à
+    /// un groupe de la vue — un paramètre hors `_meta` serait invisible dans le
+    /// drawer.
+    #[test]
+    fn multiride_namespace_is_declared_and_consistent() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        let meta = extract_meta(&table);
+
+        // 1. La vue `/multiride` est déclarée, avec son libellé.
+        let multiride = meta
+            .views
+            .get("multiride")
+            .expect("vue `multiride` déclarée");
+        assert_eq!(multiride.label, "Passages multiples");
+
+        // 2. Chaque groupe de la vue a sa métadonnée d'affichage.
+        for group in &multiride.groups {
+            let g = meta.groups.get(group).unwrap_or_else(|| {
+                panic!("groupe `{}` déclaré dans la vue multiride sans métadonnée", group)
+            });
+            assert!(g.label.is_some(), "groupe `{}` sans libellé", group);
+        }
+
+        // 3. Les 4 paramètres de détection de la spécification, tous rattachés
+        //    à un groupe de la vue.
+        let multiride_defs: Vec<_> = defs
+            .iter()
+            .filter(|d| d.path.starts_with("Multiride."))
+            .collect();
+        assert_eq!(
+            multiride_defs.len(),
+            4,
+            "4 paramètres `Multiride.*` attendus : {:?}",
+            multiride_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
+        );
+        for def in &multiride_defs {
+            let group = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
+            assert!(
+                multiride.groups.contains(&group),
+                "paramètre `{}` rattaché au groupe `{}`, absent de la vue multiride",
+                def.path,
+                group
+            );
+            assert_eq!(def.setting_type, "int", "`{}` doit être un entier", def.path);
+            assert_eq!(def.unit.as_deref(), Some("m"), "`{}` s'exprime en mètres", def.path);
+        }
+
+        // 4. Bornes par défaut de la spécification.
+        let tolerance = multiride_defs
+            .iter()
+            .find(|d| d.path == "Multiride.Detection.tolerance")
+            .expect("paramètre `Multiride.Detection.tolerance` déclaré");
+        assert_eq!(tolerance.default.as_i64(), Some(10));
+        let fusion = multiride_defs
+            .iter()
+            .find(|d| d.path == "Multiride.Detection.fusionReferences")
+            .expect("paramètre `Multiride.Detection.fusionReferences` déclaré");
+        assert_eq!(fusion.default.as_i64(), Some(100));
+        assert_eq!(
+            fusion.min,
+            Some(0.0),
+            "0 doit être admis : il désactive les fusions automatiques"
+        );
+    }
 }

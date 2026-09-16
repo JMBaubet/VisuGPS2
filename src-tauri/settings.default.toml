@@ -63,6 +63,11 @@ groups = [
   "Audit.Application",
 ]
 
+[_meta.views.multiride]
+label = "Passages multiples"
+icon = "mdi-repeat"
+groups = ["Multiride.Detection"]
+
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
 # Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
 [_meta.groups."Systeme.Key"]
@@ -120,6 +125,10 @@ icon = "mdi-rotate-360"
 [_meta.groups."Audit.Application"]
 label = "Audit — Application"
 icon = "mdi-application"
+
+[_meta.groups."Multiride.Detection"]
+label = "Multiride — Détection"
+icon = "mdi-repeat"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -705,6 +714,119 @@ Si vide, la valeur par défaut « VérificationGPX » est utilisée.
 type = "string"
 default = "VérificationGPX"
 icon = "mdi-application"
+
+# ---------------------------------------------------------------------------
+# MULTIRIDE — Détection des passages multiples
+# ---------------------------------------------------------------------------
+#
+# Ce namespace pilote la détection des portions de trace parcourues plusieurs
+# fois (aller-retour sur un tronçon, reconnaissance repassant sur une section,
+# boucle locale). Il est consommé par le store Pinia `src/stores/multiride.ts`,
+# les commandes Tauri `gpx_multiride::commands::*` et le drawer de la vue
+# `/multiride`.
+#
+# La détection suit l'audit et précède l'édition caméra : tant que les passages
+# détectés ne sont pas validés, l'édition caméra reste inaccessible
+# (`multiride_status = "pending"` dans le registre des traces).
+#
+# Les quatre paramètres sont ceux de la spécification : ils portent l'essentiel
+# du réglage de la détection, et leur documentation décrit l'effet d'un seuil
+# trop bas ou trop haut (risques de faux positifs et de faux négatifs).
+# ---------------------------------------------------------------------------
+
+[Multiride.Detection.tolerance]
+description = "Tolérance de superposition (m)"
+documentation = """
+Distance maximale entre deux points pour qu'ils soient considérés comme
+« le même lieu géographique ». C'est le seuil central de la détection : il
+décide que deux passages se superposent.
+
+- **Trop bas** (< 5 m) : rate les portions répétées à cause du bruit GPS
+  (5–15 m en zone ouverte, davantage en forêt).
+- **Trop haut** (> 25 m) : mélange des voies parallèles distinctes (route et
+  sentier adjacents, deux rues d'un même carrefour).
+
+Conseil : 8–15 m selon la qualité de la trace.
+"""
+type = "int"
+default = 10
+min = 3
+max = 30
+step = 1
+unit = "m"
+icon = "mdi-crosshairs-gps"
+
+[Multiride.Detection.longueurMin]
+description = "Longueur minimale d'un segment (m)"
+documentation = """
+Longueur minimale d'une portion répétée pour être signalée. Filtre les
+micro-correspondances parasites (demi-tour sur un parking, arrêt technique,
+redémarrage GPS).
+
+- **Trop bas** (< 30 m) : beaucoup de bruit dans les résultats.
+- **Trop haut** (> 300 m) : peut rater des portions réellement répétées mais
+  courtes (impasse, reconnaissance brève).
+
+Conseil : 50–200 m selon le type de sortie.
+"""
+type = "int"
+default = 100
+min = 20
+max = 500
+step = 10
+unit = "m"
+icon = "mdi-ruler"
+
+[Multiride.Detection.pasEchantillonnage]
+description = "Pas d'échantillonnage (m)"
+documentation = """
+Granularité à laquelle la trace est rééchantillonnée avant détection. Un pas
+constant rend les comparaisons d'intervalles homogènes, quelle que soit la
+densité de points du GPX d'origine.
+
+- **Trop bas** (< 3 m) : détection plus précise, mais coût de calcul et mémoire
+  croissants.
+- **Trop haut** (> 8 m) : plus rapide, mais peut manquer un chevauchement court
+  ou imprécis (virages serrés).
+
+Garde-fou : au-delà de 120 000 points échantillonnés, le pas est relevé
+automatiquement et le fait est consigné dans le fichier de description
+(`pas_plafonne`).
+"""
+type = "int"
+default = 4
+min = 2
+max = 10
+step = 1
+unit = "m"
+icon = "mdi-dots-grid"
+
+[Multiride.Detection.fusionReferences]
+description = "Fusion des références proches (m)"
+documentation = """
+Distance en deçà de laquelle deux passages voisins sont considérés comme un
+seul passage logique. Recoud aussi les trous courts **à l'intérieur** d'un
+passage (virages serrés, tunnels, pertes de correspondance), au double de
+cette distance.
+
+- **Trop bas** (< 20 m) : chaque micro-coupure (pause, arrêt photo,
+  redémarrage GPS) fragmente les segments.
+- **Trop haut** (> 300 m) : risque de coller des passages réellement
+  différents.
+
+Valeur 0 : désactive toute fusion automatique.
+
+La frontière entre un aller et son retour n'est **jamais** franchie par cette
+fusion, quel que soit le réglage : elle est tranchée par la géométrie locale
+(inversion de cap, ré-emprunt de route), pas par ce seuil.
+"""
+type = "int"
+default = 100
+min = 0
+max = 500
+step = 5
+unit = "m"
+icon = "mdi-call-merge"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.

@@ -29,6 +29,12 @@ const router = createRouter({
       component: () => import('../views/Audit.vue')
     },
     {
+      // Détection des passages multiples — même raison de lazy loading.
+      path: '/multiride',
+      name: 'multiride',
+      component: () => import('../views/Multiride.vue')
+    },
+    {
       path: '/screen-bis',
       name: 'screenBis',
       component: ScreenBis
