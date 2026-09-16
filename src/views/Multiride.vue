@@ -12,70 +12,35 @@
         @open-settings="appStore.isSettingsDrawerOpen = !appStore.isSettingsDrawerOpen"
       />
 
+      <MultirideSegmentsPanel
+        :passages="multirideStore.passages"
+        :segment-numbers="multirideStore.segmentNumbers"
+        :selected-segment="multirideStore.selectedSegment"
+        :trace-length-km="archive?.traceLengthKm ?? 0"
+        :repeated-km="multirideStore.repeatedKm"
+        :analysis-duration-ms="multirideStore.analysisDurationMs"
+        :params="archive?.params ?? null"
+        @select="multirideStore.selectSegment"
+      />
+
+      <!-- Zone centrale : la carte de restitution. Elle n'est montée qu'une fois
+           la trace chargée — le découpage des emprunts a besoin de ses points. -->
       <v-main class="multiride-main">
         <div class="multiride-center">
+          <MultirideMap
+            v-if="tracePoints.length >= 2"
+            :passages="multirideStore.passages"
+            :trace-points="tracePoints"
+            :selected-segment="multirideStore.selectedSegment"
+            @select-segment="multirideStore.selectSegment"
+          />
           <v-progress-circular
-            v-if="!archive"
+            v-else
             :size="60"
             :width="7"
             color="primary"
             indeterminate
           />
-
-          <v-card v-else class="multiride-summary" max-width="620">
-            <v-card-title class="d-flex align-center">
-              <v-icon
-                :icon="multirideStore.hasPassages ? 'mdi-repeat' : 'mdi-check-circle-outline'"
-                :color="multirideStore.hasPassages ? 'warning' : 'success'"
-                class="mr-2"
-              />
-              {{
-                multirideStore.hasPassages
-                  ? 'Portions répétées détectées'
-                  : 'Aucun passage multiple détecté'
-              }}
-            </v-card-title>
-
-            <v-card-text>
-              <p v-if="multirideStore.hasPassages" class="mb-4">
-                {{ multirideStore.passages.length }} passage(s) sur
-                {{ multirideStore.segmentCount }} segment(s), pour
-                {{ formatDistance(multirideStore.repeatedKm * 1000) }} de trace
-                parcourue plusieurs fois.
-              </p>
-              <p v-else class="mb-4">
-                La trace ne repasse sur aucun tronçon : rien à valider, l'édition
-                caméra est accessible.
-              </p>
-
-              <v-list density="compact" class="multiride-facts">
-                <v-list-item title="Source" :subtitle="archive.source" />
-                <v-list-item
-                  title="Trace d'origine"
-                  :subtitle="`${formatDistance(archive.traceLengthKm * 1000)} · ${archive.tracePointCount} points`"
-                />
-                <v-list-item
-                  v-if="multirideStore.analysisDurationMs > 0"
-                  title="Temps d'analyse"
-                  :subtitle="`${multirideStore.analysisDurationMs} ms`"
-                />
-                <v-list-item title="Paramètres actifs" :subtitle="paramsSummary" />
-              </v-list>
-
-              <!-- Un pas d'échantillonnage relevé automatiquement change la
-                   finesse de la détection : cela se sait. -->
-              <v-alert
-                v-if="archive.pasPlafonne"
-                type="info"
-                variant="tonal"
-                density="compact"
-                class="mt-4"
-              >
-                Le pas d'échantillonnage a été relevé automatiquement pour contenir
-                le nombre de points analysés.
-              </v-alert>
-            </v-card-text>
-          </v-card>
         </div>
       </v-main>
 
@@ -97,24 +62,29 @@
  * inaccessible** (`multiride_status = "pending"`), au même titre qu'une trace
  * non auditée. La détection suit donc l'audit et précède l'édition caméra.
  *
+ * La restitution est répartie entre le panneau latéral (synthèse, ruban,
+ * emprunts) et la carte, qui porte la trace et les portions répétées. Les deux
+ * sont synchronisés par le store : la sélection d'un segment y est publiée, le
+ * panneau la met en avant et la carte cadre son étendue.
+ *
  * Le `traceId` arrive par la query de la route (`/multiride?traceId=…`), posée
  * par le bouton Éditer de l'accueil ou par le garde-fou d'EditionCamera. À la
  * sortie, le store est réinitialisé — le fichier de description, lui, survit.
  *
- * La carte de restitution et le panneau détaillé des segments sont portés par
- * les sous-étapes suivantes de l'évolution ; cette vue expose d'ores et déjà
- * l'état, la synthèse et la relance de la détection.
+ * Les ajustements (fusion, faux positif) et la validation sont portés par la
+ * sous-étape suivante : cette vue expose la détection et sa restitution.
  */
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useMultirideStore, type MultirideParams } from '../stores/multiride'
 import { useSettingsStore } from '../stores/settings'
-import { useTracesStore } from '../stores/traces'
+import { useTracesStore, type TracePoint } from '../stores/traces'
 import { useUiStore } from '../stores/ui'
 import MultirideToolbar from '../components/Multiride/MultirideToolbar.vue'
+import MultirideMap from '../components/Multiride/MultirideMap.vue'
+import MultirideSegmentsPanel from '../components/Multiride/MultirideSegmentsPanel.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
-import { formatDistance } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -126,6 +96,8 @@ const ui = useUiStore()
 
 /** Une détection est en cours de lancement depuis cette vue. */
 const analyzing = ref(false)
+/** Points de la trace, pour le tracé de fond et le découpage des emprunts. */
+const tracePoints = ref<TracePoint[]>([])
 
 const traceId = computed(() => (route.query.traceId as string | null) ?? null)
 const traceName = computed(
@@ -134,18 +106,6 @@ const traceName = computed(
 
 /** L'état de la détection courante (`null` avant la première restitution). */
 const archive = computed(() => multirideStore.archive)
-
-/** Paramètres actifs, tels qu'ils ont produit la détection affichée. */
-const paramsSummary = computed(() => {
-  const params = archive.value?.params
-  if (!params) return ''
-  return [
-    `tolérance ${params.toleranceM} m`,
-    `longueur min ${params.longueurMinM} m`,
-    `pas ${params.pasEchantillonnageM} m`,
-    `fusion ${params.fusionReferencesM} m`,
-  ].join(' · ')
-})
 
 /** Valeur d'un paramètre numérique, avec repli sur la valeur par défaut. */
 function settingNumber(path: string, fallback: number): number {
@@ -164,10 +124,17 @@ function buildParams(): MultirideParams {
   }
 }
 
-/** Lance la détection sur la trace courante. */
+/** Charge les points de la trace — support du tracé et du découpage des emprunts. */
+async function loadTracePoints(): Promise<void> {
+  if (!traceId.value) return
+  tracePoints.value = await tracesStore.getTracePoints(traceId.value)
+}
+
+/** Lance la détection sur la trace courante, puis recharge ses points. */
 async function runDetection(): Promise<void> {
   if (!traceId.value) return
   await multirideStore.runDetection(traceId.value, buildParams())
+  await loadTracePoints()
 }
 
 /** Relance la détection à la demande (paramètres `Multiride.*` courants). */
@@ -203,6 +170,7 @@ onMounted(async () => {
     // rejouée que si le fichier est absent ou inexploitable.
     const restored = await multirideStore.restore(traceId.value)
     if (!restored) await runDetection()
+    else await loadTracePoints()
   } catch (error) {
     const msg = typeof error === 'string' ? error : 'Erreur de détection.'
     ui.showError(msg)
@@ -224,14 +192,7 @@ onBeforeRouteLeave(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
-}
-
-.multiride-summary {
   width: 100%;
-}
-
-.multiride-facts {
-  background: transparent;
+  height: 100%;
 }
 </style>
