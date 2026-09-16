@@ -8,7 +8,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::gpx_multiride::commands::{detect_impl, load_impl, validate_impl};
+use crate::gpx_multiride::commands::{
+    default_multiride_params, detect_impl, detect_status, load_impl, multiride_params_from_settings,
+    validate_impl,
+};
 use crate::gpx_multiride::file::{build_archive, file_path, load_file, save_file};
 use crate::gpx_multiride::types::{
     MultirideArchive, MultirideLatLon, MultirideParams, MultiridePassage, MultirideSens,
@@ -18,6 +21,7 @@ use crate::import_gpx::{
     get_trace_gpx_path, get_traces_path, load_registry, save_registry, Point3D, TraceMetadata,
     TraceStats,
 };
+use crate::settings::get_toml_value_by_path;
 
 // ─── Aides de test ────────────────────────────────────────────────────
 
@@ -301,5 +305,106 @@ fn validate_rejects_a_foreign_archive() {
         registry_status(&mode, &id).as_deref(),
         Some(STATUS_NONE),
         "un refus ne doit pas modifier le registre"
+    );
+}
+
+// ─── Paramètres de détection ──────────────────────────────────────────
+
+/// Table du schéma embarqué, telle que la lit le système de paramètres.
+fn default_schema() -> toml::Table {
+    let raw = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/settings.default.toml"
+    ))
+    .expect("settings.default.toml doit être lisible");
+    toml::from_str(&raw).expect("settings.default.toml doit être du TOML valide")
+}
+
+/// Les clés `Multiride.Detection` existent dans le schéma, et les valeurs
+/// publiées sont bien celles du TOML — un repli identique par construction ne
+/// prouverait rien.
+#[test]
+fn the_detection_settings_exist_in_the_schema() {
+    let table = default_schema();
+
+    for path in [
+        "Multiride.Detection.tolerance",
+        "Multiride.Detection.longueurMin",
+        "Multiride.Detection.pasEchantillonnage",
+        "Multiride.Detection.fusionReferences",
+    ] {
+        assert!(
+            get_toml_value_by_path(&table, path).is_some(),
+            "paramètre absent de settings.default.toml : {path}"
+        );
+    }
+
+    let params = multiride_params_from_settings(&table, &toml::Table::new());
+    let expected = default_multiride_params();
+    assert_eq!(params.tolerance_m, expected.tolerance_m);
+    assert_eq!(params.longueur_min_m, expected.longueur_min_m);
+    assert_eq!(params.pas_echantillonnage_m, expected.pas_echantillonnage_m);
+    assert_eq!(params.fusion_references_m, expected.fusion_references_m);
+}
+
+/// La surcharge utilisateur prime sur le schéma, et les autres valeurs restent
+/// celles du schéma.
+#[test]
+fn a_user_override_wins_over_the_schema() {
+    let table = default_schema();
+    let overrides: toml::Table = toml::from_str(
+        "[Multiride.Detection]\ntolerance = 15\nlongueurMin = 250\n",
+    )
+    .expect("surcharge TOML de test");
+
+    let params = multiride_params_from_settings(&table, &overrides);
+    let expected = default_multiride_params();
+
+    assert_eq!(params.tolerance_m, 15.0);
+    assert_eq!(params.longueur_min_m, 250.0);
+    assert_eq!(params.pas_echantillonnage_m, expected.pas_echantillonnage_m);
+    assert_eq!(params.fusion_references_m, expected.fusion_references_m);
+}
+
+// ─── Chaîne automatique ───────────────────────────────────────────────
+
+/// La détection d'une chaîne automatique écrit le fichier de description et
+/// retourne le statut à poser dans le registre.
+///
+/// Elle ne touche pas au registre : c'est l'appelant — import ou validation
+/// d'audit — qui pose le statut, dans la même passe que ses propres
+/// modifications, pour qu'aucun état intermédiaire ne les oppose.
+#[test]
+fn detect_status_writes_the_description_file() {
+    let (mode, id) = mode_with_trace("hook_ok", 8);
+    let gpx_path = get_trace_gpx_path(&mode, &id, "trace_test.gpx");
+
+    let status = detect_status(&mode, &id, "trace_test.gpx", &gpx_path, params());
+
+    assert_eq!(status.as_deref(), Some(STATUS_NONE));
+    assert!(
+        file_path(&mode, &id).exists(),
+        "le fichier de description doit être écrit"
+    );
+    assert_eq!(
+        registry_status(&mode, &id),
+        None,
+        "la chaîne automatique laisse le registre à l'appelant"
+    );
+}
+
+/// Une défaillance de la détection ne fait pas échouer l'opération qui l'a
+/// déclenchée : elle répond `None`, et rien n'est écrit.
+#[test]
+fn detect_status_stays_silent_on_a_failure() {
+    let (mode, id) = mode_with_trace("hook_ko", 8);
+    let missing = mode.join("traces").join(&id).join("absent.gpx");
+
+    let status = detect_status(&mode, &id, "absent.gpx", &missing, params());
+
+    assert_eq!(status, None, "une GPX illisible ne doit pas remonter d'erreur");
+    assert!(
+        !file_path(&mode, &id).exists(),
+        "un échec ne doit rien écrire"
     );
 }

@@ -9,19 +9,146 @@
 //! fonction interne (`detect_impl`, `validate_impl`, …) qui ne dépend pas de
 //! Tauri et reste donc testable directement — même découpage que
 //! `gpx_audit::commands`.
+//!
+//! Le module expose en outre le **point d'entrée des chaînes automatiques**
+//! (`detect_status`), appelé par l'import d'une trace déjà valide et par la
+//! validation d'un audit : la détection des passages multiples suit l'audit dans
+//! le parcours d'une trace, et doit donc se déclencher sans que l'utilisateur
+//! ouvre la vue.
 
 use std::path::Path;
+use std::sync::{Arc, RwLock};
+
+use tauri::Manager;
 
 use crate::gpx_audit::export::iso_now;
 use crate::import_gpx::{
     get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry, save_registry,
 };
+use crate::settings::{get_toml_value_by_path, SettingsState};
 
 use super::detection;
 use super::file;
 use super::types::{MultirideArchive, MultirideDetectionResult, MultirideParams};
 
+// ─── Lecture des paramètres ───────────────────────────────────────────
+
+/// Lit les paramètres du détecteur (`Multiride.Detection`) avec repli sur les
+/// valeurs par défaut de la spécification.
+///
+/// Ne **panique jamais** (`try_state`) : les chaînes automatiques (import,
+/// validation d'audit) s'appuient dessus, une défaillance du système de
+/// paramètres ne doit pas les bloquer.
+pub fn read_multiride_params(app: &tauri::AppHandle) -> MultirideParams {
+    let state = match app.try_state::<Arc<RwLock<SettingsState>>>() {
+        Some(s) => s,
+        None => return default_multiride_params(),
+    };
+    let guard = match state.read() {
+        Ok(g) => g,
+        Err(_) => return default_multiride_params(),
+    };
+    multiride_params_from_settings(&guard.default_toml, &guard.user_overrides)
+}
+
+/// Valeurs par défaut des paramètres de détection — miroir de la section
+/// `Multiride.Detection` de `settings.default.toml` (§6 de la spécification).
+pub fn default_multiride_params() -> MultirideParams {
+    MultirideParams {
+        tolerance_m: 10.0,
+        longueur_min_m: 100.0,
+        pas_echantillonnage_m: 4.0,
+        fusion_references_m: 100.0,
+    }
+}
+
+/// Résout les paramètres depuis les tables TOML : surcharge utilisateur
+/// prioritaire, puis valeur par défaut du schéma, puis repli. Pure et testable.
+pub fn multiride_params_from_settings(
+    default_toml: &toml::Table,
+    user_overrides: &toml::Table,
+) -> MultirideParams {
+    let fallback = default_multiride_params();
+    let number = |path: &str, default: f64| -> f64 {
+        let value = get_toml_value_by_path(user_overrides, path)
+            .or_else(|| get_toml_value_by_path(default_toml, path));
+        match value {
+            Some(toml::Value::Float(v)) => *v,
+            Some(toml::Value::Integer(v)) => *v as f64,
+            _ => default,
+        }
+    };
+
+    MultirideParams {
+        tolerance_m: number("Multiride.Detection.tolerance", fallback.tolerance_m),
+        longueur_min_m: number("Multiride.Detection.longueurMin", fallback.longueur_min_m),
+        pas_echantillonnage_m: number(
+            "Multiride.Detection.pasEchantillonnage",
+            fallback.pas_echantillonnage_m,
+        ),
+        fusion_references_m: number(
+            "Multiride.Detection.fusionReferences",
+            fallback.fusion_references_m,
+        ),
+    }
+}
+
 // ─── Détection ────────────────────────────────────────────────────────
+
+/// Joue la détection et écrit le fichier de description, **sans toucher au
+/// registre** : l'appelant décide du statut à y poser et l'écrit dans la même
+/// passe que ses propres modifications (import d'une trace, validation d'audit).
+pub fn detect_and_save(
+    mode_dir: &Path,
+    trace_id: &str,
+    source: &str,
+    gpx_path: &Path,
+    params: MultirideParams,
+) -> Result<MultirideArchive, String> {
+    let archive = detection::detect(trace_id, source, gpx_path, params)?;
+    file::save_file(&file::file_path(mode_dir, trace_id), &archive)?;
+    Ok(archive)
+}
+
+/// Détection d'une **chaîne automatique** — import d'une trace déjà valide,
+/// validation d'audit — : retourne le statut à poser dans le registre, ou `None`
+/// si la détection n'a pas pu aboutir.
+///
+/// Best-effort assumé : ces chaînes ne doivent jamais échouer à cause de la
+/// détection des passages multiples. Un échec — **y compris un panic**, la
+/// détection manipulant des indices calculés — laisse la trace non détectée,
+/// donc permissive : au pire l'étape des passages multiples reste à faire, jamais
+/// l'opération déclenchante n'est bloquée. La détection lancée depuis la vue,
+/// elle, remonte ses erreurs à l'utilisateur.
+pub fn detect_status(
+    mode_dir: &Path,
+    trace_id: &str,
+    source: &str,
+    gpx_path: &Path,
+    params: MultirideParams,
+) -> Option<String> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        detect_and_save(mode_dir, trace_id, source, gpx_path, params)
+    }));
+
+    match outcome {
+        Ok(Ok(archive)) => Some(archive.status().to_string()),
+        Ok(Err(error)) => {
+            eprintln!(
+                "[multiride] détection non jouée pour {} : {}",
+                trace_id, error
+            );
+            None
+        }
+        Err(_) => {
+            eprintln!(
+                "[multiride] détection interrompue pour {} : panique",
+                trace_id
+            );
+            None
+        }
+    }
+}
 
 /// Détecte les passages multiples d'une trace, écrit le fichier de description
 /// et pose le statut de la trace (`none` ou `pending`).
@@ -63,8 +190,7 @@ pub fn detect_impl(
         .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
     let gpx_path = get_trace_gpx_path(mode_dir, trace_id, &trace.filename);
 
-    let archive = detection::detect(trace_id, &trace.filename, &gpx_path, params)?;
-    file::save_file(&file::file_path(mode_dir, trace_id), &archive)?;
+    let archive = detect_and_save(mode_dir, trace_id, &trace.filename, &gpx_path, params)?;
     let status = set_status(mode_dir, trace_id, archive.status())?;
 
     Ok(MultirideDetectionResult {

@@ -11,6 +11,7 @@ use crate::gpx_audit::commands::{
     audit_params_from_settings, default_audit_params, detection_impl, findings_summary,
     validate_impl,
 };
+use crate::gpx_multiride::commands::default_multiride_params;
 use crate::gpx_audit::corrections::{apply_delete, apply_route, mark_fp, undo_correction};
 use crate::gpx_audit::pipeline::{self, renumber_findings};
 use crate::gpx_audit::types::{
@@ -383,7 +384,14 @@ fn test_validate_rejects_pending() {
     let points = make_trace_points(20);
     let findings = vec![make_finding("ar-1", FindingKind::Ar, 5, 10)];
 
-    let err = validate_impl(&mode_dir, "t-1", &points, &findings, "")
+    let err = validate_impl(
+        &mode_dir,
+        "t-1",
+        &points,
+        &findings,
+        "",
+        default_multiride_params(),
+    )
         .expect_err("un finding pendant doit bloquer la validation");
     assert!(err.contains("1 restante"), "message inattendu : {err}");
 }
@@ -391,7 +399,14 @@ fn test_validate_rejects_pending() {
 #[test]
 fn test_validate_rejects_degenerate_trace() {
     let mode_dir = std::env::temp_dir().join("vg2_audit_validate_degenere_inexistant");
-    let err = validate_impl(&mode_dir, "t-1", &make_trace_points(1), &[], "")
+    let err = validate_impl(
+        &mode_dir,
+        "t-1",
+        &make_trace_points(1),
+        &[],
+        "",
+        default_multiride_params(),
+    )
         .expect_err("une trace d'un point doit être refusée");
     assert!(err.contains("dégénérée"), "message inattendu : {err}");
 }
@@ -405,7 +420,14 @@ fn test_validate_updates_audit_status() {
     let mut findings = vec![make_finding("ar-1", FindingKind::Ar, 5, 10)];
     findings[0].status = FindingStatus::Fp;
 
-    let updated = validate_impl(&mode_dir, trace_id, &points, &findings, "VérificationGPX")
+    let updated = validate_impl(
+        &mode_dir,
+        trace_id,
+        &points,
+        &findings,
+        "VérificationGPX",
+        default_multiride_params(),
+    )
         .expect("la validation doit aboutir");
     assert_eq!(updated.audit_status, "clean");
     assert!(
@@ -419,6 +441,20 @@ fn test_validate_updates_audit_status() {
     assert!(
         registry[0].audit_archived,
         "le drapeau d'archivage doit être persisté dans le registre"
+    );
+
+    // La détection des passages multiples a suivi l'audit, dans la même
+    // commande : la trace est détectée, et son fichier de description existe.
+    // La trace de test est rectiligne, donc aucun passage multiple — le statut
+    // est `none`, et non « non détecté ».
+    assert_eq!(
+        registry[0].multiride_status.as_deref(),
+        Some("none"),
+        "l'audit doit enchaîner la détection des passages multiples"
+    );
+    assert!(
+        crate::gpx_multiride::file::file_path(&mode_dir, trace_id).exists(),
+        "le fichier de description des passages multiples doit être écrit"
     );
 
     // Le GPX a été réécrit avec les points de travail et son bloc d'audit.
@@ -449,7 +485,14 @@ fn test_validate_updates_audit_status() {
 fn test_validate_rejects_unknown_trace() {
     let mode_dir = test_dir("validate_unknown");
     fs::create_dir_all(&mode_dir).expect("création du dossier temporaire");
-    let err = validate_impl(&mode_dir, "absent", &make_trace_points(20), &[], "")
+    let err = validate_impl(
+        &mode_dir,
+        "absent",
+        &make_trace_points(20),
+        &[],
+        "",
+        default_multiride_params(),
+    )
         .expect_err("une trace absente du registre doit être refusée");
     assert!(err.contains("introuvable"), "message inattendu : {err}");
 }

@@ -920,6 +920,27 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     std::fs::rename(&geojson_tmp, &geojson_path)
         .map_err(|e| format!("Renommage du fichier GeoJSON : {}", e))?;
 
+    // 8ter. Détection des passages multiples d'une trace **déjà valide**.
+    //
+    //       Une trace sans anomalie entre directement dans le parcours : la
+    //       détection est jouée dans la foulée, sur le GPX qui vient d'être
+    //       copié. Une trace à auditer attend `audit_validate` — la détection
+    //       doit porter sur le GPX corrigé, pas sur la version fautive.
+    //
+    //       Best-effort : une défaillance laisse le statut vide, donc permissif,
+    //       et n'empêche jamais l'import.
+    let multiride_status = if audit_status == "clean" {
+        crate::gpx_multiride::commands::detect_status(
+            &mode_dir,
+            &id,
+            &stored_filename,
+            &dest_path,
+            crate::gpx_multiride::commands::read_multiride_params(&app),
+        )
+    } else {
+        None
+    };
+
     let metadata = TraceMetadata {
         id,
         name,
@@ -934,10 +955,9 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         is_displayed: false,
         audit_status,
         audit_archived: false,
-        // La détection des passages multiples suit l'audit : elle est jouée par
-        // la vue Multiride (ou par la chaîne d'import pour une trace déjà
-        // valide), jamais à l'import lui-même.
-        multiride_status: None,
+        // Renseigné ci-dessus pour une trace déjà valide ; `None` pour une trace
+        // à auditer, dont la détection suivra la correction du GPX.
+        multiride_status,
     };
 
     // 9. Ajouter au registre et sauvegarder (écriture atomique)

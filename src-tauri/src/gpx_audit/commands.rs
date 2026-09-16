@@ -330,7 +330,8 @@ pub fn audit_undo_correction(
 
 // ─── 6. Validation ────────────────────────────────────────────────────
 
-/// Valide l'audit : réécrit le GPX et pose `audit_status = "clean"`.
+/// Valide l'audit : réécrit le GPX, pose `audit_status = "clean"` et enchaîne la
+/// détection des passages multiples sur le GPX corrigé.
 ///
 /// **Point de non-retour.** Refuse tant qu'un finding est `pending`.
 #[tauri::command]
@@ -342,8 +343,16 @@ pub async fn audit_validate(
 ) -> Result<serde_json::Value, String> {
     let mode_dir = get_mode_dir(&app)?;
     let app_name = read_app_name(&app);
+    let multiride_params = crate::gpx_multiride::commands::read_multiride_params(&app);
 
-    let updated = validate_impl(&mode_dir, &trace_id, &points, &findings, &app_name)?;
+    let updated = validate_impl(
+        &mode_dir,
+        &trace_id,
+        &points,
+        &findings,
+        &app_name,
+        multiride_params,
+    )?;
 
     println!(
         "[audit] validate trace={} points={} findings={} ({} FP)",
@@ -364,12 +373,17 @@ pub async fn audit_validate(
 /// Ordre imposé par le livrable 4 §2.7 : le GPX est réécrit **avant** la mise à
 /// jour de `traces.json` (point de vigilance 6 — un échec de réécriture laisse
 /// `audit_status` intact).
+///
+/// `multiride_params` porte les réglages `Multiride.Detection` : la détection des
+/// passages multiples suit l'audit et doit porter sur le GPX corrigé, donc être
+/// jouée ici — dans la commande qui le réécrit — et non après coup.
 pub fn validate_impl(
     mode_dir: &Path,
     trace_id: &str,
     points: &[AuditPoint],
     findings: &[Finding],
     app_name: &str,
+    multiride_params: crate::gpx_multiride::types::MultirideParams,
 ) -> Result<TraceMetadata, String> {
     // 1. Aucune anomalie ne doit rester à traiter.
     let pending = findings
@@ -427,6 +441,21 @@ pub fn validate_impl(
     pipeline::write_atomic(&get_geojson_path(mode_dir, trace_id), geojson_content.as_bytes())?;
     let hash = compute_file_hash(&gpx_path)?;
 
+    // 8bis. Détection des passages multiples du GPX **corrigé**.
+    //
+    //        Elle suit l'audit dans le parcours d'une trace : la jouer ici, dans
+    //        la commande qui vient de réécrire le GPX, garantit qu'elle porte sur
+    //        le bon fichier et qu'aucun état intermédiaire n'oppose un GPX
+    //        corrigé à un statut périmé. Best-effort : une défaillance laisse le
+    //        statut vide, donc permissif, et ne remet pas en cause l'audit.
+    let multiride_status = crate::gpx_multiride::commands::detect_status(
+        mode_dir,
+        trace_id,
+        &trace.filename,
+        &gpx_path,
+        multiride_params,
+    );
+
     // 9. Registre : statut d'audit, stats et hash.
     let mut registry = load_registry(&traces_path);
     let updated = {
@@ -440,6 +469,8 @@ pub fn validate_impl(
         // L'audit appliqué est archivé dans le dossier de la trace : la carte du
         // circuit peut alors proposer la consultation des anomalies.
         entry.audit_archived = true;
+        // Le parcours se poursuit par la validation des passages multiples.
+        entry.multiride_status = multiride_status;
         entry.clone()
     };
     save_registry(&traces_path, &registry)?;
