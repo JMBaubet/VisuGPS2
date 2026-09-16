@@ -122,6 +122,23 @@
           :title="sourceAnomaliesTitle"
           @click="voirAnomaliesSource"
         />
+        <!-- Passages multiples : visible au survol dès que la détection a été
+             jouée. Vert quand les passages sont validés — consultables et
+             ajustables de nouveau —, bleu quand ils restent à valider. C'est le
+             seul chemin vers la vue une fois la barrière levée : l'icône Éditer
+             mène alors directement à l'édition caméra. -->
+        <v-btn
+          v-if="hasMultiride"
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-repeat"
+          :color="needsMultiride ? 'blue' : 'green'"
+          variant="text"
+          density="comfortable"
+          size="small"
+          :title="multirideTitle"
+          @click="voirMultiride"
+        />
         <!-- Exporter (non câblé) : visible au survol uniquement -->
         <v-btn
           class="action-btn"
@@ -351,6 +368,24 @@ const pencilTitle = computed(() => {
 })
 
 /**
+ * `true` dès que la détection des passages multiples a été jouée : il y a
+ * quelque chose à restituer, en validation comme en consultation.
+ */
+const hasMultiride = computed(
+  () => props.trace.multiride_status === 'pending' || props.trace.multiride_status === 'validated',
+)
+
+/**
+ * Tooltip du bouton des passages multiples : l'action est la même — ouvrir la
+ * vue —, l'état dit seulement ce qui y attend l'utilisateur.
+ */
+const multirideTitle = computed(() =>
+  needsMultiride.value
+    ? 'Valider les passages multiples'
+    : 'Voir les passages multiples (validés)',
+)
+
+/**
  * Tooltip du bouton « Voir les anomalies de la source » : l'audit appliqué
  * laisse une archive consultable, ou il n'y a rien à restituer.
  */
@@ -493,6 +528,18 @@ function voirAnomaliesSource() {
     return
   }
   router.push({ name: 'audit', query: { traceId: props.trace.id } })
+}
+
+/**
+ * Ouvre la vue des passages multiples : validation s'ils restent à valider,
+ * consultation sinon.
+ *
+ * Un ajustement y est **toujours** possible, y compris sur des passages déjà
+ * validés : il réécrit le fichier de description sans faire rebasculer le
+ * statut, un ajustement n'ayant pas d'incidence sur l'édition caméra.
+ */
+function voirMultiride() {
+  router.push({ name: 'multiride', query: { traceId: props.trace.id } })
 }
 
 /** Lance la visualisation 3D du circuit. */
