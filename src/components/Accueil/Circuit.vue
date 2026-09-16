@@ -104,6 +104,22 @@
           title="Supprimer"
           @click="emitDelete"
         />
+        <!-- Voir les anomalies de la source : visible au survol, et seulement
+             une fois l'audit appliqué (trace « clean » — masqué tant qu'une
+             anomalie reste à traiter). Vert quand l'audit est archivé, donc
+             consultable ; gris sinon, le clic se contentant d'informer. -->
+        <v-btn
+          v-if="!needsAudit"
+          class="action-btn"
+          :class="{ 'action-btn--hidden': !isHovering }"
+          icon="mdi-map-marker-path"
+          :color="trace.audit_archived ? 'green' : 'grey'"
+          variant="text"
+          density="comfortable"
+          size="small"
+          :title="sourceAnomaliesTitle"
+          @click="voirAnomaliesSource"
+        />
         <!-- Exporter (non câblé) : visible au survol uniquement -->
         <v-btn
           class="action-btn"
@@ -185,8 +201,16 @@
  *
  * Deux lignes d'icônes d'action (masquées par opacité hors survol) :
  *  - ligne de titre : Éditer, Gérer les groupes, Gérer la météo, Visualiser
- *  - ligne Distance / Dénivelé : Supprimer, Exporter, Info, Affichage, Favoris
+ *  - ligne Distance / Dénivelé : Supprimer, Voir les anomalies de la source,
+ *    Exporter, Info, Affichage, Favoris
  * (les Favoris et l'Affichage restent visibles s'ils sont actifs).
+ *
+ * « Voir les anomalies de la source » n'apparaît que pour une trace dont
+ * l'audit est appliqué (ou sans anomalie) : masqué tant qu'une anomalie reste à
+ * traiter. Vert quand l'audit est **archivé** — la vue Audit rouvre alors les
+ * anomalies et leurs corrections en lecture seule — gris sinon, le clic se
+ * contentant d'informer (trace jamais auditée, ou audit antérieur à
+ * l'archivage).
  *
  * Le bouton Info déploie une section (v-expand-transition) contenant les
  * détails du circuit (date d'import, source, lien) ; elle se réduit dès que le
@@ -202,6 +226,7 @@ import type { TraceMetadata } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
 import { useSettingsStore } from '../../stores/settings'
 import { useKeyframesStore } from '../../stores/keyframes'
+import { useUiStore } from '../../stores/ui'
 import type { ViewportAspect } from '../../algorithms/keyframeGenerator'
 import { formatDistance, formatElevation } from '../../utils/format'
 
@@ -227,6 +252,7 @@ const tracesStore = useTracesStore()
 const editionStore = useEditionStore()
 const settingsStore = useSettingsStore()
 const keyframesStore = useKeyframesStore()
+const ui = useUiStore()
 
 /** État d'ouverture de la section info déroulante. */
 const infoExpanded = ref(false)
@@ -304,6 +330,16 @@ const pencilTitle = computed(() => {
     ? `Éditer — édition complète (${vp})`
     : `Éditer (${vp}) — édition incomplète (${pct} % des segments verrouillés)`
 })
+
+/**
+ * Tooltip du bouton « Voir les anomalies de la source » : l'audit appliqué
+ * laisse une archive consultable, ou il n'y a rien à restituer.
+ */
+const sourceAnomaliesTitle = computed(() =>
+  props.trace.audit_archived
+    ? 'Voir les anomalies de la source'
+    : 'Aucune anomalie archivée pour cette trace'
+)
 
 /**
  * Ouvre/ferme la section info et pilote le focus carte correspondant.
@@ -415,6 +451,22 @@ function editerCircuit() {
   }
   editionStore.selectTrace(props.trace.id)
   router.push({ name: 'editionCamera' })
+}
+
+/**
+ * Ouvre la consultation des anomalies de la source.
+ *
+ * Le bouton n'apparaît que pour une trace dont l'audit est appliqué (ou sans
+ * anomalie). Sans archive — trace jamais auditée, ou audit antérieur à
+ * l'archivage — la vue n'aurait rien à restituer : on se contente d'informer,
+ * sans ouvrir la vue d'audit.
+ */
+function voirAnomaliesSource() {
+  if (!props.trace.audit_archived) {
+    ui.showInfo(`Aucune anomalie archivée pour « ${props.trace.name} ».`)
+    return
+  }
+  router.push({ name: 'audit', query: { traceId: props.trace.id } })
 }
 
 /** Lance la visualisation 3D du circuit. */

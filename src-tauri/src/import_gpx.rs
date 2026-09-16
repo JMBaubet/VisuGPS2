@@ -97,6 +97,14 @@ pub struct TraceMetadata {
     /// jamais auditée doit l'être).
     #[serde(default = "default_audit_status")]
     pub audit_status: String,
+    /// Indique qu'un audit **appliqué** est archivé dans le dossier de la trace
+    /// (`audit.json`) : les anomalies détectées et leurs traitements sont
+    /// consultables depuis la carte du circuit.
+    ///
+    /// Posé par `audit_validate`. Absent dans les registres antérieurs →
+    /// `false` : ces audits n'ont pas laissé d'archive.
+    #[serde(default)]
+    pub audit_archived: bool,
 }
 
 /// Valeur par défaut du statut d'audit pour les registres antérieurs :
@@ -915,6 +923,7 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         favorite: false,
         is_displayed: false,
         audit_status,
+        audit_archived: false,
     };
 
     // 9. Ajouter au registre et sauvegarder (écriture atomique)
@@ -1279,7 +1288,31 @@ mod tests {
             favorite: false,
             is_displayed: false,
             audit_status: "needs_review".to_string(),
+            audit_archived: false,
         }
+    }
+
+    /// Un registre antérieur à l'archivage (sans `audit_archived`) se charge
+    /// sans erreur : le champ retombe à `false`.
+    #[test]
+    fn load_registry_defaults_audit_archived_to_false() {
+        let mode = test_mode_dir("audit_archived_absent");
+        fs::create_dir_all(&mode).unwrap();
+        let traces_path = mode.join("traces.json");
+
+        // JSON d'un registre écrit avant l'apparition du champ.
+        let mut value = serde_json::to_value(vec![make_trace("id-1", "a.gpx")]).unwrap();
+        value[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("audit_archived");
+        let legacy = serde_json::to_string(&value).unwrap();
+        assert!(!legacy.contains("audit_archived"));
+        fs::write(&traces_path, &legacy).unwrap();
+
+        let loaded = load_registry(&traces_path);
+        assert_eq!(loaded.len(), 1);
+        assert!(!loaded[0].audit_archived);
     }
 
     /// La migration déplace chaque fichier de l'ancien agencement plat vers le

@@ -74,6 +74,14 @@ export interface TraceMetadata {
    * redirigée vers `/audit`.
    */
   audit_status: string
+  /**
+   * Un audit **appliqué** est archivé dans le dossier de la trace
+   * (`audit.json`) : les anomalies détectées et leurs traitements sont
+   * consultables depuis la carte du circuit (bouton « Voir les anomalies de la
+   * source »). `false` pour les traces sans audit appliqué — y compris celles
+   * auditées avant l'archivage.
+   */
+  audit_archived: boolean
 }
 
 // --- Store ---

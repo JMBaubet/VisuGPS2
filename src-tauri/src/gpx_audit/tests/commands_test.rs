@@ -140,6 +140,7 @@ fn make_trace_metadata(id: &str, filename: &str) -> TraceMetadata {
         favorite: false,
         is_displayed: false,
         audit_status: "needs_review".to_string(),
+        audit_archived: false,
     }
 }
 
@@ -406,10 +407,18 @@ fn test_validate_updates_audit_status() {
     let updated = validate_impl(&mode_dir, trace_id, &points, &findings, "VérificationGPX")
         .expect("la validation doit aboutir");
     assert_eq!(updated.audit_status, "clean");
+    assert!(
+        updated.audit_archived,
+        "l'audit appliqué doit être signalé comme archivé"
+    );
 
-    // Le registre relu porte le nouveau statut.
+    // Le registre relu porte le nouveau statut et le drapeau d'archivage.
     let registry = load_registry(&get_traces_path(&mode_dir));
     assert_eq!(registry[0].audit_status, "clean");
+    assert!(
+        registry[0].audit_archived,
+        "le drapeau d'archivage doit être persisté dans le registre"
+    );
 
     // Le GPX a été réécrit avec les points de travail et son bloc d'audit.
     let gpx_path = get_trace_gpx_path(&mode_dir, trace_id, &filename);

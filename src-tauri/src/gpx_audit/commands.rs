@@ -437,6 +437,9 @@ pub fn validate_impl(
         entry.stats = stats;
         entry.hash = hash;
         entry.audit_status = "clean".to_string();
+        // L'audit appliqué est archivé dans le dossier de la trace : la carte du
+        // circuit peut alors proposer la consultation des anomalies.
+        entry.audit_archived = true;
         entry.clone()
     };
     save_registry(&traces_path, &registry)?;
