@@ -1,27 +1,27 @@
 //! Détection des passages multiples d'une trace.
 //!
 //! Le pipeline de la spécification (« Multi-Sens » v5) s'ordonne ainsi :
-//! rééchantillonnage à pas quasi constant → appariement des points
-//! superposés et chaînage en runs → assemblage en segments (phases A/B/C
-//! itérées, frontières aller/retour préservées) → qualification du sens de
-//! chaque passage.
+//! rééchantillonnage à pas quasi constant → appariement des points superposés et
+//! chaînage en runs → assemblage en segments (phases A/B/C itérées, frontières
+//! aller/retour préservées) → qualification du sens de chaque passage.
 //!
-//! Les étapes d'entrée (lecture du GPX, métrique de la trace) sont posées ici ;
-//! elles ne dépendent pas de la détection proprement dite, qui produit
-//! aujourd'hui une liste de passages vide.
+//! Les deux premières étapes sont en place : lecture du GPX, géométrie métrique
+//! (projection locale et dédoublonnage) et rééchantillonnage. La détection
+//! proprement dite produit aujourd'hui une liste de passages vide.
 
 use std::path::Path;
 
-use crate::import_gpx::haversine;
-
 use super::file;
+use super::projection;
+use super::resample;
 use super::types::{MultirideArchive, MultirideParams, MultiridePassage, MultiridePoint};
 
 /// Extrait les points bruts d'un GPX : suite ordonnée des `<trkpt>`, tous
 /// segments de trace concaténés dans l'ordre du document.
 ///
-/// Les points sans coordonnées exploitables ne sont pas filtrés ici : la
-/// métrique et le dédoublonnage relèvent de la construction de la géométrie.
+/// C'est **l'espace d'index du contrat** : les numéros de points portés par le
+/// fichier de description se rapportent à cette suite (cf.
+/// `resample::raw_point_number`).
 fn load_points(gpx_path: &Path) -> Result<Vec<MultiridePoint>, String> {
     let file = std::fs::File::open(gpx_path)
         .map_err(|e| format!("Ouverture du fichier GPX : {}", e))?;
@@ -43,28 +43,15 @@ fn load_points(gpx_path: &Path) -> Result<Vec<MultiridePoint>, String> {
     Ok(points)
 }
 
-/// Longueur totale de la trace (km), par somme des distances orthodromiques
-/// entre points consécutifs.
-///
-/// La spécification mesure la trace **brute** (avant rééchantillonnage et
-/// consolidation) : c'est cette longueur qui figure dans le bloc `trace` du
-/// fichier de description.
-fn total_length_km(points: &[MultiridePoint]) -> f64 {
-    let meters: f64 = points
-        .windows(2)
-        .map(|pair| haversine(pair[0].lat, pair[0].lon, pair[1].lat, pair[1].lon))
-        .sum();
-    meters / 1000.0
-}
-
 /// Détecte les passages multiples d'une trace et retourne l'état complet, prêt
 /// à être écrit.
 ///
-/// Sous-étape É1 : le socle. La lecture du GPX, la métrique de la trace, le
-/// contrat de fichier et le verrou d'édition caméra sont en place ; la
-/// détection elle-même (rééchantillonnage, appariement, assemblage,
-/// qualification du sens) arrive avec les sous-étapes suivantes et produit ici
-/// une liste de passages **vide**.
+/// État de la sous-étape en cours : la lecture du GPX, la géométrie métrique
+/// (dédoublonnage à 5 cm) et le rééchantillonnage à pas quasi constant sont en
+/// place, tout comme le contrat de fichier et le verrou d'édition caméra. La
+/// détection elle-même — appariement des points superposés, assemblage en
+/// segments, qualification du sens — arrive avec les sous-étapes suivantes et
+/// produit ici une liste de passages **vide**.
 pub fn detect(
     trace_id: &str,
     source: &str,
@@ -72,9 +59,8 @@ pub fn detect(
     params: MultirideParams,
 ) -> Result<MultirideArchive, String> {
     let points = load_points(gpx_path)?;
-    if points.len() < 2 {
-        return Err("Trace dégénérée : moins de 2 points.".to_string());
-    }
+    let geom = projection::build_geometry(&points)?;
+    let sampling = resample::resample(&geom, params.pas_echantillonnage_m)?;
 
     let passages: Vec<MultiridePassage> = Vec::new();
 
@@ -83,8 +69,11 @@ pub fn detect(
         source,
         params,
         points.len(),
-        total_length_km(&points),
-        false,
+        // Longueur de la trace **analysée** : c'est la même métrique que les
+        // bornes kilométriques des passages (`km_entree` / `km_sortie`), de
+        // sorte que le consommateur du fichier lise les deux sur la même règle.
+        geom.total / 1000.0,
+        sampling.capped,
         passages,
     ))
 }

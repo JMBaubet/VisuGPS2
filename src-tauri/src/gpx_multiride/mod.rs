@@ -18,10 +18,17 @@
 //! Portage du module « Multi-Sens » de la spécification
 //! (`docs/intégration multiride/`) : les algorithmes y sont décrits, cette
 //! implémentation en est la référence.
+//!
+//! Pipeline : `detection` (lecture du GPX) → `projection` (géométrie métrique,
+//! dédoublonnage) → `resample` (pas quasi constant) → puis, dans les sous-étapes
+//! suivantes, appariement des points superposés, assemblage en segments et
+//! qualification du sens.
 
 pub mod commands;
 pub mod detection;
 pub mod file;
+pub mod projection;
+pub mod resample;
 pub mod types;
 
 #[cfg(test)]
