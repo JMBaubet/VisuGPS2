@@ -76,3 +76,64 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    /// Le catalogue des commandes documenté est celui réellement enregistré.
+    ///
+    /// `COMMANDS.md` se déclare sourcé sur ce fichier (« source de vérité :
+    /// `src-tauri/src/lib.rs` ») : ce test l'y confronte, dans l'esprit du
+    /// contrôle de cohérence du drawer (`settings::tests`). Sans lui, une
+    /// commande ajoutée, renommée ou retirée peut passer inaperçue dans la
+    /// documentation — or c'est la documentation que lit un nouvel arrivant, et
+    /// la source de vérité déclarée est le code.
+    #[test]
+    fn the_command_catalogue_matches_the_invoke_handler() {
+        // Commandes réellement enregistrées : dernier segment de chaque entrée
+        // de l'`invoke_handler`.
+        let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("lib.rs doit être lisible");
+        let handler = source
+            .split("tauri::generate_handler![")
+            .nth(1)
+            .expect("invoke_handler déclaré")
+            .split("])")
+            .next()
+            .expect("invoke_handler refermé");
+        let mut registered: Vec<String> = handler
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.rsplit("::").next().unwrap_or(entry).to_string())
+            .collect();
+        registered.sort();
+
+        // Commandes documentées : première colonne des tableaux de la section
+        // « Catalogue », la seule qui prétende à l'exhaustivité.
+        let doc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/COMMANDS.md"
+        ))
+        .expect("docs/COMMANDS.md doit être lisible");
+        let catalogue = doc
+            .split("## Catalogue")
+            .nth(1)
+            .expect("section « Catalogue » déclarée")
+            .split("\n## ")
+            .next()
+            .expect("section « Catalogue » refermée");
+        let mut documented: Vec<String> = catalogue
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `"))
+            .filter_map(|rest| rest.split('`').next())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect();
+        documented.sort();
+
+        assert_eq!(
+            documented, registered,
+            "le catalogue de docs/COMMANDS.md ne correspond plus aux commandes enregistrées"
+        );
+    }
+}
