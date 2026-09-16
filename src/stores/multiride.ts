@@ -139,6 +139,14 @@ export const useMultirideStore = defineStore('multiride', () => {
   const needsValidation = computed(() => status.value === 'pending')
 
   /**
+   * `true` dès qu'un ajustement a été porté à la détection — fusion ou marquage
+   * faux positif. La vue ne propose la réinitialisation que dans ce cas.
+   */
+  const hasAdjustments = computed(() =>
+    passages.value.some((p) => p.fauxPositif || p.fusionne),
+  )
+
+  /**
    * Longueur cumulée des portions répétées (km) : somme des longueurs des
    * passages de **référence** des segments non marqués faux positif — chaque
    * portion répétée est ainsi comptée une fois.
@@ -213,6 +221,53 @@ export const useMultirideStore = defineStore('multiride', () => {
   }
 
   /**
+   * Fusionne un segment avec le précédent et réécrit le fichier de description.
+   *
+   * La règle est celle de la spécification : seuls des emprunts de **même sens**
+   * fusionnent, et l'écart entre eux doit tenir dans un kilomètre — une décision
+   * explicite de l'utilisateur, indépendante du réglage de fusion de la
+   * détection.
+   */
+  async function mergeSegment(segment: number): Promise<void> {
+    if (!currentTraceId.value || !archive.value) return
+    archive.value = await invoke<MultirideArchive>('multiride_merge_segment', {
+      traceId: currentTraceId.value,
+      archive: archive.value,
+      segment,
+    })
+    // La sélection suit la fusion : le segment absorbant porte le rang du
+    // précédent.
+    selectedSegment.value = segment > 1 ? segment - 1 : segment
+  }
+
+  /** Marque ou démarque un segment en faux positif, et réécrit le fichier. */
+  async function toggleFp(segment: number): Promise<void> {
+    if (!currentTraceId.value || !archive.value) return
+    archive.value = await invoke<MultirideArchive>('multiride_toggle_fp', {
+      traceId: currentTraceId.value,
+      archive: archive.value,
+      segment,
+    })
+  }
+
+  /**
+   * Rétablit la détection d'origine.
+   *
+   * La détection est **rejouée** avec les paramètres enregistrés dans l'état —
+   * elle est déterministe, donc le résultat est celui de la détection initiale —
+   * plutôt que conservée en double dans le fichier. Le statut de validation est
+   * conservé : un ajustement n'a pas d'incidence sur l'édition caméra.
+   */
+  async function resetAdjustments(): Promise<void> {
+    if (!currentTraceId.value || !archive.value) return
+    archive.value = await invoke<MultirideArchive>('multiride_reset', {
+      traceId: currentTraceId.value,
+      archive: archive.value,
+    })
+    selectedSegment.value = null
+  }
+
+  /**
    * Valide les passages détectés : marque l'état `valide`, réécrit le fichier
    * de description et lève la barrière de l'édition caméra.
    *
@@ -251,12 +306,16 @@ export const useMultirideStore = defineStore('multiride', () => {
     status,
     hasPassages,
     needsValidation,
+    hasAdjustments,
     repeatedKm,
     // Actions
     segmentPassages,
     selectSegment,
     runDetection,
     restore,
+    mergeSegment,
+    toggleFp,
+    resetAdjustments,
     validate,
     reset,
   }

@@ -7,8 +7,11 @@
         :segment-count="multirideStore.segmentCount"
         :loading="multirideStore.loading || analyzing"
         :validated-at="archive?.updatedAt ?? null"
+        :dirty="dirty"
         @back="onBackClicked"
         @analyze="onAnalyzeClicked"
+        @validate="onValidateClicked"
+        @edit="goToEdition"
         @open-settings="appStore.isSettingsDrawerOpen = !appStore.isSettingsDrawerOpen"
       />
 
@@ -20,7 +23,11 @@
         :repeated-km="multirideStore.repeatedKm"
         :analysis-duration-ms="multirideStore.analysisDurationMs"
         :params="archive?.params ?? null"
+        :has-adjustments="multirideStore.hasAdjustments"
         @select="multirideStore.selectSegment"
+        @merge="onMergeClicked"
+        @toggle-fp="onToggleFpClicked"
+        @reset="onResetClicked"
       />
 
       <!-- Zone centrale : la carte de restitution. Elle n'est montée qu'une fois
@@ -46,6 +53,13 @@
 
       <!-- Panneau Paramètres (groupes Multiride.* de la vue active) -->
       <SettingsDrawer :show-system="false" />
+
+      <ConfirmExitDialog
+        v-model="dialogExitOpen"
+        :segment-count="multirideStore.segmentCount"
+        @confirm="onExitConfirmed"
+        @cancel="dialogExitOpen = false"
+      />
     </v-layout>
   </v-app>
 </template>
@@ -78,24 +92,29 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useMultirideStore, type MultirideParams } from '../stores/multiride'
+import { useEditionStore } from '../stores/edition'
 import { useSettingsStore } from '../stores/settings'
 import { useTracesStore, type TracePoint } from '../stores/traces'
 import { useUiStore } from '../stores/ui'
 import MultirideToolbar from '../components/Multiride/MultirideToolbar.vue'
 import MultirideMap from '../components/Multiride/MultirideMap.vue'
 import MultirideSegmentsPanel from '../components/Multiride/MultirideSegmentsPanel.vue'
+import ConfirmExitDialog from '../components/Multiride/dialogs/ConfirmExitDialog.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const multirideStore = useMultirideStore()
+const editionStore = useEditionStore()
 const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const ui = useUiStore()
 
 /** Une détection est en cours de lancement depuis cette vue. */
 const analyzing = ref(false)
+/** Confirmation de sortie lorsque la barrière est encore levée. */
+const dialogExitOpen = ref(false)
 /** Points de la trace, pour le tracé de fond et le découpage des emprunts. */
 const tracePoints = ref<TracePoint[]>([])
 
@@ -106,6 +125,23 @@ const traceName = computed(
 
 /** L'état de la détection courante (`null` avant la première restitution). */
 const archive = computed(() => multirideStore.archive)
+
+/**
+ * Les paramètres de détection ont changé depuis la détection affichée : une
+ * relance produirait un autre résultat, et perdrait les ajustements en cours.
+ * C'est ce que signale la pastille de la barre — la relance reste manuelle.
+ */
+const dirty = computed(() => {
+  const applied = archive.value?.params
+  if (!applied) return false
+  const current = buildParams()
+  return (
+    current.toleranceM !== applied.toleranceM ||
+    current.longueurMinM !== applied.longueurMinM ||
+    current.pasEchantillonnageM !== applied.pasEchantillonnageM ||
+    current.fusionReferencesM !== applied.fusionReferencesM
+  )
+})
 
 /** Valeur d'un paramètre numérique, avec repli sur la valeur par défaut. */
 function settingNumber(path: string, fallback: number): number {
@@ -137,6 +173,60 @@ async function runDetection(): Promise<void> {
   await loadTracePoints()
 }
 
+/** Fusionne un segment avec le précédent, puis recharge les points si besoin. */
+async function onMergeClicked(segment: number): Promise<void> {
+  try {
+    await multirideStore.mergeSegment(segment)
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : 'Échec de la fusion.'
+    ui.showError(msg)
+  }
+}
+
+/** Marque ou démarque un segment en faux positif. */
+async function onToggleFpClicked(segment: number): Promise<void> {
+  try {
+    await multirideStore.toggleFp(segment)
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : 'Échec du marquage.'
+    ui.showError(msg)
+  }
+}
+
+/** Rétablit la détection d'origine (la détection est rejouée). */
+async function onResetClicked(): Promise<void> {
+  try {
+    await multirideStore.resetAdjustments()
+    ui.showSuccess('Détection rétablie.')
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : 'Échec de la réinitialisation.'
+    ui.showError(msg)
+  }
+}
+
+/**
+ * Valide les passages détectés, puis poursuit vers l'édition caméra : c'est
+ * l'intention de l'utilisateur qui a ouvert cette vue pour éditer.
+ */
+async function onValidateClicked(): Promise<void> {
+  try {
+    await multirideStore.validate()
+    await tracesStore.loadTraces()
+    ui.showSuccess('Passages multiples validés.')
+    await goToEdition()
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : 'Échec de la validation.'
+    ui.showError(msg)
+  }
+}
+
+/** Poursuit vers l'édition caméra — la barrière est levée ou n'a pas lieu d'être. */
+async function goToEdition(): Promise<void> {
+  if (!traceId.value) return
+  editionStore.selectTrace(traceId.value)
+  await router.push({ name: 'editionCamera' })
+}
+
 /** Relance la détection à la demande (paramètres `Multiride.*` courants). */
 async function onAnalyzeClicked(): Promise<void> {
   analyzing.value = true
@@ -152,6 +242,17 @@ async function onAnalyzeClicked(): Promise<void> {
 }
 
 function onBackClicked() {
+  // Quitter sans valider laisse l'édition caméra inaccessible : on le dit.
+  if (multirideStore.needsValidation) {
+    dialogExitOpen.value = true
+    return
+  }
+  router.push({ name: 'accueil' })
+}
+
+function onExitConfirmed() {
+  dialogExitOpen.value = false
+  multirideStore.reset()
   router.push({ name: 'accueil' })
 }
 
@@ -180,7 +281,13 @@ onMounted(async () => {
 
 onBeforeRouteLeave(() => {
   // Le fichier de description porte l'état : quitter la vue ne perd rien, une
-  // reprise restitue la détection et ses ajustements.
+  // reprise restitue la détection et ses ajustements. Seule une sortie avec la
+  // barrière encore levée demande confirmation — sans boucle infinie, une fois
+  // la sortie confirmée le dialogue est refermé.
+  if (multirideStore.needsValidation && !dialogExitOpen.value) {
+    dialogExitOpen.value = true
+    return false
+  }
   multirideStore.reset()
   return true
 })

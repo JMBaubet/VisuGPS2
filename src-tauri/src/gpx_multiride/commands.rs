@@ -27,6 +27,7 @@ use crate::import_gpx::{
 };
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
+use super::adjustments;
 use super::detection;
 use super::file;
 use super::types::{MultirideArchive, MultirideDetectionResult, MultirideParams};
@@ -198,6 +199,142 @@ pub fn detect_impl(
         status,
         duration_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+// ─── Ajustements ──────────────────────────────────────────────────────
+
+/// Fusionne un segment avec le précédent (spécification §F-14) et réécrit le
+/// fichier de description.
+///
+/// Le **registre n'est pas touché** : un ajustement n'a pas d'incidence sur
+/// l'édition caméra, le statut de la trace reste donc celui de la détection ou
+/// de la validation.
+#[tauri::command]
+pub async fn multiride_merge_segment(
+    app: tauri::AppHandle,
+    trace_id: String,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let updated = merge_impl(&mode_dir, &trace_id, archive, segment)?;
+    println!(
+        "[multiride] fusion trace={} segment={} passages={}",
+        trace_id,
+        segment,
+        updated.passages.len()
+    );
+    Ok(updated)
+}
+
+/// Marque ou démarque un segment en faux positif (spécification §F-15) et
+/// réécrit le fichier de description.
+#[tauri::command]
+pub async fn multiride_toggle_fp(
+    app: tauri::AppHandle,
+    trace_id: String,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let updated = toggle_fp_impl(&mode_dir, &trace_id, archive, segment)?;
+    println!(
+        "[multiride] faux positif trace={} segment={} écarté={}",
+        trace_id,
+        segment,
+        updated
+            .passages
+            .iter()
+            .filter(|p| p.segment == segment)
+            .all(|p| p.faux_positif)
+    );
+    Ok(updated)
+}
+
+/// Rétablit la détection d'origine en la rejouant, et réécrit le fichier de
+/// description (spécification §F-16).
+#[tauri::command]
+pub async fn multiride_reset(
+    app: tauri::AppHandle,
+    trace_id: String,
+    archive: MultirideArchive,
+) -> Result<MultirideArchive, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let updated = reset_impl(&mode_dir, &trace_id, archive)?;
+    println!(
+        "[multiride] réinitialisation trace={} passages={}",
+        trace_id,
+        updated.passages.len()
+    );
+    Ok(updated)
+}
+
+/// Implémentation testable de `multiride_merge_segment` (sans `AppHandle`).
+pub fn merge_impl(
+    mode_dir: &Path,
+    trace_id: &str,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let updated = adjustments::merge_segment(&archive, segment)?;
+    save_adjusted(mode_dir, trace_id, &updated)?;
+    Ok(updated)
+}
+
+/// Implémentation testable de `multiride_toggle_fp` (sans `AppHandle`).
+pub fn toggle_fp_impl(
+    mode_dir: &Path,
+    trace_id: &str,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let updated = adjustments::toggle_fp(&archive, segment)?;
+    save_adjusted(mode_dir, trace_id, &updated)?;
+    Ok(updated)
+}
+
+/// Implémentation testable de `multiride_reset` (sans `AppHandle`).
+///
+/// La réinitialisation **rejoue la détection** avec les paramètres enregistrés
+/// dans l'état, plutôt que de conserver une copie de la détection initiale : la
+/// détection est déterministe, donc le résultat est le même, et le fichier ne
+/// porte pas de baseline redondante. Le statut de validation est conservé — un
+/// ajustement n'a pas d'incidence sur l'édition caméra.
+pub fn reset_impl(
+    mode_dir: &Path,
+    trace_id: &str,
+    archive: MultirideArchive,
+) -> Result<MultirideArchive, String> {
+    if archive.trace_id != trace_id {
+        return Err(format!(
+            "L'état à réinitialiser appartient à une autre trace ({} au lieu de {}).",
+            archive.trace_id, trace_id
+        ));
+    }
+
+    let gpx_path = get_trace_gpx_path(mode_dir, trace_id, &archive.source);
+    let detected = detection::detect(trace_id, &archive.source, &gpx_path, archive.params.clone())?;
+    let fresh = MultirideArchive {
+        valide: archive.valide,
+        ..detected
+    };
+    file::save_file(&file::file_path(mode_dir, trace_id), &fresh)?;
+    Ok(fresh)
+}
+
+/// Écrit l'état ajusté, après vérification de son rattachement à la trace.
+fn save_adjusted(
+    mode_dir: &Path,
+    trace_id: &str,
+    archive: &MultirideArchive,
+) -> Result<(), String> {
+    if archive.trace_id != trace_id {
+        return Err(format!(
+            "L'état ajusté appartient à une autre trace ({} au lieu de {}).",
+            archive.trace_id, trace_id
+        ));
+    }
+    file::save_file(&file::file_path(mode_dir, trace_id), archive)
 }
 
 // ─── Relecture ────────────────────────────────────────────────────────

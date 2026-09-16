@@ -47,14 +47,45 @@
         Aucun passage multiple
       </v-chip>
 
+      <!-- Pastille de relance : les paramètres du panneau ont changé depuis la
+           détection affichée, une relance produirait un autre résultat. -->
+      <v-badge :dot="dirty" color="warning" :offset-x="-4" :offset-y="6">
+        <v-btn
+          prepend-icon="mdi-refresh"
+          variant="text"
+          :disabled="loading"
+          :title="
+            dirty
+              ? 'Les paramètres ont changé depuis cette détection : relancer pour l\'actualiser'
+              : 'Relancer la détection avec les paramètres courants'
+          "
+          @click="emit('analyze')"
+        >
+          Relancer
+        </v-btn>
+      </v-badge>
+
+      <!-- Sortie : valider lève la barrière de l'édition caméra ; une trace sans
+           passage multiple (ou déjà validée) y mène directement. -->
       <v-btn
-        prepend-icon="mdi-refresh"
-        variant="text"
+        v-if="status === 'pending'"
+        color="success"
+        prepend-icon="mdi-check"
         :disabled="loading"
-        title="Relancer la détection avec les paramètres courants"
-        @click="emit('analyze')"
+        title="Valider les passages multiples et poursuivre vers l'édition caméra"
+        @click="emit('validate')"
       >
-        Relancer
+        Valider et éditer
+      </v-btn>
+      <v-btn
+        v-else-if="status === 'validated' || status === 'none'"
+        color="primary"
+        prepend-icon="mdi-pencil"
+        :disabled="loading"
+        title="Éditer la caméra de la trace"
+        @click="emit('edit')"
+      >
+        Éditer
       </v-btn>
 
       <v-btn
@@ -79,7 +110,10 @@
  *
  * L'état affiché est celui du **registre** des traces, restitué par le store :
  * `pending` ferme l'édition caméra tant que les portions répétées n'ont pas été
- * validées.
+ * validées — le bouton de sortie valide alors avant de poursuivre. La **pastille**
+ * du bouton de relance signale que les paramètres ont changé depuis la détection
+ * affichée (spécification §F-05) : la relance n'est jamais automatique, les
+ * ajustements en cours seraient perdus sans que l'utilisateur l'ait demandé.
  */
 import { computed } from 'vue'
 import { useAppStore } from '../../stores/app'
@@ -95,11 +129,15 @@ const props = defineProps<{
   loading: boolean
   /** Horodatage ISO de la validation, si connue. */
   validatedAt?: string | null
+  /** Les paramètres de détection ont changé depuis la détection affichée. */
+  dirty: boolean
 }>()
 
 const emit = defineEmits<{
   back: []
   analyze: []
+  validate: []
+  edit: []
   'open-settings': []
 }>()
 

@@ -23,6 +23,7 @@
 //! dédoublonnage) → `resample` (pas quasi constant) → `runs` (correspondances et
 //! chaînage) → `segments` (assemblage) → `direction` (sens de chaque passage).
 
+pub mod adjustments;
 pub mod commands;
 pub mod detection;
 pub mod direction;

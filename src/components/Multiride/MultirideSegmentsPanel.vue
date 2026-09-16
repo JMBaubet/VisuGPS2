@@ -32,10 +32,15 @@ const props = defineProps<{
   analysisDurationMs: number
   /** Paramètres ayant produit la détection. */
   params: MultirideParams | null
+  /** `true` dès qu'un ajustement a été porté à la détection. */
+  hasAdjustments: boolean
 }>()
 
 const emit = defineEmits<{
   select: [segment: number]
+  merge: [segment: number]
+  'toggle-fp': [segment: number]
+  reset: []
 }>()
 
 /** Panneaux de synthèse dépliés au premier affichage. */
@@ -141,6 +146,20 @@ function railTitle(passage: MultiridePassage): string {
           </v-expansion-panel>
         </v-expansion-panels>
 
+        <!-- Réinitialisation : visible dès qu'un ajustement existe (F-16). -->
+        <v-btn
+          v-if="hasAdjustments"
+          class="ma-2"
+          block
+          size="small"
+          variant="tonal"
+          color="warning"
+          prepend-icon="mdi-restore"
+          @click="emit('reset')"
+        >
+          Réinitialiser les modifications
+        </v-btn>
+
         <v-divider class="my-1" />
 
         <v-list v-if="segmentNumbers.length > 0" nav class="py-0">
@@ -220,6 +239,35 @@ function railTitle(passage: MultiridePassage): string {
                 </span>
               </div>
             </div>
+
+            <!-- Ajustements du segment : fusion avec le précédent (sauf le
+                 premier, qui n'en a pas) et marquage faux positif. Le clic ne
+                 doit pas remonter comme une sélection de segment. -->
+            <div class="mrl-actions">
+              <v-btn
+                v-if="segment > 1"
+                size="x-small"
+                variant="text"
+                prepend-icon="mdi-arrow-collapse-up"
+                :title="`Fusionner le segment ${segment} avec le précédent`"
+                @click.stop="emit('merge', segment)"
+              >
+                Fusionner S{{ segment }}
+              </v-btn>
+              <v-btn
+                size="x-small"
+                variant="text"
+                :prepend-icon="isFalsePositive(segment) ? 'mdi-close-circle-outline' : 'mdi-cancel'"
+                :title="
+                  isFalsePositive(segment)
+                    ? 'Réintégrer ce segment dans le résultat'
+                    : 'Détecté à tort : exclure ce segment du résultat'
+                "
+                @click.stop="emit('toggle-fp', segment)"
+              >
+                {{ isFalsePositive(segment) ? 'Retirer FP' : 'Faux positif' }}
+              </v-btn>
+            </div>
           </v-list-item>
         </v-list>
 
@@ -286,6 +334,13 @@ function railTitle(passage: MultiridePassage): string {
 
 .mrl-passages {
   margin-top: 6px;
+}
+
+.mrl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
 }
 
 .mrl-passage {

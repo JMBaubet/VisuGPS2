@@ -1,5 +1,6 @@
 //! Tests du module Multiride (passages multiples).
 
+mod adjustments_test;
 mod commands_test;
 mod detection_test;
 mod direction_test;

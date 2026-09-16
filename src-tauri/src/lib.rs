@@ -68,7 +68,10 @@ pub fn run() {
             gpx_audit::commands::audit_load_archive,
             gpx_multiride::commands::multiride_detect,
             gpx_multiride::commands::multiride_load,
-            gpx_multiride::commands::multiride_validate
+            gpx_multiride::commands::multiride_validate,
+            gpx_multiride::commands::multiride_merge_segment,
+            gpx_multiride::commands::multiride_toggle_fp,
+            gpx_multiride::commands::multiride_reset
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
