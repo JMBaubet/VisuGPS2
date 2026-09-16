@@ -15,9 +15,11 @@
 //!   caméra reste inaccessible (`multiride_status = "pending"`), au même titre
 //!   qu'une trace non auditée.
 //!
-//! Portage du module « Multi-Sens » de la spécification
-//! (`docs/intégration multiride/`) : les algorithmes y sont décrits, cette
-//! implémentation en est la référence.
+//! Portage du module « Multi-Sens » de la spécification, **dont l'archive de
+//! conception a été retirée** (comme celle du module Audit) : cette
+//! implémentation fait foi, et la `documentation` des paramètres
+//! `Multiride.Detection.*` de `settings.default.toml` décrit l'effet de chaque
+//! seuil ainsi que les faux positifs et faux négatifs qu'il expose.
 //!
 //! Pipeline : `detection` (lecture du GPX) → `projection` (géométrie métrique,
 //! dédoublonnage) → `resample` (pas quasi constant) → `runs` (correspondances et
