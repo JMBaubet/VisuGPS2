@@ -37,7 +37,6 @@ const MIN_SEP_STEPS: f64 = 4.0;
 /// Les bornes sont des **indices du rééchantillonnage**. Le côté B est normalisé
 /// (`b0 ≤ b1`) quel que soit le sens du parcours : les étapes en aval ne
 /// raisonnent qu'en intervalles.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Run {
     /// Intervalle « première occurrence » (côté A).

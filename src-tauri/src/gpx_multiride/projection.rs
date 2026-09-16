@@ -72,11 +72,6 @@ pub struct MultirideGeom {
     /// Provenance de chaque point conservé : index (0-based) dans les points
     /// **bruts** fournis. Un point écarté au dédoublonnage ne figure donc pas
     /// ici, et le point conservé porte l'index de la **première** occurrence.
-    ///
-    /// Lue par `resample::raw_point_number`, que l'assemblage des segments
-    /// appellera pour convertir ses bornes en numéros de points GPX — d'où le
-    /// marqueur temporaire, à retirer quand le pipeline la lira.
-    #[allow(dead_code)]
     pub raw_index: Vec<usize>,
 }
 

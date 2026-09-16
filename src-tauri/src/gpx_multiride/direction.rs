@@ -13,14 +13,6 @@
 //! - **continu** : un virage commun aux deux passages pénalise sans changer le
 //!   signe, là où un vote majoritaire sur le signe de `Δcap` serait fragile ;
 //! - **auto-pondérant** : les appariements les mieux alignés pèsent le plus.
-//!
-//! Marqueur temporaire `allow(dead_code)` : la qualification du sens est appelée
-//! par l'assemblage des segments, porté par la sous-étape suivante — tout le
-//! module est donc encore sans appelant. Le marqueur est posé au niveau du
-//! **module** parce que c'est le module entier qui est en attente, et non
-//! quelques éléments au milieu d'un fichier déjà consommé.
-
-#![allow(dead_code)]
 
 use super::resample::Resample;
 

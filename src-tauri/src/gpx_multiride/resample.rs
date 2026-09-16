@@ -25,12 +25,6 @@ pub const MAX_SAMPLES: usize = 120_000;
 const CUM_EPS_M: f64 = 1e-6;
 
 /// Trace rééchantillonnée — entrée de la détection des correspondances.
-///
-/// Les coordonnées géographiques et la provenance ne sont pas encore lues par le
-/// pipeline : c'est l'assemblage des segments qui s'en servira pour porter les
-/// bornes des passages et leurs numéros de points GPX. D'où le marqueur
-/// temporaire, à retirer quand le pipeline les lira.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Resample {
     /// Nombre d'intervalles : la trace compte `n + 1` points échantillonnés.
@@ -150,10 +144,6 @@ pub fn resample_capped(
 /// fichier de description désignent les `<trkpt>` du GPX d'origine, et non les
 /// points de la trace nettoyée — sans quoi la jointure décrite en annexe 13.6 ne
 /// tomberait plus juste dès qu'un point a été écarté au dédoublonnage.
-///
-/// L'assemblage des segments (sous-étape suivante) est son premier appelant ;
-/// d'où le marqueur temporaire, à retirer à ce moment-là.
-#[allow(dead_code)]
 pub fn raw_point_number(geom: &MultirideGeom, resample: &Resample, index: usize) -> usize {
     geom.raw_index[resample.orig[index]] + 1
 }

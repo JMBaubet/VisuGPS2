@@ -1,11 +1,13 @@
 //! Tests du module Multiride (passages multiples).
 
 mod commands_test;
+mod detection_test;
 mod direction_test;
 mod file_test;
 mod projection_test;
 mod resample_test;
 mod runs_test;
+mod segments_test;
 
 use crate::gpx_multiride::projection::{build_geometry, MultirideGeom};
 use crate::gpx_multiride::resample::{resample, Resample};
