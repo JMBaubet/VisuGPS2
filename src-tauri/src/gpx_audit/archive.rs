@@ -49,6 +49,8 @@ pub struct AuditArchive {
     /// Paramètres du détecteur ayant produit les findings (rejoués à
     /// l'identique par les aperçus et les éléments de rendu de la carte).
     pub params: AuditParams,
+    /// Longueur totale de la trace de travail (m) — restitue la synthèse.
+    pub total_distance_m: f64,
     /// Trace de travail (points consolidés et corrigés).
     pub points: Vec<AuditPoint>,
     /// Findings, avec leur statut, leur correction et leur enregistrement
@@ -68,6 +70,7 @@ pub fn build_archive(
     trace_id: &str,
     validated: bool,
     params: AuditParams,
+    total_distance_m: f64,
     points: Vec<AuditPoint>,
     findings: Vec<Finding>,
 ) -> AuditArchive {
@@ -77,6 +80,7 @@ pub fn build_archive(
         updated_at: iso_now(),
         validated,
         params,
+        total_distance_m,
         points,
         findings,
     }

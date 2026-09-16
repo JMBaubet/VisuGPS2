@@ -478,30 +478,51 @@ pub fn findings_summary(findings: &[Finding]) -> FindingsSummary {
 /// `clean`.
 ///
 /// Les **aperçus** (réglage continu des curseurs) ne passent jamais par ici :
-/// seuls les traitements effectifs sont archivés.
+/// seuls les traitements effectifs sont archivés. Retourne l'horodatage de
+/// l'écriture, que le store publie comme date d'archivage.
 #[tauri::command]
 pub async fn audit_save_state(
     app: tauri::AppHandle,
     trace_id: String,
     params: AuditParams,
+    total_distance_m: f64,
     points: Vec<AuditPoint>,
     findings: Vec<Finding>,
     validated: bool,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let mode_dir = get_mode_dir(&app)?;
-    save_state_impl(&mode_dir, &trace_id, params, points, findings, validated)
+    save_state_impl(
+        &mode_dir,
+        &trace_id,
+        params,
+        total_distance_m,
+        points,
+        findings,
+        validated,
+    )
 }
 
 /// Implémentation testable de `audit_save_state` (sans `AppHandle`).
+///
+/// Retourne l'horodatage de l'archive écrite.
 pub fn save_state_impl(
     mode_dir: &Path,
     trace_id: &str,
     params: AuditParams,
+    total_distance_m: f64,
     points: Vec<AuditPoint>,
     findings: Vec<Finding>,
     validated: bool,
-) -> Result<(), String> {
-    let archive = archive::build_archive(trace_id, validated, params, points, findings);
+) -> Result<String, String> {
+    let archive = archive::build_archive(
+        trace_id,
+        validated,
+        params,
+        total_distance_m,
+        points,
+        findings,
+    );
+    let updated_at = archive.updated_at.clone();
     archive::save_archive(&archive::archive_path(mode_dir, trace_id), &archive)?;
     println!(
         "[audit] archive trace={} points={} findings={} validée={}",
@@ -510,7 +531,7 @@ pub fn save_state_impl(
         archive.findings.len(),
         validated
     );
-    Ok(())
+    Ok(updated_at)
 }
 
 /// Lit l'archive d'audit d'une trace (`null` si absente ou inexploitable).

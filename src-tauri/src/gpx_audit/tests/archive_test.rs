@@ -20,6 +20,9 @@ use crate::gpx_audit::types::{
 
 // ─── Aides de test ────────────────────────────────────────────────────
 
+/// Longueur totale de trace utilisée par les tests (m).
+const DISTANCE_M: f64 = 12_345.6;
+
 /// Dossier temporaire isolé (nettoyé au préalable), propre à chaque test.
 fn test_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -115,7 +118,7 @@ fn test_save_then_load_round_trip() {
         make_finding("ar-3", FindingStatus::Pending, None, None),
     ];
 
-    save_state_impl(&mode_dir, trace_id, params.clone(), points, findings, false)
+    save_state_impl(&mode_dir, trace_id, params.clone(), DISTANCE_M, points, findings, false)
         .expect("écriture de l'archive");
 
     let loaded = load_archive_impl(&mode_dir, trace_id).expect("archive relue");
@@ -135,6 +138,7 @@ fn test_save_then_load_round_trip() {
     // rendu de la carte sont reconstruits à l'identique en consultation.
     assert_eq!(loaded.params.consol_m, params.consol_m);
     assert_eq!(loaded.params.angle_deg, params.angle_deg);
+    assert_eq!(loaded.total_distance_m, DISTANCE_M);
 }
 
 #[test]
@@ -162,6 +166,7 @@ fn test_archive_keeps_deleted_points_of_a_correction() {
         &mode_dir,
         trace_id,
         default_audit_params(),
+        DISTANCE_M,
         make_points(2),
         findings,
         true,
@@ -193,6 +198,7 @@ fn test_save_overwrites_previous_archive() {
         &mode_dir,
         trace_id,
         default_audit_params(),
+        DISTANCE_M,
         make_points(4),
         vec![],
         false,
@@ -202,6 +208,7 @@ fn test_save_overwrites_previous_archive() {
         &mode_dir,
         trace_id,
         default_audit_params(),
+        DISTANCE_M,
         make_points(2),
         vec![],
         true,
@@ -221,6 +228,7 @@ fn test_save_creates_trace_folder_without_temporary_file() {
         trace_id,
         false,
         default_audit_params(),
+        DISTANCE_M,
         make_points(2),
         Vec::new(),
     );
@@ -246,6 +254,7 @@ fn test_archive_json_uses_camel_case() {
         &mode_dir,
         trace_id,
         default_audit_params(),
+        DISTANCE_M,
         make_points(3),
         findings,
         false,
@@ -304,6 +313,7 @@ fn test_load_returns_none_on_unknown_version() {
         trace_id,
         false,
         default_audit_params(),
+        DISTANCE_M,
         make_points(2),
         Vec::new(),
     );
@@ -324,6 +334,7 @@ fn test_load_returns_none_for_another_trace() {
         "t-origine",
         false,
         default_audit_params(),
+        DISTANCE_M,
         make_points(2),
         Vec::new(),
     );

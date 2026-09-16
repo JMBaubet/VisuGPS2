@@ -8,10 +8,18 @@
 // le travail lourd aux commandes Tauri (src-tauri/src/gpx_audit/commands.rs) et
 // se contente de conserver l'état, d'exposer des getters dérivés et
 // d'orchestrer les appels.
+//
+// État **archivé** (avenant à la décision 6) : le travail est écrit sur disque
+// au fil des actions, via `audit_save_state` (`traces/{trace_id}/audit.json`).
+// L'archive sert la **reprise** d'une session interrompue (`needs_review`) et la
+// **consultation** d'un audit validé (`clean`) — en lecture seule, sans
+// annulation possible : les enregistrements d'annulation n'ont de sens que dans
+// la session qui les a produits.
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useUiStore } from './ui'
 
 // ─── Types primaires ──────────────────────────────────────────────────
 
@@ -139,6 +147,23 @@ export interface AuditState {
   findings: Finding[]
 }
 
+// ─── Archive disque de l'audit (`traces/{trace_id}/audit.json`) ───────
+
+/**
+ * Miroir de `gpx_audit::archive::AuditArchive` : l'état complet d'un audit
+ * (trace de travail, findings, traitements) tel qu'il est écrit sur disque.
+ */
+export interface AuditArchive {
+  version: number
+  traceId: string
+  updatedAt: string
+  validated: boolean
+  params: AuditParams
+  totalDistanceM: number
+  points: AuditPoint[]
+  findings: Finding[]
+}
+
 // ─── Éléments de rendu de la carte (commande `audit_map_overlay`) ─────
 
 export interface RpAnchors {
@@ -245,6 +270,13 @@ export const useAuditStore = defineStore('audit', () => {
    * La carte y pose ses marqueurs jaune/orange (IHM §6).
    */
   const routeRange = ref<[number, number] | null>(null)
+  /**
+   * `true` quand la vue affiche un audit **validé** (trace `clean`) : les
+   * anomalies et leurs traitements sont visibles, mais plus modifiables.
+   */
+  const isConsultation = ref(false)
+  /** Horodatage ISO de la dernière écriture de l'archive, ou `null`. */
+  const archivedAt = ref<string | null>(null)
 
   // ─── Getters ───────────────────────────────────────────────────
   const pendingCount = computed(
@@ -263,7 +295,14 @@ export const useAuditStore = defineStore('audit', () => {
   const selectedFinding = computed(
     () => findings.value.find((f) => f.id === selectedFindingId.value) ?? null,
   )
-  const canApply = computed(() => hasWorkInProgress.value && allProcessed.value)
+  /**
+   * `true` quand l'audit courant peut être appliqué (écriture du GPX) : au moins
+   * un traitement effectué, plus aucune anomalie à traiter, et **session
+   * modifiable** — un audit consulté ne se réapplique pas.
+   */
+  const canApply = computed(
+    () => !isConsultation.value && hasWorkInProgress.value && allProcessed.value,
+  )
   const totalFindings = computed(() => findings.value.length)
   /** Éléments de rendu de l'anomalie sélectionnée, ou `null`. */
   const selectedOverlay = computed(
@@ -277,8 +316,23 @@ export const useAuditStore = defineStore('audit', () => {
   // ─── Actions ───────────────────────────────────────────────────
 
   /**
+   * Refuse toute modification d'un audit **consulté**.
+   *
+   * En consultation (trace déjà `clean`), on visualise les anomalies et les
+   * corrections apportées : ni traitement, ni annulation, ni nouvelle
+   * validation. Défense en profondeur — l'interface masque déjà ces actions.
+   */
+  function assertEditable(): void {
+    if (isConsultation.value) {
+      throw new Error(
+        "Consultation d'un audit validé : les corrections ne peuvent plus être modifiées.",
+      )
+    }
+  }
+
+  /**
    * Lance la détection (AR + RP) sur la trace donnée.
-   * Remplace intégralement l'état courant.
+   * Remplace intégralement l'état courant, puis **archive** le résultat.
    */
   async function runAudit(traceId: string, p: AuditParams): Promise<void> {
     const result = await invoke<AuditDetectionResult>('audit_run_detection', {
@@ -292,12 +346,14 @@ export const useAuditStore = defineStore('audit', () => {
     analysisDurationMs.value = result.durationMs
     totalDistanceM.value = result.totalDistanceM
     selectedFindingId.value = null
+    isConsultation.value = false
     // nextPointId initialisé au max + 1 pour les futures insertions.
     nextPointId.value =
       working.value.length > 0
         ? Math.max(...working.value.map((pt) => pt.id)) + 1
         : 0
     await loadMapOverlays()
+    await persistOrWarn()
   }
 
   /**
@@ -309,6 +365,7 @@ export const useAuditStore = defineStore('audit', () => {
     ds: number,
     de: number,
   ): Promise<void> {
+    assertEditable()
     if (!currentTraceId.value) {
       throw new Error("Aucune trace en cours d'audit.")
     }
@@ -326,6 +383,7 @@ export const useAuditStore = defineStore('audit', () => {
     deletePreview.value = null
     syncNextPointId()
     await loadMapOverlays()
+    await persistOrWarn()
   }
 
   /**
@@ -340,6 +398,7 @@ export const useAuditStore = defineStore('audit', () => {
     coords: LatLon[],
     profile: 'driving-car' | 'cycling-road',
   ): Promise<void> {
+    assertEditable()
     if (!currentTraceId.value) {
       throw new Error("Aucune trace en cours d'audit.")
     }
@@ -358,24 +417,29 @@ export const useAuditStore = defineStore('audit', () => {
     findings.value = state.findings
     syncNextPointId()
     await loadMapOverlays()
+    await persistOrWarn()
   }
 
   /** Marque un finding comme faux positif (trace inchangée). */
   async function markFp(findingId: string): Promise<void> {
+    assertEditable()
     findings.value = await invoke<Finding[]>('audit_mark_fp', {
       findings: findings.value,
       findingId,
     })
     await loadMapOverlays()
+    await persistOrWarn()
   }
 
   /** Retire le marqueur faux positif (retour à `pending`). */
   async function unmarkFp(findingId: string): Promise<void> {
+    assertEditable()
     findings.value = await invoke<Finding[]>('audit_unmark_fp', {
       findings: findings.value,
       findingId,
     })
     await loadMapOverlays()
+    await persistOrWarn()
   }
 
   /**
@@ -384,6 +448,7 @@ export const useAuditStore = defineStore('audit', () => {
    * les ancres ont disparu.
    */
   async function undoCorrection(findingId: string): Promise<void> {
+    assertEditable()
     if (!currentTraceId.value) {
       throw new Error("Aucune trace en cours d'audit.")
     }
@@ -397,6 +462,7 @@ export const useAuditStore = defineStore('audit', () => {
     findings.value = state.findings
     syncNextPointId()
     await loadMapOverlays()
+    await persistOrWarn()
   }
 
   /**
@@ -444,16 +510,90 @@ export const useAuditStore = defineStore('audit', () => {
   /**
    * Valide l'audit : réécrit le GPX, pose `audit_status = "clean"`.
    * Point de non-retour. La vue doit fermer après succès.
+   *
+   * L'archive est réécrite juste après, marquée `validated` : elle devient la
+   * pièce de consultation (et non plus une session de travail).
    */
   async function validateAndRewrite(): Promise<unknown> {
+    assertEditable()
     if (!currentTraceId.value) {
       throw new Error("Aucune trace en cours d'audit.")
     }
-    return invoke('audit_validate', {
+    const result = await invoke('audit_validate', {
       traceId: currentTraceId.value,
       points: working.value,
       findings: findings.value,
     })
+    await persistOrWarn(true)
+    return result
+  }
+
+  /**
+   * Charge l'état de travail depuis l'archive de la trace.
+   *
+   * @param consultation `true` pour un audit **validé** (trace `clean`) :
+   * l'état est restitué en lecture seule. `false` pour reprendre une session
+   * interrompue (`needs_review`), qui reste entièrement modifiable.
+   * @returns `false` si aucune archive exploitable n'existe — l'appelant
+   * décide alors de relancer la détection (ou de n'afficher que la trace).
+   */
+  async function restore(traceId: string, consultation: boolean): Promise<boolean> {
+    const archive = await invoke<AuditArchive | null>('audit_load_archive', {
+      traceId,
+    })
+    if (!archive) return false
+
+    currentTraceId.value = traceId
+    working.value = archive.points
+    findings.value = archive.findings
+    params.value = archive.params
+    totalDistanceM.value = archive.totalDistanceM
+    // La durée d'analyse n'est pas archivée : elle ne vaut que pour la
+    // détection qui vient d'être jouée.
+    analysisDurationMs.value = 0
+    selectedFindingId.value = null
+    deletePreview.value = null
+    routePreview.value = null
+    routeRange.value = null
+    isConsultation.value = consultation
+    archivedAt.value = archive.updatedAt
+    syncNextPointId()
+    await loadMapOverlays()
+    return true
+  }
+
+  /**
+   * Écrit l'archive de l'état de travail courant (trace, findings, traitements).
+   *
+   * Sans état courant (aucune trace, aucun paramètre), l'écriture est sans
+   * objet : c'est un no-op silencieux.
+   */
+  async function persist(validated = false): Promise<void> {
+    if (!currentTraceId.value || !params.value) return
+    archivedAt.value = await invoke<string>('audit_save_state', {
+      traceId: currentTraceId.value,
+      params: params.value,
+      totalDistanceM: totalDistanceM.value,
+      points: working.value,
+      findings: findings.value,
+      validated,
+    })
+  }
+
+  /**
+   * Archive sans jamais faire échouer le traitement : l'état en mémoire reste la
+   * référence, mais un échec d'écriture est **signalé** — sans archive, le
+   * travail n'est pas restituable après la fermeture.
+   */
+  async function persistOrWarn(validated = false): Promise<void> {
+    try {
+      await persist(validated)
+    } catch (error) {
+      const msg = typeof error === 'string' ? error : 'écriture impossible'
+      useUiStore().showWarning(
+        `Archive de l'audit non écrite (${msg}) — le travail ne sera pas restituable.`,
+      )
+    }
   }
 
   /**
@@ -473,6 +613,8 @@ export const useAuditStore = defineStore('audit', () => {
     deletePreview.value = null
     routePreview.value = null
     routeRange.value = null
+    isConsultation.value = false
+    archivedAt.value = null
   }
 
   /** Sélectionne ou désélectionne un finding. */
@@ -525,6 +667,8 @@ export const useAuditStore = defineStore('audit', () => {
     deletePreview,
     routePreview,
     routeRange,
+    isConsultation,
+    archivedAt,
     // Getters
     pendingCount,
     correctedCount,
@@ -537,6 +681,7 @@ export const useAuditStore = defineStore('audit', () => {
     totalFindings,
     // Actions
     runAudit,
+    restore,
     applyDelete,
     applyRoute,
     markFp,
