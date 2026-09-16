@@ -1,6 +1,7 @@
 //! Tests du module Audit GPX.
 
 mod ar_test;
+mod archive_test;
 mod commands_test;
 mod corrections_test;
 mod overlay_test;

@@ -62,7 +62,9 @@ pub fn run() {
             gpx_audit::commands::audit_mark_fp,
             gpx_audit::commands::audit_unmark_fp,
             gpx_audit::commands::audit_undo_correction,
-            gpx_audit::commands::audit_validate
+            gpx_audit::commands::audit_validate,
+            gpx_audit::commands::audit_save_state,
+            gpx_audit::commands::audit_load_archive
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,6 +7,9 @@
 
 pub mod anchor;
 pub mod ar;
+// Archive d'audit persistée (`traces/{trace_id}/audit.json`) : reprise d'une
+// session interrompue et consultation d'un audit validé.
+pub mod archive;
 pub mod commands;
 pub mod consolidation;
 pub mod corrections;

@@ -21,6 +21,7 @@ use crate::import_gpx::{
 };
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
+use super::archive::{self, AuditArchive};
 use super::export::{rewrite_gpx, FindingsSummary};
 use super::overlay::{map_overlays, FindingOverlay};
 use super::pipeline;
@@ -464,4 +465,69 @@ pub fn findings_summary(findings: &[Finding]) -> FindingsSummary {
             .filter(|f| f.status == FindingStatus::Fp)
             .count(),
     }
+}
+
+// ─── 11. Archive d'audit ──────────────────────────────────────────────
+
+/// Écrit l'archive d'audit d'une trace (état de travail courant).
+///
+/// Appelée par le store **après la détection, puis après chaque traitement**
+/// (suppression, routage, faux positif, annulation) : le travail survit ainsi à
+/// la sortie de la vue et au redémarrage de l'application, et peut être
+/// restitué — reprise d'une session `needs_review`, consultation d'un audit
+/// `clean`.
+///
+/// Les **aperçus** (réglage continu des curseurs) ne passent jamais par ici :
+/// seuls les traitements effectifs sont archivés.
+#[tauri::command]
+pub async fn audit_save_state(
+    app: tauri::AppHandle,
+    trace_id: String,
+    params: AuditParams,
+    points: Vec<AuditPoint>,
+    findings: Vec<Finding>,
+    validated: bool,
+) -> Result<(), String> {
+    let mode_dir = get_mode_dir(&app)?;
+    save_state_impl(&mode_dir, &trace_id, params, points, findings, validated)
+}
+
+/// Implémentation testable de `audit_save_state` (sans `AppHandle`).
+pub fn save_state_impl(
+    mode_dir: &Path,
+    trace_id: &str,
+    params: AuditParams,
+    points: Vec<AuditPoint>,
+    findings: Vec<Finding>,
+    validated: bool,
+) -> Result<(), String> {
+    let archive = archive::build_archive(trace_id, validated, params, points, findings);
+    archive::save_archive(&archive::archive_path(mode_dir, trace_id), &archive)?;
+    println!(
+        "[audit] archive trace={} points={} findings={} validée={}",
+        trace_id,
+        archive.points.len(),
+        archive.findings.len(),
+        validated
+    );
+    Ok(())
+}
+
+/// Lit l'archive d'audit d'une trace (`null` si absente ou inexploitable).
+///
+/// Une archive illisible ne remonte jamais d'erreur : le module retombe sur la
+/// détection, qui reste la source de vérité.
+#[tauri::command]
+pub async fn audit_load_archive(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<Option<AuditArchive>, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    println!("[audit] lecture archive trace={}", trace_id);
+    Ok(load_archive_impl(&mode_dir, &trace_id))
+}
+
+/// Implémentation testable de `audit_load_archive` (sans `AppHandle`).
+pub fn load_archive_impl(mode_dir: &Path, trace_id: &str) -> Option<AuditArchive> {
+    archive::load_archive(&archive::archive_path(mode_dir, trace_id), trace_id)
 }

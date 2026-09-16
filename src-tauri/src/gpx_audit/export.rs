@@ -243,7 +243,8 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Horodatage ISO 8601 UTC, à la seconde (le JS retire les millisecondes).
-fn iso_now() -> String {
+/// Partagé avec `archive.rs` : une seule source pour le format des horodatages.
+pub(crate) fn iso_now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
