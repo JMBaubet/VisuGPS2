@@ -251,7 +251,7 @@ Une trace n'est **valide** que si elle est auditée. Les fichiers GPX édités (
 
 La détection est **protégée contre tout panic** : un panic dans la commande d'import laisserait le frontend bloqué sans réponse après la sélection du fichier. En cas de défaillance, repli sur `"needs_review"` (une trace non auditée doit l'être).
 
-Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/audit?traceId=…`, et `EditionCamera.vue` redirige également vers `/audit` (garde-fou). Le module Audit (détection AR/RP, corrections par suppression / routage OpenRouteService / faux positif, findings **volatils**, réécriture du GPX au bouton « Appliquer » avec backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Audit GPX ».
+Une trace non « clean » ne peut **pas** entrer en édition caméra : le bouton Éditer de l'accueil redirige vers la vue `/audit?traceId=…`, et `EditionCamera.vue` redirige également vers `/audit` (garde-fou). Le module Audit (détection AR/RP, corrections par suppression / routage OpenRouteService / faux positif, **archive d'audit** `audit.json` écrite au fil des traitements, réécriture du GPX au bouton « Appliquer » avec backup `.orig`) est décrit dans [ARCHITECTURE.md](./ARCHITECTURE.md), section « Audit GPX ».
 
 ### 4.6 Structures de données Rust
 
@@ -293,11 +293,14 @@ pub struct TraceMetadata {
     pub is_displayed: bool,               // afficher sur la carte (persisté)
     #[serde(default = "default_audit_status")]
     pub audit_status: String,             // "clean" | "needs_review" (défaut)
+    #[serde(default)]
+    pub audit_archived: bool,             // audit appliqué archivé (défaut : false)
 }
 ```
 
 > ℹ️ Les noms de champs en `snake_case` sérialisés tels quels correspondent exactement aux interfaces TypeScript du frontend (§5.3). Inutile d'ajouter `#[serde(rename_all = …)]`.
 > ℹ️ Le champ `audit_status` est posé à l'import (détection automatique, §4.5-bis). Absent dans les registres antérieurs → `"needs_review"` (rétrocompatibilité via `#[serde(default = "default_audit_status")]` : une trace jamais auditée doit l'être).
+> ℹ️ Le champ `audit_archived` est posé par `audit_validate`, avec `audit_status = "clean"` : il signale qu'un audit appliqué a laissé une archive consultable dans le dossier de la trace. Absent des registres antérieurs → `false`. Voir [DATA_STORAGE.md](./DATA_STORAGE.md).
 > ⚠️ Les registres au **format pré-audit** — contenant la clé `"cleaning_status"` — sont **détectés et ignorés** par `load_registry` (D1) : la liste retournée est vide et le fichier n'est pas réécrit. Voir [DATA_STORAGE.md](./DATA_STORAGE.md).
 
 ### 4.7 Gestion des erreurs
@@ -691,6 +694,8 @@ export function formatElevation(m: number): string {
 - **Commentaires explicatifs en français**.
 
 ---
+
+**Version** : 1.4 — 2026-09-16. Archivage de l'audit : nouveau champ `audit_archived` sur `TraceMetadata` (`#[serde(default)]` → `false`), posé par `audit_validate` avec `audit_status = "clean"`. Il signale qu'une archive d'audit (`traces/{trace_id}/audit.json`) est consultable depuis la carte du circuit.
 
 **Version** : 1.3 — 2026-09-12. Bascule du module de nettoyage vers le module **Audit GPX** : le champ `cleaning_status` (et `cleaning_phase`) devient `audit_status` (`"clean"` | `"needs_review"`, défaut `"needs_review"`), la détection à l'import passe à `gpx_audit::pipeline::detect_all` avec les paramètres `Audit.*`, et le blocage de l'édition caméra redirige vers la vue `/audit?traceId=…`. Les registres au format pré-audit (contenant `cleaning_status`) sont ignorés (D1) et les fichiers de travail `cleaning.*.json` purgés (D2c).
 

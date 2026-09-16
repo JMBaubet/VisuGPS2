@@ -168,6 +168,66 @@ citaient l'archive comme spécification normative, ont été réalignés. Docume
 à jour : `docs/ARCHITECTURE.md` (référence du module, ancrage du panneau) et
 `docs/README.md` (arborescence).
 
+### Avenant du 2026-09-16 — archivage de l'audit et consultation
+
+Le travail d'audit n'est **plus volatil** (avenant à la décision 6) et une trace
+déjà auditée **redevient consultable**.
+
+**Ajouté**
+
+- **Archive d'audit** (`src-tauri/src/gpx_audit/archive.rs`) : l'état de travail
+  — trace de travail, findings, corrections et enregistrements d'annulation —
+  est écrit dans `traces/{trace_id}/audit.json`, **au fil des actions** : après
+  la détection, puis après chaque traitement (suppression, routage, faux positif,
+  retrait du faux positif, annulation). Les aperçus (curseurs) n'écrivent jamais.
+  Écriture atomique ; lecture **tolérante** (archive absente, illisible, d'une
+  version de format inconnue ou d'une autre trace → repli sur la détection).
+- **Deux commandes Tauri** — `audit_save_state` et `audit_load_archive` — qui
+  portent le catalogue de l'application de 34 à **36 commandes**.
+- **Trois modes d'entrée dans `/audit`** : **détection** (`needs_review` sans
+  archive, comportement d'origine), **reprise** d'une session interrompue
+  (`needs_review` avec archive), **consultation** d'un audit appliqué (`clean`) —
+  anomalies et corrections restituées **en lecture seule**.
+- **Bouton « Voir les anomalies de la source »** dans la carte du circuit
+  (`Circuit.vue`) : juste après Supprimer, visible au survol, masqué tant qu'une
+  anomalie reste à traiter. Icône **verte** quand l'audit est archivé (le clic
+  rouvre la vue Audit en consultation), **grise** sinon, le clic se contentant
+  d'informer sans ouvrir la vue.
+- Champ `audit_archived` sur `TraceMetadata` (`#[serde(default)]` → `false`),
+  posé par `audit_validate` avec `audit_status = "clean"`.
+
+**Modifié**
+
+- **Dialogue de sortie de l'audit** (`ConfirmExitDialog.vue`) : il n'annonce plus
+  une perte de travail — l'audit est archivé — mais deux états : des anomalies
+  restent à traiter, ou **le fichier GPX n'a pas été créé** alors que tout est
+  traité (bouton « Appliquer » oublié). Boutons « Rester » / « Quitter ». En
+  consultation, la sortie est **silencieuse**.
+- **Panneau d'action** (`AuditActionPanel.vue`) : prop `readonly` — les
+  descriptions des corrections restent visibles, toutes les actions disparaissent
+  (une correction archivée n'est plus annulable).
+- **Barre d'outils** (`AuditToolbar.vue`) : en consultation, le chip
+  « Consultation » (daté de l'archivage) remplace le bouton « Appliquer ».
+- `canApply` devient faux en consultation ; les cinq actions de traitement du
+  store refusent d'agir hors session modifiable.
+
+**Migration et compatibilité**
+
+- Les registres sans `audit_archived` se chargent sans erreur (défaut `false`).
+- Les traces auditées **avant** cet avenant n'ont pas d'archive : le bouton reste
+  gris et le clic informe qu'il n'y a rien à restituer. Aucune migration de
+  données n'est nécessaire.
+
+**Tests** : `cargo test` à **217 tests verts** (10 nouveaux sur le contrat
+d'archive, 1 sur la rétrocompatibilité du registre).
+
+**Documentation** : `docs/COMMANDS.md` (36 commandes, `AuditArchive`, champ de
+registre), `docs/DATA_STORAGE.md` (section « Archive d'audit », arborescence,
+champ `audit_archived`), `docs/ARCHITECTURE.md` (§ Audit GPX : archive, modes
+d'entrée, consultation ; § Accueil : bouton du circuit), `docs/CONTEXT.md`,
+`docs/EXTENDING.md`, `docs/SPEC_IMPORT_GPX.md` (version 1.4),
+`docs/SPEC_AFFICHAGE_TRACES.md`.
+
 ---
 
 ## [0.0.1] — Base initiale

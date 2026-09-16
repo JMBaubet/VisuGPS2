@@ -31,6 +31,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │       └── {trace_id}/
 │           ├── {filename}.gpx          # GPX (nom d'origine sanitizé)
 │           ├── {filename}.gpx.orig     # backup de l'original (posé par audit_validate)
+│           ├── audit.json              # archive de l'audit (anomalies + traitements)
 │           ├── trace.geojson           # LineString GeoJSON
 │           ├── keyframes_169.json      # keyframes ratio 16:9
 │           └── keyframes_43.json       # keyframes ratio 4:3
@@ -41,6 +42,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
     ├── traces.json
     └── traces/{trace_id}/
         ├── {filename}.gpx
+        ├── audit.json
         ├── trace.geojson
         └── keyframes_169.json / keyframes_43.json
 ```
@@ -56,8 +58,9 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 > `cleaning.*.json` résiduels de tous les dossiers de traces. Idempotente et
 > **silencieuse** (D3b — aucun log, aucune erreur remontée). Le dossier hérité
 > `cleaning/` de l'ancien agencement plat est supprimé par `migrate_mode_storage`.
-> Le module Audit GPX **n'écrit aucun fichier de travail** : ses findings sont
-> volatils (décision 6) et vivent uniquement en mémoire dans le store Pinia.
+> Le module Audit GPX n'écrit plus de fichiers de travail par phase, mais **une
+> archive d'audit unique** par trace : `traces/{trace_id}/audit.json` (voir
+> « Archive d'audit » ci-dessous).
 
 ## Détail des fichiers
 
@@ -119,16 +122,19 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "hash": "sha256:91a5d3aa7185523b717b4169884d6ee48afa613cd10c0a9bdae75d18a900becb",
     "favorite": false,
     "is_displayed": false,
-    "audit_status": "needs_review"
+    "audit_status": "needs_review",
+    "audit_archived": false
   }
 ]
 ```
 
 **Statut d'audit** (`audit_status`) : `"clean"` (auditée sans anomalie, ou corrections appliquées) ou `"needs_review"` (anomalies détectées à l'import). Une trace non `"clean"` **n'est pas candidate** à l'édition caméra : elle est redirigée vers la vue `/audit`. Le statut est posé à l'import (détection AR + RP sur les points du GPX) et repasse à `"clean"` par `audit_validate`.
 
+**Archivage de l'audit** (`audit_archived`) : `true` quand un audit **appliqué** a laissé une archive dans le dossier de la trace (`audit.json`). C'est ce drapeau, lu par la carte du circuit, qui rend le bouton « Voir les anomalies de la source » **vert** (anomalies et traitements consultables) plutôt que gris. Posé par `audit_validate`, en même temps que `"clean"` ; absent des registres antérieurs → `false` (ces audits n'ont pas laissé d'archive, et les corrections ne sont pas restituables).
+
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
-**Rétrocompatibilité et registres pré-audit (D1)** : `favorite` et `is_displayed` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ce champ se charge donc sans erreur. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
+**Rétrocompatibilité et registres pré-audit (D1)** : `favorite`, `is_displayed` et `audit_archived` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ces champs se charge donc sans erreur. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
 
 ### `traces/{trace_id}/trace.geojson` — LineString GeoJSON
 
@@ -160,19 +166,62 @@ Le backend traite le JSON de manière transparente (`serde_json::Value`), sans v
 Écriture atomique (tmp + rename). Le dossier de la trace est créé automatiquement à la première sauvegarde.
 
 > **Suppression** : quand une trace est supprimée (`delete_trace`), son **dossier entier**
-> `traces/{trace_id}/` est supprimé (GPX, backup `.orig`, GeoJSON, keyframes) —
+> `traces/{trace_id}/` est supprimé (GPX, backup `.orig`, archive d'audit, GeoJSON, keyframes) —
 > la cascade est implicite.
 
-### Fichiers de travail du module Audit — **aucun**
+### `traces/{trace_id}/audit.json` — Archive d'audit
 
-Le module Audit GPX **n'écrit aucun fichier de travail**. Les findings, la trace de travail
-(`AuditPoint[]`) et les enregistrements d'annulation sont **volatils** (décision 6) : ils vivent
-uniquement en mémoire, dans le store Pinia `src/stores/audit.ts`, et sont perdus à la sortie de
-la vue (`auditStore.reset()` dans `onBeforeRouteLeave`).
+État complet du travail d'audit, écrit **au fil des actions** (avenant à la décision 6 : les
+findings ne sont plus volatils). Sans cette archive, ni la reprise d'une session interrompue ni
+la consultation d'un audit appliqué ne seraient possibles.
 
-Seuls deux effets sont persistés, et uniquement par la commande `audit_validate` : le **GPX
-réécrit** (la trace de travail y est écrite telle quelle, invariant C10) et le champ
-`audit_status` du registre. Le backup `{filename}.gpx.orig` est posé à cette occasion,
+**Quand le fichier est écrit** (commande `audit_save_state`, écriture **atomique** tmp + rename) :
+
+| Événement | `validated` écrit |
+|---|---|
+| Détection initiale (`audit_run_detection` par la vue) | `false` |
+| Chaque traitement : suppression, routage, faux positif, retrait du faux positif, annulation | `false` |
+| Validation (`audit_validate`), après la réécriture du GPX | `true` |
+
+Les **aperçus** — réglage continu des curseurs de suppression ou de routage — n'écrivent
+**jamais** : seuls les traitements effectifs sont archivés.
+
+**Format** (JSON en camelCase, miroir TS `AuditArchive` dans `src/stores/audit.ts`) :
+
+```json
+{
+  "version": 1,
+  "traceId": "cd9e49cb-40fb-43a6-896e-ef2fdde357de",
+  "updatedAt": "2026-09-16T13:54:01Z",
+  "validated": false,
+  "params": { "consolM": 0.5, "tolDeg": 20.0, "pairM": 50.0,
+              "maxpairs": 5, "segM": 200.0, "closeM": 15.0, "angleDeg": 270 },
+  "totalDistanceM": 45213.4,
+  "points": [ { "id": 1, "lat": 49.03, "lon": 4.03, "ele": 83.0 } ],
+  "findings": [ { "id": "ar-1", "kind": "ar", "status": "corrected",
+                  "correction": "delete", "undo": { }, "zoneIds": [12, 13] } ]
+}
+```
+
+- `points` est la **trace de travail** : elle porte l'espace d'index des findings (invariant C4)
+  et permet de restituer la carte, la liste et les zones d'anomalie **sans réexécuter la
+  détection**.
+- `findings` porte les statuts (`pending` / `corrected` / `fp`) et les corrections, ainsi que les
+  **enregistrements d'annulation** — ces derniers conservent les points supprimés et le tracé ORS
+  remplaçant, seule source du « avant / après » lors d'une consultation.
+- Les **paramètres du détecteur** voyagent avec l'archive : aperçus et éléments de rendu de la
+  carte sont reconstruits à l'identique.
+
+**Lecture** (commande `audit_load_archive`) : **tolérante**. Archive absente, illisible, d'une
+version de format inconnue ou rattachée à une autre trace → `null`, et le module retombe sur la
+détection, qui reste la source de vérité. Aucune erreur n'est remontée à l'utilisateur.
+
+**Écrasement** : le fichier reflète toujours le **dernier** état écrit (pas d'historique de
+versions, pas de fusion). Il n'est supprimé que par la suppression de la trace.
+
+**Effets persistés au total** par le module Audit : le **GPX réécrit** (la trace de travail y est
+écrite telle quelle, invariant C10), les champs `audit_status` et `audit_archived` du registre, et
+cette archive. Le backup `{filename}.gpx.orig` est posé par `audit_validate`,
 **une seule fois** — un `.orig` existant n'est jamais écrasé.
 
 > **Héritage** : les fichiers `cleaning.{phase}.json` et `cleaning.{phase}.decisions.json` de
@@ -216,11 +265,13 @@ get_trace_dir(mode_dir, trace_id)      → {mode_dir}/traces/{trace_id}         
 get_trace_gpx_path(mode_dir, trace_id, filename) → {mode_dir}/traces/{trace_id}/{filename}
 get_geojson_path(mode_dir, trace_id)  → {mode_dir}/traces/{trace_id}/trace.geojson
 get_keyframes_path(mode_dir, trace_id, viewport_aspect) → {mode_dir}/traces/{trace_id}/keyframes_169.json | keyframes_43.json
+archive_path(mode_dir, trace_id)      → {mode_dir}/traces/{trace_id}/audit.json
 get_traces_path(mode_dir)             → {mode_dir}/traces.json
 ```
 
-> Le module Audit GPX n'introduit **aucun chemin nouveau** : il ne persiste rien en dehors du
-> GPX réécrit par `audit_validate` (via `get_trace_gpx_path`) et du registre.
+> Le module Audit GPX utilise **un seul chemin nouveau** — `archive_path`, l'archive d'audit
+> décrite plus haut — en plus du GPX réécrit par `audit_validate` (via `get_trace_gpx_path`) et
+> du registre.
 
 Le mode actif est déterminé par `gestionMode::read_active_mode(app_data_dir, is_dev)` qui lit `.env`.
 
@@ -240,7 +291,7 @@ Côté frontend, les secrets arrivent toujours masqués (`********`) via `get_se
 ## Isolation par mode
 
 Changer de mode d'exécution isole **complètement** les données :
-- `traces.json` et `traces/` (dossiers par trace : GPX, `.gpx.orig`, geojson, keyframes) sont propres à chaque mode.
+- `traces.json` et `traces/` (dossiers par trace : GPX, `.gpx.orig`, archive d'audit, geojson, keyframes) sont propres à chaque mode.
 - `config.toml` et `config-dev.toml` sont propres à chaque mode.
 
 Cela permet de tester/démontrer sans polluer l'environnement de production (`OPE`).
@@ -253,4 +304,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-09-12
+**Dernière mise à jour** : 2026-09-16

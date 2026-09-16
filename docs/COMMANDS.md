@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (34 commandes)
+## Catalogue (36 commandes)
 
 ### Application
 
@@ -84,7 +84,7 @@ pub struct ModeInfo {
 |---|---|---|
 | `import_gpx_file` | `async (app) -> Result<TraceMetadata, String>` | Sélecteur natif, parse, hash, copie, stats, màj registre. |
 | `get_traces` | `async (app) -> Result<Vec<TraceMetadata>, String>` | Liste les traces du mode actif depuis `traces.json`. |
-| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le **dossier entier** `traces/{trace_id}/` (GPX, backup `.orig`, GeoJSON, keyframes, nettoyage) + l'entrée du registre (écriture atomique). |
+| `delete_trace` | `async (app, trace_id) -> Result<(), String>` | Supprime le **dossier entier** `traces/{trace_id}/` (GPX, backup `.orig`, archive d'audit, GeoJSON, keyframes) + l'entrée du registre (écriture atomique). |
 | `update_trace` | `async (app, trace_id, favorite: Option<bool>, is_displayed: Option<bool>) -> Result<(), String>` | Mise à jour partielle (PATCH) d'une trace. Seuls les champs `Some(...)` sont modifiés. |
 | `get_trace_geometry` | `async (app, trace_id) -> Result<TraceGeometry, String>` | Géométrie GeoJSON d'une trace (lu depuis le cache, ou régénéré depuis le GPX en cas de migration). |
 | `get_trace_points` | `async (app, trace_id) -> Result<TracePoints, String>` | Points d'une trace avec altitude et distance cumulée 3D (re-parse le GPX original à la demande). |
@@ -102,9 +102,14 @@ pub struct ModeInfo {
 > annulable par anomalie. Une trace n'est **valide** que si elle est auditée
 > (`audit_status = "clean"`) ; elle est sinon redirigée vers la vue `/audit`.
 >
-> **Les findings sont volatils** (décision 6) : l'état de travail vit dans le
-> store Pinia `src/stores/audit.ts` et n'est **pas persisté** entre deux sessions.
-> Seuls le GPX réécrit et `audit_status` survivent à la fermeture.
+> **L'état de travail est archivé sur disque** (`audit_save_state` →
+> `traces/{trace_id}/audit.json`, avenant à la décision 6) : trace de travail,
+> findings et traitements sont écrits après la détection puis après **chaque**
+> traitement. L'archive sert la **reprise** d'une session interrompue et la
+> **consultation** d'un audit appliqué (lecture seule, sans annulation possible).
+> Elle est relue par `audit_load_archive`, avec repli silencieux sur la détection
+> si elle est absente ou inexploitable. Voir
+> [DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idauditjson--archive-daudit).
 >
 > Les commandes `audit_map_overlay`, `audit_delete_preview`,
 > `audit_routes_identical` sont **pures** (aucun accès disque, aucun `AppHandle`) :
@@ -121,7 +126,9 @@ pub struct ModeInfo {
 | `audit_mark_fp` | `(findings: Vec<Finding>, finding_id: String) -> Result<Vec<Finding>, String>` | Marque une anomalie en **faux positif** (`status = Fp`). Refuse si elle est déjà `Fp`. |
 | `audit_unmark_fp` | `(findings: Vec<Finding>, finding_id: String) -> Result<Vec<Finding>, String>` | Symétrique de `audit_mark_fp` : repasse une anomalie `Fp` en `Pending`. |
 | `audit_undo_correction` | `(trace_id: String, points, findings, finding_id: String) -> Result<AuditState, String>` | Annule la correction portée par une anomalie (restaure les points d'origine, retire les points insérés, réintègre les faux positifs absorbés). |
-| `audit_validate` | `async (app, trace_id: String, points: Vec<AuditPoint>, findings: Vec<Finding>) -> Result<TraceMetadata, String>` | **Point de non-retour.** Refuse tant qu'un finding est `pending`. Réécrit le GPX (backup `{filename}.gpx.orig` posé **une seule fois**, jamais écrasé), régénère geojson/stats/hash et pose `audit_status = "clean"`. Le GPX est écrit **avant** `traces.json` : un échec de réécriture laisse le statut intact. |
+| `audit_validate` | `async (app, trace_id: String, points: Vec<AuditPoint>, findings: Vec<Finding>) -> Result<TraceMetadata, String>` | **Point de non-retour.** Refuse tant qu'un finding est `pending`. Réécrit le GPX (backup `{filename}.gpx.orig` posé **une seule fois**, jamais écrasé), régénère geojson/stats/hash et pose `audit_status = "clean"` **et** `audit_archived = true`. Le GPX est écrit **avant** `traces.json` : un échec de réécriture laisse le statut intact. |
+| `audit_save_state` | `async (app, trace_id: String, params: AuditParams, total_distance_m: f64, points: Vec<AuditPoint>, findings: Vec<Finding>, validated: bool) -> Result<String, String>` | Écrit l'**archive d'audit** (`traces/{trace_id}/audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection (`validated = false`) puis après **chaque** traitement ; `validated = true` après une validation réussie. Les aperçus (curseurs) ne l'appellent jamais. |
+| `audit_load_archive` | `async (app, trace_id: String) -> Result<Option<AuditArchive>, String>` | Relit l'archive d'une trace : `null` si elle est absente, illisible, d'une version inconnue ou rattachée à une autre trace — l'appelant retombe alors sur `audit_run_detection`. Sert la reprise d'une session interrompue et la consultation d'un audit appliqué. |
 
 **Type `AuditParams`** (miroir TS `AuditParams` dans `src/stores/audit.ts`) — assemblé par la vue depuis les réglages `Audit.*` :
 ```rust
@@ -183,10 +190,22 @@ pub struct AuditDetectionResult {
 }
 
 pub struct AuditState {
-    pub trace_id: String,
     pub points: Vec<AuditPoint>,
     pub findings: Vec<Finding>,
-    pub next_point_id: u32,
+}
+```
+
+**Type `AuditArchive`** — l'état de travail persisté dans `traces/{trace_id}/audit.json` (miroir TS `AuditArchive` dans `src/stores/audit.ts`) :
+```rust
+pub struct AuditArchive {
+    pub version: u32,                  // version du format (1) ; autre version → archive ignorée
+    pub trace_id: String,
+    pub updated_at: String,            // horodatage ISO 8601 UTC de la dernière écriture
+    pub validated: bool,               // true après une validation (pièce de consultation)
+    pub params: AuditParams,           // paramètres du détecteur ayant produit les findings
+    pub total_distance_m: f64,
+    pub points: Vec<AuditPoint>,       // trace de travail (espace d'index des findings)
+    pub findings: Vec<Finding>,        // statuts, corrections et enregistrements d'annulation
 }
 ```
 
@@ -261,4 +280,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-08-19
+**Dernière mise à jour** : 2026-09-16

@@ -251,7 +251,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 34 commandes : voir COMMANDS.md pour le catalogue complet
+            // 36 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
             gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*
         ])
@@ -332,7 +332,7 @@ src/
 │   ├── traces.ts     # Store des traces GPX importées
 │   ├── keyframes.ts  # Store de persistance des keyframes (loadKeyframes, saveKeyframes, clearKeyframes)
 │   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
-│   ├── audit.ts      # Store du module Audit GPX (détection, findings volatils, corrections)
+│   ├── audit.ts      # Store du module Audit GPX (détection, archive, corrections)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
 │   ├── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra (simple + délégation frustum)
@@ -408,7 +408,7 @@ src-tauri/
 │   ├── gestionMode.rs    # Gestion des modes d'exécution
 │   ├── settings.rs       # Système de paramètres de configuration
 │   ├── import_gpx.rs     # Import de fichiers GPX
-│   ├── gpx_audit/        # Module Audit GPX (11 fichiers + tests)
+│   ├── gpx_audit/        # Module Audit GPX (15 fichiers + tests)
 │   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
 │   │   └── default.json  # Permissions pour les fenêtres
@@ -426,7 +426,7 @@ src-tauri/
 - `gestionMode.rs` : CRUD des modes d'exécution, lecture/écriture du `.env`, fichier `ModeExe.toml`
 - `settings.rs` : Lecture/écriture des paramètres TOML, chiffrement des secrets (AES-256-GCM)
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
-- `gpx_audit/` : Module Audit GPX (détection AR/RP, moteur de correction, réécriture GPX) — 11 fichiers : `types.rs`, `geometry.rs`, `consolidation.rs`, `ar.rs`, `rp.rs`, `anchor.rs`, `corrections.rs`, `migration.rs`, `export.rs`, `overlay.rs`, `preview.rs`, `routing.rs`, `pipeline.rs`, `commands.rs`. Détails au § « Audit GPX » ci-dessous.
+- `gpx_audit/` : Module Audit GPX (détection AR/RP, moteur de correction, archive d'audit, réécriture GPX) — 15 fichiers : `types.rs`, `geometry.rs`, `consolidation.rs`, `ar.rs`, `rp.rs`, `anchor.rs`, `corrections.rs`, `migration.rs`, `export.rs`, `archive.rs`, `overlay.rs`, `preview.rs`, `routing.rs`, `pipeline.rs`, `commands.rs`. Détails au § « Audit GPX » ci-dessous.
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -779,7 +779,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
-   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Badge d'audit** : un `v-chip` orange « À auditer » est affiché tant que `audit_status !== 'clean'`, et l'icône Éditer devient **`mdi-map-marker-path`** (au lieu de `mdi-pencil`). Le bouton **Éditer** sélectionne la trace (`editionStore.selectTrace`) puis navigue vers la vue `editionCamera` — ou vers la vue `/audit` si la trace n'est pas « clean » (cf. § « Audit GPX » ci-dessous). **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / jaune > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, **Voir les anomalies de la source**, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Badge d'audit** : l'icône Éditer devient **`mdi-map-marker-path`** (au lieu de `mdi-pencil`) tant que `audit_status !== 'clean'`. Le bouton **Éditer** sélectionne la trace (`editionStore.selectTrace`) puis navigue vers la vue `editionCamera` — ou vers la vue `/audit` si la trace n'est pas « clean » (cf. § « Audit GPX » ci-dessous). **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / jaune > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. **Voir les anomalies de la source** (`mdi-map-marker-path`, juste après Supprimer, visible au survol) n'apparaît que si `audit_status === 'clean'` — donc masqué tant qu'une anomalie reste à traiter. Son icône est **verte** quand `audit_archived` est vrai : le clic ouvre `/audit?traceId=…` en **consultation** (anomalies et corrections en lecture seule). Elle est **grise** sinon (trace jamais auditée, ou audit antérieur à l'archivage) et le clic se contente d'un message d'information, sans ouvrir la vue. Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
    - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).
@@ -816,29 +816,56 @@ les risques de faux positifs ou de faux négatifs associés. Les scénarios GPX 
 ont été rapatriés dans `src-tauri/src/gpx_audit/tests/fixtures/`, au contact des tests qui les
 consomment.
 
-### État d'audit (`audit_status`)
+### État d'audit (`audit_status`, `audit_archived`)
 
-`TraceMetadata` porte un unique champ (Rust + TS) :
+`TraceMetadata` porte deux champs (Rust + TS) :
 - `audit_status` : `"clean" | "needs_review"`, défaut **`"needs_review"`**
-  (`#[serde(default = "default_audit_status")]`).
+  (`#[serde(default = "default_audit_status")]`) ;
+- `audit_archived` : `bool`, défaut `false` (`#[serde(default)]`) — un audit **appliqué** a laissé
+  une archive dans le dossier de la trace. C'est ce drapeau qui rend le bouton « Voir les
+  anomalies de la source » **vert** (anomalies consultables) plutôt que gris, sans lecture de
+  fichier ni appel IPC supplémentaire au montage de l'accueil.
 
-Posé **à l'import** : le backend exécute la détection complète (AR + RP) sur les points du GPX
-avec les paramètres `Audit.*` → `"needs_review"` si au moins un finding, `"clean"` sinon. La
-détection est protégée contre tout panic (un panic laisserait l'import sans réponse) : en cas
-de défaillance, repli sur `"needs_review"`.
+`audit_status` est posé **à l'import** : le backend exécute la détection complète (AR + RP) sur
+les points du GPX avec les paramètres `Audit.*` → `"needs_review"` si au moins un finding,
+`"clean"` sinon. La détection est protégée contre tout panic (un panic laisserait l'import sans
+réponse) : en cas de défaillance, repli sur `"needs_review"`. `audit_archived` reste `false`
+jusqu'à une validation.
 
 **Blocage de l'édition caméra** (gate dur) : une trace non « clean » ne peut pas entrer dans la
 vue d'édition caméra — le bouton Éditer de l'accueil (`Circuit.vue`) et le garde-fou
 d'`EditionCamera.vue` redirigent tous deux vers `/audit?traceId=…`. Le `traceId` circule par la
 **query de la route** (plus de store intermédiaire depuis la migration).
 
-### Findings volatils (décision 6)
+### Archive d'audit (avenant à la décision 6)
 
 L'état de travail — trace de travail (`AuditPoint[]`), findings, corrections et enregistrements
-d'undo — vit **uniquement dans le store Pinia `src/stores/audit.ts`**. Il n'est **pas persisté**
-entre deux sessions : seuls le GPX réécrit et `audit_status` survivent à la fermeture. Aucun
-fichier de travail n'est donc créé sur disque (contrairement aux `cleaning.*.json` de l'ancien
-module, supprimés par la purge D2c).
+d'annulation — est écrit sur disque **au fil des actions**, dans `traces/{trace_id}/audit.json`
+(commande `audit_save_state`, écriture atomique). Il n'est donc **plus volatil** : la sortie de
+la vue, ou la fermeture de l'application, ne perd plus le travail. Les **aperçus** (réglage
+continu des curseurs de suppression et de routage) n'écrivent jamais — seuls les traitements
+effectifs sont archivés.
+
+L'archive porte la **trace de travail**, ce qui restitue la carte, la liste et les zones
+d'anomalie telles qu'elles étaient, **sans réexécuter la détection** ; elle conserve en outre les
+enregistrements d'annulation, seule source du « avant / après » (points supprimés, tracé ORS
+remplaçant) lors d'une consultation. Elle est relue par `audit_load_archive`, avec un repli
+**silencieux** sur la détection si elle est absente, illisible, d'une version de format inconnue
+ou rattachée à une autre trace. Une validation **écrase** l'archive de la session, marquée
+`validated`. Le fichier est décrit dans
+[DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idauditjson--archive-daudit).
+
+Trois modes d'entrée en découlent, décidés par le statut de la trace :
+
+| Statut | Archive | Mode de la vue |
+|---|---|---|
+| `needs_review` | absente | **détection** (comportement d'origine), puis archivage |
+| `needs_review` | présente | **reprise** de la session interrompue, entièrement modifiable |
+| `clean` | présente | **consultation** : audit appliqué restitué, **lecture seule** |
+
+En consultation, corriger, annuler ou réappliquer est exclu — gardes du store `audit.ts` et
+interface sans action : une correction archivée n'est plus annulable, les enregistrements
+d'annulation n'ayant de sens que dans la session qui les a produits.
 
 ### Identifiants stables et index
 
@@ -851,7 +878,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 
 ### Architecture
 
-1. **Module backend** (`src-tauri/src/gpx_audit/`) — 14 fichiers :
+1. **Module backend** (`src-tauri/src/gpx_audit/`) — 15 fichiers :
 
    | Fichier | Rôle |
    |---|---|
@@ -868,19 +895,22 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
    | `routing.rs` | Contrat d'échange avec OpenRouteService, partie algorithmique : test d'identité des deux tracés (longueurs à 2 %, Hausdorff ≤ 15 m). Le réseau vit côté front (`useAuditOrs.ts`). |
    | `export.rs` | Réécriture du GPX après audit (CORRECTIONS §5.4, IHM §20) : la trace de travail est écrite **telle quelle** (invariant C10), l'entête du source n'est pas reconstruite. |
    | `migration.rs` | **D1** (registre pré-audit ignoré) et **D2c** (purge des `cleaning.*.json` hérités) — câblés depuis `import_gpx.rs` (`load_registry` / `get_mode_dir`). |
-   | `commands.rs` | Les **10 commandes Tauri** publiques + leurs implémentations testables sans `AppHandle`. |
+   | `archive.rs` | **Archive d'audit** persistée (`traces/{trace_id}/audit.json`) : `AuditArchive`, `archive_path`, `build_archive`, `save_archive` (écriture atomique) et `load_archive` (lecture **tolérante** : archive absente, illisible, d'une version inconnue ou d'une autre trace → `None`). |
+   | `commands.rs` | Les **12 commandes Tauri** publiques + leurs implémentations testables sans `AppHandle`. |
 
-2. **Store Frontend** (`src/stores/audit.ts`) — Pattern Setup Store, état volatil :
-   - Types miroir des structs Rust (`AuditParams`, `AuditPoint`, `Finding`, `FindingKind`, `FindingStatus`, `AuditState`, `AuditDetectionResult`, `DeletePreview`, `FindingOverlay`).
-   - Actions de détection (`runAudit`), de sélection (`selectFinding`), de correction (`applyDelete`, `applyRoute`, `markFp`, `unmarkFp`, `undoCorrection`), d'aperçu (`deletePreview`, `mapOverlay`) et **`validate`** (bouton « Appliquer » : refuse tant qu'un finding est `pending`, ferme la vue, non annulable — décision 8).
-   - `reset()` : appelé à la sortie de la vue (décision 9 — les findings sont volatils).
+2. **Store Frontend** (`src/stores/audit.ts`) — Pattern Setup Store, état **archivé** au fil des actions :
+   - Types miroir des structs Rust (`AuditParams`, `AuditPoint`, `Finding`, `FindingKind`, `FindingStatus`, `AuditState`, `AuditDetectionResult`, `AuditArchive`, `DeletePreview`, `FindingOverlay`).
+   - Actions de détection (`runAudit`), de sélection (`selectFinding`), de correction (`applyDelete`, `applyRoute`, `markFp`, `unmarkFp`, `undoCorrection`), d'aperçu (`previewDelete`, `mapOverlay`) et **`validateAndRewrite`** (bouton « Appliquer » : refuse tant qu'un finding est `pending`, ferme la vue, non annulable — décision 8).
+   - **Persistance** : `persist` (interne) écrit l'archive après la détection et après **chaque** traitement ; un échec d'écriture est signalé par une notification sans interrompre le traitement. `restore(traceId, consultation)` recharge l'état depuis l'archive **et positionne le mode** — même sans archive, une trace `clean` reste en lecture seule. États `isConsultation` et `archivedAt` ; en consultation, `assertEditable()` refuse les cinq actions de traitement et `canApply` est faux.
+   - `reset()` : appelé à la sortie de la vue (décision 9) — il vide l'état en mémoire, **pas** l'archive.
 
 3. **Vue** (`src/views/Audit.vue`, route `/audit`, lazy loading) :
    - Plein écran (style Accueil/EditionCamera) : toolbar + carte Mapbox + panneau des anomalies (drawer gauche, 340 px) + panneau d'action + drawer Paramètres. Le **panneau d'action** est ancré en **haut à gauche de la carte** (16 px), au contact de la liste des anomalies qu'il complète : choix d'ergonomie assumé, la spec IHM §6 de l'archive de conception prescrivant l'inverse (haut à droite).
+   - **Mode d'entrée** : la vue charge le registre des traces, lit `audit_status`, appelle `restore` (consultation si `clean`, reprise sinon) et ne lance `runAudit` qu'en l'absence d'archive pour une trace `needs_review` — une trace `clean` sans archive se contente d'un message d'information.
    - Garde-fou : sans `traceId` en query, retour à l'accueil avec notification.
-   - `onBeforeRouteLeave` : **avertissement** si un travail est en cours (`hasWorkInProgress`), puis `auditStore.reset()` (décision 9).
+   - `onBeforeRouteLeave` : en consultation, sortie **silencieuse** ; sinon **confirmation** si un travail existe (`pendingCount > 0` ou au moins un traitement), avec deux messages — anomalies encore à traiter, ou fichier GPX non créé alors que tout est traité. Puis `auditStore.reset()` (décision 9).
 
-4. **Composants** (`src/components/Audit/`) : `AuditToolbar.vue`, `AuditProgressChip.vue`, `AuditFindingsPanel.vue`, `AuditSynthesis.vue`, `AuditActionPanel.vue`, `AuditMap.vue` (3ᵉ instance Mapbox GL, avec `auditMapFeatures.ts` et `auditMapLayers.ts`), et `dialogs/` (`ConfirmExitDialog.vue`, `ConfirmApplyDialog.vue`).
+4. **Composants** (`src/components/Audit/`) : `AuditToolbar.vue` (chip **Consultation** — daté — à la place du bouton « Appliquer »), `AuditProgressChip.vue`, `AuditFindingsPanel.vue`, `AuditSynthesis.vue`, `AuditActionPanel.vue` (prop `readonly` : descriptions conservées, actions masquées), `AuditMap.vue` (3ᵉ instance Mapbox GL, avec `auditMapFeatures.ts` et `auditMapLayers.ts`), et `dialogs/` (`ConfirmExitDialog.vue` — deux messages, `ConfirmApplyDialog.vue`).
 
 5. **Composable réseau** (`src/composables/useAuditOrs.ts`) : requêtes OpenRouteService (profils voiture et vélo, deux clés en bascule automatique sur quota épuisé — `Systeme.Key.openRouteServiceClePrimaire` / `Systeme.Key.openRouteServiceCleSecondaire`, chiffrées en AES-256-GCM).
 
@@ -913,9 +943,11 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 | `audit_apply_route(trace_id, …, coords, profile, next_point_id)` | Remplace le segment par le tracé OpenRouteService (profil `car` / `bike`). |
 | `audit_mark_fp(findings, finding_id)` / `audit_unmark_fp(findings, finding_id)` | Marque / démarque une anomalie en faux positif. |
 | `audit_undo_correction(trace_id, points, findings, finding_id)` | Annule la correction d'une anomalie (restaure les points, retire les points insérés, réintègre les faux positifs absorbés). |
-| `audit_validate(trace_id, points, findings)` | **Point de non-retour.** Refuse tant qu'un finding est `pending`. Réécrit le GPX (backup `.orig` une seule fois), régénère geojson/stats/hash et pose `audit_status = "clean"`. Écrit le GPX **avant** `traces.json`. |
+| `audit_validate(trace_id, points, findings)` | **Point de non-retour.** Refuse tant qu'un finding est `pending`. Réécrit le GPX (backup `.orig` une seule fois), régénère geojson/stats/hash et pose `audit_status = "clean"` **et** `audit_archived = true`. Écrit le GPX **avant** `traces.json`. |
+| `audit_save_state(trace_id, params, total_distance_m, points, findings, validated)` | Écrit l'**archive d'audit** (`audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection puis après **chaque** traitement ; `validated = true` après une validation réussie. Jamais appelée par les aperçus. |
+| `audit_load_archive(trace_id)` | Relit l'archive d'une trace (`None` si absente, illisible, d'une version inconnue ou d'une autre trace) — reprise d'une session interrompue et consultation d'un audit appliqué. |
 
-> Référence complète des **34 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des **36 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ### Paramètres (`Audit.*`)
 
@@ -1002,6 +1034,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
    - Le bouton **Éditer** appelle `editerCircuit()` : `editionStore.selectTrace(trace.id)` puis — si `audit_status !== 'clean'` (trace à auditer) → `router.push({ name: 'audit', query: { traceId: trace.id } })` ; sinon → `router.push({ name: 'editionCamera' })`. La trace auditée est désignée par la **query** de la route : plus de store intermédiaire.
+   - Le bouton **Voir les anomalies de la source** appelle `voirAnomaliesSource()` : il ouvre la même route `/audit?traceId=…` (mode consultation) si `audit_archived` est vrai, et se contente sinon d'une notification — la vue n'ayant rien à restituer.
 
 ### Carte satellite + terrain (vs. Accueil/Map.vue)
 
@@ -1043,10 +1076,10 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | `get_keyframes` | Charge les keyframes persistés d'une trace pour un ratio (`None` si absent). |
 | `delete_keyframes` | Supprime le fichier keyframes d'un ratio (tolérant si absent). |
 
-> Référence complète des 34 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 36 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-09-12
+**Dernière mise à jour** : 2026-09-16

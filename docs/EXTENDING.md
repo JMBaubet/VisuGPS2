@@ -200,7 +200,7 @@ onMounted(() => {
 </template>
 ```
 
-> **Exemple dans le projet** : **`src/stores/audit.ts`** (store du module Audit GPX) illustre un store plus complet — état **volatil** non persisté, types miroir des structs Rust (`AuditPoint`, `Finding`, `AuditParams`, `AuditState`, `DeletePreview`, `FindingOverlay`), actions asynchrones appelant les commandes Tauri (`runAudit`, `applyDelete`, `applyRoute`, `validate`), getters de progression (`hasWorkInProgress`) et `reset()` appelé à la sortie de la vue (les findings ne survivent pas à la navigation — décision 9).
+> **Exemple dans le projet** : **`src/stores/audit.ts`** (store du module Audit GPX) illustre un store plus complet — types miroir des structs Rust (`AuditPoint`, `Finding`, `AuditParams`, `AuditState`, `AuditArchive`, `DeletePreview`, `FindingOverlay`), actions asynchrones appelant les commandes Tauri (`runAudit`, `restore`, `applyDelete`, `applyRoute`, `validateAndRewrite`), **persistance au fil des actions** (chaque traitement archive l'état via `audit_save_state`, un échec d'écriture étant notifié sans interrompre le traitement), getters de progression (`hasWorkInProgress`, `canApply`) et `reset()` appelé à la sortie de la vue : l'état en mémoire ne survit pas à la navigation (décision 9), mais l'archive reste sur disque.
 
 ---
 
@@ -380,7 +380,7 @@ pub fn run() {
 
 > ⚠️ **Ne pas modifier `main.rs`** : il se contente d'appeler `tauri_app_lib::run()`. Les commandes sont enregistrées dans **`lib.rs`** (ou dans un module déclaré via `mod mon_module;` dans `lib.rs`). Voir [COMMANDS.md](./COMMANDS.md) pour la procédure complète.
 >
-> **Exemple dans le projet** : le catalogue compte actuellement **34 commandes**. Le module **`gpx_audit`** illustre le pattern complet — module déclaré (`mod gpx_audit;` dans `lib.rs`), commandes exposées par un sous-module dédié (`gpx_audit::commands::*` : 10 commandes enregistrées dans `invoke_handler`, de `audit_run_detection` à `audit_validate`), appelées depuis `src/stores/audit.ts` via `invoke()`. Le module sépare volontairement les **commandes** (`commands.rs`, seules à recevoir un `AppHandle`) des **implémentations testables** (`detection_impl`, `validate_impl`) et des **calculs purs** (`audit_map_overlay`, `audit_delete_preview`, `audit_routes_identical`).
+> **Exemple dans le projet** : le catalogue compte actuellement **36 commandes**. Le module **`gpx_audit`** illustre le pattern complet — module déclaré (`mod gpx_audit;` dans `lib.rs`), commandes exposées par un sous-module dédié (`gpx_audit::commands::*` : 12 commandes enregistrées dans `invoke_handler`, de `audit_run_detection` à `audit_load_archive`), appelées depuis `src/stores/audit.ts` via `invoke()`. Le module sépare volontairement les **commandes** (`commands.rs`, seules à recevoir un `AppHandle`) des **implémentations testables** (`detection_impl`, `validate_impl`) et des **calculs purs** (`audit_map_overlay`, `audit_delete_preview`, `audit_routes_identical`).
 
 ### Côté Frontend
 
@@ -951,4 +951,4 @@ const monParam = computed(() => {
 
 ---
 
-**Dernière mise à jour** : 2026-08-19
+**Dernière mise à jour** : 2026-09-16
