@@ -172,9 +172,6 @@ export const useMultirideStore = defineStore('multiride', () => {
     return archive.value.valide ? 'validated' : 'pending'
   })
 
-  /** `true` dès qu'un passage est détecté : la barrière s'applique. */
-  const hasPassages = computed(() => passages.value.length > 0)
-
   /** `true` quand l'édition caméra reste fermée par la détection. */
   const needsValidation = computed(() => status.value === 'pending')
 
@@ -417,7 +414,6 @@ export const useMultirideStore = defineStore('multiride', () => {
     segmentNumbers,
     segmentCount,
     status,
-    hasPassages,
     needsValidation,
     hasAdjustments,
     falsePositiveSegmentCount,

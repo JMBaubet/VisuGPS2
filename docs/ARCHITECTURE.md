@@ -1067,7 +1067,7 @@ détection lancée depuis la vue, elle, remonte ses erreurs à l'utilisateur.
      `MultirideArchive`, `MultirideDetectionResult`).
    - État `currentTraceId`, `archive`, `selectedSegment`, `analysisDurationMs`,
      `loading` ; getters `passages`, `segmentNumbers`, `segmentCount`, `status`,
-     `hasPassages`, `needsValidation`, `repeatedKm`, **`hasAdjustments`** (les
+     `needsValidation`, `repeatedKm`, **`hasAdjustments`** (les
      gestes qui changent le résultat — écarté, fusionné —, et donc le
      verrouillage des paramètres), **`treatedSegmentCount`** (les verdicts —
      approuvé, écarté —, le `x` du compteur), `falsePositiveSegmentCount` et
