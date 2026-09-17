@@ -380,7 +380,7 @@ pub fn run() {
 
 > ⚠️ **Ne pas modifier `main.rs`** : il se contente d'appeler `tauri_app_lib::run()`. Les commandes sont enregistrées dans **`lib.rs`** (ou dans un module déclaré via `mod mon_module;` dans `lib.rs`). Voir [COMMANDS.md](./COMMANDS.md) pour la procédure complète.
 >
-> **Exemple dans le projet** : le catalogue compte actuellement **42 commandes**. Le module **`gpx_audit`** illustre le pattern complet — module déclaré (`mod gpx_audit;` dans `lib.rs`), commandes exposées par un sous-module dédié (`gpx_audit::commands::*` : 12 commandes enregistrées dans `invoke_handler`, de `audit_run_detection` à `audit_load_archive`), appelées depuis `src/stores/audit.ts` via `invoke()`. Le module sépare volontairement les **commandes** (`commands.rs`, seules à recevoir un `AppHandle`) des **implémentations testables** (`detection_impl`, `validate_impl`) et des **calculs purs** (`audit_map_overlay`, `audit_delete_preview`, `audit_routes_identical`).
+> **Exemple dans le projet** : le catalogue compte actuellement **44 commandes**. Le module **`gpx_audit`** illustre le pattern complet — module déclaré (`mod gpx_audit;` dans `lib.rs`), commandes exposées par un sous-module dédié (`gpx_audit::commands::*` : 12 commandes enregistrées dans `invoke_handler`, de `audit_run_detection` à `audit_load_archive`), appelées depuis `src/stores/audit.ts` via `invoke()`. Le module sépare volontairement les **commandes** (`commands.rs`, seules à recevoir un `AppHandle`) des **implémentations testables** (`detection_impl`, `validate_impl`) et des **calculs purs** (`audit_map_overlay`, `audit_delete_preview`, `audit_routes_identical`).
 
 ### Côté Frontend
 

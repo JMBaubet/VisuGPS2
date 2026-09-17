@@ -252,7 +252,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 42 commandes : voir COMMANDS.md pour le catalogue complet
+            // 44 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
             gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*
         ])
@@ -960,7 +960,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 | `audit_save_state(trace_id, params, total_distance_m, points, findings, validated)` | Écrit l'**archive d'audit** (`audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection puis après **chaque** traitement ; `validated = true` après une validation réussie. Jamais appelée par les aperçus. |
 | `audit_load_archive(trace_id)` | Relit l'archive d'une trace (`None` si absente, illisible, d'une version inconnue ou d'une autre trace) — reprise d'une session interrompue et consultation d'un audit appliqué. |
 
-> Référence complète des **42 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des **44 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ### Paramètres (`Audit.*`)
 
@@ -1033,7 +1033,12 @@ vue :
   entre directement dans le parcours, la détection est jouée dans la foulée ;
 - par **`audit_validate`**, sur le GPX **corrigé** et dans la commande qui le
   réécrit — ce qui garantit qu'il n'existe aucun état où le GPX est corrigé mais
-  le statut périmé.
+  le statut périmé ;
+- à l'**enregistrement d'un paramètre** de détection, depuis la vue : la
+  détection affichée n'est plus celle que les réglages décrivent, elle est donc
+  rejouée sans geste supplémentaire — le bouton de relance a été retiré. Le
+  déclencheur est l'enregistrement, jamais la frappe, et une détection restituée
+  n'est pas relancée à l'ouverture.
 
 Dans les deux cas la détection est **best-effort** : un échec (y compris un
 panic, l'algorithme manipulant des indices calculés) laisse la trace non
@@ -1052,19 +1057,24 @@ détection lancée depuis la vue, elle, remonte ses erreurs à l'utilisateur.
    | `runs.rs` | Appariement des points superposés (index spatial en grille, trois filtres) et chaînage en runs maximaux. |
    | `segments.rs` | Assemblage : phases A/B/C itérées, préservation des frontières aller/retour, Passe D de fusion intra-segment. |
    | `direction.rs` | Qualification du sens d'un emprunt, par score cumulé de `cos(Δcap)`. |
-   | `adjustments.rs` | Ajustements manuels : fusion d'un segment avec le précédent, marquage faux positif (fonctions pures). |
+   | `adjustments.rs` | Gestes manuels, fonctions pures : approbation d'un segment, fusion avec le précédent, marquage faux positif, annulation d'un geste. |
    | `file.rs` | Écriture atomique et lecture tolérante du fichier de description, à la nomenclature de la spécification. |
    | `detection.rs` | Orchestration du pipeline et projection du résultat sur le contrat. |
-   | `commands.rs` | Les **6 commandes** Tauri et leurs implémentations testables sans `AppHandle`. |
+   | `commands.rs` | Les **8 commandes** Tauri et leurs implémentations testables sans `AppHandle`. |
 
 2. **Store Frontend** (`src/stores/multiride.ts`) — Pattern Setup Store :
    - Types miroir des structs Rust (`MultirideParams`, `MultiridePassage`,
      `MultirideArchive`, `MultirideDetectionResult`).
    - État `currentTraceId`, `archive`, `selectedSegment`, `analysisDurationMs`,
      `loading` ; getters `passages`, `segmentNumbers`, `segmentCount`, `status`,
-     `hasPassages`, `needsValidation`, `hasAdjustments`, `repeatedKm`.
-   - Actions `runDetection`, `restore`, `mergeSegment`, `toggleFp`,
-     `resetAdjustments`, `validate`, `reset`.
+     `hasPassages`, `needsValidation`, `repeatedKm`, **`hasAdjustments`** (les
+     gestes qui changent le résultat — écarté, fusionné —, et donc le
+     verrouillage des paramètres), **`treatedSegmentCount`** (les verdicts —
+     approuvé, écarté —, le `x` du compteur), `falsePositiveSegmentCount` et
+     `pendingSegmentCount`.
+   - Actions `runDetection`, `restore`, **`validateSegment`**, `mergeSegment`,
+     `toggleFp`, **`undoSegment`**, `validate`, `reset` ; helpers
+     `segmentPassages`, `referenceOf`, `previousSegmentPassages`.
    - Le store ne fait **aucun calcul métier** : tout le travail lourd est délégué
      aux commandes.
 
@@ -1072,22 +1082,48 @@ détection lancée depuis la vue, elle, remonte ses erreurs à l'utilisateur.
    - Plein écran : toolbar + carte Mapbox + panneau latéral des segments + drawer
      Paramètres. Le `traceId` circule par la **query** de la route.
    - **Mode d'entrée** : la vue restitue la description écrite (`multiride_load`)
-     et ne relance la détection que si elle est absente ou inexploitable.
+     et ne relance la détection que si elle est absente ou inexploitable. Une
+     détection restituée n'est **pas** relancée, même si ses paramètres diffèrent
+     des réglages courants : ouvrir la vue ne doit pas écraser des gestes.
+   - **Relance automatique** : enregistrer un paramètre rejoue la détection. Les
+     réglages du drawer n'alimentent qu'un brouillon local tant qu'ils ne sont
+     pas enregistrés, si bien que comparer les valeurs suffit — sans
+     temporisation. Les paramètres sont inaccessibles dès qu'un geste change le
+     résultat ou qu'une analyse est en cours : le bouton est grisé et le drawer
+     se referme, une relance écrasant les gestes et un second enregistrement
+     pendant l'analyse restant sans effet.
    - **Sortie** : une confirmation est demandée si des passages restent à valider
      (l'édition caméra restera inaccessible) ; sinon la sortie est silencieuse.
      Le store est réinitialisé, le fichier survit.
-   - Depuis la vue, « Valider et éditer » lève la barrière puis poursuit
-     directement vers l'édition caméra — l'intention de l'utilisateur qui a
-     ouvert la vue.
+   - **Validation** : elle lève la barrière et **revient à l'accueil**.
+     L'édition caméra s'ouvre depuis la carte du circuit, plus depuis cette vue,
+     qui n'a donc plus que deux sorties : le retour et la validation.
 
 4. **Composants** (`src/components/Multiride/`) :
-   - `MultirideToolbar.vue` : chip d'état, **pastille** de relance (les paramètres
-     ont changé depuis la détection affichée), bouton de relance, CTA de sortie
-     (« Valider et éditer » / « Éditer »), panneau Paramètres.
-   - `MultirideSegmentsPanel.vue` : synthèse (segments, emprunts, faux positifs,
-     fusions, km répétés, paramètres actifs), puis un bloc par segment — badges,
+   - `MultirideToolbar.vue` : compteur d'avancement, chip d'état (« Validé »,
+     daté, ou « Aucun passage multiple » — rien tant que les passages restent à
+     valider, le compteur et le bouton le disant déjà), bouton **Valider** et
+     panneau Paramètres. Ni relance manuelle — elle est automatique —, ni accès
+     à l'édition caméra.
+   - `MultirideProgressChip.vue` : segments **jugés** sur le total, faux positifs
+     rappelés à part. Même rendu que le compteur d'anomalies de l'audit, mais des
+     props différentes : `treated` compte les verdicts quand l'audit compte les
+     corrections, et `fp` n'en isole que les segments écartés. Un segment fusionné
+     n'a rien dit de sa justesse : il reste à examiner jusqu'à son verdict.
+   - `MultirideSegmentsPanel.vue` : un bloc par segment — en-tête (longueur et
+     début de l'emprunt de **référence**), badges d'état alignés à droite,
      **ruban multi-rails** (un rail par emprunt, positionné en pourcentage de la
-     trace et coloré par sens) et liste des emprunts.
+     trace et coloré par sens) et emprunts répétés (Aller/Retour, par leur seul
+     début). La ligne ne porte **aucune action** : elles appartiennent à la
+     fenêtre d'action.
+   - `MultirideActionPanel.vue` : la **fenêtre d'action** du segment sélectionné,
+     ouverte par le clic sur la ligne ou sur un emprunt de la carte — les trois
+     gestes du module, l'annulation, et le motif de chaque refus en info-bulle.
+   - `MultirideSynthesis.vue` : la synthèse, qui ferme le panneau sous la liste
+     des segments et reste repliée tant qu'on ne la demande pas. Les paramètres
+     actifs s'y lisent un par ligne.
+   - `multirideFormat.ts` : les libellés partagés par le panneau et la fenêtre
+     d'action — kilomètres à la française et en-tête de segment.
    - `MultirideMap.vue` : **4ᵉ instance Mapbox GL**, distincte des autres. Trace de
      fond (bleu, épaisseur 4), emprunts en trois couches (une par sens, pour que la
      référence — la plus épaisse — reste **sous** celles qui la recouvrent), bornes
@@ -1104,22 +1140,37 @@ détection lancée depuis la vue, elle, remonte ses erreurs à l'utilisateur.
    - `dialogs/ConfirmExitDialog.vue` : confirmation de sortie avec la barrière
      encore levée.
 
-5. **Ajustements manuels** (`adjustments.rs`) — fonctions **pures**, l'écriture
-   appartenant aux commandes :
-   - **fusion** d'un segment avec le précédent : emprunts repris dans l'ordre de
-     la trace, fusionnés deux à deux **de même sens** et séparés d'au plus **1 km**
-     (`MERGE_MANUAL_TOL_KM`, indépendant du réglage de fusion de la détection) ;
-     le premier emprunt devient la référence, les anciennes références non-tête
-     basculent en « aller » ;
-   - **faux positif** : marque tout le segment, qui est exclu de l'export et des
-     kilomètres répétés ;
-   - **réinitialisation** : la détection est **rejouée** avec les paramètres
-     enregistrés — elle est déterministe — plutôt que conservée en double.
+5. **Gestes manuels** (`adjustments.rs`) — fonctions **pures**, l'écriture
+   appartenant aux commandes. **Deux ordres de gestes, et deux règles** :
+   - un **verdict** — approuver, écarter — porte sur le segment dans son état
+     courant, et les deux verdicts s'excluent : un segment exclu de l'export ne
+     s'approuve pas, et écarter un segment approuvé **efface** l'approbation, qui
+     ne conserve aucune donnée ;
+   - une **fusion** réorganise la détection sans la juger : emprunts repris dans
+     l'ordre de la trace, fusionnés deux à deux **de même sens** et séparés d'au
+     plus **1 km** (`MERGE_MANUAL_TOL_KM`, indépendant du réglage de fusion de la
+     détection) ; le premier emprunt devient la référence, les anciennes
+     références non-tête basculent en « aller ». Refusée quand un des deux camps
+     est écarté, elle laisse le segment fusionné **approuvable** — le résultat est
+     un segment **neuf**, qui perd les approbations de ses deux camps ;
+   - l'**annulation** défait un geste par segment, le verdict **avant** la fusion,
+     et la **réinitialisation** rejoue la détection avec les paramètres
+     enregistrés — elle est déterministe — plutôt que d'en conserver une copie.
+     Cette dernière — la commande `multiride_reset` — n'a plus de bouton dans la
+     vue : elle reste au catalogue, en attendant que le besoin se représente.
 
-   Aucun ajustement ne touche au **registre** : ils n'ont pas d'incidence sur
-   l'édition caméra, et un état validé le reste. Une **relance** de la détection,
-   en revanche, repasse le statut à `pending` : l'utilisateur n'a pas vu le
-   nouveau résultat.
+   Une fusion enregistre les emprunts d'avant (`avant_fusion`) : elle est
+   destructive et ne se recalcule pas. Cet instantané portant l'état complet des
+   emprunts — enregistrements et approbations compris —, une **chaîne de fusions**
+   (un segment absorbe son précédent puis le suivant) s'annule pas à pas, de la
+   plus récente à la plus ancienne.
+
+   **Tout geste invalide la validation de la détection** : elle portait sur un
+   état qui n'est plus celui-ci. Les commandes **reposent le statut** dans le
+   registre dans la même passe — c'est lui que lisent la carte du circuit et le
+   garde-fou de l'édition caméra, et la barrière se referme sans attendre un
+   rechargement. Une **relance**, elle, repasse le statut à `pending` par
+   construction : le résultat produit est neuf, l'utilisateur ne l'a pas vu.
 
 ### Commandes Tauri du module Multiride
 
@@ -1127,10 +1178,17 @@ détection lancée depuis la vue, elle, remonte ses erreurs à l'utilisateur.
 |----------|-------------|
 | `multiride_detect(trace_id, params)` | Relit le GPX, rééchantillonne, apparie, assemble et qualifie les emprunts ; écrit `multiride.json` et pose le statut (`none` / `pending`). |
 | `multiride_load(trace_id)` | Relit la description d'une trace (`null` si absente, illisible, d'une version inconnue ou rattachée à une autre trace). |
-| `multiride_merge_segment(trace_id, archive, segment)` | Fusionne un segment avec le précédent et réécrit la description, **sans toucher au registre**. |
-| `multiride_toggle_fp(trace_id, archive, segment)` | Marque ou démarque un segment en faux positif, et réécrit la description. |
-| `multiride_reset(trace_id, archive)` | Rejoue la détection avec les paramètres enregistrés ; le statut de validation est conservé. |
+| `multiride_validate_segment(trace_id, archive, segment)` | **Approuve** un segment dans son état courant — un vrai passage multiple, rien à changer — et réécrit la description. Refusé sur un segment écarté ; ouvert sur un segment fusionné. |
+| `multiride_merge_segment(trace_id, archive, segment)` | Fusionne un segment avec le précédent, enregistre les emprunts d'avant (`avant_fusion`) et réécrit la description. Refusé quand un des deux camps est écarté. |
+| `multiride_toggle_fp(trace_id, archive, segment)` | Marque ou démarque un segment en faux positif, et réécrit la description. Refusé sur un segment fusionné. |
+| `multiride_undo_segment(trace_id, archive, segment)` | Annule un geste : retire le verdict — approbation, marqueur —, ou réinstalle les emprunts d'avant une fusion. |
+| `multiride_reset(trace_id, archive)` | Rejoue la détection avec les paramètres enregistrés ; la validation tombe, comme pour tout autre geste. |
 | `multiride_validate(trace_id, archive)` | **Point de sortie** : marque l'état `valide` et pose `multiride_status = "validated"`, ce qui lève la barrière. |
+
+Chacune des commandes de geste réécrit la description **et repose le statut** :
+un geste invalide la validation de la détection, et la barrière de l'édition
+caméra doit se refermer dans la même passe. Ce sont aussi les seules commandes
+du module qui exigent l'entrée du registre, après la détection et la validation.
 
 ### Paramètres (`Multiride.*`)
 
@@ -1212,7 +1270,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
    - Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace à auditer (`audit_status !== 'clean'`) → `router.push({ name: 'audit', query: { traceId: trace.id } })` ; passages multiples à valider (`multiride_status === 'pending'`) → `router.push({ name: 'multiride', query: { traceId: trace.id } })` ; sinon → édition caméra. Son icône porte l'état : `mdi-map-marker-path` **orange** (à auditer), `mdi-repeat` **ambre** (passages à valider) ou `mdi-pencil` (libre — la couleur traduit alors l'avancement du verrouillage), et l'icône est **forcée visible** hors survol tant qu'une barrière subsiste ou que l'édition est incomplète. La trace est désignée par la **query** de la route : plus de store intermédiaire.
    - Le bouton **Voir les anomalies de la source** (section info déroulante, `mdi-map-marker-path` **vert**) appelle `voirAnomaliesSource()` : il ouvre la route `/audit?traceId=…` en **consultation**. Il n'est **rendu** que si `audit_status === 'clean'` **et** `audit_archived` — il n'y a plus de repli informatif, la vue n'ayant rien à restituer sans archive.
-   - Le bouton **Passages multiples** (section info déroulante, `mdi-repeat` **vert**) ouvre `/multiride?traceId=…` en **consultation**, ajustement compris. Il n'est **rendu** que si `multiride_status === 'validated'` : tant que les passages restent à valider, c'est l'icône Éditer qui mène à la vue (barrière).
+   - Le bouton **Passages multiples** (section info déroulante, `mdi-repeat` **vert**) ouvre `/multiride?traceId=…` en **consultation**, ajustement compris. Il n'est **rendu** que si `multiride_status === 'validated'` : tant que les passages restent à valider, c'est l'icône Éditer qui mène à la vue (barrière). Un **geste** y invalide la validation — la trace repasse à valider, et le bouton laisse place à l'icône Éditer ambre jusqu'à une nouvelle validation.
 
 ### Carte satellite + terrain (vs. Accueil/Map.vue)
 
@@ -1255,7 +1313,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | `get_keyframes` | Charge les keyframes persistés d'une trace pour un ratio (`None` si absent). |
 | `delete_keyframes` | Supprime le fichier keyframes d'un ratio (tolérant si absent). |
 
-> Référence complète des 42 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 44 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 

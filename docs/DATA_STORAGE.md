@@ -135,7 +135,7 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Archivage de l'audit** (`audit_archived`) : `true` quand un audit **appliqué** a laissé une archive dans le dossier de la trace (`audit.json`). C'est ce drapeau, lu par la carte du circuit, qui **rend** le bouton « Voir les anomalies de la source » (anomalies et traitements consultables) : il est **absent** tant qu'il est faux — il n'existe plus d'état gris informatif. Posé par `audit_validate`, en même temps que `"clean"` ; absent des registres antérieurs → `false` (ces audits n'ont pas laissé d'archive, et les corrections ne sont pas restituables).
 
-**Statut des passages multiples** (`multiride_status`) : `"none"` (détection jouée, aucune portion répétée), `"pending"` (au moins un passage reste à valider — **l'édition caméra est fermée**) ou `"validated"` (passages validés). Il vaut `null` pour une trace dont la détection n'a pas été jouée : la valeur est **permissive**, la barrière ne s'appliquant qu'aux traces détectées depuis l'introduction du module. Posé par `multiride_detect` (`none`/`pending`) et par `multiride_validate` (`validated`) ; les ajustements (`multiride_merge_segment`, `multiride_toggle_fp`, `multiride_reset`) le laissent **inchangé**. Comme `audit_archived`, ce champ évite à la carte du circuit de lire un fichier pour connaître l'état de la trace.
+**Statut des passages multiples** (`multiride_status`) : `"none"` (détection jouée, aucune portion répétée), `"pending"` (au moins un passage reste à valider — **l'édition caméra est fermée**) ou `"validated"` (passages validés). Il vaut `null` pour une trace dont la détection n'a pas été jouée : la valeur est **permissive**, la barrière ne s'appliquant qu'aux traces détectées depuis l'introduction du module. Posé par `multiride_detect` (`none`/`pending`) et par `multiride_validate` (`validated`), et **reposé par chacune des commandes de geste** — approbation, fusion, faux positif, annulation, réinitialisation — : un geste invalide la validation de la détection, donc le statut retombe à `pending` (ou `none` si la détection ne trouve plus rien) et la barrière se referme. Comme `audit_archived`, ce champ évite à la carte du circuit de lire un fichier pour connaître l'état de la trace.
 
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
@@ -245,9 +245,17 @@ reconnaissance repassant sur une section, boucle locale. Le fichier est le
 | Événement | Effet |
 |---|---|
 | Détection (`multiride_detect`) | État neuf, `valide: false` |
-| Fusion, faux positif (`multiride_merge_segment`, `multiride_toggle_fp`) | État ajusté, `valide` **conservé** |
-| Réinitialisation (`multiride_reset`) | Détection rejouée à l'identique, `valide` conservé |
-| Validation (`multiride_validate`) | `valide: true` |
+| Approbation d'un segment (`multiride_validate_segment`) | Segment marqué `valide`, `valide` **de la détection retombe à `false`** |
+| Fusion, faux positif (`multiride_merge_segment`, `multiride_toggle_fp`) | État modifié, `valide` de la détection retombe à `false` |
+| Annulation d'un geste (`multiride_undo_segment`) | Geste défait, `valide` de la détection retombe à `false` |
+| Réinitialisation (`multiride_reset`) | Détection rejouée à l'identique, `valide` retombe à `false` |
+| Validation de la détection (`multiride_validate`) | `valide: true` |
+
+**Tout geste invalide la validation de la détection** : elle portait sur un état
+qui n'est plus celui-ci. Les commandes de geste **reposent le statut** du
+registre dans la même passe (`multiride_status` repasse à `"pending"`, ou à
+`"none"` si la détection ne trouve plus rien), si bien que la barrière de
+l'édition caméra se referme sans attendre un rechargement.
 
 **Format** : une `FeatureCollection` GeoJSON à la nomenclature de la
 spécification — `properties` global porte le contexte de la trace, les paramètres
@@ -268,7 +276,8 @@ coordonnées** (les bornes `[lon, lat]` d'entrée et de sortie).
     "parametres": { "tolerance_m": 10.0, "longueur_min_m": 100.0,
                     "pas_echantillonnage_m": 4.0, "fusion_references_m": 100.0,
                     "pas_plafonne": false },
-    "ajustements": { "fusions_manuelles": 0, "faux_positifs_exclus": 0 },
+    "ajustements": { "fusions_manuelles": 0, "faux_positifs_exclus": 0,
+                     "segments_valides": 0 },
     "note": "Chaque Feature représente un passage. La géométrie LineString ne contient que les 2 points bornes (entrée, sortie). Pour reconstituer la portion de trace, joindre point_entree / point_sortie avec la trace d'origine."
   },
   "features": [
@@ -279,7 +288,7 @@ coordonnées** (les bornes `[lon, lat]` d'entrée et de sortie).
         "faux_positif": false,
         "point_entree": 240, "point_sortie": 842,
         "km_entree": 7.62, "km_sortie": 23.06,
-        "longueur_km": 15.44, "fusionne": false
+        "longueur_km": 15.44, "fusionne": false, "valide": false
       },
       "geometry": { "type": "LineString",
                     "coordinates": [[7.49912, 43.77584], [7.49278, 43.79012]] }
@@ -300,12 +309,31 @@ coordonnées** (les bornes `[lon, lat]` d'entrée et de sortie).
   ils **restent** dans le fichier (c'est l'export qui les exclut), sinon une
   réouverture de la vue ne pourrait plus distinguer un segment écarté d'un
   segment ordinaire ;
-- `fusionne` marque les emprunts d'un segment ayant subi une fusion manuelle.
+- `fusionne` marque les emprunts d'un segment ayant subi une fusion manuelle ;
+- `valide`, sur une Feature, marque un segment **approuvé** tel quel — un vrai
+  passage multiple. À ne pas confondre avec le `valide` de `properties`, qui est
+  la **validation de la détection** et la barrière de l'édition caméra :
+  approuver ses segments ne vaut pas valider la détection ;
+- `avant_fusion` (absent le plus souvent) porte, sur les seules Features d'un
+  segment **fusionné**, les emprunts des deux segments tels qu'ils étaient avant
+  la fusion — laquelle est destructive et ne se recalcule pas. L'instantané
+  conserve les enregistrements et approbations qu'ils portaient : une chaîne de
+  fusions s'annule donc pas à pas, de la plus récente à la plus ancienne.
 
-**Trois ajouts au format de la spécification** : `version` et `trace_id` (version
+**Les gestes, et leurs règles** — deux ordres, et deux règles : un **verdict**
+(approuvé, écarté) porte sur le segment dans son état courant, et les deux
+verdicts s'excluent ; une **fusion** réorganise la détection sans la juger, et le
+segment fusionné — un segment neuf — perd les approbations de ses deux camps.
+
+**Ajouts au format de la spécification** : `version` et `trace_id` (version
 du format et rattachement à la trace, sans quoi la lecture ne pourrait pas
-refuser un fichier étranger), `valide` (levée de la barrière) et `faux_positif`
-(conservation des segments écartés, cf. ci-dessus).
+refuser un fichier étranger), `valide` dans `properties` (levée de la barrière),
+`faux_positif` (conservation des segments écartés, cf. ci-dessus), `valide` sur
+chaque Feature (approbation du segment) et `avant_fusion` (annulation d'une
+fusion). Tous sont **additifs et facultatifs à la lecture** : la version du
+format reste `1`, et un fichier écrit avant leur introduction se relit — son
+segment fusionné n'est simplement plus annulable, ses segments pas encore
+approuvés.
 
 **Lecture** (commande `multiride_load`) : **tolérante** — fichier absent,
 illisible, d'une version inconnue ou rattaché à une autre trace → `null`, et la
