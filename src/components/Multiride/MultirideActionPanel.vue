@@ -15,6 +15,18 @@
       <!-- Le titre est porté par l'enveloppe et non par le bouton : un bouton
            désactivé ne reçoit pas le survol, son info-bulle ne s'afficherait
            donc jamais — or c'est elle qui dit pourquoi l'action est refusée. -->
+      <div :title="approveNote">
+        <v-btn
+          block
+          color="success"
+          prepend-icon="mdi-check"
+          :disabled="approveBlocked"
+          @click="approve()"
+        >
+          {{ approved ? 'Segment approuvé' : 'Valider le segment' }}
+        </v-btn>
+      </div>
+
       <div :title="mergeNote">
         <v-btn
           block
@@ -60,17 +72,22 @@
  * Fenêtre d'action d'un segment (mêmes vues et mêmes gestes que la vue Audit,
  * où le clic sur une anomalie ouvre `AuditActionPanel`).
  *
- * Elle porte les trois gestes du module : **fusionner** le segment avec le
- * précédent, le marquer **faux positif**, et **annuler** l'ajustement en
- * cours. Un segment ne portant qu'un ajustement à la fois, les deux premiers
- * s'excluent : celui qui est refusé est grisé, son info-bulle en donne le
- * motif — premier segment, faux positif d'un des deux camps, ou segment déjà
- * fusionné.
+ * Elle porte les trois gestes du module, dans l'ordre de fréquence :
+ * **approuver** le segment dans son état courant, le **fusionner** avec le
+ * précédent, le marquer **faux positif** — puis **annuler** le geste en cours.
+ *
+ * Deux ordres de gestes, et deux règles : un **verdict** (approuvé, écarté)
+ * porte sur le segment tel qu'il est, et les deux verdicts s'excluent ; une
+ * **fusion**, elle, réorganise la détection sans la juger — un segment fusionné
+ * s'approuve donc comme un autre, mais ne peut plus être écarté. Les gestes
+ * impossibles sont grisés, leur info-bulle en donne le motif : premier segment,
+ * faux positif d'un des deux camps, segment déjà fusionné pour l'écartement, ou
+ * déjà approuvé. L'annulation retire d'abord le verdict, puis la fusion.
  *
  * Comme son homologue de l'audit, la fenêtre est **branchée au store** : elle
  * lit le segment sélectionné et agit elle-même, le parent n'ayant qu'à la
- * monter et à refermer. Les actions restent ouvertes après un geste — un
- * ajustement se défait, et la fenêtre propose justement de le défaire.
+ * monter et à refermer. Les gestes restent ouverts après coup — un verdict se
+ * défait, et la fenêtre propose justement de le défaire.
  */
 import { computed } from 'vue'
 import { useMultirideStore } from '../../stores/multiride'
@@ -108,10 +125,37 @@ const falsePositive = computed(() => passages.value.some((p) => p.fauxPositif))
 /** Le segment a été réuni à son précédent par une fusion manuelle. */
 const merged = computed(() => passages.value.some((p) => p.fusionne))
 
+/** Le segment est approuvé tel quel : un vrai passage multiple. */
+const approved = computed(() => passages.value.some((p) => p.valide))
+
 /** Le précédent est écarté : il ne peut rien absorber. */
 const previousFalsePositive = computed(() =>
   previousPassages.value.some((p) => p.fauxPositif),
 )
+
+/**
+ * Approbation refusée sur un segment écarté — un segment exclu de l'export ne
+ * s'approuve pas —, et sans objet sur un segment déjà approuvé.
+ *
+ * Un segment **fusionné** s'approuve, en revanche : la fusion réorganise la
+ * détection, elle ne dit rien de sa justesse, et le segment fusionné est un
+ * segment neuf, à juger comme les autres.
+ */
+const approveBlocked = computed(() => approved.value || falsePositive.value)
+
+/** Motif du refus — ou ce que le geste affirme, quand il est possible. */
+const approveNote = computed(() => {
+  if (approved.value) {
+    return "Ce segment est déjà approuvé — « Annuler l'approbation » revient dessus"
+  }
+  if (falsePositive.value) {
+    return 'Ce segment est un faux positif : un segment écarté ne peut pas être approuvé'
+  }
+  if (merged.value) {
+    return 'Approuver le résultat de la fusion : la fusion réorganise la détection, elle ne juge pas sa justesse'
+  }
+  return 'Un vrai passage multiple, rien à changer : le segment est approuvé et compte comme examiné'
+})
 
 /** Fusion refusée : premier segment, ou faux positif d'un des deux camps. */
 const mergeBlocked = computed(
@@ -149,16 +193,30 @@ const fpNote = computed(() =>
 )
 
 /**
- * Un ajustement reste à défaire : le marqueur d'un segment écarté, ou
- * l'enregistrement des emprunts d'avant une fusion.
+ * Un état reste à défaire : une approbation, le marqueur d'un segment écarté,
+ * ou l'enregistrement des emprunts d'avant une fusion.
  */
 const undoable = computed(
-  () => falsePositive.value || passages.value.some((p) => p.avantFusion != null),
+  () =>
+    approved.value ||
+    falsePositive.value ||
+    passages.value.some((p) => p.avantFusion != null),
 )
 
-const undoLabel = computed(() =>
-  falsePositive.value ? 'Annuler le faux positif' : 'Annuler la fusion',
-)
+const undoLabel = computed(() => {
+  if (approved.value) return "Annuler l'approbation"
+  return falsePositive.value ? 'Retirer le faux positif' : 'Annuler la fusion'
+})
+
+/** Approuve le segment — un vrai passage multiple, rien à changer. */
+async function approve(): Promise<void> {
+  try {
+    await multirideStore.validateSegment(props.segment)
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : "Échec de l'approbation."
+    ui.showError(msg)
+  }
+}
 
 /** Réunit le segment à son précédent — le store suit la fusion. */
 async function merge(): Promise<void> {

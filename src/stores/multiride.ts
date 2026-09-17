@@ -70,6 +70,14 @@ export interface MultiridePassage {
   /** Le segment du passage a subi une fusion manuelle. */
   fusionne: boolean
   /**
+   * Segment **approuvé** : un vrai passage multiple, rien à changer.
+   *
+   * Troisième état d'un segment, exclusif des deux autres, et comme eux un fait
+   * de segment porté par chaque emprunt. C'est le geste le plus fréquent, et le
+   * seul dont l'annulation ne demande aucune donnée.
+   */
+  valide: boolean
+  /**
    * Emprunts des deux segments **tels qu'ils étaient avant la fusion** — de
    * quoi l'annuler.
    *
@@ -171,16 +179,16 @@ export const useMultirideStore = defineStore('multiride', () => {
   const needsValidation = computed(() => status.value === 'pending')
 
   /**
-   * `true` dès qu'un ajustement a été porté à la détection — fusion ou marquage
-   * faux positif.
+   * `true` dès qu'un ajustement a été porté à la détection — un segment écarté
+   * ou fusionné.
+   *
+   * C'est **la** condition du verrouillage des paramètres : ces deux gestes
+   * changent le résultat, et une relance les effacerait. Une approbation, elle,
+   * ne change rien au résultat — elle sera simplement à refaire sur la
+   * détection relancée —, et ne verrouille donc pas les paramètres.
    */
   const hasAdjustments = computed(() =>
     passages.value.some((p) => p.fauxPositif || p.fusionne),
-  )
-
-  /** Segments fusionnés — c'est le segment absorbant qui porte la marque. */
-  const mergedSegmentCount = computed(
-    () => segmentNumbersWhere(passages.value, (p) => p.fusionne).length,
   )
 
   /** Segments marqués faux positifs. */
@@ -189,12 +197,17 @@ export const useMultirideStore = defineStore('multiride', () => {
   )
 
   /**
-   * Segments portant un ajustement — l'union des deux marques, et non leur
-   * somme : un segment ne porte qu'un ajustement, mais un état exceptionnel
+   * Segments **jugés** : approuvés ou écartés.
+   *
+   * C'est le `x` du compteur d'avancement, et il compte des verdicts — pas des
+   * réorganisations. Un segment fusionné n'a rien dit de sa justesse : c'est un
+   * segment **neuf**, qui reste à juger, et il figure donc parmi les segments à
+   * examiner tant qu'il n'a pas été approuvé ou écarté. L'union, et non la
+   * somme : un segment ne porte qu'un verdict, mais un état exceptionnel
    * (fichier modifié à la main) ne doit pas faire mentir le décompte.
    */
   const treatedSegmentCount = computed(
-    () => segmentNumbersWhere(passages.value, (p) => p.fauxPositif || p.fusionne).length,
+    () => segmentNumbersWhere(passages.value, (p) => p.valide || p.fauxPositif).length,
   )
 
   /**
@@ -332,16 +345,32 @@ export const useMultirideStore = defineStore('multiride', () => {
   }
 
   /**
-   * Annule l'ajustement d'un segment et réécrit le fichier de description.
+   * Approuve un segment tel qu'il a été détecté — un vrai passage multiple,
+   * rien à changer — et réécrit le fichier de description.
    *
-   * Un segment ne portant qu'un ajustement à la fois, la commande n'a pas à
-   * savoir lequel elle défait : l'état enregistré le dit — marqueur faux
-   * positif à retirer, ou emprunts d'avant fusion à réinstaller, avec le rang
-   * des segments que la fusion avait décalés.
-   *
-   * La sélection est conservée : le segment existe toujours après l'annulation,
-   * c'est son contenu qui change.
+   * C'est le geste le plus fréquent de la vue, et le seul dont l'annulation ne
+   * demande aucune donnée : l'approbation se retire comme elle s'est posée.
    */
+  async function validateSegment(segment: number): Promise<void> {
+    if (!currentTraceId.value || !archive.value) return
+    archive.value = await invoke<MultirideArchive>('multiride_validate_segment', {
+      traceId: currentTraceId.value,
+      archive: archive.value,
+      segment,
+    })
+  }
+
+    /**
+     * Annule l'état d'un segment et réécrit le fichier de description.
+     *
+     * Un segment ne portant qu'un état à la fois, la commande n'a pas à savoir
+     * lequel elle défait : l'état enregistré le dit — approbation ou marqueur à
+     * retirer, ou emprunts d'avant fusion à réinstaller, avec le rang des
+     * segments que la fusion avait décalés.
+     *
+     * La sélection est conservée : le segment existe toujours après
+     * l'annulation, c'est son état qui change.
+     */
   async function undoSegment(segment: number): Promise<void> {
     if (!currentTraceId.value || !archive.value) return
     archive.value = await invoke<MultirideArchive>('multiride_undo_segment', {
@@ -391,7 +420,6 @@ export const useMultirideStore = defineStore('multiride', () => {
     hasPassages,
     needsValidation,
     hasAdjustments,
-    mergedSegmentCount,
     falsePositiveSegmentCount,
     treatedSegmentCount,
     pendingSegmentCount,
@@ -403,6 +431,7 @@ export const useMultirideStore = defineStore('multiride', () => {
     selectSegment,
     runDetection,
     restore,
+    validateSegment,
     mergeSegment,
     toggleFp,
     undoSegment,

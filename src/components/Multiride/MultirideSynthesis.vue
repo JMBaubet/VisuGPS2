@@ -18,6 +18,9 @@
           <v-list-item title="Faux positifs">
             <template #append>{{ falsePositiveCount }}</template>
           </v-list-item>
+          <v-list-item title="Segments approuvés">
+            <template #append>{{ approvedCount }}</template>
+          </v-list-item>
           <v-list-item title="Fusions manuelles">
             <template #append>{{ mergedCount }}</template>
           </v-list-item>
@@ -78,6 +81,11 @@ const segmentCount = computed(
 const falsePositiveCount = computed(
   () =>
     new Set(props.passages.filter((p) => p.fauxPositif).map((p) => p.segment)).size,
+)
+
+/** Segments approuvés tels quels. */
+const approvedCount = computed(
+  () => new Set(props.passages.filter((p) => p.valide).map((p) => p.segment)).size,
 )
 
 /** Segments réunis à leur précédent par une fusion manuelle. */

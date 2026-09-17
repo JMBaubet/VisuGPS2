@@ -8,33 +8,35 @@
 
 <script setup lang="ts">
 /**
- * Badge d'avancement des passages multiples : segments ajustés sur le total,
+ * Badge d'avancement des passages multiples : segments examinés sur le total,
  * avec le décompte des faux positifs.
  *
- * Copie conforme d'`AuditProgressChip` — mêmes props, mêmes couleurs, même
- * rendu — pour que l'avancement se lise de la même façon dans les deux vues :
- * rouge tant que rien n'est ajusté, vert quand tout l'est, orange ou ambre en
- * cours, et le rappel des faux positifs.
+ * Même rendu et mêmes couleurs qu'`AuditProgressChip` — rouge tant que rien
+ * n'est examiné, vert quand tout l'est, orange ou ambre en cours — pour que
+ * l'avancement se lise de la même façon dans les deux vues.
  *
- * Le vocabulaire diffère d'une vue à l'autre : `corrected`, qui compte les
- * anomalies corrigées côté audit, compte ici les segments **fusionnés**. C'est
- * l'ajustement qui tient lieu de correction, et la barrière n'exigeant rien —
- * une détection juste se valide telle quelle —, ce compteur reste un repère,
- * jamais une condition.
+ * Les props diffèrent en revanche, et pour une raison de fond : l'audit ne
+ * connaît que des anomalies à corriger, quand un segment de passages multiples
+ * se contente le plus souvent d'être **approuvé**. `treated` compte donc les
+ * segments ayant reçu un geste, quel qu'il soit — approuvé, écarté, fusionné —
+ * et `fp` n'en isole que les segments écartés, pour le rappel du suffixe.
+ *
+ * Ce compteur reste un repère : la barrière n'exige rien, une détection juste
+ * se valide telle quelle.
  */
 import { computed } from 'vue'
 
 const props = defineProps<{
-  /** Segments sans ajustement. */
+  /** Segments sans geste — à examiner. */
   pending: number
-  /** Segments fusionnés avec leur précédent. */
-  corrected: number
-  /** Segments marqués faux positifs. */
+  /** Segments examinés : approuvés, écartés ou fusionnés. */
+  treated: number
+  /** Segments écartés (faux positifs), parmi les examinés. */
   fp: number
 }>()
 
-const done = computed(() => props.corrected + props.fp)
-const total = computed(() => done.value + props.pending)
+const done = computed(() => props.treated)
+const total = computed(() => props.treated + props.pending)
 
 const chipColor = computed(() => {
   if (props.pending === 0 && done.value === 0) return 'default'

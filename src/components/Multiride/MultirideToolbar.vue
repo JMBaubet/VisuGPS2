@@ -13,11 +13,11 @@
     </v-app-bar-title>
 
     <template #append>
-      <!-- Avancement : segments ajustés sur le total, comme le compteur
+      <!-- Avancement : segments examinés sur le total, comme le compteur
            d'anomalies de la vue Audit. -->
       <MultirideProgressChip
         :pending="pendingCount"
-        :corrected="correctedCount"
+        :treated="treatedCount"
         :fp="fpCount"
         class="mr-3"
       />
@@ -115,11 +115,11 @@ const props = defineProps<{
   loading: boolean
   /** Horodatage ISO de la validation, si connue. */
   validatedAt?: string | null
-  /** Segments sans ajustement. */
+  /** Segments sans geste — à examiner. */
   pendingCount: number
-  /** Segments fusionnés avec leur précédent. */
-  correctedCount: number
-  /** Segments marqués faux positifs. */
+  /** Segments examinés : approuvés, écartés ou fusionnés. */
+  treatedCount: number
+  /** Segments écartés (faux positifs). */
   fpCount: number
   /** Un ajustement est en place : les paramètres ne sont pas modifiables. */
   adjustmentsLocked: boolean

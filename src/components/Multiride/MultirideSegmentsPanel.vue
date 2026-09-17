@@ -12,9 +12,9 @@
             @click="emit('select', segment)"
           >
             <!-- Titre : la longueur et le début de l'emprunt de référence.
-                 L'état d'ajustement est porté à droite par un badge ; un
-                 segment n'en porte qu'un, la fusion et le faux positif
-                 s'excluant. -->
+                 L'état du segment est porté à droite par ses badges : un
+                 verdict — écarté, ou approuvé —, et la marque d'une fusion, qui
+                 est d'un autre ordre et peut donc l'accompagner. -->
             <v-list-item-title :class="{ 'mrl-strike': isFalsePositive(segment) }">
               {{ titleOf(segment) }}
             </v-list-item-title>
@@ -28,14 +28,24 @@
               >
                 FP
               </v-chip>
-              <v-chip
-                v-else-if="isMerged(segment)"
-                size="x-small"
-                variant="tonal"
-                color="info"
-              >
-                fusionné
-              </v-chip>
+              <template v-else>
+                <v-chip
+                  v-if="isMerged(segment)"
+                  size="x-small"
+                  variant="tonal"
+                  color="info"
+                >
+                  fusionné
+                </v-chip>
+                <v-chip
+                  v-if="isValidated(segment)"
+                  size="x-small"
+                  variant="tonal"
+                  color="success"
+                >
+                  validé
+                </v-chip>
+              </template>
             </template>
 
             <!-- Ruban multi-rails : un rail par emprunt, positionné sur la
@@ -171,6 +181,11 @@ function isFalsePositive(segment: number): boolean {
 /** `true` si le segment a été réuni à son précédent par une fusion. */
 function isMerged(segment: number): boolean {
   return segmentPassages(segment).some((p) => p.fusionne)
+}
+
+/** `true` si le segment a été approuvé tel quel. */
+function isValidated(segment: number): boolean {
+  return segmentPassages(segment).some((p) => p.valide)
 }
 
 /** En-tête d'un segment, lu sur son emprunt de référence. */
