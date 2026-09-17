@@ -23,20 +23,10 @@
       />
 
       <!-- État de la détection : c'est lui qui décide de l'accès à l'édition
-           caméra (un état « à valider » la ferme). -->
+           caméra. Rien à dire tant que les passages restent à valider — le
+           compteur d'avancement et le bouton de validation le disent déjà. -->
       <v-chip
-        v-if="status === 'pending'"
-        color="warning"
-        variant="tonal"
-        prepend-icon="mdi-alert-outline"
-        class="mr-3"
-        title="Les portions répétées doivent être validées avant l'édition caméra"
-      >
-        À valider — {{ segmentCount }}
-        {{ segmentCount > 1 ? 'segments' : 'segment' }}
-      </v-chip>
-      <v-chip
-        v-else-if="status === 'validated'"
+        v-if="status === 'validated'"
         color="info"
         variant="tonal"
         prepend-icon="mdi-check-decagram-outline"
@@ -91,9 +81,10 @@
  * état de la détection, validation et panneau Paramètres (flip-flop).
  *
  * L'état affiché est celui du **registre** des traces, restitué par le store :
- * `pending` ferme l'édition caméra tant que les portions répétées n'ont pas été
- * validées. La validation lève la barrière et **ramène à l'accueil** ;
- * l'édition caméra s'ouvre depuis la carte du circuit, plus depuis cette vue.
+ * un état « à valider » ferme l'édition caméra, et la validation le lève puis
+ * **ramène à l'accueil** ; l'édition caméra s'ouvre depuis la carte du circuit,
+ * plus depuis cette vue. Rien n'annonce cet état tant qu'il dure : le compteur
+ * d'avancement et le bouton de validation le disent déjà.
  *
  * Il n'y a **pas de relance manuelle** : la détection est rejouée d'elle-même
  * quand un paramètre est enregistré, et le bouton des paramètres est grisé tant
@@ -109,8 +100,6 @@ const props = defineProps<{
   traceName: string
   /** Statut de la détection (`null` : aucune détection chargée). */
   status: MultirideStatus | null
-  /** Nombre de segments détectés. */
-  segmentCount: number
   /** Une détection ou une relecture est en cours. */
   loading: boolean
   /** Horodatage ISO de la validation, si connue. */

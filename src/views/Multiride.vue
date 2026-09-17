@@ -4,7 +4,6 @@
       <MultirideToolbar
         :trace-name="traceName"
         :status="multirideStore.status"
-        :segment-count="multirideStore.segmentCount"
         :loading="multirideStore.loading"
         :validated-at="archive?.updatedAt ?? null"
         :pending-count="multirideStore.pendingSegmentCount"
