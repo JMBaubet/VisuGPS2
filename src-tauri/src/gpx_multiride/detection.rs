@@ -86,9 +86,9 @@ pub fn detect(
                     1 => MultirideSens::Aller,
                     _ => MultirideSens::Retour,
                 },
-                // L'utilisateur seul marque un faux positif ou une fusion : une
-                // détection neuve n'en porte aucun, et n'a donc rien à
-                // restaurer.
+                // L'utilisateur seul approuve un segment, le marque faux positif
+                // ou le fusionne : une détection neuve n'en porte aucun, et n'a
+                // donc rien à restaurer.
                 faux_positif: false,
                 point_entree: passage.pt0,
                 point_sortie: passage.pt1,
@@ -96,6 +96,7 @@ pub fn detect(
                 km_sortie: passage.km1,
                 longueur_km: passage.km1 - passage.km0,
                 fusionne: false,
+                valide: false,
                 avant_fusion: None,
                 entree: MultirideLatLon {
                     lat: sampling.lat[passage.s],

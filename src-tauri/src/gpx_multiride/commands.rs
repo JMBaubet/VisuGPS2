@@ -1,10 +1,11 @@
 //! Commandes Tauri du module Multiride.
 //!
 //! Les commandes publiques, appelées par le store Pinia `useMultirideStore` :
-//! détection et relecture (`multiride_detect`, `multiride_load`), ajustements
-//! (`multiride_merge_segment`, `multiride_toggle_fp`, `multiride_reset`,
-//! `multiride_undo_segment`) et validation (`multiride_validate`). Aucune
-//! n'entretient d'état côté Rust : le fichier de description
+//! détection et relecture (`multiride_detect`, `multiride_load`), gestes sur un
+//! segment (`multiride_validate_segment`, `multiride_toggle_fp`,
+//! `multiride_merge_segment`, `multiride_undo_segment`), réinitialisation
+//! (`multiride_reset`) et validation de la détection (`multiride_validate`).
+//! Aucune n'entretient d'état côté Rust : le fichier de description
 //! (`traces/{trace_id}/multiride.json`) est la seule persistance, et il est
 //! réécrit par chaque commande qui modifie l'état.
 //!
@@ -254,12 +255,39 @@ pub async fn multiride_toggle_fp(
     Ok(updated)
 }
 
+/// Approuve un segment — un vrai passage multiple, rien à changer — et réécrit
+/// le fichier de description.
+///
+/// C'est le geste le plus fréquent de la vue, et le seul qui ne conserve aucune
+/// donnée à restaurer : l'approbation se retire comme elle s'est posée.
+///
+/// Comme les autres ajustements, la commande **ne touche pas au registre** :
+/// approuver les segments d'une détection ne vaut pas validation de la
+/// détection.
+#[tauri::command]
+pub async fn multiride_validate_segment(
+    app: tauri::AppHandle,
+    trace_id: String,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let updated = validate_segment_impl(&mode_dir, &trace_id, archive, segment)?;
+    println!(
+        "[multiride] segment approuvé trace={} segment={} passages={}",
+        trace_id,
+        segment,
+        updated.passages.len()
+    );
+    Ok(updated)
+}
+
 /// Annule l'ajustement d'un segment (spécification §F-14, §F-15) et réécrit le
 /// fichier de description.
 ///
-/// Un segment ne portant qu'un ajustement à la fois, la commande n'a pas à
-/// savoir lequel elle annule : l'état reçu le dit — marqueur faux positif à
-/// retirer, ou enregistrement d'avant fusion à réinstaller.
+/// Un segment ne portant qu'un état à la fois, la commande n'a pas à savoir
+/// lequel elle annule : l'état reçu le dit — approbation ou marqueur à retirer,
+/// ou enregistrement d'avant fusion à réinstaller.
 ///
 /// Le **registre n'est pas touché**, comme pour les autres ajustements.
 #[tauri::command]
@@ -330,6 +358,18 @@ pub fn undo_impl(
     segment: usize,
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::undo_segment(&archive, segment)?;
+    save_adjusted(mode_dir, trace_id, &updated)?;
+    Ok(updated)
+}
+
+/// Implémentation testable de `multiride_validate_segment` (sans `AppHandle`).
+pub fn validate_segment_impl(
+    mode_dir: &Path,
+    trace_id: &str,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let updated = adjustments::validate_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
     Ok(updated)
 }

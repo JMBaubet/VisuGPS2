@@ -8,21 +8,24 @@
 //! métadonnées d'indices et de distances cumulées permettant de rejoindre la
 //! trace d'origine (annexe 13.6).
 //!
-//! Quatre ajouts au format de la spécification, pour en faire un état
+//! Cinq ajouts au format de la spécification, pour en faire un état
 //! **restaurable** en plus d'un contrat de sortie :
 //! - `version` et `trace_id` dans `properties` — versionnage du format (une
 //!   version inconnue est refusée) et rattachement à la trace ;
-//! - `valide` dans `properties` — marque de validation par l'utilisateur ;
+//! - `valide` dans `properties` — marque de validation de la détection par
+//!   l'utilisateur ;
 //! - `faux_positif` sur chaque `Feature` — les passages d'un segment marqué
 //!   faux positif **restent** dans le fichier (c'est l'export qui les exclut,
 //!   §CA-13) : sans eux, une réouverture de la vue ne pourrait plus les
 //!   distinguer d'un segment ordinaire ;
+//! - `valide` sur chaque `Feature` — le segment a été **approuvé** tel quel, à
+//!   distinguer de la validation de la détection, qui porte sur l'ensemble ;
 //! - `avant_fusion` sur les Features d'un segment **fusionné** — les emprunts
 //!   des deux segments tels qu'ils étaient avant la fusion, qui est
-//!   destructive et ne se recalcule pas. Comme le champ est additif et
-//!   optionnel, un fichier écrit avant son introduction se lit toujours : le
-//!   segment fusionné n'est simplement plus annulable, et la version du format
-//!   reste donc `1`.
+//!   destructive et ne se recalcule pas. Comme les champs additifs et
+//!   optionnels se lisent ou se taisent sans erreur, la version du format reste
+//!   `1` : un fichier écrit avant leur introduction se relit (la fusion n'est
+//!   simplement plus annulable, le segment pas encore approuvé).
 //!
 //! Deux garanties, reprises de `gpx_audit::archive` :
 //! - l'écriture est **atomique** (`pipeline::write_atomic`, `.tmp` + `rename`) :
@@ -107,6 +110,9 @@ struct FileAdjustments {
     fusions_manuelles: usize,
     /// Nombre de segments marqués faux positif (exclus de l'export).
     faux_positifs_exclus: usize,
+    /// Nombre de segments approuvés tels quels.
+    #[serde(default)]
+    segments_valides: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -129,6 +135,13 @@ struct FileFeatureProperties {
     km_sortie: f64,
     longueur_km: f64,
     fusionne: bool,
+    /// Segment approuvé par l'utilisateur : un vrai passage multiple.
+    ///
+    /// Seul état de segment à n'avoir besoin d'**aucune** donnée pour être
+    /// défait : il se retire comme il s'est posé. Absent d'un fichier écrit
+    /// avant l'introduction du champ, qui se relit alors « à examiner ».
+    #[serde(default)]
+    valide: bool,
     /// Emprunts d'avant la fusion qui a réuni ce segment au précédent.
     ///
     /// Absent hors d'un segment fusionné — et donc absent des fichiers écrits
@@ -202,6 +215,7 @@ fn passage_to_feature(passage: &MultiridePassage) -> FileFeature {
             km_sortie: passage.km_sortie,
             longueur_km: passage.longueur_km,
             fusionne: passage.fusionne,
+            valide: passage.valide,
             avant_fusion: passage.avant_fusion.as_ref().map(|saved| {
                 saved.iter().map(passage_to_feature).collect()
             }),
@@ -230,6 +244,7 @@ fn feature_to_passage(feature: FileFeature) -> MultiridePassage {
         km_sortie: feature.properties.km_sortie,
         longueur_km: feature.properties.longueur_km,
         fusionne: feature.properties.fusionne,
+        valide: feature.properties.valide,
         avant_fusion: feature
             .properties
             .avant_fusion
@@ -271,6 +286,7 @@ fn to_file(archive: &MultirideArchive) -> MultirideFile {
             ajustements: FileAdjustments {
                 fusions_manuelles: count_segments(&archive.passages, |p| p.fusionne),
                 faux_positifs_exclus: count_segments(&archive.passages, |p| p.faux_positif),
+                segments_valides: count_segments(&archive.passages, |p| p.valide),
             },
             note: NOTE.to_string(),
         },

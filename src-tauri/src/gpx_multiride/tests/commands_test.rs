@@ -147,6 +147,7 @@ fn archive_with_one_passage(mode: &std::path::Path, id: &str) -> MultirideArchiv
             km_sortie: 0.08,
             longueur_km: 0.08,
             fusionne: false,
+            valide: false,
             avant_fusion: None,
             entree: MultirideLatLon {
                 lat: 45.0,

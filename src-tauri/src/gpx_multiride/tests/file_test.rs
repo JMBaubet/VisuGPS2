@@ -64,6 +64,7 @@ fn passage(
         km_sortie: 23.06,
         longueur_km: 15.44,
         fusionne,
+        valide: false,
         avant_fusion: None,
         entree: MultirideLatLon {
             lat: 43.77584,
@@ -308,6 +309,64 @@ fn a_file_written_before_the_field_still_loads() {
     assert_eq!(loaded.passages.len(), 3);
     assert!(loaded.passages.iter().all(|p| p.avant_fusion.is_none()));
     assert!(loaded.passages[0].fusionne, "la fusion reste lisible");
+}
+
+// ─── Approbation d'un segment (`valide`) ──────────────────────────────
+
+/// L'approbation est écrite à la nomenclature du contrat, sur la Feature du
+/// segment, et comptée dans le bloc des ajustements.
+#[test]
+fn an_approval_is_written_and_read_back() {
+    let dir = test_dir("segment_valide");
+    let path = file_path(&dir, TRACE_ID);
+    // Le segment 2 du fixture est écarté : l'approbation prend sa place, un
+    // segment ne portant qu'un état à la fois.
+    let mut archive = archive_with_passages();
+    for passage in archive.passages.iter_mut().filter(|p| p.segment == 2) {
+        passage.faux_positif = false;
+        passage.valide = true;
+    }
+
+    save_file(&path, &archive).unwrap();
+    let json = read_json(&path);
+
+    let features = json["features"].as_array().unwrap();
+    assert_eq!(features[2]["properties"]["valide"], true);
+    assert_eq!(features[2]["properties"]["faux_positif"], false);
+    assert_eq!(features[0]["properties"]["valide"], false);
+    assert_eq!(
+        json["properties"]["ajustements"]["segments_valides"], 1,
+        "un segment approuvé"
+    );
+
+    let loaded = load_file(&path, TRACE_ID).expect("fichier relu");
+    assert!(loaded.passages[2].valide);
+    assert!(!loaded.passages[0].valide);
+}
+
+/// Un fichier écrit avant l'introduction du champ se relit : le segment est
+/// simplement « à examiner », et la version du format n'a pas à changer.
+#[test]
+fn a_file_without_the_approval_field_reads_as_unapproved() {
+    let dir = test_dir("avant_approbation");
+    let path = file_path(&dir, TRACE_ID);
+    save_file(&path, &archive_with_passages()).unwrap();
+
+    let mut json = read_json(&path);
+    for feature in json["features"].as_array_mut().unwrap() {
+        feature["properties"].as_object_mut().unwrap().remove("valide");
+    }
+    json["properties"]["ajustements"]
+        .as_object_mut()
+        .unwrap()
+        .remove("segments_valides");
+    fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+
+    let loaded = load_file(&path, TRACE_ID).expect("fichier antérieur toujours lisible");
+
+    assert_eq!(loaded.version, FILE_VERSION);
+    assert_eq!(loaded.passages.len(), 3);
+    assert!(loaded.passages.iter().all(|p| !p.valide));
 }
 
 // ─── Lecture tolérante ────────────────────────────────────────────────

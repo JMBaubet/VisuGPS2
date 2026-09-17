@@ -105,6 +105,15 @@ pub struct MultiridePassage {
     pub longueur_km: f64,
     /// Le segment du passage a subi une fusion manuelle.
     pub fusionne: bool,
+    /// Segment **approuvé** par l'utilisateur : un vrai passage multiple, rien
+    /// à changer.
+    ///
+    /// Troisième état d'un segment, exclusif des deux autres — écarté,
+    /// fusionné —, et comme eux un fait de segment porté par chaque emprunt.
+    /// C'est le geste le plus fréquent : sans lui, approuver un segment ne se
+    /// dirait pas, et l'avancement ne pourrait jamais être complet.
+    #[serde(default)]
+    pub valide: bool,
     /// Emprunts des deux segments **tels qu'ils étaient avant la fusion** —
     /// de quoi l'annuler.
     ///

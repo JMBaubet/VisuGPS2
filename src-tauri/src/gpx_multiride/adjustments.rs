@@ -3,6 +3,8 @@
 //! Quatre gestes, sur des fonctions **pures** — l'écriture du fichier
 //! appartient aux commandes :
 //!
+//! - **validation** d'un segment : le geste le plus fréquent, celui qui dit
+//!   qu'un segment détecté est un vrai passage multiple, sans rien y changer ;
 //! - **fusion** d'un segment avec le précédent : la décision explicite de
 //!   l'utilisateur que deux tronçons n'en font qu'un (deux rues d'un même
 //!   carrefour, portions séparées par une interruption de trace) ;
@@ -12,12 +14,24 @@
 //! - **réinitialisation**, qui rejoue la détection — portée par la commande, la
 //!   détection n'étant pas du ressort de ce module.
 //!
-//! **Un segment écarté ne fusionne pas**, et un segment fusionné ne s'écarte
-//! pas : la fusion et le faux positif s'excluent, de sorte qu'un segment ne
-//! porte jamais qu'un ajustement — donc une seule annulation à offrir. En
-//! revanche les fusions **s'enchaînent** : un segment peut absorber son
-//! précédent puis le suivant, et la chaîne s'annule de la plus récente à la
-//! plus ancienne (cf. [`undo_segment`]).
+//! **Deux axes, et non un seul état.** Une **fusion** réorganise la détection :
+//! elle ne dit rien de la justesse du résultat, et le segment fusionné est un
+//! segment **neuf**, qui perd donc l'approbation de ses deux camps — il reste à
+//! approuver. Un **verdict**, lui, porte sur le segment dans son état courant :
+//! approuvé, ou écarté, les deux s'excluant puisqu'un segment exclu de l'export
+//! ne peut pas être dit juste. Un segment fusionné peut donc être approuvé, et
+//! la fusion s'annule indépendamment du verdict (l'annulation retire d'abord le
+//! verdict, puis la fusion).
+//!
+//! Les gestes se refusent ainsi entre eux : une fusion qui prendrait un segment
+//! écarté, et l'approbation d'un segment écarté. Approuver ne conservant aucune
+//! donnée, écarter un segment approuvé **efface** simplement l'approbation ; une
+//! fusion, elle, garde l'enregistrement des emprunts d'avant — et cet
+//! enregistrement porte aussi les approbations, que l'annulation restitue donc
+//! avec le reste.
+//!
+//! Les fusions **s'enchaînent** : un segment peut absorber son précédent puis
+//! le suivant, et la chaîne s'annule de la plus récente à la plus ancienne.
 //!
 //! Aucun de ces gestes ne touche au **statut** de la trace : ils n'ont pas
 //! d'incidence sur l'édition caméra, et un état validé le reste.
@@ -66,8 +80,10 @@ fn segment_passages(passages: &[MultiridePassage], segment: usize) -> Vec<Multir
 /// conserve afin qu'une réouverture retrouve le marquage.
 ///
 /// Le marquage est refusé sur un segment **fusionné** : la fusion et le faux
-/// positif s'excluent, un segment ne portant qu'un ajustement à la fois. Le
-/// retrait du marqueur, lui, reste toujours possible.
+/// positif s'excluent, un segment ne portant qu'un état à la fois. Sur un
+/// segment **approuvé**, il passe et efface l'approbation — rien n'est perdu,
+/// une approbation ne portant aucune donnée. Le retrait du marqueur, lui, reste
+/// toujours possible.
 pub fn toggle_fp(archive: &MultirideArchive, segment: usize) -> Result<MultirideArchive, String> {
     let passages = segment_passages(&archive.passages, segment);
     if passages.is_empty() {
@@ -86,6 +102,44 @@ pub fn toggle_fp(archive: &MultirideArchive, segment: usize) -> Result<Multiride
     let mut updated = archive.clone();
     for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
         passage.faux_positif = mark;
+        // Écarter un segment approuvé est une décision plus forte : elle prend
+        // sa place. Un segment ne porte qu'un état.
+        if mark {
+            passage.valide = false;
+        }
+    }
+    Ok(updated)
+}
+
+/// Approuve un segment tel qu'il a été détecté (§F-15).
+///
+/// C'est le geste le plus fréquent — un segment sur lequel il n'y a rien à
+/// redire —, et le seul qui n'ait besoin d'aucune donnée pour être défait.
+///
+/// L'approbation porte sur le segment **dans son état courant** : elle est donc
+/// ouverte sur un segment fusionné, qui doit être approuvé comme les autres —
+/// une fusion réorganise la détection, elle ne dit rien de sa justesse. Refusée
+/// en revanche sur un segment **écarté** : un segment exclu de l'export ne
+/// s'approuve pas, la contradiction serait dans les termes. L'appelant l'annonce
+/// en grisant le bouton ; le refus est ici la défense en profondeur.
+pub fn validate_segment(
+    archive: &MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let passages = segment_passages(&archive.passages, segment);
+    if passages.is_empty() {
+        return Err(format!("Segment introuvable : {}.", segment));
+    }
+    if passages.iter().any(|p| p.faux_positif) {
+        return Err(format!(
+            "Le segment {} est un faux positif : un segment écarté ne peut pas être approuvé.",
+            segment
+        ));
+    }
+
+    let mut updated = archive.clone();
+    for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
+        passage.valide = true;
     }
     Ok(updated)
 }
@@ -200,6 +254,10 @@ pub fn merge_segment(
         passage.fusionne = true;
         // Refusé plus haut : aucun des deux segments n'est écarté.
         passage.faux_positif = false;
+        // Le segment fusionné est un segment **neuf** : une approbation portée
+        // par l'un des deux camps ne le couvre pas. Elle n'est pas perdue pour
+        // autant — l'instantané la conserve, et l'annulation la restitue.
+        passage.valide = false;
         passage.avant_fusion = Some(snapshot.clone());
     }
 
@@ -225,24 +283,28 @@ pub fn merge_segment(
     })
 }
 
-/// Annule l'ajustement d'un segment (§F-14, §F-15).
+/// Annule un geste sur un segment (§F-14, §F-15).
 ///
-/// Un segment ne portant qu'un ajustement à la fois, la nature de l'annulation
-/// se lit dans l'état reçu :
+/// Les gestes étant de deux ordres — un **verdict** sur le segment (approuvé,
+/// écarté) et une **réorganisation** (la fusion) —, l'annulation retire d'abord
+/// le verdict, puis la fusion : un segment écarté redevient à examiner, un
+/// segment approuvé de même, et un segment fusionné retrouve ses emprunts
+/// d'avant. C'est l'ordre des gestes : on revient sur son avis avant de défaire
+/// la réorganisation sur laquelle il portait.
 ///
-/// - **faux positif** : aucune donnée à restaurer, le marqueur est retiré ;
-/// - **fusion** : l'instantané `avant_fusion` est réinstallé tel quel — emprunts
-///   d'origine, numéros de segment d'origine, et l'enregistrement qu'ils
-///   portaient eux-mêmes. Les segments que la fusion avait décalés d'un rang
-///   (`segment` exclu, tout ce qui le suit) reprennent leur numéro.
+/// La fusion s'annule en réinstallant l'instantané `avant_fusion` tel quel —
+/// emprunts d'origine, numéros de segment d'origine, et l'enregistrement qu'ils
+/// portaient eux-mêmes. Les segments que la fusion avait décalés d'un rang
+/// (`segment` exclu, tout ce qui le suit) reprennent leur numéro.
 ///
 /// La réinstallation de l'instantané **imbriqué** est ce qui permet d'annuler
 /// une chaîne de fusions pas à pas : défaire la fusion la plus récente rend au
 /// segment son état d'alors, où l'enregistrement de la fusion précédente est
-/// toujours présent, donc annulable à son tour.
+/// toujours présent, donc annulable à son tour. L'instantané portant l'état
+/// complet des emprunts, il restitue aussi les approbations qu'ils avaient.
 ///
-/// Un segment sans ajustement, ou fusionné sans enregistrement — cas d'un
-/// fichier écrit avant l'introduction du champ —, est refusé.
+/// Un segment sans geste, ou fusionné sans enregistrement — cas d'un fichier
+/// écrit avant l'introduction du champ —, est refusé.
 pub fn undo_segment(
     archive: &MultirideArchive,
     segment: usize,
@@ -252,14 +314,25 @@ pub fn undo_segment(
         return Err(format!("Segment introuvable : {}.", segment));
     }
 
-    // Faux positif : le marqueur est le seul état à défaire. Le test porte sur
-    // « au moins un emprunt marqué » — le marquage est un geste de segment, et
+    // Écarté : le marqueur est le seul état à défaire. Le test porte sur « au
+    // moins un emprunt marqué » — le marquage est un geste de segment, et
     // l'annulation doit pouvoir le défaire même sur un état partiellement
     // marqué, qu'aucune commande ne produit mais qu'un fichier peut porter.
     if passages.iter().any(|p| p.faux_positif) {
         let mut updated = archive.clone();
         for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
             passage.faux_positif = false;
+        }
+        return Ok(updated);
+    }
+
+    // Approuvé : rien à restaurer, l'approbation se retire comme elle s'est
+    // posée — la fusion éventuelle du segment, elle, reste en place et reste
+    // annulable au coup suivant.
+    if passages.iter().any(|p| p.valide) {
+        let mut updated = archive.clone();
+        for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
+            passage.valide = false;
         }
         return Ok(updated);
     }

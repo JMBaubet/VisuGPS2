@@ -71,6 +71,7 @@ pub fn run() {
             gpx_multiride::commands::multiride_validate,
             gpx_multiride::commands::multiride_merge_segment,
             gpx_multiride::commands::multiride_toggle_fp,
+            gpx_multiride::commands::multiride_validate_segment,
             gpx_multiride::commands::multiride_undo_segment,
             gpx_multiride::commands::multiride_reset
         ])

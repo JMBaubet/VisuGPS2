@@ -14,8 +14,12 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::gpx_multiride::adjustments::{merge_segment, sens_rank, toggle_fp, undo_segment};
-use crate::gpx_multiride::commands::{merge_impl, reset_impl, toggle_fp_impl, undo_impl};
+use crate::gpx_multiride::adjustments::{
+    merge_segment, sens_rank, toggle_fp, undo_segment, validate_segment,
+};
+use crate::gpx_multiride::commands::{
+    merge_impl, reset_impl, toggle_fp_impl, undo_impl, validate_segment_impl,
+};
 use crate::gpx_multiride::file::{build_archive, file_path, load_file, save_file};
 use crate::gpx_multiride::types::{
     MultirideArchive, MultirideLatLon, MultirideParams, MultiridePassage, MultirideSens,
@@ -62,6 +66,7 @@ fn passage(
         km_sortie,
         longueur_km: km_sortie - km_entree,
         fusionne: false,
+        valide: false,
         avant_fusion: None,
         entree: MultirideLatLon {
             lat: 45.0,
@@ -303,8 +308,104 @@ fn a_merged_segment_cannot_be_marked_false_positive() {
     assert!(error.contains("fusionné"), "message : {error}");
 }
 
-// ─── Annulation ───────────────────────────────────────────────────────
+// ─── Approbation d'un segment ─────────────────────────────────────────
 
+/// Approuver un segment le marque **en entier** : c'est un fait de segment.
+#[test]
+fn approving_a_segment_marks_the_whole_segment() {
+    let approved = validate_segment(&reference_case(), 2).unwrap();
+
+    assert!(approved.passages.iter().filter(|p| p.segment == 2).all(|p| p.valide));
+    assert!(
+        approved.passages.iter().filter(|p| p.segment == 1).all(|p| !p.valide),
+        "le segment voisin n'est pas touché : {approved:?}"
+    );
+}
+
+/// Un segment **écarté** ne s'approuve pas : un segment exclu de l'export ne
+/// peut pas être dit juste, la contradiction serait dans les termes.
+#[test]
+fn an_excluded_segment_cannot_be_approved() {
+    let error = validate_segment(&mark_false_positive(reference_case(), 1), 1).unwrap_err();
+    assert!(error.contains("segment 1"), "message : {error}");
+    assert!(error.contains("faux positif"), "message : {error}");
+}
+
+/// Un segment **fusionné** s'approuve, en revanche : la fusion réorganise la
+/// détection, elle ne dit rien de sa justesse — et le segment fusionné est un
+/// segment neuf, à juger comme les autres. Sans quoi il resterait à examiner
+/// pour toujours, et l'avancement ne pourrait jamais être complet.
+#[test]
+fn a_merged_segment_can_be_approved() {
+    let merged = merge_segment(&reference_case(), 2).unwrap();
+    assert!(merged.passages.iter().all(|p| !p.valide));
+
+    let approved = validate_segment(&merged, 1).unwrap();
+
+    assert!(
+        approved.passages.iter().all(|p| p.valide && p.fusionne),
+        "approuvé sans cesser d'être fusionné : {approved:?}"
+    );
+}
+
+/// Les deux ordres de gestes s'annulent séparément : le verdict d'abord, la
+/// fusion ensuite.
+#[test]
+fn undoing_a_merged_segment_peels_the_approval_then_the_merge() {
+    let base = reference_case();
+    let merged = merge_segment(&base, 2).unwrap();
+    let approved = validate_segment(&merged, 1).unwrap();
+
+    // Premier retour : l'approbation, le segment restant fusionné.
+    let back_to_merged = undo_segment(&approved, 1).unwrap();
+    assert_eq!(summary(&back_to_merged), summary(&merged));
+    assert!(back_to_merged.passages.iter().all(|p| p.fusionne && !p.valide));
+
+    // Second retour : la fusion, la détection retrouvant ses deux segments.
+    let back_to_base = undo_segment(&back_to_merged, 1).unwrap();
+    assert_eq!(summary(&back_to_base), summary(&base));
+}
+
+/// Un segment introuvable est refusé comme partout ailleurs dans le module.
+#[test]
+fn approving_an_unknown_segment_is_refused() {
+    let error = validate_segment(&reference_case(), 9).unwrap_err();
+    assert!(error.contains("introuvable"), "message : {error}");
+}
+
+/// Écarter un segment approuvé prend la place de l'approbation : rien n'est
+/// perdu, une approbation ne conservant aucune donnée.
+#[test]
+fn excluding_an_approved_segment_clears_the_approval() {
+    let approved = validate_segment(&reference_case(), 2).unwrap();
+
+    let excluded = toggle_fp(&approved, 2).unwrap();
+
+    assert!(excluded.passages.iter().all(|p| !p.valide));
+    assert!(excluded.passages.iter().filter(|p| p.segment == 2).all(|p| p.faux_positif));
+}
+
+/// Une fusion produit un segment **neuf** : l'approbation portée par l'un des
+/// deux camps ne le couvre pas, et l'annulation la restitue.
+#[test]
+fn merging_clears_the_approval_and_undoing_restores_it() {
+    let approved = validate_segment(&reference_case(), 1).unwrap();
+    let approved = validate_segment(&approved, 2).unwrap();
+
+    let merged = merge_segment(&approved, 2).unwrap();
+    assert!(
+        merged.passages.iter().all(|p| !p.valide),
+        "le segment fusionné est à approuver : {merged:?}"
+    );
+
+    let undone = undo_segment(&merged, 1).unwrap();
+    assert!(
+        undone.passages.iter().all(|p| p.valide),
+        "l'instantané porte l'approbation des deux segments : {undone:?}"
+    );
+}
+
+// ─── Annulation ───────────────────────────────────────────────────────
 /// La fusion enregistre les emprunts d'avant, tels quels : c'est de là que
 /// l'annulation tire l'état à réinstaller.
 #[test]
@@ -401,6 +502,17 @@ fn undoing_a_false_positive_clears_the_marker() {
     assert_eq!(summary(&undone), summary(&reference_case()));
 }
 
+/// Annuler une approbation retire la marque et rend le segment à examiner.
+#[test]
+fn undoing_an_approval_clears_the_mark() {
+    let approved = validate_segment(&reference_case(), 2).unwrap();
+
+    let undone = undo_segment(&approved, 2).unwrap();
+
+    assert!(undone.passages.iter().all(|p| !p.valide));
+    assert_eq!(summary(&undone), summary(&reference_case()));
+}
+
 /// Rien à annuler : le refus est explicite, jamais silencieux.
 #[test]
 fn undoing_an_untouched_segment_is_refused() {
@@ -484,6 +596,34 @@ fn undoing_a_false_positive_is_persisted() {
             .passages
             .iter()
             .all(|p| !p.faux_positif)
+    );
+}
+
+/// Approbation et annulation sont écrites comme les autres gestes : une
+/// réouverture de la vue retrouve les segments approuvés.
+#[test]
+fn an_approval_and_its_undo_are_persisted() {
+    let mode = test_dir("persistance_approbation");
+
+    let approved = validate_segment_impl(&mode, "t-1", reference_case(), 1).unwrap();
+    assert!(approved.passages.iter().any(|p| p.valide));
+    assert!(
+        load_file(&file_path(&mode, "t-1"), "t-1")
+            .unwrap()
+            .passages
+            .iter()
+            .filter(|p| p.segment == 1)
+            .all(|p| p.valide)
+    );
+
+    let undone = undo_impl(&mode, "t-1", approved, 1).unwrap();
+    assert!(undone.passages.iter().all(|p| !p.valide));
+    assert!(
+        load_file(&file_path(&mode, "t-1"), "t-1")
+            .unwrap()
+            .passages
+            .iter()
+            .all(|p| !p.valide)
     );
 }
 
