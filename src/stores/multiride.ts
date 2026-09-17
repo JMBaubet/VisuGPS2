@@ -15,6 +15,12 @@
 // correspondant (`multiride_status`) vit dans le registre des traces, ce qui
 // permet à la carte du circuit de connaître la barrière **sans lire de
 // fichier**.
+//
+// Un segment ne porte qu'**un ajustement à la fois** — une fusion ou un faux
+// positif, jamais les deux —, et cet ajustement s'annule individuellement
+// (`undoSegment`). Les fusions, elles, s'enchaînent : un segment peut absorber
+// son précédent puis le suivant, et la chaîne s'annule de la plus récente à la
+// plus ancienne.
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -63,6 +69,16 @@ export interface MultiridePassage {
   longueurKm: number
   /** Le segment du passage a subi une fusion manuelle. */
   fusionne: boolean
+  /**
+   * Emprunts des deux segments **tels qu'ils étaient avant la fusion** — de
+   * quoi l'annuler.
+   *
+   * Présent sur les seuls emprunts d'un segment fusionné, et absent partout
+   * ailleurs. Les emprunts enregistrés conservent leurs propres champs, y
+   * compris un `avantFusion` antérieur : une chaîne de fusions s'annule donc
+   * pas à pas, la plus récente d'abord.
+   */
+  avantFusion?: MultiridePassage[] | null
   entree: MultirideLatLon
   sortie: MultirideLatLon
 }
@@ -91,6 +107,22 @@ export interface MultirideDetectionResult {
   archive: MultirideArchive
   status: MultirideStatus
   durationMs: number
+}
+
+// ─── Aides pures ──────────────────────────────────────────────────────
+
+/**
+ * Numéros des segments dont **au moins un** emprunt satisfait `flag`, triés.
+ *
+ * Les marques d'ajustement sont des faits de segment portés par chaque emprunt
+ * (comme côté Rust, `file::count_segments`) : c'est pourquoi on compte des
+ * segments **distincts** et non des emprunts.
+ */
+function segmentNumbersWhere(
+  passages: MultiridePassage[],
+  flag: (passage: MultiridePassage) => boolean,
+): number[] {
+  return [...new Set(passages.filter(flag).map((p) => p.segment))].sort((a, b) => a - b)
 }
 
 // ─── Store ────────────────────────────────────────────────────────────
@@ -140,10 +172,38 @@ export const useMultirideStore = defineStore('multiride', () => {
 
   /**
    * `true` dès qu'un ajustement a été porté à la détection — fusion ou marquage
-   * faux positif. La vue ne propose la réinitialisation que dans ce cas.
+   * faux positif.
    */
   const hasAdjustments = computed(() =>
     passages.value.some((p) => p.fauxPositif || p.fusionne),
+  )
+
+  /** Segments fusionnés — c'est le segment absorbant qui porte la marque. */
+  const mergedSegmentCount = computed(
+    () => segmentNumbersWhere(passages.value, (p) => p.fusionne).length,
+  )
+
+  /** Segments marqués faux positifs. */
+  const falsePositiveSegmentCount = computed(
+    () => segmentNumbersWhere(passages.value, (p) => p.fauxPositif).length,
+  )
+
+  /**
+   * Segments portant un ajustement — l'union des deux marques, et non leur
+   * somme : un segment ne porte qu'un ajustement, mais un état exceptionnel
+   * (fichier modifié à la main) ne doit pas faire mentir le décompte.
+   */
+  const treatedSegmentCount = computed(
+    () => segmentNumbersWhere(passages.value, (p) => p.fauxPositif || p.fusionne).length,
+  )
+
+  /**
+   * Segments **sans** ajustement : ce que le compteur de progression de la
+   * barre compte à côté des traités, comme le `pending` des anomalies.
+   * Borné à zéro — un décompte négatif ne voudrait rien dire.
+   */
+  const pendingSegmentCount = computed(() =>
+    Math.max(0, segmentCount.value - treatedSegmentCount.value),
   )
 
   /**
@@ -164,6 +224,27 @@ export const useMultirideStore = defineStore('multiride', () => {
     return passages.value
       .filter((p) => p.segment === segment)
       .sort((a, b) => a.passage - b.passage)
+  }
+
+  /**
+   * Emprunt de **référence** d'un segment (le premier), ou `null`.
+   *
+   * C'est lui qui porte la longueur et le début affichés en tête de segment :
+   * la représentation d'un passage multiple se lit sur sa référence, les autres
+   * emprunts n'étant que ses répétitions.
+   */
+  function referenceOf(segment: number): MultiridePassage | null {
+    return segmentPassages(segment).find((p) => p.sens === 'reference') ?? null
+  }
+
+  /**
+   * Emprunts du segment **précédent**, ou liste vide pour le premier segment.
+   *
+   * La fusion — et son refus quand un des deux camps est écarté — se décide sur
+   * ces emprunts, que la barre d'action affiche en grisant le bouton.
+   */
+  function previousSegmentPassages(segment: number): MultiridePassage[] {
+    return segment > 1 ? segmentPassages(segment - 1) : []
   }
 
   /** Sélectionne ou désélectionne un segment (mise en avant sur la carte). */
@@ -251,6 +332,26 @@ export const useMultirideStore = defineStore('multiride', () => {
   }
 
   /**
+   * Annule l'ajustement d'un segment et réécrit le fichier de description.
+   *
+   * Un segment ne portant qu'un ajustement à la fois, la commande n'a pas à
+   * savoir lequel elle défait : l'état enregistré le dit — marqueur faux
+   * positif à retirer, ou emprunts d'avant fusion à réinstaller, avec le rang
+   * des segments que la fusion avait décalés.
+   *
+   * La sélection est conservée : le segment existe toujours après l'annulation,
+   * c'est son contenu qui change.
+   */
+  async function undoSegment(segment: number): Promise<void> {
+    if (!currentTraceId.value || !archive.value) return
+    archive.value = await invoke<MultirideArchive>('multiride_undo_segment', {
+      traceId: currentTraceId.value,
+      archive: archive.value,
+      segment,
+    })
+  }
+
+  /**
    * Rétablit la détection d'origine.
    *
    * La détection est **rejouée** avec les paramètres enregistrés dans l'état —
@@ -307,14 +408,21 @@ export const useMultirideStore = defineStore('multiride', () => {
     hasPassages,
     needsValidation,
     hasAdjustments,
+    mergedSegmentCount,
+    falsePositiveSegmentCount,
+    treatedSegmentCount,
+    pendingSegmentCount,
     repeatedKm,
     // Actions
     segmentPassages,
+    referenceOf,
+    previousSegmentPassages,
     selectSegment,
     runDetection,
     restore,
     mergeSegment,
     toggleFp,
+    undoSegment,
     resetAdjustments,
     validate,
     reset,
