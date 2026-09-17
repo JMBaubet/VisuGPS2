@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (42 commandes)
+## Catalogue (43 commandes)
 
 ### Application
 
@@ -236,8 +236,9 @@ pub struct AuditArchive {
 |---|---|---|
 | `multiride_detect` | `async (app, trace_id: String, params: MultirideParams) -> Result<MultirideDetectionResult, String>` | Relit le GPX de la trace, rééchantillonne, apparie les points superposés, assemble les segments et qualifie les sens. Écrit `multiride.json`, pose `multiride_status` (`none` ou `pending`) et retourne l'état, le statut et la durée. Appelée par la vue et par sa relance. |
 | `multiride_load` | `async (app, trace_id: String) -> Result<Option<MultirideArchive>, String>` | Relit la description d'une trace : `null` si elle est absente, illisible, d'une version inconnue ou rattachée à une autre trace — la vue relance alors la détection. |
-| `multiride_merge_segment` | `async (app, trace_id: String, archive: MultirideArchive, segment: usize) -> Result<MultirideArchive, String>` | Fusionne un segment avec le précédent : emprunts repris dans l'ordre de la trace, fusionnés deux à deux **de même sens** et séparés d'au plus **1 km**. Le premier emprunt devient la référence du segment fusionné, les anciennes références non-tête basculent en « aller ». Réécrit le fichier, **sans toucher au registre**. |
-| `multiride_toggle_fp` | `async (app, trace_id: String, archive: MultirideArchive, segment: usize) -> Result<MultirideArchive, String>` | Marque ou démarque un segment en **faux positif** (exclu de l'export et des kilomètres répétés). Réécrit le fichier, sans toucher au registre. |
+| `multiride_merge_segment` | `async (app, trace_id: String, archive: MultirideArchive, segment: usize) -> Result<MultirideArchive, String>` | Fusionne un segment avec le précédent : emprunts repris dans l'ordre de la trace, fusionnés deux à deux **de même sens** et séparés d'au plus **1 km**. Le premier emprunt devient la référence du segment fusionné, les anciennes références non-tête basculent en « aller ». **Refusé si l'un des deux segments est un faux positif** — un segment ne porte qu'un ajustement à la fois. Les emprunts d'avant sont enregistrés (`avant_fusion`) pour rendre la fusion annulable ; la fusion est destructive, elle ne se recalcule pas. Réécrit le fichier, **sans toucher au registre**. |
+| `multiride_toggle_fp` | `async (app, trace_id: String, archive: MultirideArchive, segment: usize) -> Result<MultirideArchive, String>` | Marque ou démarque un segment en **faux positif** (exclu de l'export et des kilomètres répétés). Le marquage est **refusé sur un segment fusionné** ; le retrait du marqueur reste possible. Réécrit le fichier, sans toucher au registre. |
+| `multiride_undo_segment` | `async (app, trace_id: String, archive: MultirideArchive, segment: usize) -> Result<MultirideArchive, String>` | **Annule l'ajustement d'un segment** : retire le marqueur d'un segment faux positif, ou réinstalle les emprunts d'avant une fusion (`avant_fusion`) — les segments décalés par la fusion reprennent alors leur rang. Une chaîne de fusions s'annule pas à pas, de la plus récente à la plus ancienne. Refuse un segment sans ajustement, ou fusionné sans enregistrement (fichier écrit avant l'introduction du champ). Réécrit le fichier, **sans toucher au registre**. |
 | `multiride_reset` | `async (app, trace_id: String, archive: MultirideArchive) -> Result<MultirideArchive, String>` | Rétablit la détection d'origine en la **rejouant** avec les paramètres enregistrés — elle est déterministe, le fichier n'a donc pas à porter de copie de la détection initiale. Le statut de validation est conservé. |
 | `multiride_validate` | `async (app, trace_id: String, archive: MultirideArchive) -> Result<MultirideArchive, String>` | **Point de sortie** : marque l'état `valide`, réécrit le fichier et pose `multiride_status = "validated"`, ce qui lève la barrière de l'édition caméra. Les ajustements ultérieurs restent possibles et **conservent** le statut. |
 
@@ -280,10 +281,15 @@ pub struct MultiridePassage {
     pub km_sortie: f64,
     pub longueur_km: f64,
     pub fusionne: bool,          // segment ayant subi une fusion manuelle
+    pub avant_fusion: Option<Vec<MultiridePassage>>,
+                                 // emprunts des deux segments avant la fusion — de quoi l'annuler
+                                 // (présent sur les seuls emprunts d'un segment fusionné)
     pub entree: MultirideLatLon, // bornes — géométrie du fichier de description
     pub sortie: MultirideLatLon,
 }
 ```
+
+> **Invariant des ajustements** : la fusion et le faux positif **s'excluent** — un segment ne porte qu'un ajustement à la fois, et donc une seule annulation à offrir. Les fusions, elles, **s'enchaînent** : un segment peut absorber son précédent puis le suivant. L'enregistrement d'annulation d'une fusion contient les emprunts d'avant, lesquels gardent leur propre enregistrement : la chaîne s'annule de la plus récente à la plus ancienne.
 
 ### Paramètres / Settings (`settings.rs`)
 

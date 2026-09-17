@@ -8,7 +8,7 @@
 //! métadonnées d'indices et de distances cumulées permettant de rejoindre la
 //! trace d'origine (annexe 13.6).
 //!
-//! Trois ajouts au format de la spécification, pour en faire un état
+//! Quatre ajouts au format de la spécification, pour en faire un état
 //! **restaurable** en plus d'un contrat de sortie :
 //! - `version` et `trace_id` dans `properties` — versionnage du format (une
 //!   version inconnue est refusée) et rattachement à la trace ;
@@ -16,7 +16,13 @@
 //! - `faux_positif` sur chaque `Feature` — les passages d'un segment marqué
 //!   faux positif **restent** dans le fichier (c'est l'export qui les exclut,
 //!   §CA-13) : sans eux, une réouverture de la vue ne pourrait plus les
-//!   distinguer d'un segment ordinaire.
+//!   distinguer d'un segment ordinaire ;
+//! - `avant_fusion` sur les Features d'un segment **fusionné** — les emprunts
+//!   des deux segments tels qu'ils étaient avant la fusion, qui est
+//!   destructive et ne se recalcule pas. Comme le champ est additif et
+//!   optionnel, un fichier écrit avant son introduction se lit toujours : le
+//!   segment fusionné n'est simplement plus annulable, et la version du format
+//!   reste donc `1`.
 //!
 //! Deux garanties, reprises de `gpx_audit::archive` :
 //! - l'écriture est **atomique** (`pipeline::write_atomic`, `.tmp` + `rename`) :
@@ -123,6 +129,12 @@ struct FileFeatureProperties {
     km_sortie: f64,
     longueur_km: f64,
     fusionne: bool,
+    /// Emprunts d'avant la fusion qui a réuni ce segment au précédent.
+    ///
+    /// Absent hors d'un segment fusionné — et donc absent des fichiers écrits
+    /// avant l'introduction du champ, qui se relisent sans erreur.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    avant_fusion: Option<Vec<FileFeature>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -170,31 +182,72 @@ fn count_segments(passages: &[MultiridePassage], flag: impl Fn(&MultiridePassage
         .len()
 }
 
+/// Projette un emprunt sur sa Feature : bornes en géométrie, métadonnées en
+/// propriétés.
+///
+/// L'enregistrement d'annulation d'une fusion est projeté **par la même
+/// fonction** que l'emprunt de tête : l'instantané est donc un arbre de
+/// Features, où chaque niveau garde la forme du contrat de sortie.
+fn passage_to_feature(passage: &MultiridePassage) -> FileFeature {
+    FileFeature {
+        kind: "Feature".to_string(),
+        properties: FileFeatureProperties {
+            segment: passage.segment,
+            passage: passage.passage,
+            sens: passage.sens,
+            faux_positif: passage.faux_positif,
+            point_entree: passage.point_entree,
+            point_sortie: passage.point_sortie,
+            km_entree: passage.km_entree,
+            km_sortie: passage.km_sortie,
+            longueur_km: passage.longueur_km,
+            fusionne: passage.fusionne,
+            avant_fusion: passage.avant_fusion.as_ref().map(|saved| {
+                saved.iter().map(passage_to_feature).collect()
+            }),
+        },
+        geometry: FileGeometry {
+            kind: "LineString".to_string(),
+            coordinates: [
+                [passage.entree.lon, passage.entree.lat],
+                [passage.sortie.lon, passage.sortie.lat],
+            ],
+        },
+    }
+}
+
+/// Relit une Feature vers l'emprunt qu'elle décrit (réciproque de
+/// `passage_to_feature`, enregistrement d'annulation compris).
+fn feature_to_passage(feature: FileFeature) -> MultiridePassage {
+    MultiridePassage {
+        segment: feature.properties.segment,
+        passage: feature.properties.passage,
+        sens: feature.properties.sens,
+        faux_positif: feature.properties.faux_positif,
+        point_entree: feature.properties.point_entree,
+        point_sortie: feature.properties.point_sortie,
+        km_entree: feature.properties.km_entree,
+        km_sortie: feature.properties.km_sortie,
+        longueur_km: feature.properties.longueur_km,
+        fusionne: feature.properties.fusionne,
+        avant_fusion: feature
+            .properties
+            .avant_fusion
+            .map(|saved| saved.into_iter().map(feature_to_passage).collect()),
+        entree: MultirideLatLon {
+            lat: feature.geometry.coordinates[0][1],
+            lon: feature.geometry.coordinates[0][0],
+        },
+        sortie: MultirideLatLon {
+            lat: feature.geometry.coordinates[1][1],
+            lon: feature.geometry.coordinates[1][0],
+        },
+    }
+}
+
 /// Projette l'état interne sur le format de la spécification.
 fn to_file(archive: &MultirideArchive) -> MultirideFile {
-    let features = archive
-        .passages
-        .iter()
-        .map(|p| FileFeature {
-            kind: "Feature".to_string(),
-            properties: FileFeatureProperties {
-                segment: p.segment,
-                passage: p.passage,
-                sens: p.sens,
-                faux_positif: p.faux_positif,
-                point_entree: p.point_entree,
-                point_sortie: p.point_sortie,
-                km_entree: p.km_entree,
-                km_sortie: p.km_sortie,
-                longueur_km: p.longueur_km,
-                fusionne: p.fusionne,
-            },
-            geometry: FileGeometry {
-                kind: "LineString".to_string(),
-                coordinates: [[p.entree.lon, p.entree.lat], [p.sortie.lon, p.sortie.lat]],
-            },
-        })
-        .collect();
+    let features = archive.passages.iter().map(passage_to_feature).collect();
 
     MultirideFile {
         kind: "FeatureCollection".to_string(),
@@ -243,30 +296,7 @@ fn from_file(file: MultirideFile) -> MultirideArchive {
         trace_point_count: properties.trace.point_count,
         trace_length_km: properties.trace.length_km,
         pas_plafonne: properties.parametres.pas_plafonne,
-        passages: file
-            .features
-            .into_iter()
-            .map(|feature| MultiridePassage {
-                segment: feature.properties.segment,
-                passage: feature.properties.passage,
-                sens: feature.properties.sens,
-                faux_positif: feature.properties.faux_positif,
-                point_entree: feature.properties.point_entree,
-                point_sortie: feature.properties.point_sortie,
-                km_entree: feature.properties.km_entree,
-                km_sortie: feature.properties.km_sortie,
-                longueur_km: feature.properties.longueur_km,
-                fusionne: feature.properties.fusionne,
-                entree: MultirideLatLon {
-                    lat: feature.geometry.coordinates[0][1],
-                    lon: feature.geometry.coordinates[0][0],
-                },
-                sortie: MultirideLatLon {
-                    lat: feature.geometry.coordinates[1][1],
-                    lon: feature.geometry.coordinates[1][0],
-                },
-            })
-            .collect(),
+        passages: file.features.into_iter().map(feature_to_passage).collect(),
     }
 }
 

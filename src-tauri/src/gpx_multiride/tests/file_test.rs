@@ -3,9 +3,10 @@
 //!
 //! Ils couvrent le **contrat de fichier** : nomenclature de la spécification
 //! (§F-17 / annexe 13.4), géométrie bornée à deux points, ajouts de
-//! restauration (`version`, `trace_id`, `valide`, `faux_positif`), écriture
-//! atomique, et robustesse de la lecture (fichier absent, illisible, d'une
-//! version inconnue ou rattaché à une autre trace).
+//! restauration (`version`, `trace_id`, `valide`, `faux_positif`,
+//! `avant_fusion`), écriture atomique, et robustesse de la lecture (fichier
+//! absent, illisible, d'une version inconnue, rattaché à une autre trace, ou
+//! écrit avant l'introduction d'un champ optionnel).
 
 use std::fs;
 use std::path::PathBuf;
@@ -63,6 +64,7 @@ fn passage(
         km_sortie: 23.06,
         longueur_km: 15.44,
         fusionne,
+        avant_fusion: None,
         entree: MultirideLatLon {
             lat: 43.77584,
             lon: 7.49912,
@@ -225,6 +227,87 @@ fn false_positives_stay_in_the_file_and_are_counted() {
     // Le marquage survit à la relecture.
     let loaded = load_file(&path, TRACE_ID).unwrap();
     assert!(loaded.passages[2].faux_positif);
+}
+
+// ─── Enregistrement d'annulation (`avant_fusion`) ─────────────────────
+
+/// Les emprunts d'avant une fusion sont écrits avec la Feature du segment
+/// fusionné, à la forme du contrat : ce sont des Features complètes.
+#[test]
+fn a_merge_record_is_written_and_read_back() {
+    let dir = test_dir("avant_fusion");
+    let path = file_path(&dir, TRACE_ID);
+    let saved = passage(1, 2, MultirideSens::Retour, false, false);
+    let mut archive = archive_with_passages();
+    archive.passages[0].avant_fusion = Some(vec![saved]);
+
+    save_file(&path, &archive).unwrap();
+    let json = read_json(&path);
+
+    let record = json["features"][0]["properties"]["avant_fusion"]
+        .as_array()
+        .expect("enregistrement écrit");
+    assert_eq!(record.len(), 1);
+    assert_eq!(record[0]["type"], "Feature");
+    assert_eq!(record[0]["properties"]["passage"], 2);
+    assert_eq!(record[0]["properties"]["sens"], "retour");
+    assert_eq!(record[0]["geometry"]["coordinates"][0][0], 7.49912);
+
+    let loaded = load_file(&path, TRACE_ID).expect("fichier relu");
+    let reloaded_record = loaded.passages[0]
+        .avant_fusion
+        .as_ref()
+        .expect("enregistrement relu");
+    assert_eq!(reloaded_record.len(), 1);
+    assert_eq!(reloaded_record[0].passage, 2);
+    assert_eq!(reloaded_record[0].sens, MultirideSens::Retour);
+    assert_eq!(reloaded_record[0].km_sortie, 23.06);
+    assert!(loaded.passages[1].avant_fusion.is_none());
+}
+
+/// Le champ est **absent** du fichier quand il n'y a rien à restaurer : le
+/// contrat de sortie n'est pas alourdi par un `null` systématique.
+#[test]
+fn the_undo_record_is_absent_without_a_merge() {
+    let dir = test_dir("avant_fusion_absente");
+    let path = file_path(&dir, TRACE_ID);
+
+    save_file(&path, &archive_with_passages()).unwrap();
+    let json = read_json(&path);
+
+    for feature in json["features"].as_array().unwrap() {
+        assert!(
+            feature["properties"].get("avant_fusion").is_none(),
+            "aucun enregistrement à écrire : {feature}"
+        );
+    }
+}
+
+/// Un fichier écrit **avant** l'introduction du champ se lit encore : la
+/// version du format n'a donc pas à changer, le segment fusionné n'est
+/// simplement plus annulable.
+#[test]
+fn a_file_written_before_the_field_still_loads() {
+    let dir = test_dir("avant_le_champ");
+    let path = file_path(&dir, TRACE_ID);
+    save_file(&path, &archive_with_passages()).unwrap();
+
+    // Ce que produisait la version précédente : le champ en moins.
+    let mut json = read_json(&path);
+    for feature in json["features"].as_array_mut().unwrap() {
+        feature["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("avant_fusion");
+    }
+    fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+
+    let loaded = load_file(&path, TRACE_ID).expect("fichier antérieur toujours lisible");
+
+    assert_eq!(loaded.version, FILE_VERSION);
+    assert_eq!(loaded.passages.len(), 3);
+    assert!(loaded.passages.iter().all(|p| p.avant_fusion.is_none()));
+    assert!(loaded.passages[0].fusionne, "la fusion reste lisible");
 }
 
 // ─── Lecture tolérante ────────────────────────────────────────────────

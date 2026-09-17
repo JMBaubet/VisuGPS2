@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::gpx_multiride::commands::{
     default_multiride_params, detect_impl, detect_status, load_impl, multiride_params_from_settings,
-    validate_impl,
+    toggle_fp_impl, undo_impl, validate_impl,
 };
 use crate::gpx_multiride::file::{build_archive, file_path, load_file, save_file};
 use crate::gpx_multiride::types::{
@@ -147,6 +147,7 @@ fn archive_with_one_passage(mode: &std::path::Path, id: &str) -> MultirideArchiv
             km_sortie: 0.08,
             longueur_km: 0.08,
             fusionne: false,
+            avant_fusion: None,
             entree: MultirideLatLon {
                 lat: 45.0,
                 lon: 2.0,
@@ -287,6 +288,30 @@ fn adjustment_after_validation_keeps_the_status() {
     assert!(reloaded.passages[0].faux_positif);
     assert_eq!(reloaded.status(), STATUS_VALIDATED);
     assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_VALIDATED));
+}
+
+/// Un ajustement, puis son annulation, laissent le registre intact : seul le
+/// statut de validation décide de la barrière de l'édition caméra.
+#[test]
+fn an_adjustment_and_its_undo_leave_the_registry_alone() {
+    let (mode, id) = mode_with_trace("undo_registre", 8);
+    detect_impl(&mode, &id, params()).unwrap();
+    let archive = archive_with_one_passage(&mode, &id);
+
+    let marked = toggle_fp_impl(&mode, &id, archive, 1).unwrap();
+    assert!(marked.passages[0].faux_positif);
+    assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_NONE));
+
+    let undone = undo_impl(&mode, &id, marked, 1).unwrap();
+
+    assert!(!undone.passages[0].faux_positif);
+    assert_eq!(
+        registry_status(&mode, &id).as_deref(),
+        Some(STATUS_NONE),
+        "un ajustement n'a pas d'incidence sur la barrière"
+    );
+    let reloaded = load_file(&file_path(&mode, &id), &id).unwrap();
+    assert!(!reloaded.passages[0].faux_positif, "l'annulation est écrite");
 }
 
 /// Un état appartenant à une autre trace est refusé : le rattachement du

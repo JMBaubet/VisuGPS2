@@ -6,12 +6,16 @@
 //! §3.5) est reproduit tel quel : deux segments adjacents, chacun avec sa
 //! référence et son retour, doivent donner **deux** emprunts fusionnés — la
 //! référence d'un côté, le retour de l'autre.
+//!
+//! Deux familles de règles s'y ajoutent : l'**exclusion** du faux positif et de
+//! la fusion (un segment ne porte qu'un ajustement à la fois), et
+//! l'**annulation**, y compris d'une chaîne de fusions.
 
 use std::fs;
 use std::path::PathBuf;
 
-use crate::gpx_multiride::adjustments::{merge_segment, sens_rank, toggle_fp};
-use crate::gpx_multiride::commands::{merge_impl, reset_impl, toggle_fp_impl};
+use crate::gpx_multiride::adjustments::{merge_segment, sens_rank, toggle_fp, undo_segment};
+use crate::gpx_multiride::commands::{merge_impl, reset_impl, toggle_fp_impl, undo_impl};
 use crate::gpx_multiride::file::{build_archive, file_path, load_file, save_file};
 use crate::gpx_multiride::types::{
     MultirideArchive, MultirideLatLon, MultirideParams, MultiridePassage, MultirideSens,
@@ -58,6 +62,7 @@ fn passage(
         km_sortie,
         longueur_km: km_sortie - km_entree,
         fusionne: false,
+        avant_fusion: None,
         entree: MultirideLatLon {
             lat: 45.0,
             lon: 2.0,
@@ -86,13 +91,29 @@ fn reference_case() -> MultirideArchive {
     ])
 }
 
-/// Résumé lisible d'un état : `(segment, emprunt, sens, km début, km fin)`.
-fn summary(archive: &MultirideArchive) -> Vec<(usize, usize, MultirideSens, f64, f64)> {
-    archive
-        .passages
+/// Résumé lisible d'emprunts : `(segment, emprunt, sens, km début, km fin)`.
+fn summary_of(passages: &[MultiridePassage]) -> Vec<(usize, usize, MultirideSens, f64, f64)> {
+    passages
         .iter()
         .map(|p| (p.segment, p.passage, p.sens, p.km_entree, p.km_sortie))
         .collect()
+}
+
+/// Résumé lisible d'un état : `(segment, emprunt, sens, km début, km fin)`.
+fn summary(archive: &MultirideArchive) -> Vec<(usize, usize, MultirideSens, f64, f64)> {
+    summary_of(&archive.passages)
+}
+
+/// Marque tous les emprunts d'un segment en faux positif.
+fn mark_false_positive(mut archive: MultirideArchive, segment: usize) -> MultirideArchive {
+    for passage in archive
+        .passages
+        .iter_mut()
+        .filter(|p| p.segment == segment)
+    {
+        passage.faux_positif = true;
+    }
+    archive
 }
 
 /// GPX minimal de `n` points alignés (~11 m entre deux points).
@@ -255,19 +276,157 @@ fn the_following_segments_shift_down() {
     );
 }
 
-/// Fusionner un segment écarté garde le résultat **écarté** : mieux vaut
-/// continuer d'exclure de l'export ce que l'utilisateur avait rejeté que de le
-/// réintroduire à son insu.
+/// Un segment faux positif ne fusionne pas — ni comme segment absorbé, ni comme
+/// segment absorbant : le résultat serait à la fois fusionné et écarté de
+/// l'export, et aucun des deux gestes ne pourrait être annulé seul.
 #[test]
-fn merging_keeps_the_segment_excluded_when_either_side_was() {
-    let mut base = reference_case();
-    for passage in base.passages.iter_mut().filter(|p| p.segment == 2) {
-        passage.faux_positif = true;
-    }
+fn a_false_positive_segment_never_merges() {
+    // Le précédent est écarté : la fusion est refusée.
+    let error = merge_segment(&mark_false_positive(reference_case(), 1), 2).unwrap_err();
+    assert!(error.contains("segment 1"), "message : {error}");
+    assert!(error.contains("faux positif"), "message : {error}");
+
+    // Le segment absorbé est écarté : refus également.
+    let error = merge_segment(&mark_false_positive(reference_case(), 2), 2).unwrap_err();
+    assert!(error.contains("segment 2"), "message : {error}");
+    assert!(error.contains("faux positif"), "message : {error}");
+}
+
+/// L'inverse est vrai aussi : un segment fusionné ne s'écarte pas — le marquage
+/// est refusé, le retrait du marqueur resterait possible.
+#[test]
+fn a_merged_segment_cannot_be_marked_false_positive() {
+    let merged = merge_segment(&reference_case(), 2).unwrap();
+
+    let error = toggle_fp(&merged, 1).unwrap_err();
+
+    assert!(error.contains("fusionné"), "message : {error}");
+}
+
+// ─── Annulation ───────────────────────────────────────────────────────
+
+/// La fusion enregistre les emprunts d'avant, tels quels : c'est de là que
+/// l'annulation tire l'état à réinstaller.
+#[test]
+fn a_merge_records_the_passages_of_before() {
+    let base = reference_case();
 
     let merged = merge_segment(&base, 2).unwrap();
 
-    assert!(merged.passages.iter().all(|p| p.faux_positif));
+    let saved = merged.passages[0]
+        .avant_fusion
+        .as_ref()
+        .expect("enregistrement d'annulation");
+    assert_eq!(
+        summary_of(saved),
+        summary(&base),
+        "l'instantané est l'état des deux segments d'origine"
+    );
+    assert!(
+        saved.iter().all(|p| p.avant_fusion.is_none()),
+        "aucun enregistrement antérieur : il n'y a pas eu de fusion avant"
+    );
+}
+
+/// Annuler une fusion rend aux deux segments leurs emprunts, leur sens et leur
+/// numérotation d'origine — et ne laisse aucun enregistrement derrière elle.
+#[test]
+fn undoing_a_merge_restores_the_original_segments() {
+    let base = reference_case();
+    let merged = merge_segment(&base, 2).unwrap();
+
+    let undone = undo_segment(&merged, 1).unwrap();
+
+    assert_eq!(summary(&undone), summary(&base));
+    assert!(
+        undone.passages.iter().all(|p| !p.fusionne && p.avant_fusion.is_none()),
+        "l'état restauré ne porte plus d'ajustement : {undone:?}"
+    );
+}
+
+/// Les segments que la fusion avait décalés d'un rang reprennent leur numéro.
+#[test]
+fn undoing_a_merge_shifts_the_following_segments_back() {
+    let base = archive(vec![
+        passage(1, 1, MultirideSens::Reference, 0.0, 10.0),
+        passage(2, 1, MultirideSens::Reference, 11.0, 20.0),
+        passage(3, 1, MultirideSens::Reference, 100.0, 110.0),
+        passage(3, 2, MultirideSens::Retour, 200.0, 210.0),
+    ]);
+    let merged = merge_segment(&base, 2).unwrap();
+    assert_eq!(merged.passages.last().unwrap().segment, 2, "le 3ᵉ est devenu 2ᵉ");
+
+    let undone = undo_segment(&merged, 1).unwrap();
+
+    assert_eq!(summary(&undone), summary(&base));
+}
+
+/// Une chaîne de fusions s'annule **pas à pas**, de la plus récente à la plus
+/// ancienne : l'instantané d'une fusion contient celui de la précédente, et
+/// c'est ce qui rend l'état intermédiaire à nouveau annulable.
+#[test]
+fn a_chain_of_merges_is_undone_step_by_step() {
+    let base = archive(vec![
+        passage(1, 1, MultirideSens::Reference, 0.0, 10.0),
+        passage(2, 1, MultirideSens::Reference, 10.5, 20.0),
+        passage(3, 1, MultirideSens::Reference, 20.5, 30.0),
+    ]);
+
+    let two_merged = merge_segment(&base, 2).unwrap(); // S2 absorbé par S1
+    let three_merged = merge_segment(&two_merged, 2).unwrap(); // S3 absorbé à son tour
+    assert_eq!(
+        summary(&three_merged),
+        vec![(1, 1, MultirideSens::Reference, 0.0, 30.0)],
+        "trois segments consécutifs recousus en un seul"
+    );
+
+    // Premier retour : l'état à deux segments, toujours annulable.
+    let back_to_two = undo_segment(&three_merged, 1).unwrap();
+    assert_eq!(summary(&back_to_two), summary(&two_merged));
+
+    // Second retour : l'état d'origine.
+    let back_to_base = undo_segment(&back_to_two, 1).unwrap();
+    assert_eq!(summary(&back_to_base), summary(&base));
+    assert!(back_to_base.passages.iter().all(|p| p.avant_fusion.is_none()));
+}
+
+/// Annuler un faux positif se réduit à retirer le marqueur.
+#[test]
+fn undoing_a_false_positive_clears_the_marker() {
+    let marked = mark_false_positive(reference_case(), 2);
+
+    let undone = undo_segment(&marked, 2).unwrap();
+
+    assert!(undone.passages.iter().all(|p| !p.faux_positif));
+    assert_eq!(summary(&undone), summary(&reference_case()));
+}
+
+/// Rien à annuler : le refus est explicite, jamais silencieux.
+#[test]
+fn undoing_an_untouched_segment_is_refused() {
+    let error = undo_segment(&reference_case(), 1).unwrap_err();
+    assert!(error.contains("Aucun ajustement"), "message : {error}");
+}
+
+/// Un segment introuvable est refusé comme partout ailleurs dans le module.
+#[test]
+fn undoing_an_unknown_segment_is_refused() {
+    let error = undo_segment(&reference_case(), 9).unwrap_err();
+    assert!(error.contains("introuvable"), "message : {error}");
+}
+
+/// Un segment fusionné **sans** enregistrement — fichier écrit avant
+/// l'introduction du champ `avant_fusion` — est refusé, sans être cassé.
+#[test]
+fn undoing_a_merge_without_a_record_is_refused() {
+    let mut merged = merge_segment(&reference_case(), 2).unwrap();
+    for passage in merged.passages.iter_mut() {
+        passage.avant_fusion = None;
+    }
+
+    let error = undo_segment(&merged, 1).unwrap_err();
+
+    assert!(error.contains("Aucun ajustement"), "message : {error}");
 }
 
 // ─── Commandes ────────────────────────────────────────────────────────
@@ -283,6 +442,63 @@ fn an_adjustment_is_persisted() {
     let reloaded = load_file(&file_path(&mode, "t-1"), "t-1").expect("état relu");
     assert_eq!(reloaded.passages.len(), updated.passages.len());
     assert!(reloaded.passages.iter().all(|p| p.fusionne));
+}
+
+/// L'annulation est écrite sur disque, enregistrement compris : une réouverture
+/// retrouve l'état d'avant l'ajustement, et non plus la fusion.
+#[test]
+fn an_undo_is_persisted() {
+    let mode = test_dir("persistance_annulation");
+    let base = reference_case();
+    merge_impl(&mode, "t-1", base.clone(), 2).unwrap();
+    // L'enregistrement survit à l'écriture : sans lui, l'annulation ne pourrait
+    // pas être jouée après une relecture.
+    let reloaded = load_file(&file_path(&mode, "t-1"), "t-1").expect("état relu");
+    assert!(reloaded.passages.iter().all(|p| p.avant_fusion.is_some()));
+
+    let undone = undo_impl(&mode, "t-1", reloaded, 1).unwrap();
+
+    assert_eq!(summary(&undone), summary(&base));
+    let persisted = load_file(&file_path(&mode, "t-1"), "t-1").expect("état relu");
+    assert_eq!(
+        summary(&persisted),
+        summary(&base),
+        "le fichier porte l'état d'avant la fusion"
+    );
+    assert!(persisted.passages.iter().all(|p| p.avant_fusion.is_none()));
+}
+
+/// Un faux positif s'annule aussi par la commande, et l'annulation est écrite.
+#[test]
+fn undoing_a_false_positive_is_persisted() {
+    let mode = test_dir("persistance_fp");
+    let marked = toggle_fp_impl(&mode, "t-1", reference_case(), 2).unwrap();
+    assert!(marked.passages.iter().any(|p| p.faux_positif));
+
+    let undone = undo_impl(&mode, "t-1", marked, 2).unwrap();
+
+    assert!(undone.passages.iter().all(|p| !p.faux_positif));
+    assert!(
+        load_file(&file_path(&mode, "t-1"), "t-1")
+            .unwrap()
+            .passages
+            .iter()
+            .all(|p| !p.faux_positif)
+    );
+}
+
+/// Une annulation sur une autre trace est refusée, sans rien écrire.
+#[test]
+fn undoing_on_a_foreign_archive_is_refused() {
+    let mode = test_dir("annulation_etrangere");
+    // L'état porte un ajustement annulable, mais appartient à une autre trace
+    // que celle de l'appel : c'est le rattachement qui est refusé.
+    let adjusted = toggle_fp(&reference_case(), 2).unwrap();
+
+    let error = undo_impl(&mode, "autre", adjusted, 2).unwrap_err();
+
+    assert!(error.contains("autre trace"), "message : {error}");
+    assert!(!file_path(&mode, "autre").exists());
 }
 
 /// Un état appartenant à une autre trace est refusé, sans rien écrire.

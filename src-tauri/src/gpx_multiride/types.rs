@@ -105,6 +105,16 @@ pub struct MultiridePassage {
     pub longueur_km: f64,
     /// Le segment du passage a subi une fusion manuelle.
     pub fusionne: bool,
+    /// Emprunts des deux segments **tels qu'ils étaient avant la fusion** —
+    /// de quoi l'annuler.
+    ///
+    /// Présent sur les seuls emprunts d'un segment fusionné, et `None`
+    /// partout ailleurs (détection neuve, segment écarté). Les emprunts
+    /// enregistrés conservent leurs propres champs, **y compris un
+    /// `avant_fusion` antérieur** : la fusion de trois segments consécutifs
+    /// s'annule donc en cascade, la plus récente d'abord.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avant_fusion: Option<Vec<MultiridePassage>>,
     /// Borne d'entrée — première coordonnée de la géométrie du fichier.
     pub entree: MultirideLatLon,
     /// Borne de sortie — seconde coordonnée de la géométrie du fichier.

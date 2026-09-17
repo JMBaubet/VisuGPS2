@@ -1,7 +1,10 @@
 //! Commandes Tauri du module Multiride.
 //!
-//! Trois commandes publiques, appelées par le store Pinia `useMultirideStore`.
-//! Aucune n'entretient d'état côté Rust : le fichier de description
+//! Les commandes publiques, appelées par le store Pinia `useMultirideStore` :
+//! détection et relecture (`multiride_detect`, `multiride_load`), ajustements
+//! (`multiride_merge_segment`, `multiride_toggle_fp`, `multiride_reset`,
+//! `multiride_undo_segment`) et validation (`multiride_validate`). Aucune
+//! n'entretient d'état côté Rust : le fichier de description
 //! (`traces/{trace_id}/multiride.json`) est la seule persistance, et il est
 //! réécrit par chaque commande qui modifie l'état.
 //!
@@ -251,6 +254,32 @@ pub async fn multiride_toggle_fp(
     Ok(updated)
 }
 
+/// Annule l'ajustement d'un segment (spécification §F-14, §F-15) et réécrit le
+/// fichier de description.
+///
+/// Un segment ne portant qu'un ajustement à la fois, la commande n'a pas à
+/// savoir lequel elle annule : l'état reçu le dit — marqueur faux positif à
+/// retirer, ou enregistrement d'avant fusion à réinstaller.
+///
+/// Le **registre n'est pas touché**, comme pour les autres ajustements.
+#[tauri::command]
+pub async fn multiride_undo_segment(
+    app: tauri::AppHandle,
+    trace_id: String,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let updated = undo_impl(&mode_dir, &trace_id, archive, segment)?;
+    println!(
+        "[multiride] annulation trace={} segment={} passages={}",
+        trace_id,
+        segment,
+        updated.passages.len()
+    );
+    Ok(updated)
+}
+
 /// Rétablit la détection d'origine en la rejouant, et réécrit le fichier de
 /// description (spécification §F-16).
 #[tauri::command]
@@ -289,6 +318,18 @@ pub fn toggle_fp_impl(
     segment: usize,
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::toggle_fp(&archive, segment)?;
+    save_adjusted(mode_dir, trace_id, &updated)?;
+    Ok(updated)
+}
+
+/// Implémentation testable de `multiride_undo_segment` (sans `AppHandle`).
+pub fn undo_impl(
+    mode_dir: &Path,
+    trace_id: &str,
+    archive: MultirideArchive,
+    segment: usize,
+) -> Result<MultirideArchive, String> {
+    let updated = adjustments::undo_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
     Ok(updated)
 }
