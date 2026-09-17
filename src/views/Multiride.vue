@@ -93,7 +93,7 @@
  * par le bouton Éditer de l'accueil ou par le garde-fou d'EditionCamera. À la
  * sortie, le store est réinitialisé — le fichier de description, lui, survit.
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useMultirideStore, type MultirideParams } from '../stores/multiride'
@@ -119,6 +119,13 @@ const ui = useUiStore()
 const dialogExitOpen = ref(false)
 /** Points de la trace, pour le tracé de fond et le découpage des emprunts. */
 const tracePoints = ref<TracePoint[]>([])
+/**
+ * Paramètres ayant produit la détection affichée, en une chaîne comparable.
+ * `null` tant qu'aucune détection n'est chargée : c'est ce qui distingue
+ * l'ouverture de la vue — où les réglages arrivent après le premier rendu —
+ * d'un enregistrement de paramètre.
+ */
+const appliedParamsKey = ref<string | null>(null)
 
 const traceId = computed(() => (route.query.traceId as string | null) ?? null)
 const traceName = computed(
@@ -127,6 +134,9 @@ const traceName = computed(
 
 /** L'état de la détection courante (`null` avant la première restitution). */
 const archive = computed(() => multirideStore.archive)
+
+/** Paramètres réglés dans le drawer, en une chaîne comparable à l'appliquée. */
+const settingsParamsKey = computed(() => paramsKeyOf(buildParams()))
 
 /** Valeur d'un paramètre numérique, avec repli sur la valeur par défaut. */
 function settingNumber(path: string, fallback: number): number {
@@ -145,17 +155,56 @@ function buildParams(): MultirideParams {
   }
 }
 
+/**
+ * Les quatre paramètres en une chaîne comparable — les valeurs seules, dans
+ * l'ordre de [`MultirideParams`] : deux jeux de paramètres sont identiques
+ * quand leurs chaînes le sont.
+ */
+function paramsKeyOf(params: MultirideParams | null | undefined): string | null {
+  if (!params) return null
+  return [
+    params.toleranceM,
+    params.longueurMinM,
+    params.pasEchantillonnageM,
+    params.fusionReferencesM,
+  ].join('|')
+}
+
 /** Charge les points de la trace — support du tracé et du découpage des emprunts. */
 async function loadTracePoints(): Promise<void> {
   if (!traceId.value) return
   tracePoints.value = await tracesStore.getTracePoints(traceId.value)
 }
 
-/** Lance la détection sur la trace courante, puis recharge ses points. */
+/**
+ * Lance la détection sur la trace courante, puis recharge ses points.
+ *
+ * Les paramètres appliqués sont relevés sur l'état produit — et non sur les
+ * réglages : c'est ce que la détection a réellement joué qui fait référence.
+ */
 async function runDetection(): Promise<void> {
   if (!traceId.value) return
   await multirideStore.runDetection(traceId.value, buildParams())
+  appliedParamsKey.value = paramsKeyOf(multirideStore.archive?.params)
   await loadTracePoints()
+}
+
+/**
+ * Rejoue la détection avec les paramètres qui viennent d'être enregistrés.
+ *
+ * C'est la **seule** relance : le bouton dédié a disparu. Une relance écrase la
+ * détection précédente et ses ajustements, raison pour laquelle les paramètres
+ * ne sont pas modifiables tant qu'un ajustement existe — le drawer est fermé et
+ * son bouton grisé, l'utilisateur ne peut donc pas déclencher ce cas.
+ */
+async function onParametersSaved(): Promise<void> {
+  try {
+    await runDetection()
+    ui.showSuccess('Paramètres enregistrés : détection relancée.')
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : 'Détection impossible.'
+    ui.showError(`${msg} Modifiez un paramètre pour réessayer.`)
+  }
 }
 
 /**
@@ -204,8 +253,16 @@ onMounted(async () => {
     // La détection déjà écrite fait foi — ajustements compris ; elle n'est
     // rejouée que si le fichier est absent ou inexploitable.
     const restored = await multirideStore.restore(traceId.value)
-    if (!restored) await runDetection()
-    else await loadTracePoints()
+    if (!restored) {
+      await runDetection()
+    } else {
+      // Une détection restituée n'est pas relancée, même si ses paramètres
+      // diffèrent des réglages courants : ouvrir la vue ne doit pas écraser
+      // des ajustements. Ce sont les paramètres de la détection qui font
+      // référence jusqu'au prochain enregistrement.
+      appliedParamsKey.value = paramsKeyOf(multirideStore.archive?.params)
+      await loadTracePoints()
+    }
   } catch (error) {
     const msg = typeof error === 'string' ? error : 'Erreur de détection.'
     ui.showError(msg)
@@ -225,6 +282,44 @@ onBeforeRouteLeave(() => {
   multirideStore.reset()
   return true
 })
+
+/**
+ * Relance de la détection à l'enregistrement d'un paramètre.
+ *
+ * Le déclencheur est l'**enregistrement**, et non la frappe : les curseurs du
+ * drawer n'alimentent qu'un brouillon local, rien n'est persisté avant le
+ * bouton d'enregistrement. Comparer les valeurs suffit donc, sans temporisation
+ * — le rechargement des réglages qui suit un enregistrement ne déclenche rien
+ * tant que les valeurs sont celles appliquées.
+ *
+ * Deux garde-fous. Une détection déjà en cours, pour ne pas empiler deux
+ * analyses. Et un ajustement en place : une relance l'écraserait — théoriquement
+ * superflu, le bouton des paramètres étant grisé dès qu'un ajustement existe,
+ * mais il protège d'une modification venue d'ailleurs.
+ */
+watch(settingsParamsKey, (key) => {
+  // Aucune détection de référence : c'est l'ouverture de la vue, pas un
+  // enregistrement — les réglages y arrivent après le premier rendu.
+  if (appliedParamsKey.value === null) return
+  if (key === appliedParamsKey.value) return
+  if (multirideStore.loading || multirideStore.hasAdjustments) return
+  void onParametersSaved()
+})
+
+/**
+ * Les paramètres cessent d'être modifiables dès qu'une détection est en cours
+ * ou qu'un ajustement est en place — les deux conditions qui grisent le bouton
+ * de la barre. Le drawer se referme donc s'il était ouvert : sans cela, un
+ * second enregistrement pendant l'analyse serait ignoré, la détection en cours
+ * portant les paramètres qu'elle a reçus, et l'affichage ne correspondrait plus
+ * aux réglages enregistrés.
+ */
+watch(
+  () => multirideStore.loading || multirideStore.hasAdjustments,
+  (locked) => {
+    if (locked) appStore.isSettingsDrawerOpen = false
+  },
+)
 </script>
 
 <style scoped>
