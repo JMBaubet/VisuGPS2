@@ -2,45 +2,6 @@
   <v-navigation-drawer permanent width="360" class="mrl-panel">
     <div class="mrl-panel-body">
       <div class="mrl-panel-list">
-        <v-expansion-panels variant="accordion" class="ma-1" v-model="openPanels">
-          <v-expansion-panel>
-            <v-expansion-panel-title>
-              <v-icon icon="mdi-chart-box" class="mr-2" />
-              Synthèse
-            </v-expansion-panel-title>
-            <v-expansion-panel-text>
-              <v-list density="compact">
-                <v-list-item title="Segments répétés">
-                  <template #append>
-                    <b>{{ segmentNumbers.length }}</b>
-                  </template>
-                </v-list-item>
-                <v-list-item title="Emprunts">
-                  <template #append>{{ passages.length }}</template>
-                </v-list-item>
-                <v-list-item title="Faux positifs">
-                  <template #append>{{ falsePositiveCount }}</template>
-                </v-list-item>
-                <v-list-item title="Fusions manuelles">
-                  <template #append>{{ mergedCount }}</template>
-                </v-list-item>
-                <v-list-item title="Km répétés">
-                  <template #append>{{ repeatedKm.toFixed(2) }} km</template>
-                </v-list-item>
-                <v-list-item title="Trace">
-                  <template #append>{{ traceLengthKm.toFixed(2) }} km</template>
-                </v-list-item>
-                <v-list-item v-if="analysisDurationMs > 0" title="Temps d'analyse">
-                  <template #append>{{ analysisDurationMs }} ms</template>
-                </v-list-item>
-                <v-list-item title="Paramètres actifs" :subtitle="paramsSummary" />
-              </v-list>
-            </v-expansion-panel-text>
-          </v-expansion-panel>
-        </v-expansion-panels>
-
-        <v-divider class="my-1" />
-
         <v-list v-if="segmentNumbers.length > 0" nav class="py-0">
           <v-list-item
             v-for="segment in segmentNumbers"
@@ -123,14 +84,25 @@
           text="La trace ne repasse sur aucun troncçon."
         />
       </div>
+
+      <v-divider />
+
+      <!-- La synthèse ferme le panneau, sous la liste : une lecture de
+           contexte, repliée tant qu'on ne la demande pas. -->
+      <MultirideSynthesis
+        :passages="passages"
+        :repeated-km="repeatedKm"
+        :analysis-duration-ms="analysisDurationMs"
+        :params="params"
+      />
     </div>
   </v-navigation-drawer>
 </template>
 
 <script setup lang="ts">
 /**
- * Panneau latéral des passages multiples : synthèse de la détection, puis un
- * bloc par segment — en-tête, **ruban multi-rails** et emprunts répétés.
+ * Panneau latéral des passages multiples : un bloc par segment — en-tête,
+ * **ruban multi-rails** et emprunts répétés —, fermé par la synthèse.
  *
  * La restitution d'un segment se limite à ce qui décide : la longueur et le
  * début de son emprunt de **référence** en titre, puis chaque Aller/Retour par
@@ -150,8 +122,8 @@
  * parent, qui la publie dans le store : la carte s'y synchronise et cadre
  * l'étendue du segment.
  */
-import { ref, computed } from 'vue'
 import type { MultirideParams, MultiridePassage } from '../../stores/multiride'
+import MultirideSynthesis from './MultirideSynthesis.vue'
 import { sensColor, sensLabel } from './multirideMapLayers'
 import { formatSegmentTitle, formatStart } from './multirideFormat'
 
@@ -175,31 +147,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [segment: number]
 }>()
-
-/** Panneaux de synthèse dépliés au premier affichage. */
-const openPanels = ref<number[]>([0])
-
-/** Segments distincts marqués faux positifs. */
-const falsePositiveCount = computed(
-  () => props.segmentNumbers.filter((n) => isFalsePositive(n)).length,
-)
-
-/** Segments ayant subi une fusion manuelle. */
-const mergedCount = computed(
-  () => props.segmentNumbers.filter((n) => isMerged(n)).length,
-)
-
-/** Paramètres actifs, tels qu'ils ont produit la détection. */
-const paramsSummary = computed(() => {
-  const params = props.params
-  if (!params) return ''
-  return [
-    `tolérance ${params.toleranceM} m`,
-    `longueur min ${params.longueurMinM} m`,
-    `pas ${params.pasEchantillonnageM} m`,
-    `fusion ${params.fusionReferencesM} m`,
-  ].join(' · ')
-})
 
 /** Emprunts d'un segment, triés par numéro d'emprunt. */
 function segmentPassages(segment: number): MultiridePassage[] {
