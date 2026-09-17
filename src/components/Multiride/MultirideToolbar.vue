@@ -13,6 +13,15 @@
     </v-app-bar-title>
 
     <template #append>
+      <!-- Avancement : segments ajustés sur le total, comme le compteur
+           d'anomalies de la vue Audit. -->
+      <MultirideProgressChip
+        :pending="pendingCount"
+        :corrected="correctedCount"
+        :fp="fpCount"
+        class="mr-3"
+      />
+
       <!-- État de la détection : c'est lui qui décide de l'accès à l'édition
            caméra (un état « à valider » la ferme). -->
       <v-chip
@@ -47,76 +56,53 @@
         Aucun passage multiple
       </v-chip>
 
-      <!-- Pastille de relance : les paramètres du panneau ont changé depuis la
-           détection affichée, une relance produirait un autre résultat. -->
-      <v-badge :dot="dirty" color="warning" :offset-x="-4" :offset-y="6">
-        <v-btn
-          prepend-icon="mdi-refresh"
-          variant="text"
-          :disabled="loading"
-          :title="
-            dirty
-              ? 'Les paramètres ont changé depuis cette détection : relancer pour l\'actualiser'
-              : 'Relancer la détection avec les paramètres courants'
-          "
-          @click="emit('analyze')"
-        >
-          Relancer
-        </v-btn>
-      </v-badge>
-
-      <!-- Sortie : valider lève la barrière de l'édition caméra ; une trace sans
-           passage multiple (ou déjà validée) y mène directement. -->
+      <!-- Sortie : la validation lève la barrière et ramène à l'accueil, où la
+           carte du circuit ouvre l'édition caméra. -->
       <v-btn
         v-if="status === 'pending'"
         color="success"
         prepend-icon="mdi-check"
         :disabled="loading"
-        title="Valider les passages multiples et poursuivre vers l'édition caméra"
+        title="Valider les passages multiples et revenir à l'accueil"
         @click="emit('validate')"
       >
-        Valider et éditer
-      </v-btn>
-      <v-btn
-        v-else-if="status === 'validated' || status === 'none'"
-        color="primary"
-        prepend-icon="mdi-pencil"
-        :disabled="loading"
-        title="Éditer la caméra de la trace"
-        @click="emit('edit')"
-      >
-        Éditer
+        Valider
       </v-btn>
 
-      <v-btn
-        icon="mdi-cog-outline"
-        variant="text"
-        :color="appStore.isSettingsDrawerOpen ? 'primary' : ''"
-        :title="
-          appStore.isSettingsDrawerOpen
-            ? 'Fermer les paramètres'
-            : 'Paramètres de la vue Passages multiples'
-        "
-        @click="emit('open-settings')"
-      />
+      <!-- Le titre est porté par l'enveloppe : un bouton désactivé ne reçoit
+           pas le survol, son info-bulle ne s'afficherait donc jamais — or
+           c'est elle qui dit pourquoi le panneau est fermé. -->
+      <div :title="settingsNote">
+        <v-btn
+          icon="mdi-cog-outline"
+          variant="text"
+          :color="appStore.isSettingsDrawerOpen ? 'primary' : ''"
+          :disabled="settingsLocked"
+          @click="emit('open-settings')"
+        />
+      </div>
     </template>
   </v-app-bar>
 </template>
 
 <script setup lang="ts">
 /**
- * Barre supérieure de la vue Passages multiples : retour, titre, état de la
- * détection, relance de la détection et panneau Paramètres (flip-flop).
+ * Barre supérieure de la vue Passages multiples : retour, titre, avancement,
+ * état de la détection, validation et panneau Paramètres (flip-flop).
  *
  * L'état affiché est celui du **registre** des traces, restitué par le store :
  * `pending` ferme l'édition caméra tant que les portions répétées n'ont pas été
- * validées — le bouton de sortie valide alors avant de poursuivre. La **pastille**
- * du bouton de relance signale que les paramètres ont changé depuis la détection
- * affichée (spécification §F-05) : la relance n'est jamais automatique, les
- * ajustements en cours seraient perdus sans que l'utilisateur l'ait demandé.
+ * validées. La validation lève la barrière et **ramène à l'accueil** ;
+ * l'édition caméra s'ouvre depuis la carte du circuit, plus depuis cette vue.
+ *
+ * Il n'y a **pas de relance manuelle** : la détection est rejouée d'elle-même
+ * quand un paramètre est enregistré, et le bouton des paramètres est grisé tant
+ * qu'un ajustement est en place — une relance les écraserait — ou qu'une
+ * détection est en cours.
  */
 import { computed } from 'vue'
 import { useAppStore } from '../../stores/app'
+import MultirideProgressChip from './MultirideProgressChip.vue'
 import type { MultirideStatus } from '../../stores/multiride'
 
 const props = defineProps<{
@@ -129,15 +115,19 @@ const props = defineProps<{
   loading: boolean
   /** Horodatage ISO de la validation, si connue. */
   validatedAt?: string | null
-  /** Les paramètres de détection ont changé depuis la détection affichée. */
-  dirty: boolean
+  /** Segments sans ajustement. */
+  pendingCount: number
+  /** Segments fusionnés avec leur précédent. */
+  correctedCount: number
+  /** Segments marqués faux positifs. */
+  fpCount: number
+  /** Un ajustement est en place : les paramètres ne sont pas modifiables. */
+  adjustmentsLocked: boolean
 }>()
 
 const emit = defineEmits<{
   back: []
-  analyze: []
   validate: []
-  edit: []
   'open-settings': []
 }>()
 
@@ -150,5 +140,21 @@ const validatedTitle = computed(() => {
     return 'Portions répétées validées — édition caméra accessible'
   }
   return `Validé le ${date.toLocaleString('fr-FR')} — édition caméra accessible`
+})
+
+/** Paramètres inaccessibles : une relance est en cours, ou un ajustement existe. */
+const settingsLocked = computed(() => props.loading || props.adjustmentsLocked)
+
+/** Motif du verrouillage — ou l'action du bouton, quand il est ouvert. */
+const settingsNote = computed(() => {
+  if (props.loading) {
+    return 'Détection en cours : les paramètres ne sont pas modifiables'
+  }
+  if (props.adjustmentsLocked) {
+    return 'Des ajustements sont en place : annulez-les pour modifier les paramètres'
+  }
+  return appStore.isSettingsDrawerOpen
+    ? 'Fermer les paramètres'
+    : 'Paramètres de la vue Passages multiples'
 })
 </script>

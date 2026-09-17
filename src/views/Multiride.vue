@@ -5,13 +5,14 @@
         :trace-name="traceName"
         :status="multirideStore.status"
         :segment-count="multirideStore.segmentCount"
-        :loading="multirideStore.loading || analyzing"
+        :loading="multirideStore.loading"
         :validated-at="archive?.updatedAt ?? null"
-        :dirty="dirty"
+        :pending-count="multirideStore.pendingSegmentCount"
+        :corrected-count="multirideStore.mergedSegmentCount"
+        :fp-count="multirideStore.falsePositiveSegmentCount"
+        :adjustments-locked="multirideStore.treatedSegmentCount > 0"
         @back="onBackClicked"
-        @analyze="onAnalyzeClicked"
         @validate="onValidateClicked"
-        @edit="goToEdition"
         @open-settings="appStore.isSettingsDrawerOpen = !appStore.isSettingsDrawerOpen"
       />
 
@@ -96,7 +97,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useMultirideStore, type MultirideParams } from '../stores/multiride'
-import { useEditionStore } from '../stores/edition'
 import { useSettingsStore } from '../stores/settings'
 import { useTracesStore, type TracePoint } from '../stores/traces'
 import { useUiStore } from '../stores/ui'
@@ -111,13 +111,10 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const multirideStore = useMultirideStore()
-const editionStore = useEditionStore()
 const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const ui = useUiStore()
 
-/** Une détection est en cours de lancement depuis cette vue. */
-const analyzing = ref(false)
 /** Confirmation de sortie lorsque la barrière est encore levée. */
 const dialogExitOpen = ref(false)
 /** Points de la trace, pour le tracé de fond et le découpage des emprunts. */
@@ -130,23 +127,6 @@ const traceName = computed(
 
 /** L'état de la détection courante (`null` avant la première restitution). */
 const archive = computed(() => multirideStore.archive)
-
-/**
- * Les paramètres de détection ont changé depuis la détection affichée : une
- * relance produirait un autre résultat, et perdrait les ajustements en cours.
- * C'est ce que signale la pastille de la barre — la relance reste manuelle.
- */
-const dirty = computed(() => {
-  const applied = archive.value?.params
-  if (!applied) return false
-  const current = buildParams()
-  return (
-    current.toleranceM !== applied.toleranceM ||
-    current.longueurMinM !== applied.longueurMinM ||
-    current.pasEchantillonnageM !== applied.pasEchantillonnageM ||
-    current.fusionReferencesM !== applied.fusionReferencesM
-  )
-})
 
 /** Valeur d'un paramètre numérique, avec repli sur la valeur par défaut. */
 function settingNumber(path: string, fallback: number): number {
@@ -179,39 +159,19 @@ async function runDetection(): Promise<void> {
 }
 
 /**
- * Valide les passages détectés, puis poursuit vers l'édition caméra : c'est
- * l'intention de l'utilisateur qui a ouvert cette vue pour éditer.
+ * Valide les passages détectés, puis revient à l'accueil : l'édition caméra
+ * s'ouvre depuis la carte du circuit, plus depuis cette vue.
  */
 async function onValidateClicked(): Promise<void> {
   try {
     await multirideStore.validate()
     await tracesStore.loadTraces()
     ui.showSuccess('Passages multiples validés.')
-    await goToEdition()
+    // Le garde-fou de sortie ne s'y oppose plus : la barrière est levée.
+    await router.push({ name: 'accueil' })
   } catch (error) {
     const msg = typeof error === 'string' ? error : 'Échec de la validation.'
     ui.showError(msg)
-  }
-}
-
-/** Poursuit vers l'édition caméra — la barrière est levée ou n'a pas lieu d'être. */
-async function goToEdition(): Promise<void> {
-  if (!traceId.value) return
-  editionStore.selectTrace(traceId.value)
-  await router.push({ name: 'editionCamera' })
-}
-
-/** Relance la détection à la demande (paramètres `Multiride.*` courants). */
-async function onAnalyzeClicked(): Promise<void> {
-  analyzing.value = true
-  try {
-    await runDetection()
-    ui.showSuccess('Détection des passages multiples terminée.')
-  } catch (error) {
-    const msg = typeof error === 'string' ? error : 'Échec de la détection.'
-    ui.showError(msg)
-  } finally {
-    analyzing.value = false
   }
 }
 
