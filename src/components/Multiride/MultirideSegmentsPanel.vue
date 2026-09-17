@@ -1,110 +1,3 @@
-<script setup lang="ts">
-/**
- * Panneau latéral des passages multiples : synthèse de la détection, puis un
- * bloc par segment — badges, longueur de référence, **ruban multi-rails** et
- * liste des emprunts.
- *
- * Le ruban situe chaque emprunt sur la trace entière : un rail par emprunt,
- * positionné en pourcentage des kilomètres, coloré selon le sens. C'est la
- * lecture que la spécification demande (« mini-ribbon »), et elle rend visible
- * d'un coup d'œil qu'un troncçon est emprunté plusieurs fois loin les uns des
- * autres.
- *
- * La sélection d'un segment remonte au parent, qui la publie dans le store : la
- * carte s'y synchronise et cadre l'étendue du segment.
- */
-import { ref, computed } from 'vue'
-import type { MultirideParams, MultiridePassage } from '../../stores/multiride'
-import { sensColor, sensLabel } from './multirideMapLayers'
-
-const props = defineProps<{
-  /** Emprunts détectés, tous segments confondus, triés. */
-  passages: MultiridePassage[]
-  /** Numéros des segments détectés, dans l'ordre. */
-  segmentNumbers: number[]
-  /** Segment mis en avant (`null` : aucun). */
-  selectedSegment: number | null
-  /** Longueur totale de la trace analysée (km). */
-  traceLengthKm: number
-  /** Longueur cumulée des portions répétées, faux positifs exclus (km). */
-  repeatedKm: number
-  /** Durée de la dernière détection jouée (ms). */
-  analysisDurationMs: number
-  /** Paramètres ayant produit la détection. */
-  params: MultirideParams | null
-  /** `true` dès qu'un ajustement a été porté à la détection. */
-  hasAdjustments: boolean
-}>()
-
-const emit = defineEmits<{
-  select: [segment: number]
-  merge: [segment: number]
-  'toggle-fp': [segment: number]
-  reset: []
-}>()
-
-/** Panneaux de synthèse dépliés au premier affichage. */
-const openPanels = ref<number[]>([0])
-
-/** Segments distincts marqués faux positifs. */
-const falsePositiveCount = computed(
-  () => props.segmentNumbers.filter((n) => isFalsePositive(n)).length,
-)
-
-/** Segments ayant subi une fusion manuelle. */
-const mergedCount = computed(
-  () => props.segmentNumbers.filter((n) => segmentPassages(n).some((p) => p.fusionne)).length,
-)
-
-/** Paramètres actifs, tels qu'ils ont produit la détection. */
-const paramsSummary = computed(() => {
-  const params = props.params
-  if (!params) return ''
-  return [
-    `tolérance ${params.toleranceM} m`,
-    `longueur min ${params.longueurMinM} m`,
-    `pas ${params.pasEchantillonnageM} m`,
-    `fusion ${params.fusionReferencesM} m`,
-  ].join(' · ')
-})
-
-/** Emprunts d'un segment, triés par numéro d'emprunt. */
-function segmentPassages(segment: number): MultiridePassage[] {
-  return props.passages
-    .filter((p) => p.segment === segment)
-    .sort((a, b) => a.passage - b.passage)
-}
-
-/** `true` si le segment a été écarté par l'utilisateur. */
-function isFalsePositive(segment: number): boolean {
-  return segmentPassages(segment).every((p) => p.fauxPositif)
-}
-
-/** Emprunt de référence du segment (le premier). */
-function referenceOf(segment: number): MultiridePassage | null {
-  return segmentPassages(segment).find((p) => p.sens === 'reference') ?? null
-}
-
-/** Position d'un emprunt sur la trace entière, en pourcentage. */
-function railLeft(passage: MultiridePassage): string {
-  if (props.traceLengthKm <= 0) return '0%'
-  return `${Math.max(0, (passage.kmEntree / props.traceLengthKm) * 100).toFixed(3)}%`
-}
-
-/** Largeur d'un emprunt sur la trace entière, en pourcentage. */
-function railWidth(passage: MultiridePassage): string {
-  if (props.traceLengthKm <= 0) return '0%'
-  const ratio = (passage.longueurKm / props.traceLengthKm) * 100
-  // Un emprunt très court reste visible : le ruban doit signaler sa présence.
-  return `${Math.max(0.4, ratio).toFixed(3)}%`
-}
-
-/** Info-bulle d'un rail : bornes kilométriques et sens. */
-function railTitle(passage: MultiridePassage): string {
-  return `${sensLabel(passage.sens)} — km ${passage.kmEntree.toFixed(2)} → ${passage.kmSortie.toFixed(2)}`
-}
-</script>
-
 <template>
   <v-navigation-drawer permanent width="360" class="mrl-panel">
     <div class="mrl-panel-body">
@@ -146,20 +39,6 @@ function railTitle(passage: MultiridePassage): string {
           </v-expansion-panel>
         </v-expansion-panels>
 
-        <!-- Réinitialisation : visible dès qu'un ajustement existe (F-16). -->
-        <v-btn
-          v-if="hasAdjustments"
-          class="ma-2"
-          block
-          size="small"
-          variant="tonal"
-          color="warning"
-          prepend-icon="mdi-restore"
-          @click="emit('reset')"
-        >
-          Réinitialiser les modifications
-        </v-btn>
-
         <v-divider class="my-1" />
 
         <v-list v-if="segmentNumbers.length > 0" nav class="py-0">
@@ -171,13 +50,17 @@ function railTitle(passage: MultiridePassage): string {
             :class="{ 'mrl-segment--fp': isFalsePositive(segment) }"
             @click="emit('select', segment)"
           >
-            <v-list-item-title class="d-flex align-center">
-              <span :class="{ 'mrl-strike': isFalsePositive(segment) }">
-                Segment {{ segment }}
-              </span>
+            <!-- Titre : la longueur et le début de l'emprunt de référence.
+                 L'état d'ajustement est porté à droite par un badge ; un
+                 segment n'en porte qu'un, la fusion et le faux positif
+                 s'excluant. -->
+            <v-list-item-title :class="{ 'mrl-strike': isFalsePositive(segment) }">
+              {{ titleOf(segment) }}
+            </v-list-item-title>
+
+            <template #append>
               <v-chip
                 v-if="isFalsePositive(segment)"
-                class="ml-2"
                 size="x-small"
                 variant="tonal"
                 color="warning"
@@ -185,20 +68,14 @@ function railTitle(passage: MultiridePassage): string {
                 FP
               </v-chip>
               <v-chip
-                v-if="segmentPassages(segment).some((p) => p.fusionne)"
-                class="ml-2"
+                v-else-if="isMerged(segment)"
                 size="x-small"
                 variant="tonal"
                 color="info"
               >
                 fusionné
               </v-chip>
-            </v-list-item-title>
-
-            <v-list-item-subtitle>
-              {{ segmentPassages(segment).length }} emprunt(s) ·
-              {{ (referenceOf(segment)?.longueurKm ?? 0).toFixed(2) }} km
-            </v-list-item-subtitle>
+            </template>
 
             <!-- Ruban multi-rails : un rail par emprunt, positionné sur la
                  trace entière et coloré selon son sens. -->
@@ -221,52 +98,20 @@ function railTitle(passage: MultiridePassage): string {
               </div>
             </div>
 
-            <!-- Liste des emprunts : bornes de points, bornes kilométriques et
-                 sens. -->
+            <!-- Emprunts répétés — les Aller et les Retour —, par leur seul
+                 début : la référence est portée par le titre, la longueur et
+                 les bornes de points ne décident de rien. -->
             <div class="mrl-passages">
               <div
-                v-for="passage in segmentPassages(segment)"
+                v-for="passage in repeatPassages(segment)"
                 :key="passage.passage"
                 class="mrl-passage"
               >
                 <span class="mrl-passage-sens" :style="{ color: sensColor(passage.sens) }">
                   {{ sensLabel(passage.sens) }}
                 </span>
-                <span class="mrl-passage-range">
-                  points {{ passage.pointEntree }}–{{ passage.pointSortie }} · km
-                  {{ passage.kmEntree.toFixed(2) }}–{{ passage.kmSortie.toFixed(2) }} ·
-                  {{ passage.longueurKm.toFixed(2) }} km
-                </span>
+                <span class="mrl-passage-range">{{ formatStart(passage.kmEntree) }}</span>
               </div>
-            </div>
-
-            <!-- Ajustements du segment : fusion avec le précédent (sauf le
-                 premier, qui n'en a pas) et marquage faux positif. Le clic ne
-                 doit pas remonter comme une sélection de segment. -->
-            <div class="mrl-actions">
-              <v-btn
-                v-if="segment > 1"
-                size="x-small"
-                variant="text"
-                prepend-icon="mdi-arrow-collapse-up"
-                :title="`Fusionner le segment ${segment} avec le précédent`"
-                @click.stop="emit('merge', segment)"
-              >
-                Fusionner S{{ segment }}
-              </v-btn>
-              <v-btn
-                size="x-small"
-                variant="text"
-                :prepend-icon="isFalsePositive(segment) ? 'mdi-close-circle-outline' : 'mdi-cancel'"
-                :title="
-                  isFalsePositive(segment)
-                    ? 'Réintégrer ce segment dans le résultat'
-                    : 'Détecté à tort : exclure ce segment du résultat'
-                "
-                @click.stop="emit('toggle-fp', segment)"
-              >
-                {{ isFalsePositive(segment) ? 'Retirer FP' : 'Faux positif' }}
-              </v-btn>
             </div>
           </v-list-item>
         </v-list>
@@ -281,6 +126,131 @@ function railTitle(passage: MultiridePassage): string {
     </div>
   </v-navigation-drawer>
 </template>
+
+<script setup lang="ts">
+/**
+ * Panneau latéral des passages multiples : synthèse de la détection, puis un
+ * bloc par segment — en-tête, **ruban multi-rails** et emprunts répétés.
+ *
+ * La restitution d'un segment se limite à ce qui décide : la longueur et le
+ * début de son emprunt de **référence** en titre, puis chaque Aller/Retour par
+ * son seul début. Les bornes de points et les kilomètres de sortie ne servent
+ * pas la décision et ne sont plus affichés ; ils restent dans le fichier, qui
+ * est le contrat de sortie du module.
+ *
+ * Le ruban situe chaque emprunt sur la trace entière : un rail par emprunt,
+ * positionné en pourcentage des kilomètres, coloré selon le sens. C'est la
+ * lecture que la spécification demande (« mini-ribbon »), et elle rend visible
+ * d'un coup d'œil qu'un tronçon est emprunté plusieurs fois loin les uns des
+ * autres.
+ *
+ * La ligne ne porte **aucune action** : la gestion d'un segment — fusion, faux
+ * positif, annulation — appartient à la fenêtre d'action, que le clic ouvre
+ * (`MultirideActionPanel`), comme dans la vue Audit. La sélection remonte au
+ * parent, qui la publie dans le store : la carte s'y synchronise et cadre
+ * l'étendue du segment.
+ */
+import { ref, computed } from 'vue'
+import type { MultirideParams, MultiridePassage } from '../../stores/multiride'
+import { sensColor, sensLabel } from './multirideMapLayers'
+import { formatSegmentTitle, formatStart } from './multirideFormat'
+
+const props = defineProps<{
+  /** Emprunts détectés, tous segments confondus, triés. */
+  passages: MultiridePassage[]
+  /** Numéros des segments détectés, dans l'ordre. */
+  segmentNumbers: number[]
+  /** Segment mis en avant (`null` : aucun). */
+  selectedSegment: number | null
+  /** Longueur totale de la trace analysée (km). */
+  traceLengthKm: number
+  /** Longueur cumulée des portions répétées, faux positifs exclus (km). */
+  repeatedKm: number
+  /** Durée de la dernière détection jouée (ms). */
+  analysisDurationMs: number
+  /** Paramètres ayant produit la détection. */
+  params: MultirideParams | null
+}>()
+
+const emit = defineEmits<{
+  select: [segment: number]
+}>()
+
+/** Panneaux de synthèse dépliés au premier affichage. */
+const openPanels = ref<number[]>([0])
+
+/** Segments distincts marqués faux positifs. */
+const falsePositiveCount = computed(
+  () => props.segmentNumbers.filter((n) => isFalsePositive(n)).length,
+)
+
+/** Segments ayant subi une fusion manuelle. */
+const mergedCount = computed(
+  () => props.segmentNumbers.filter((n) => isMerged(n)).length,
+)
+
+/** Paramètres actifs, tels qu'ils ont produit la détection. */
+const paramsSummary = computed(() => {
+  const params = props.params
+  if (!params) return ''
+  return [
+    `tolérance ${params.toleranceM} m`,
+    `longueur min ${params.longueurMinM} m`,
+    `pas ${params.pasEchantillonnageM} m`,
+    `fusion ${params.fusionReferencesM} m`,
+  ].join(' · ')
+})
+
+/** Emprunts d'un segment, triés par numéro d'emprunt. */
+function segmentPassages(segment: number): MultiridePassage[] {
+  return props.passages
+    .filter((p) => p.segment === segment)
+    .sort((a, b) => a.passage - b.passage)
+}
+
+/**
+ * Emprunts **répétés** d'un segment : tout sauf la référence, qui est déjà
+ * portée par le titre.
+ */
+function repeatPassages(segment: number): MultiridePassage[] {
+  return segmentPassages(segment).filter((p) => p.sens !== 'reference')
+}
+
+/** `true` si le segment a été écarté par l'utilisateur. */
+function isFalsePositive(segment: number): boolean {
+  return segmentPassages(segment).some((p) => p.fauxPositif)
+}
+
+/** `true` si le segment a été réuni à son précédent par une fusion. */
+function isMerged(segment: number): boolean {
+  return segmentPassages(segment).some((p) => p.fusionne)
+}
+
+/** En-tête d'un segment, lu sur son emprunt de référence. */
+function titleOf(segment: number): string {
+  const reference = segmentPassages(segment).find((p) => p.sens === 'reference') ?? null
+  return formatSegmentTitle(segment, reference)
+}
+
+/** Position d'un emprunt sur la trace entière, en pourcentage. */
+function railLeft(passage: MultiridePassage): string {
+  if (props.traceLengthKm <= 0) return '0%'
+  return `${Math.max(0, (passage.kmEntree / props.traceLengthKm) * 100).toFixed(3)}%`
+}
+
+/** Largeur d'un emprunt sur la trace entière, en pourcentage. */
+function railWidth(passage: MultiridePassage): string {
+  if (props.traceLengthKm <= 0) return '0%'
+  const ratio = (passage.longueurKm / props.traceLengthKm) * 100
+  // Un emprunt très court reste visible : le ruban doit signaler sa présence.
+  return `${Math.max(0.4, ratio).toFixed(3)}%`
+}
+
+/** Info-bulle d'un rail : bornes kilométriques et sens. */
+function railTitle(passage: MultiridePassage): string {
+  return `${sensLabel(passage.sens)} — km ${passage.kmEntree.toFixed(2)} → ${passage.kmSortie.toFixed(2)}`
+}
+</script>
 
 <style scoped>
 .mrl-panel-body {
@@ -334,13 +304,6 @@ function railTitle(passage: MultiridePassage): string {
 
 .mrl-passages {
   margin-top: 6px;
-}
-
-.mrl-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
 }
 
 .mrl-passage {

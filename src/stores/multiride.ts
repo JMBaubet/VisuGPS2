@@ -352,23 +352,6 @@ export const useMultirideStore = defineStore('multiride', () => {
   }
 
   /**
-   * Rétablit la détection d'origine.
-   *
-   * La détection est **rejouée** avec les paramètres enregistrés dans l'état —
-   * elle est déterministe, donc le résultat est celui de la détection initiale —
-   * plutôt que conservée en double dans le fichier. Le statut de validation est
-   * conservé : un ajustement n'a pas d'incidence sur l'édition caméra.
-   */
-  async function resetAdjustments(): Promise<void> {
-    if (!currentTraceId.value || !archive.value) return
-    archive.value = await invoke<MultirideArchive>('multiride_reset', {
-      traceId: currentTraceId.value,
-      archive: archive.value,
-    })
-    selectedSegment.value = null
-  }
-
-  /**
    * Valide les passages détectés : marque l'état `valide`, réécrit le fichier
    * de description et lève la barrière de l'édition caméra.
    *
@@ -423,7 +406,6 @@ export const useMultirideStore = defineStore('multiride', () => {
     mergeSegment,
     toggleFp,
     undoSegment,
-    resetAdjustments,
     validate,
     reset,
   }

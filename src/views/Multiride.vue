@@ -23,11 +23,7 @@
         :repeated-km="multirideStore.repeatedKm"
         :analysis-duration-ms="multirideStore.analysisDurationMs"
         :params="archive?.params ?? null"
-        :has-adjustments="multirideStore.hasAdjustments"
         @select="multirideStore.selectSegment"
-        @merge="onMergeClicked"
-        @toggle-fp="onToggleFpClicked"
-        @reset="onResetClicked"
       />
 
       <!-- Zone centrale : la carte de restitution. Elle n'est montée qu'une fois
@@ -47,6 +43,14 @@
             :width="7"
             color="primary"
             indeterminate
+          />
+
+          <!-- Fenêtre d'action du segment sélectionné : les gestes du module,
+               comme le panneau d'action de la vue Audit. -->
+          <MultirideActionPanel
+            v-if="multirideStore.selectedSegment !== null"
+            :segment="multirideStore.selectedSegment"
+            @close="multirideStore.selectSegment(null)"
           />
         </div>
       </v-main>
@@ -79,14 +83,14 @@
  * La restitution est répartie entre le panneau latéral (synthèse, ruban,
  * emprunts) et la carte, qui porte la trace et les portions répétées. Les deux
  * sont synchronisés par le store : la sélection d'un segment y est publiée, le
- * panneau la met en avant et la carte cadre son étendue.
+ * panneau la met en avant et la carte cadre son étendue. Le clic sur un segment
+ * — dans la liste ou sur la carte — ouvre en outre la **fenêtre d'action** du
+ * segment, où se prennent les trois gestes du module : fusion, faux positif,
+ * annulation de l'ajustement en cours.
  *
  * Le `traceId` arrive par la query de la route (`/multiride?traceId=…`), posée
  * par le bouton Éditer de l'accueil ou par le garde-fou d'EditionCamera. À la
  * sortie, le store est réinitialisé — le fichier de description, lui, survit.
- *
- * Les ajustements (fusion, faux positif) et la validation sont portés par la
- * sous-étape suivante : cette vue expose la détection et sa restitution.
  */
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
@@ -99,6 +103,7 @@ import { useUiStore } from '../stores/ui'
 import MultirideToolbar from '../components/Multiride/MultirideToolbar.vue'
 import MultirideMap from '../components/Multiride/MultirideMap.vue'
 import MultirideSegmentsPanel from '../components/Multiride/MultirideSegmentsPanel.vue'
+import MultirideActionPanel from '../components/Multiride/MultirideActionPanel.vue'
 import ConfirmExitDialog from '../components/Multiride/dialogs/ConfirmExitDialog.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 
@@ -171,37 +176,6 @@ async function runDetection(): Promise<void> {
   if (!traceId.value) return
   await multirideStore.runDetection(traceId.value, buildParams())
   await loadTracePoints()
-}
-
-/** Fusionne un segment avec le précédent, puis recharge les points si besoin. */
-async function onMergeClicked(segment: number): Promise<void> {
-  try {
-    await multirideStore.mergeSegment(segment)
-  } catch (error) {
-    const msg = typeof error === 'string' ? error : 'Échec de la fusion.'
-    ui.showError(msg)
-  }
-}
-
-/** Marque ou démarque un segment en faux positif. */
-async function onToggleFpClicked(segment: number): Promise<void> {
-  try {
-    await multirideStore.toggleFp(segment)
-  } catch (error) {
-    const msg = typeof error === 'string' ? error : 'Échec du marquage.'
-    ui.showError(msg)
-  }
-}
-
-/** Rétablit la détection d'origine (la détection est rejouée). */
-async function onResetClicked(): Promise<void> {
-  try {
-    await multirideStore.resetAdjustments()
-    ui.showSuccess('Détection rétablie.')
-  } catch (error) {
-    const msg = typeof error === 'string' ? error : 'Échec de la réinitialisation.'
-    ui.showError(msg)
-  }
 }
 
 /**
