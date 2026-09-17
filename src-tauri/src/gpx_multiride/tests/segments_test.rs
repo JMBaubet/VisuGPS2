@@ -5,7 +5,6 @@
 //! protègent un aller-retour. Vient ensuite l'assemblage complet sur des traces
 //! synthétiques, dont les intervalles attendus sont calculables.
 
-use crate::gpx_multiride::resample::Resample;
 use crate::gpx_multiride::runs::find_runs;
 use crate::gpx_multiride::segments::{
     boundary_between_passes, build_segments, merge_ordered_passages, merge_within_segment,
