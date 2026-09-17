@@ -133,7 +133,7 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Statut d'audit** (`audit_status`) : `"clean"` (auditée sans anomalie, ou corrections appliquées) ou `"needs_review"` (anomalies détectées à l'import). Une trace non `"clean"` **n'est pas candidate** à l'édition caméra : elle est redirigée vers la vue `/audit`. Le statut est posé à l'import (détection AR + RP sur les points du GPX) et repasse à `"clean"` par `audit_validate`.
 
-**Archivage de l'audit** (`audit_archived`) : `true` quand un audit **appliqué** a laissé une archive dans le dossier de la trace (`audit.json`). C'est ce drapeau, lu par la carte du circuit, qui rend le bouton « Voir les anomalies de la source » **vert** (anomalies et traitements consultables) plutôt que gris. Posé par `audit_validate`, en même temps que `"clean"` ; absent des registres antérieurs → `false` (ces audits n'ont pas laissé d'archive, et les corrections ne sont pas restituables).
+**Archivage de l'audit** (`audit_archived`) : `true` quand un audit **appliqué** a laissé une archive dans le dossier de la trace (`audit.json`). C'est ce drapeau, lu par la carte du circuit, qui **rend** le bouton « Voir les anomalies de la source » (anomalies et traitements consultables) : il est **absent** tant qu'il est faux — il n'existe plus d'état gris informatif. Posé par `audit_validate`, en même temps que `"clean"` ; absent des registres antérieurs → `false` (ces audits n'ont pas laissé d'archive, et les corrections ne sont pas restituables).
 
 **Statut des passages multiples** (`multiride_status`) : `"none"` (détection jouée, aucune portion répétée), `"pending"` (au moins un passage reste à valider — **l'édition caméra est fermée**) ou `"validated"` (passages validés). Il vaut `null` pour une trace dont la détection n'a pas été jouée : la valeur est **permissive**, la barrière ne s'appliquant qu'aux traces détectées depuis l'introduction du module. Posé par `multiride_detect` (`none`/`pending`) et par `multiride_validate` (`validated`) ; les ajustements (`multiride_merge_segment`, `multiride_toggle_fp`, `multiride_reset`) le laissent **inchangé**. Comme `audit_archived`, ce champ évite à la carte du circuit de lire un fichier pour connaître l'état de la trace.
 
@@ -393,4 +393,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-09-16
+**Dernière mise à jour** : 2026-09-17

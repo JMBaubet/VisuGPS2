@@ -5,12 +5,16 @@
 // identifie le même emprunt dans le ruban et la liste. La palette est donc
 // définie ici une fois pour les deux.
 //
-// **Palette Material Design**, y compris les trois couleurs de la spécification
-// (bleu `#3564e0`, orange `#ec9c11`, rouge `#dd3327`), traduites en nuances 500 :
-// la couleur d'un emprunt doit rester celle du reste de l'application, où
-// l'orange signifie « parcouru » et le rouge « écarté ». Voir la note de
-// portage : la bibliothèque Material n'a pas de noir absolu, l'arrivée est donc
-// en `grey 900`.
+// **Palette Material Design** (nuances 500), qui s'écarte des trois couleurs de
+// la spécification : le bleu du thème y habille la trace de fond, la référence
+// est passée au vert (`#4CAF50`) et l'aller au vert-lime (`#CDDC39`) ; le rouge
+// reste le retour — la couleur « écarté » du reste de l'application. Voir la
+// note de portage : la bibliothèque Material n'a pas de noir absolu, l'arrivée
+// est donc en `grey 900`.
+//
+// Cette palette habille aussi les **libellés de sens** du panneau des segments,
+// posés sur la surface du thème — **claire par défaut** : le vert-lime et le
+// vert y sont nettement moins lisibles qu'en trait sur la carte.
 //
 // Mapbox GL n'a pas de « panes » nommés : l'empilement est déterminé par
 // l'**ordre d'ajout** des couches (bas → haut). C'est ce qui impose **trois
@@ -36,12 +40,12 @@ export function emptyFC(): GeoJSON.FeatureCollection {
 
 /** Palette des emprunts et de la trace de fond. */
 export const MULTIRIDE_COLORS = {
-  /** Trace de fond — `grey 500`, neutre et en retrait. */
-  trace: '#9E9E9E',
-  /** Emprunt de référence — `blue 500`, le bleu primaire de l'application. */
-  reference: '#2196F3',
-  /** Emprunt de même sens — `orange 500`. */
-  aller: '#FF9800',
+  /** Trace de fond — `blue 500`, le bleu de l'application (primaire du thème sombre). */
+  trace: '#2196F3',
+  /** Emprunt de référence — `vert 500`, le vert de l'application (validation, valeurs par défaut). */
+  reference: '#4CAF50',
+  /** Emprunt de même sens — `lime 500`. */
+  aller: '#CDDC39',
   /** Emprunt en sens inverse — `red 500`. */
   retour: '#F44336',
   /** Départ — blanc. */
@@ -53,10 +57,11 @@ export const MULTIRIDE_COLORS = {
 /**
  * Épaisseurs et opacités de la spécification (§F-11) : la référence est le
  * trait le plus épais, et l'épaisseur décroissante distingue les sens même sur
- * une capture sans légende.
+ * une capture sans légende. La trace de fond est à l'épaisseur du retour, le
+ * plus fin des emprunts.
  */
 export const MULTIRIDE_STYLE = {
-  traceWidth: 2,
+  traceWidth: 4,
   referenceWidth: 8,
   allerWidth: 6,
   retourWidth: 4,
@@ -214,13 +219,16 @@ export function initMultirideLayers(map: Map, handlers: MultirideMapHandlers): v
     map.addLayer(layer)
   }
 
-  // Bornes de la trace : dessus, elles ne doivent pas être recouvertes. Aucun
-  // filtre : la source mêle la trace et ses deux bornes, et le type de géométrie
-  // suffit à ne dessiner que les points.
+  // Bornes de la trace : dessus, elles ne doivent pas être recouvertes.
+  // Filtre explicite obligatoire : Mapbox dessine un cercle à chaque coordonnée
+  // de la source, donc sans ce filtre chaque sommet de la trace en reçoit un.
   const endsLayer: CircleLayerSpecification = {
     id: LAYER_IDS.traceEnds,
     type: 'circle',
     source: SOURCE_IDS.trace,
+    // Ne dessiner QUE le départ et l'arrivée : la source mêle la trace complète
+    // (LineString) et ses deux bornes (Point).
+    filter: ['in', ['get', 'kind'], ['literal', ['start', 'end']]] as unknown as FilterSpecification,
     paint: {
       'circle-radius': 6,
       'circle-color': [

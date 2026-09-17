@@ -40,7 +40,7 @@ Plongée approfondie dans l'architecture :
 ### 📡 [COMMANDS.md](./COMMANDS.md)
 **Référence des commandes Tauri**
 
-Catalogue exhaustif des **36 commandes** backend↔frontend :
+Catalogue exhaustif des **42 commandes** backend↔frontend :
 - Application, affichage/multi-écrans, modes d'exécution, paramètres, traces GPX
 - Signatures Rust, types de retour, règles métier
 - Exemples d'appel côté TypeScript
@@ -149,7 +149,7 @@ docs/
 ├── README.md                  # Ce fichier (index)
 ├── CONTEXT.md                 # Contexte général
 ├── ARCHITECTURE.md            # Architecture technique
-├── COMMANDS.md                # Référence des 36 commandes Tauri
+├── COMMANDS.md                # Référence des 42 commandes Tauri
 ├── DATA_STORAGE.md            # Schéma de stockage des données
 ├── CONVENTIONS.md             # Conventions de code
 ├── EXTENDING.md               # Guide d'extension
@@ -195,6 +195,6 @@ Material Design mature, composants riches, documentation excellente, grande comm
 
 ---
 
-**Dernière mise à jour** : 2026-09-16
+**Dernière mise à jour** : 2026-09-17
 **Version de l'application** : 0.0.1
 **Status** : En développement actif

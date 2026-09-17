@@ -27,18 +27,21 @@
       <v-spacer></v-spacer> <!-- Pousse les icônes à droite (alignées sur la ligne Distance/Dénivelé) -->
       <div class="d-flex align-center">
         <!--
-          Éditer : couleur = avancement du verrouillage (vert / jaune / orange /
-          rouge, mêmes seuils que la toolbar d'édition), ou barrière non levée —
-          orange pour un audit à faire, bleu pour des passages multiples à
-          valider. **Forcée visible** quand l'édition est incomplète ou qu'une
-          barrière subsiste (icône non verte), même sans survol ; masquée
-          uniquement si verte et non survolée ; visible au survol quelle que
-          soit la couleur (pour pouvoir lancer l'édition).
+          Éditer : icône et couleur selon l'état de la trace.
+           - audit requis → mdi-map-marker-path orange (barrière 1) ;
+           - passages multiples à valider → mdi-repeat ambre (barrière 2) ;
+           - sinon → mdi-pencil, couleur = avancement du verrouillage
+             (vert / ambre / orange / rouge — seuils identiques à la toolbar
+             d'édition, qui emploie le jaune pour le palier > 50 %).
+          **Forcée visible** quand l'édition est incomplète ou qu'une barrière
+          subsiste, même sans survol ; masquée uniquement si verte et non
+          survolée ; visible au survol quelle que soit la couleur (pour
+          pouvoir lancer l'édition).
         -->
         <v-btn
           class="action-btn"
           :class="{ 'action-btn--hidden': !(isEditionIncomplete || isHovering) }"
-          :icon="needsAudit || needsMultiride ? 'mdi-map-marker-path' : 'mdi-pencil'"
+          :icon="needsAudit ? 'mdi-map-marker-path' : needsMultiride ? 'mdi-repeat' : 'mdi-pencil'"
           :color="editColor"
           variant="text"
           density="comfortable"
@@ -106,39 +109,6 @@
           title="Supprimer"
           @click="emitDelete"
         />
-        <!-- Voir les anomalies de la source : visible au survol, et seulement
-             une fois l'audit appliqué (trace « clean » — masqué tant qu'une
-             anomalie reste à traiter). Vert quand l'audit est archivé, donc
-             consultable ; gris sinon, le clic se contentant d'informer. -->
-        <v-btn
-          v-if="!needsAudit"
-          class="action-btn"
-          :class="{ 'action-btn--hidden': !isHovering }"
-          icon="mdi-map-marker-path"
-          :color="trace.audit_archived ? 'green' : 'grey'"
-          variant="text"
-          density="comfortable"
-          size="small"
-          :title="sourceAnomaliesTitle"
-          @click="voirAnomaliesSource"
-        />
-        <!-- Passages multiples : visible au survol dès que la détection a été
-             jouée. Vert quand les passages sont validés — consultables et
-             ajustables de nouveau —, bleu quand ils restent à valider. C'est le
-             seul chemin vers la vue une fois la barrière levée : l'icône Éditer
-             mène alors directement à l'édition caméra. -->
-        <v-btn
-          v-if="hasMultiride"
-          class="action-btn"
-          :class="{ 'action-btn--hidden': !isHovering }"
-          icon="mdi-repeat"
-          :color="needsMultiride ? 'blue' : 'green'"
-          variant="text"
-          density="comfortable"
-          size="small"
-          :title="multirideTitle"
-          @click="voirMultiride"
-        />
         <!-- Exporter (non câblé) : visible au survol uniquement -->
         <v-btn
           class="action-btn"
@@ -194,8 +164,44 @@
       >
         <v-divider></v-divider>
         <v-card-text class="py-2 px-4">
-          <div class="text-body-2 mb-1">
-            Importé le {{ formattedImportDate }}
+          <!-- Ligne « Importé le… » avec, à droite, les actions de
+               consultation de la source (audit archivé) et des passages
+               multiples (validés). Les deux boutons sont **absents** tant
+               que l'action correspondante n'est pas légitime : plus de
+               gris « informatif ». -->
+          <div class="d-flex align-center mb-1">
+            <div class="text-body-2">
+              Importé le {{ formattedImportDate }}
+            </div>
+            <v-spacer></v-spacer>
+            <div class="d-flex align-center">
+              <!-- Voir les anomalies de la source : seulement pour une trace
+                   clean dont l'audit est archivé. Absent sinon — la vue
+                   n'aurait rien à restituer. -->
+              <v-btn
+                v-if="!needsAudit && trace.audit_archived"
+                icon="mdi-map-marker-path"
+                color="green"
+                variant="text"
+                density="comfortable"
+                size="small"
+                title="Voir les anomalies de la source"
+                @click="voirAnomaliesSource"
+              />
+              <!-- Passages multiples : seulement pour des passages validés
+                   (consultation). Tant qu'ils restent à valider, c'est
+                   l'icône Éditer qui mène à la vue. -->
+              <v-btn
+                v-if="trace.multiride_status === 'validated'"
+                icon="mdi-repeat"
+                color="green"
+                variant="text"
+                density="comfortable"
+                size="small"
+                title="Voir les passages multiples (validés)"
+                @click="voirMultiride"
+              />
+            </div>
           </div>
           <div class="text-body-2 mb-1">
             Source : {{ trace.source }}
@@ -220,16 +226,17 @@
  *
  * Deux lignes d'icônes d'action (masquées par opacité hors survol) :
  *  - ligne de titre : Éditer, Gérer les groupes, Gérer la météo, Visualiser
- *  - ligne Distance / Dénivelé : Supprimer, Voir les anomalies de la source,
- *    Exporter, Info, Affichage, Favoris
- * (les Favoris et l'Affichage restent visibles s'ils sont actifs).
+ *  - ligne Distance / Dénivelé : Supprimer, Exporter, Info, Affichage, Favoris
+ * S'y ajoutent, en haut à droite de la section info déroulante (ouverte via
+ * Info) : Voir les anomalies de la source (trace clean et audit archivé) et
+ * Passages multiples (passages validés) — les seules actions de consultation
+ * de la source, qui n'ont pas leur place dans la ligne d'actions rapides.
  *
- * « Voir les anomalies de la source » n'apparaît que pour une trace dont
- * l'audit est appliqué (ou sans anomalie) : masqué tant qu'une anomalie reste à
- * traiter. Vert quand l'audit est **archivé** — la vue Audit rouvre alors les
- * anomalies et leurs corrections en lecture seule — gris sinon, le clic se
- * contentant d'informer (trace jamais auditée, ou audit antérieur à
- * l'archivage).
+ * L'icône Éditer change de nature selon l'état de la trace : mdi-map-marker-path
+ * orange tant qu'un audit reste à faire, mdi-repeat ambre tant que les passages
+ * multiples ne sont pas validés, mdi-pencil sinon — dont la couleur traduit
+ * l'avancement du verrouillage (mêmes seuils que la toolbar d'édition, qui
+ * emploie le jaune pour le palier > 50 %).
  *
  * Le bouton Info déploie une section (v-expand-transition) contenant les
  * détails du circuit (date d'import, source, lien) ; elle se réduit dès que le
@@ -245,7 +252,6 @@ import type { TraceMetadata } from '../../stores/traces'
 import { useEditionStore } from '../../stores/edition'
 import { useSettingsStore } from '../../stores/settings'
 import { useKeyframesStore } from '../../stores/keyframes'
-import { useUiStore } from '../../stores/ui'
 import type { ViewportAspect } from '../../algorithms/keyframeGenerator'
 import { formatDistance, formatElevation } from '../../utils/format'
 
@@ -271,7 +277,6 @@ const tracesStore = useTracesStore()
 const editionStore = useEditionStore()
 const settingsStore = useSettingsStore()
 const keyframesStore = useKeyframesStore()
-const ui = useUiStore()
 
 /** État d'ouverture de la section info déroulante. */
 const infoExpanded = ref(false)
@@ -311,21 +316,21 @@ onMounted(async () => {
 })
 
 /**
- * Couleur de l'icône Éditer selon l'avancement de l'édition (mêmes seuils que
- * le bouton ViewPort de la toolbar d'édition) : vert si **tous** les segments
- * sont verrouillés, jaune si **> 50 %**, orange si **≥ 10 %**, rouge sinon.
+ * Couleur de l'icône Éditer.
+ * Deux barrières priment sur l'avancement du verrouillage, car elles ferment
+ * l'accès à l'édition : une trace non « clean » est orange (audit requis),
+ * une trace dont les passages multiples restent à valider est ambre. Sinon :
+ * vert (tout verrouillé) → ambre (> 50 %) → orange (≥ 10 %) → rouge.
  *
- * Deux barrières prennent le pas sur cet avancement, car elles ferment l'accès à
- * l'édition : une trace non « clean » (anomalies à auditer) est toujours en
- * orange, une trace dont les passages multiples ne sont pas validés toujours en
- * bleu.
+ * L'ambre de la barrière 2 et celui du palier > 50 % sont la même teinte : la
+ * distinguer repose sur l'icône (`mdi-repeat` contre `mdi-pencil`).
  */
 const editColor = computed(() => {
   if (needsAudit.value) return '#FF9800' // orange — à auditer
-  if (needsMultiride.value) return '#2196F3' // bleu — passages multiples à valider
+  if (needsMultiride.value) return '#FFC107' // ambre — passages multiples à valider
   const r = lockRatio.value
   if (r >= 1) return '#4CAF50' // vert
-  if (r > 0.5) return '#FFEB3B' // jaune
+  if (r > 0.5) return '#FFC107' // ambre
   if (r >= 0.1) return '#FF9800' // orange
   return '#F44336' // rouge
 })
@@ -366,34 +371,6 @@ const pencilTitle = computed(() => {
     ? `Éditer — édition complète (${vp})`
     : `Éditer (${vp}) — édition incomplète (${pct} % des segments verrouillés)`
 })
-
-/**
- * `true` dès que la détection des passages multiples a été jouée : il y a
- * quelque chose à restituer, en validation comme en consultation.
- */
-const hasMultiride = computed(
-  () => props.trace.multiride_status === 'pending' || props.trace.multiride_status === 'validated',
-)
-
-/**
- * Tooltip du bouton des passages multiples : l'action est la même — ouvrir la
- * vue —, l'état dit seulement ce qui y attend l'utilisateur.
- */
-const multirideTitle = computed(() =>
-  needsMultiride.value
-    ? 'Valider les passages multiples'
-    : 'Voir les passages multiples (validés)',
-)
-
-/**
- * Tooltip du bouton « Voir les anomalies de la source » : l'audit appliqué
- * laisse une archive consultable, ou il n'y a rien à restituer.
- */
-const sourceAnomaliesTitle = computed(() =>
-  props.trace.audit_archived
-    ? 'Voir les anomalies de la source'
-    : 'Aucune anomalie archivée pour cette trace'
-)
 
 /**
  * Ouvre/ferme la section info et pilote le focus carte correspondant.
@@ -517,22 +494,19 @@ function editerCircuit() {
 /**
  * Ouvre la consultation des anomalies de la source.
  *
- * Le bouton n'apparaît que pour une trace dont l'audit est appliqué (ou sans
- * anomalie). Sans archive — trace jamais auditée, ou audit antérieur à
- * l'archivage — la vue n'aurait rien à restituer : on se contente d'informer,
- * sans ouvrir la vue d'audit.
+ * Le bouton n'est rendu que pour une trace dont l'audit est appliqué **et**
+ * archivé : sans archive, la vue n'aurait rien à restituer, le bouton est
+ * donc simplement absent.
  */
 function voirAnomaliesSource() {
-  if (!props.trace.audit_archived) {
-    ui.showInfo(`Aucune anomalie archivée pour « ${props.trace.name} ».`)
-    return
-  }
   router.push({ name: 'audit', query: { traceId: props.trace.id } })
 }
 
 /**
- * Ouvre la vue des passages multiples : validation s'ils restent à valider,
- * consultation sinon.
+ * Ouvre la vue des passages multiples en consultation.
+ *
+ * Le bouton n'est rendu que pour des passages déjà validés : tant qu'ils
+ * restent à valider, c'est l'icône Éditer qui mène à la vue (barrière).
  *
  * Un ajustement y est **toujours** possible, y compris sur des passages déjà
  * validés : il réécrit le fichier de description sans faire rebasculer le
