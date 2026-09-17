@@ -1184,6 +1184,11 @@ onUnmounted(() => {
     resizeObserver = null
   }
   closeCurrentPopup()
+  // Le focus est un état de store : il survit à la navigation, alors que les
+  // deux gardes qui le consomment (moveend et refreshVisibleTraceIds)
+  // disparaissent avec cette carte. Un focus encore armé au retour figerait la
+  // liste des circuits pour toute la session — il meurt donc avec la carte.
+  tracesStore.focusedTraceId = null
   if (map) {
     map.remove()
     map = null

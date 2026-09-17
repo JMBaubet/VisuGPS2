@@ -504,6 +504,7 @@ Utilisateur déplace/zoome la carte
 - Le calcul utilise l'événement `idle` de Mapbox (carte dans un état stable, clusters rendus) pour garantir que `queryRenderedFeatures` retourne des résultats fiables. Un drapeau `pendingVisibleRefresh` est levé par `scheduleVisibleRefresh()` et consommé par le handler `idle`.
 - Le pattern d'epoch (`visibleEpoch`) annule les résultats périmés si un nouveau `moveend` survient pendant les appels asynchrones à `getClusterLeaves`.
 - Pendant un focus (`focusedTraceId` positionné), `refreshVisibleTraceIds()` est court-circuité pour garder le drawer stable (cohérent avec `moveend`).
+- **Durée de vie du focus** : le focus est un état de **store**, il survit donc à la navigation, alors que les deux gardes qui le consomment (`moveend` et `refreshVisibleTraceIds`) appartiennent à `Map.vue`. Il est par conséquent **libéré au démontage de `Map.vue`** (`onUnmounted`), aux côtés du popup et du `map.remove()`. Sans cette libération, sortir de l'accueil par un bouton de la section Info — clic qui navigue sans que le curseur quitte la carte, donc sans `mouseleave`, seul geste qui relâchait le focus — laissait le focus armé pour le reste de la session : `moveend` et `refreshVisibleTraceIds` restaient court-circuités au retour, et la liste des circuits se figeait au dernier ensemble calculé avant le départ, un redémarrage étant seul à la rétablir.
 
 ## Patterns architecturaux
 
@@ -788,7 +789,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
    - État `visibleTraceIds` (réactif, `Set<string>`) : identifiants des traces visibles dans le viewport courant. Mis à jour par `Map.vue` via l'action `setVisibleTraceIds()`. État UI éphémère, non persisté.
    - Action `updateMapCenter(lat, lon)` : appelée par `Map.vue` sur `moveend` (debounce) pour synchroniser le tri.
    - Action `setVisibleTraceIds(ids)` : appelée par `Map.vue` après `queryRenderedFeatures` + `getClusterLeaves`.
-   - État `focusedTraceId` : id de la trace « focus » temporaire (clic Info dans `Circuit.vue`), observé par `Map.vue` pour isoler et cadrer la trace (cf. §5). État UI éphémère, non persisté.
+   - État `focusedTraceId` : id de la trace « focus » temporaire (clic Info dans `Circuit.vue`), observé par `Map.vue` pour isoler et cadrer la trace (cf. §5). État UI éphémère, non persisté, **libéré au démontage de `Map.vue`** en plus de la fermeture du focus.
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
@@ -801,7 +802,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
    - **Synchronisation carte ↔ store** : `moveend` (debounce 150 ms) → `tracesStore.updateMapCenter()` → `scheduleVisibleRefresh()` → à l'état stable (`idle`) : `queryRenderedFeatures` sur les couches `unclustered-point` et `clusters`, `getClusterLeaves` pour extraire les feuilles, dédoublonnage → `tracesStore.setVisibleTraceIds()` → invalidation du getter `visibleTracesByDistance` → mise à jour de la liste. Pendant un focus, le calcul est court-circuité (stabilité du drawer).
    - **Vue mémorisée (centrage/zoom)** : le centre (`[2.0, 43.7]`) et le zoom (`5.15`) par défaut (France/Espagne) sont restaurés depuis les paramètres **cachés** `Carte.Vue.*` (centreLat/centreLng/zoom, floats — groupe non listé dans `_meta`, donc invisible du drawer). Au montage, `loadPersistedView()` lit ces valeurs et les passe à `initializeMap` (via le constructeur Mapbox). À chaque `moveend` (debounce 150 ms, **hors focus**), `persistMapView()` sauvegarde le centre/zoom courant via `updateSetting` — n'écrivant que ce qui a changé (`lastSavedView`). La vue est ainsi restituée au lancement **et** au retour sur la vue (la carte est remontée à chaque navigation, aucun KeepAlive).
    - **Interactions** : clic cluster → `easeTo` vers le centre au zoom d'expansion ; clic point → popup (nom, source, coordonnées) ; curseur `pointer` au survol.
-   - **Focus carte** : `watch(tracesStore.focusedTraceId)` → sauvegarde de la vue, masquage des couches favoris/affichées, affichage isolé de la trace dans `focus-traces-line`, cadrage par `fitBounds`, retour par `flyTo` (durée `Carte.Traces.dureeFlyTo`).
+   - **Focus carte** : `watch(tracesStore.focusedTraceId)` → sauvegarde de la vue, masquage des couches favoris/affichées, affichage isolé de la trace dans `focus-traces-line`, cadrage par `fitBounds`, retour par `flyTo` (durée `Carte.Traces.dureeFlyTo`). Le focus est **libéré au démontage du composant** (`onUnmounted`), avec le popup et la carte : il ne doit pas survivre à la carte qui le consomme.
    - **Réactivité** : `watch(traces)` → `setData()` sur les sources + `scheduleVisibleRefresh()` pour recalculer les visibles ; `watch(settings)` → `setPaintProperty` pour le style ; événement `idle` → consomme `pendingVisibleRefresh` pour effectuer le calcul après stabilisation du rendu.
 
 6. **Utilitaire géographique** (`src/utils/geo.ts`) :
