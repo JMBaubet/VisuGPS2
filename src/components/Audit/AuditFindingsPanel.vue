@@ -1,5 +1,5 @@
 <template>
-  <v-navigation-drawer permanent width="340" class="py-1">
+  <v-navigation-drawer permanent width="360" class="py-1">
     <div class="audit-findings">
       <div class="audit-findings-list">
         <v-list v-if="findings.length > 0"  nav>
