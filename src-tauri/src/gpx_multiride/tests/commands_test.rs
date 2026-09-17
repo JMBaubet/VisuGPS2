@@ -10,12 +10,12 @@ use std::path::PathBuf;
 
 use crate::gpx_multiride::commands::{
     default_multiride_params, detect_impl, detect_status, load_impl, multiride_params_from_settings,
-    toggle_fp_impl, undo_impl, validate_impl,
+    toggle_fp_impl, undo_impl, validate_impl, validate_segment_impl,
 };
 use crate::gpx_multiride::file::{build_archive, file_path, load_file, save_file};
 use crate::gpx_multiride::types::{
     MultirideArchive, MultirideLatLon, MultirideParams, MultiridePassage, MultirideSens,
-    STATUS_NONE, STATUS_VALIDATED,
+    STATUS_NONE, STATUS_PENDING, STATUS_VALIDATED,
 };
 use crate::import_gpx::{
     get_trace_gpx_path, get_traces_path, load_registry, save_registry, Point3D, TraceMetadata,
@@ -268,31 +268,56 @@ fn validate_marks_the_state_and_opens_the_barrier() {
     assert_eq!(reloaded.passages.len(), 1);
 }
 
-/// Un ajustement postérieur à la validation réécrit le fichier **sans** faire
-/// rebasculer le statut : les ajustements n'ont pas d'incidence sur l'édition
-/// caméra.
+/// Un geste invalide la validation de la détection : le fichier et le registre
+/// retombent ensemble, la barrière se referme.
 #[test]
-fn adjustment_after_validation_keeps_the_status() {
+fn an_adjustment_after_validation_invalidates_it() {
     let (mode, id) = mode_with_trace("validate_ajustement", 8);
     detect_impl(&mode, &id, params()).unwrap();
     let archive = archive_with_one_passage(&mode, &id);
     let validated = validate_impl(&mode, &id, archive).unwrap();
-
-    // Ajustement : le passage est marqué faux positif. Le store ajuste l'état
-    // **validé** qu'il a reçu, donc `valide` est conservé à la réécriture.
-    let mut adjusted = validated;
-    adjusted.passages[0].faux_positif = true;
-    save_file(&file_path(&mode, &id), &adjusted).unwrap();
-
-    let reloaded = load_file(&file_path(&mode, &id), &id).unwrap();
-    assert!(reloaded.valide);
-    assert!(reloaded.passages[0].faux_positif);
-    assert_eq!(reloaded.status(), STATUS_VALIDATED);
     assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_VALIDATED));
+
+    // Geste sur un segment : approuver le seul de la détection.
+    let adjusted = validate_segment_impl(&mode, &id, validated, 1).unwrap();
+
+    assert!(!adjusted.valide, "la validation de la détection est tombée");
+    assert!(adjusted.passages[0].valide, "le segment, lui, est approuvé");
+    assert_eq!(adjusted.status(), STATUS_PENDING);
+    assert_eq!(
+        registry_status(&mode, &id).as_deref(),
+        Some(STATUS_PENDING),
+        "le registre suit : la carte du circuit referme l'édition caméra"
+    );
+    assert!(
+        !load_file(&file_path(&mode, &id), &id).unwrap().valide,
+        "le fichier aussi"
+    );
 }
 
-/// Un ajustement, puis son annulation, laissent le registre intact : seul le
-/// statut de validation décide de la barrière de l'édition caméra.
+/// Un geste repose le statut du registre, qui cesse d'être « aucun passage » :
+/// écarter le seul segment d'une détection rend celle-ci à valider.
+#[test]
+fn a_gesture_reposes_the_registry_status() {
+    let (mode, id) = mode_with_trace("geste_registre", 8);
+    detect_impl(&mode, &id, params()).unwrap();
+    let archive = archive_with_one_passage(&mode, &id);
+    assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_NONE));
+
+    let marked = toggle_fp_impl(&mode, &id, archive, 1).unwrap();
+
+    assert!(marked.passages[0].faux_positif);
+    assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_PENDING));
+
+    // Et l'annulation du geste, symétriquement, repose le statut.
+    let undone = undo_impl(&mode, &id, marked, 1).unwrap();
+
+    assert!(!undone.passages[0].faux_positif);
+    assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_PENDING));
+}
+
+/// Un geste, puis son annulation, reposent tous deux le statut : c'est lui que
+/// lisent la carte du circuit et le garde-fou de la vue d'édition.
 #[test]
 fn an_adjustment_and_its_undo_leave_the_registry_alone() {
     let (mode, id) = mode_with_trace("undo_registre", 8);
@@ -301,15 +326,15 @@ fn an_adjustment_and_its_undo_leave_the_registry_alone() {
 
     let marked = toggle_fp_impl(&mode, &id, archive, 1).unwrap();
     assert!(marked.passages[0].faux_positif);
-    assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_NONE));
+    assert_eq!(registry_status(&mode, &id).as_deref(), Some(STATUS_PENDING));
 
     let undone = undo_impl(&mode, &id, marked, 1).unwrap();
 
     assert!(!undone.passages[0].faux_positif);
     assert_eq!(
         registry_status(&mode, &id).as_deref(),
-        Some(STATUS_NONE),
-        "un ajustement n'a pas d'incidence sur la barrière"
+        Some(STATUS_PENDING),
+        "la détection reste à valider après l'annulation"
     );
     let reloaded = load_file(&file_path(&mode, &id), &id).unwrap();
     assert!(!reloaded.passages[0].faux_positif, "l'annulation est écrite");

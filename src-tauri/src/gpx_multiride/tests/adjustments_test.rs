@@ -21,8 +21,12 @@ use crate::gpx_multiride::commands::{
     merge_impl, reset_impl, toggle_fp_impl, undo_impl, validate_segment_impl,
 };
 use crate::gpx_multiride::file::{build_archive, file_path, load_file, save_file};
+use crate::import_gpx::{
+    get_traces_path, save_registry, Point3D, TraceMetadata, TraceStats,
+};
 use crate::gpx_multiride::types::{
     MultirideArchive, MultirideLatLon, MultirideParams, MultiridePassage, MultirideSens,
+    STATUS_PENDING,
 };
 
 // ─── Aides de test ────────────────────────────────────────────────────
@@ -139,14 +143,59 @@ fn make_gpx(n: usize) -> String {
     )
 }
 
-/// Mode temporaire portant le GPX d'une trace, pour les commandes qui relisent
-/// la trace (la réinitialisation rejoue la détection).
+/// Mode temporaire portant le GPX d'une trace **et son entrée au registre**,
+/// pour les commandes qui relisent la trace (la réinitialisation rejoue la
+/// détection) ou reposent son statut (tout geste).
 fn mode_with_gpx(name: &str, trace_id: &str, points: usize) -> PathBuf {
     let mode = test_dir(name);
     let dir = mode.join("traces").join(trace_id);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("trace.gpx"), make_gpx(points)).unwrap();
+    save_registry(
+        &get_traces_path(&mode),
+        &[make_registry_entry(trace_id, "trace.gpx")],
+    )
+    .unwrap();
     mode
+}
+
+/// Entrée minimale du registre : trace auditée, sans détection de passages
+/// multiples — c'est le point de départ des commandes de geste.
+fn make_registry_entry(trace_id: &str, filename: &str) -> TraceMetadata {
+    TraceMetadata {
+        id: trace_id.to_string(),
+        name: "Trace de test".to_string(),
+        source: "Test".to_string(),
+        source_url: None,
+        activity_type: None,
+        filename: filename.to_string(),
+        import_date: "2026-01-01T00:00:00Z".to_string(),
+        stats: TraceStats {
+            start_point: Point3D {
+                lat: 45.0,
+                lon: 2.0,
+                alt: None,
+            },
+            end_point: Point3D {
+                lat: 45.0,
+                lon: 2.1,
+                alt: None,
+            },
+            distance_m: 1000.0,
+            positive_elevation_m: 0.0,
+            negative_elevation_m: 0.0,
+            alt_min_m: None,
+            alt_max_m: None,
+            points_count: 8,
+            duration_s: None,
+        },
+        hash: "sha256:test".to_string(),
+        favorite: false,
+        is_displayed: false,
+        audit_status: "clean".to_string(),
+        audit_archived: false,
+        multiride_status: None,
+    }
 }
 
 // ─── Rangs de sens ────────────────────────────────────────────────────
@@ -405,6 +454,36 @@ fn merging_clears_the_approval_and_undoing_restores_it() {
     );
 }
 
+/// Approuver un segment ne vaut pas **valider la détection** : deux champs
+/// distincts, que la barrière de l'édition caméra ne confond pas. Une détection
+/// dont tous les segments sont approuvés reste à valider.
+#[test]
+fn approving_a_segment_does_not_validate_the_detection() {
+    let approved = validate_segment(&reference_case(), 1).unwrap();
+
+    assert!(approved.passages.iter().any(|p| p.valide));
+    assert!(!approved.valide, "la détection reste à valider");
+    assert_eq!(approved.status(), STATUS_PENDING);
+}
+
+/// Tout geste invalide la validation de la détection : elle portait sur un état
+/// qui n'est plus celui-ci, et la barrière de l'édition caméra se referme.
+#[test]
+fn every_gesture_invalidates_the_detection_validation() {
+    let mut validated = reference_case();
+    validated.valide = true;
+
+    assert!(!validate_segment(&validated, 1).unwrap().valide, "approuver");
+    assert!(!toggle_fp(&validated, 2).unwrap().valide, "écarter");
+    assert!(!merge_segment(&validated, 2).unwrap().valide, "fusionner");
+
+    // Annuler est un geste comme un autre : l'état d'avant n'est pas celui qui
+    // avait été validé.
+    let mut marked = toggle_fp(&reference_case(), 2).unwrap();
+    marked.valide = true;
+    assert!(!undo_segment(&marked, 2).unwrap().valide, "annuler");
+}
+
 // ─── Annulation ───────────────────────────────────────────────────────
 /// La fusion enregistre les emprunts d'avant, tels quels : c'est de là que
 /// l'annulation tire l'état à réinstaller.
@@ -546,7 +625,7 @@ fn undoing_a_merge_without_a_record_is_refused() {
 /// L'ajustement est écrit sur disque : une réouverture de la vue le retrouve.
 #[test]
 fn an_adjustment_is_persisted() {
-    let mode = test_dir("persistance");
+    let mode = mode_with_gpx("persistance", "t-1", 8);
     let base = reference_case();
 
     let updated = merge_impl(&mode, "t-1", base, 2).unwrap();
@@ -560,7 +639,7 @@ fn an_adjustment_is_persisted() {
 /// retrouve l'état d'avant l'ajustement, et non plus la fusion.
 #[test]
 fn an_undo_is_persisted() {
-    let mode = test_dir("persistance_annulation");
+    let mode = mode_with_gpx("persistance_annulation", "t-1", 8);
     let base = reference_case();
     merge_impl(&mode, "t-1", base.clone(), 2).unwrap();
     // L'enregistrement survit à l'écriture : sans lui, l'annulation ne pourrait
@@ -583,7 +662,7 @@ fn an_undo_is_persisted() {
 /// Un faux positif s'annule aussi par la commande, et l'annulation est écrite.
 #[test]
 fn undoing_a_false_positive_is_persisted() {
-    let mode = test_dir("persistance_fp");
+    let mode = mode_with_gpx("persistance_fp", "t-1", 8);
     let marked = toggle_fp_impl(&mode, "t-1", reference_case(), 2).unwrap();
     assert!(marked.passages.iter().any(|p| p.faux_positif));
 
@@ -603,7 +682,7 @@ fn undoing_a_false_positive_is_persisted() {
 /// réouverture de la vue retrouve les segments approuvés.
 #[test]
 fn an_approval_and_its_undo_are_persisted() {
-    let mode = test_dir("persistance_approbation");
+    let mode = mode_with_gpx("persistance_approbation", "t-1", 8);
 
     let approved = validate_segment_impl(&mode, "t-1", reference_case(), 1).unwrap();
     assert!(approved.passages.iter().any(|p| p.valide));
@@ -652,10 +731,11 @@ fn an_adjustment_on_a_foreign_archive_is_refused() {
     assert!(!file_path(&mode, "autre").exists());
 }
 
-/// La réinitialisation rejoue la détection et **conserve le statut de
-/// validation** : un ajustement n'a pas d'incidence sur l'édition caméra.
+/// La réinitialisation rejoue la détection et **invalide la validation**,
+/// comme tout autre geste : la détection rejouée n'est plus celle qui avait été
+/// relue et validée.
 #[test]
-fn resetting_replays_the_detection_and_keeps_the_validation() {
+fn resetting_replays_the_detection_and_clears_the_validation() {
     let mode = mode_with_gpx("reinitialisation", "t-1", 8);
     let mut base = archive(vec![passage(1, 1, MultirideSens::Reference, 0.0, 0.01)]);
     base.valide = true;
@@ -663,14 +743,14 @@ fn resetting_replays_the_detection_and_keeps_the_validation() {
 
     let fresh = reset_impl(&mode, "t-1", base).unwrap();
 
-    assert!(fresh.valide, "le statut de validation est conservé");
+    assert!(!fresh.valide, "la validation est tombée");
     // La trace de test est rectiligne : la détection rejouée ne trouve rien.
     assert!(fresh.passages.is_empty(), "détection rejouée : {fresh:?}");
     assert_eq!(
         fresh.trace_point_count, 8,
         "l'état revient à celui de la détection, pas de l'ajustement"
     );
-    assert_eq!(load_file(&file_path(&mode, "t-1"), "t-1").unwrap().valide, true);
+    assert!(!load_file(&file_path(&mode, "t-1"), "t-1").unwrap().valide);
 }
 
 /// Réinitialiser l'état d'une autre trace est refusé.

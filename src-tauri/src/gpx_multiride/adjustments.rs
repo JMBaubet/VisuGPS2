@@ -33,8 +33,11 @@
 //! Les fusions **s'enchaînent** : un segment peut absorber son précédent puis
 //! le suivant, et la chaîne s'annule de la plus récente à la plus ancienne.
 //!
-//! Aucun de ces gestes ne touche au **statut** de la trace : ils n'ont pas
-//! d'incidence sur l'édition caméra, et un état validé le reste.
+//! **Tout geste invalide la validation de la détection.** Elle portait sur un
+//! état qui n'est plus celui-ci : l'édition caméra se referme donc, jusqu'à ce
+//! que la détection modifiée soit relue et validée à nouveau. Le statut du
+//! registre suit, écrit par les commandes — les gestes, eux, n'entretiennent
+//! aucun état et ne touchent pas au registre.
 
 use std::cmp::Ordering;
 
@@ -73,6 +76,23 @@ fn segment_passages(passages: &[MultiridePassage], segment: usize) -> Vec<Multir
     found
 }
 
+/// Invalide la validation de la **détection**.
+///
+/// Tout geste sur un segment passe par ici : la détection validée n'est plus
+/// celle qu'on regarde, et l'édition caméra doit se refermer le temps qu'elle
+/// soit relue. Le statut du registre suit, à la charge des commandes — les
+/// gestes n'entretiennent aucune état, et n'écrivent pas le registre eux-mêmes.
+///
+/// À ne pas confondre avec `valide` sur un **emprunt**, qui est l'approbation de
+/// son segment : approuver un segment ne vaut pas valider la détection, et
+/// inversement.
+fn invalidate(archive: MultirideArchive) -> MultirideArchive {
+    MultirideArchive {
+        valide: false,
+        ..archive
+    }
+}
+
 /// Marque ou démarque un segment en faux positif (§F-15).
 ///
 /// Un segment est faux positif lorsque **tous** ses emprunts le sont : c'est le
@@ -103,12 +123,12 @@ pub fn toggle_fp(archive: &MultirideArchive, segment: usize) -> Result<Multiride
     for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
         passage.faux_positif = mark;
         // Écarter un segment approuvé est une décision plus forte : elle prend
-        // sa place. Un segment ne porte qu'un état.
+        // sa place. Un segment ne porte qu'un verdict.
         if mark {
             passage.valide = false;
         }
     }
-    Ok(updated)
+    Ok(invalidate(updated))
 }
 
 /// Approuve un segment tel qu'il a été détecté (§F-15).
@@ -137,11 +157,15 @@ pub fn validate_segment(
         ));
     }
 
+    // Le champ remis à `true` ici est l'approbation du **segment** ; celui que
+    // `invalidate` remet à `false` est la validation de la **détection**, la
+    // barrière de l'édition caméra. Un segment approuvé ne vaut pas une
+    // détection validée.
     let mut updated = archive.clone();
     for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
         passage.valide = true;
     }
-    Ok(updated)
+    Ok(invalidate(updated))
 }
 
 /// Refuse une fusion dont un des deux camps est écarté.
@@ -277,10 +301,10 @@ pub fn merge_segment(
     updated.extend(merged);
     updated.sort_by_key(|p| (p.segment, p.passage));
 
-    Ok(MultirideArchive {
+    Ok(invalidate(MultirideArchive {
         passages: updated,
         ..archive.clone()
-    })
+    }))
 }
 
 /// Annule un geste sur un segment (§F-14, §F-15).
@@ -323,7 +347,7 @@ pub fn undo_segment(
         for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
             passage.faux_positif = false;
         }
-        return Ok(updated);
+        return Ok(invalidate(updated));
     }
 
     // Approuvé : rien à restaurer, l'approbation se retire comme elle s'est
@@ -334,7 +358,7 @@ pub fn undo_segment(
         for passage in updated.passages.iter_mut().filter(|p| p.segment == segment) {
             passage.valide = false;
         }
-        return Ok(updated);
+        return Ok(invalidate(updated));
     }
 
     // Fusion : l'instantané porte l'état d'avant, tel quel.
@@ -367,8 +391,8 @@ pub fn undo_segment(
     updated.extend(snapshot);
     updated.sort_by_key(|p| (p.segment, p.passage));
 
-    Ok(MultirideArchive {
+    Ok(invalidate(MultirideArchive {
         passages: updated,
         ..archive.clone()
-    })
+    }))
 }

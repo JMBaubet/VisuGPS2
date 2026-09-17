@@ -9,6 +9,12 @@
 //! (`traces/{trace_id}/multiride.json`) est la seule persistance, et il est
 //! réécrit par chaque commande qui modifie l'état.
 //!
+//! Les commandes de geste **reposent le statut** dans le registre, comme la
+//! détection et la validation : un geste invalide la validation de la détection,
+//! et la barrière de l'édition caméra doit se refermer dans la même passe — le
+//! registre est ce que lisent la carte du circuit et le garde-fou de la vue
+//! d'édition.
+//!
 //! Chaque commande est un **adaptateur mince** : la logique réside dans une
 //! fonction interne (`detect_impl`, `validate_impl`, …) qui ne dépend pas de
 //! Tauri et reste donc testable directement — même découpage que
@@ -335,6 +341,7 @@ pub fn merge_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::merge_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
+    set_status(mode_dir, trace_id, updated.status())?;
     Ok(updated)
 }
 
@@ -347,6 +354,7 @@ pub fn toggle_fp_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::toggle_fp(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
+    set_status(mode_dir, trace_id, updated.status())?;
     Ok(updated)
 }
 
@@ -359,6 +367,7 @@ pub fn undo_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::undo_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
+    set_status(mode_dir, trace_id, updated.status())?;
     Ok(updated)
 }
 
@@ -371,6 +380,7 @@ pub fn validate_segment_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::validate_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
+    set_status(mode_dir, trace_id, updated.status())?;
     Ok(updated)
 }
 
@@ -395,11 +405,14 @@ pub fn reset_impl(
 
     let gpx_path = get_trace_gpx_path(mode_dir, trace_id, &archive.source);
     let detected = detection::detect(trace_id, &archive.source, &gpx_path, archive.params.clone())?;
+    // La détection rejouée remplace celle qui avait été validée : la
+    // validation tombe, comme pour tout autre geste.
     let fresh = MultirideArchive {
-        valide: archive.valide,
+        valide: false,
         ..detected
     };
     file::save_file(&file::file_path(mode_dir, trace_id), &fresh)?;
+    set_status(mode_dir, trace_id, fresh.status())?;
     Ok(fresh)
 }
 
