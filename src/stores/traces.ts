@@ -109,7 +109,9 @@ export const useTracesStore = defineStore('traces', () => {
   /**
    * id de la trace à **cadrer** sur la carte (import récent) — signal
    * transitoire **one-shot**, posé par `importerGpx` et consommé (remis à null)
-   * par Map.vue après le `fitBounds`.
+   * par `Map.vue` dès qu'un cadrage est tenté. Un signal posé avant que la
+   * carte soit prête reste armé jusqu'au `load`, qui le reprend : il est donc
+   * toujours soit honoré, soit en attente — jamais oublié.
    */
   const traceToFrameId = ref<string | null>(null)
   /**

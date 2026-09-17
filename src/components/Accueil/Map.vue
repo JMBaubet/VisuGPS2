@@ -890,6 +890,11 @@ function initializeMap(initialView: { center: [number, number]; zoom: number }) 
     // à appliquer setPaintProperty / setData sans erreur « layer does not exist ».
     mapReady = true
 
+    // Un signal de cadrage armé avant que la carte soit prête (import lancé
+    // pendant le chargement du style) est honoré ici : le watch n'étant pas
+    // immédiat, il ne le reprendrait pas.
+    framePendingTrace()
+
     // Recharger les géométries des favoris et traces affichées.
     refreshLineLayers()
 
@@ -1056,36 +1061,51 @@ watch(
     }
   },
 )
-// Import d'une trace : cadrer la carte sur la trace nouvellement importée.
-// Signal one-shot (`traceToFrameId`, posé par `importerGpx`) — la trace
-// occupe au plus 80 % de la hauteur et de la largeur de la carte (marge de
-// 10 % de chaque côté).
-watch(
-  () => tracesStore.traceToFrameId,
-  async (id) => {
-    if (!map || !mapReady || !id) return
-    try {
-      const geom = await tracesStore.getTraceGeometry(id)
-      const bounds = computeBounds(geom)
-      const rect = map.getContainer().getBoundingClientRect()
-      map.fitBounds(bounds, {
-        padding: {
-          top: rect.height * 0.1,
-          bottom: rect.height * 0.1,
-          left: rect.width * 0.1,
-          right: rect.width * 0.1,
-        },
-        duration: getParam('Carte.Traces.dureeFlyTo') ?? 500,
-        essential: true,
-      })
-    } catch (error) {
-      console.error(`Cadrage impossible pour la trace ${id} :`, error)
-    } finally {
-      // Consommer le signal (one-shot).
-      tracesStore.traceToFrameId = null
-    }
-  },
-)
+/**
+ * Import d'une trace : cadre la carte sur la trace nouvellement importée,
+ * demandée par le signal one-shot `traceToFrameId` (posé par `importerGpx`).
+ * La trace occupe au plus 80 % de la hauteur et de la largeur de la carte
+ * (marge de 10 % de chaque côté).
+ *
+ * Le signal n'est consommé que lorsque la carte est **prête** : tant qu'elle ne
+ * l'est pas il reste armé, et le cadrage est repris par le handler `load`. Le
+ * watch n'étant pas immédiat, un signal posé avant que la carte soit prête
+ * serait sinon perdu — et resterait armé, hors du contrat one-shot.
+ *
+ * À l'inverse, un cadrage **tenté** consomme le signal même s'il échoue : ses
+ * causes sont durables (géométrie illisible, GPX disparu), un second essai
+ * échouerait à l'identique, et un signal gardé armé ferait sauter la carte plus
+ * tard, au retour sur l'accueil, sur un import que l'utilisateur a oublié.
+ */
+async function framePendingTrace() {
+  const id = tracesStore.traceToFrameId
+  if (!map || !mapReady || !id) return
+
+  // One-shot : consommé dès qu'il est honoré, que le cadrage réussisse ou non.
+  tracesStore.traceToFrameId = null
+
+  try {
+    const geom = await tracesStore.getTraceGeometry(id)
+    const bounds = computeBounds(geom)
+    const rect = map.getContainer().getBoundingClientRect()
+    map.fitBounds(bounds, {
+      padding: {
+        top: rect.height * 0.1,
+        bottom: rect.height * 0.1,
+        left: rect.width * 0.1,
+        right: rect.width * 0.1,
+      },
+      duration: getParam('Carte.Traces.dureeFlyTo') ?? 500,
+      essential: true,
+    })
+  } catch (error) {
+    console.error(`Cadrage impossible pour la trace ${id} :`, error)
+  }
+}
+
+// Le signal change : le cadrage est honoré dès que la carte est prête (sinon
+// `framePendingTrace` le laisse armé pour le handler `load`).
+watch(() => tracesStore.traceToFrameId, framePendingTrace)
 watch(
   () => settingsStore.settings,
   () => {
