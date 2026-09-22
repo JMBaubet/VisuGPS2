@@ -1,0 +1,2289 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analyse GPX — Montées éditables (v2.3)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; background: #f5f7fa; color: #1e293b; padding: 20px; }
+  .container { max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 1.8em; margin: 0 0 5px; }
+  h2 { font-size: 1.15em; margin: 0 0 15px; }
+  .subtitle { color: #64748b; margin: 0 0 20px; }
+
+  .card { background: white; border-radius: 12px; padding: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 20px; }
+
+  /* === [v2.3] Drop zone : plein format + compact === */
+  .drop-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 50px 20px;
+    text-align: center; cursor: pointer; transition: all 0.2s;
+    background: white; margin-bottom: 20px; }
+  .drop-zone:hover, .drop-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
+  .drop-zone-icon { font-size: 3em; margin-bottom: 10px; }
+  .drop-zone-text { color: #64748b; }
+  .drop-zone-text strong { color: #3b82f6; }
+
+  .drop-zone.compact {
+    padding: 10px 18px;
+    display: flex; align-items: center; gap: 12px;
+    text-align: left;
+    margin-bottom: 14px;
+    border-style: solid;
+    border-width: 1px;
+    border-color: #e2e8f0;
+  }
+  .drop-zone.compact:hover { border-color: #3b82f6; background: #eff6ff; }
+  .drop-zone.compact .drop-zone-icon {
+    font-size: 1.4em; margin: 0;
+  }
+  .drop-zone.compact .drop-zone-text {
+    font-size: 0.9em; flex: 1;
+  }
+
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; }
+  .control-group { display: flex; flex-direction: column; gap: 5px; }
+  .control-group label { font-size: 0.85em; font-weight: 500; color: #475569; }
+  .control-group input[type="number"] { padding: 8px 12px; border: 1px solid #cbd5e1;
+    border-radius: 6px; font-size: 1em; font-family: inherit; }
+  .control-group input[type="number"]:focus { outline: none; border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+  .adv-badge { display: inline-block; padding: 1px 6px; margin-left: 4px;
+    border-radius: 8px; background: #ede9fe; color: #7c3aed;
+    font-size: 0.68em; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; vertical-align: middle; }
+  .field-hint { font-size: 0.72em; color: #94a3b8; font-style: italic;
+    margin-top: 2px; line-height: 1.35; }
+  .field-hint code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: #475569; font-style: normal; font-size: 0.95em; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+  .stat { padding: 12px; background: #f8fafc; border-radius: 8px; border-left: 3px solid #3b82f6; }
+  .stat.climb { border-left-color: #16a34a; }
+  .stat-label { font-size: 0.7em; color: #64748b; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 500; }
+  .stat-value { font-size: 1.3em; font-weight: 600; margin-top: 4px; }
+  .stat-value small { font-size: 0.55em; color: #64748b; font-weight: 400; }
+  .ribbon { display: flex; height: 34px; border-radius: 6px; overflow: hidden;
+    background: #e2e8f0; border: 1px solid #cbd5e1; }
+  .ribbon-seg { height: 100%; cursor: pointer; transition: filter .15s; }
+  .ribbon-seg:hover { filter: brightness(1.15); }
+  .ribbon-axis { display: flex; justify-content: space-between;
+    font-size: 0.72em; color: #94a3b8; margin-top: 4px; }
+  .legend-grid { display: flex; flex-wrap: wrap; gap: 10px 20px;
+    margin-top: 14px; font-size: 0.85em; }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; color: #475569; }
+  .legend-swatch { width: 16px; height: 16px; border-radius: 4px;
+    display: inline-block; border: 1px solid rgba(0,0,0,0.08); }
+  .chart-container { position: relative; height: 320px; }
+  .chart-legend { display: flex; gap: 20px; margin-bottom: 12px; font-size: 0.85em; flex-wrap: wrap; }
+  .chart-legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .chart-legend .line { display: inline-block; width: 20px; height: 3px; border-radius: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }
+  th { font-weight: 600; color: #475569; font-size: 0.72em; text-transform: uppercase;
+    background: #f8fafc; position: sticky; top: 0; z-index: 1; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.num { text-align: right; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #f1f5f9; }
+  tr.modified td:nth-child(2)::after { content: " •"; color: #f59e0b; font-weight: bold; }
+  tr.constrained td:nth-child(2)::after { content: " ⚠"; color: #f97316; font-weight: bold; }
+  tr.constrained { background: #fff7ed; }
+  tr.invalid { background: #fef2f2; opacity: 0.75; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px;
+    font-size: 0.78em; font-weight: 500; color: white; }
+  .scroll-list { max-height: 480px; overflow-y: auto; }
+  .hidden { display: none; }
+  .hint { font-size: 0.82em; color: #64748b; margin-top: 8px; font-style: italic; }
+  .two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .two-cols { grid-template-columns: 1fr; } }
+  .criteria { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .criteria .crit { background: #f1f5f9; border: 1px solid #e2e8f0;
+    border-radius: 6px; padding: 6px 10px; font-size: 0.8em; color: #334155; }
+  .criteria .crit strong { color: #dc2626; }
+  .criteria-title { font-size: 0.8em; color: #64748b; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-top: 14px; }
+  .info-box { background: #eff6ff; border-left: 3px solid #3b82f6;
+    padding: 10px 14px; border-radius: 6px; font-size: 0.85em; color: #1e40af; margin-top: 12px; }
+  .info-box code { background: rgba(59,130,246,0.12); padding: 1px 5px; border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.9em; }
+  .info-box.purple { background: #f5f3ff; border-left-color: #8b5cf6; color: #5b21b6; }
+  .info-box.purple code { background: rgba(139,92,246,0.12); }
+  .km-input { width: 90px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px;
+    font-family: inherit; font-size: 0.9em; text-align: right;
+    font-variant-numeric: tabular-nums; background: white; }
+  .km-input:focus { outline: none; border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }
+  .btn-icon { display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0; border: 1px solid #e2e8f0;
+    border-radius: 4px; background: white; cursor: pointer;
+    font-size: 0.85em; color: #64748b; margin-left: 3px; }
+  .btn-icon:hover { background: #f1f5f9; color: #1e293b; }
+  .btn-icon.del:hover { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+  .btn-icon.reset:hover { background: #dbeafe; color: #1e40af; border-color: #bfdbfe; }
+  .btn { padding: 8px 14px; border-radius: 6px; border: 1px solid #cbd5e1;
+    background: white; font-family: inherit; font-size: 0.9em;
+    cursor: pointer; color: #334155; }
+  .btn:hover { background: #f1f5f9; }
+  .btn.primary { background: #3b82f6; color: white; border-color: #3b82f6; }
+  .btn.primary:hover { background: #2563eb; }
+  .toolbar { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
+
+  .climb-select-cell { text-align: center; width: 30px; }
+  .climb-select-cell input[type="radio"] {
+    cursor: pointer; width: 18px; height: 18px;
+    accent-color: #3b82f6; vertical-align: middle;
+  }
+  tr.selected { background: #fef3c7 !important; }
+  tr.selected:hover { background: #fde68a !important; }
+  tr.selected td:nth-child(2)::after { content: ""; }
+
+  .chart-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px; gap: 15px; flex-wrap: wrap;
+  }
+  .chart-toolbar .chart-legend { margin-bottom: 0; }
+
+  /* === [v2.3] Toggle brut avec états visuels distincts === */
+  .toggle-brut {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.85em; color: #475569; cursor: pointer; user-select: none;
+    padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    transition: background 0.15s, border-color 0.15s;
+    position: relative;
+  }
+  .toggle-brut:hover { background: #f1f5f9; }
+  .toggle-brut input {
+    cursor: pointer; width: 16px; height: 16px; accent-color: #64748b;
+  }
+  /* État "utilisateur" : la case est cochée */
+  .toggle-brut.user-on {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+    color: #4338ca;
+  }
+  /* État "auto" : la case est décochée mais l'édition force l'affichage */
+  .toggle-brut.auto-on {
+    background: #fef3c7;
+    border-color: #fcd34d;
+    color: #b45309;
+  }
+  .toggle-brut .auto-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: #f59e0b;
+    color: white;
+    font-size: 0.66em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 4px;
+  }
+  .toggle-brut .auto-badge.hidden { display: none; }
+
+  .drag-hint {
+    font-size: 0.82em; color: #64748b; padding: 10px 14px;
+    background: #f1f5f9; border-radius: 6px; margin-top: 10px;
+    line-height: 1.7; border-left: 3px solid #3b82f6;
+  }
+  .drag-hint kbd {
+    display: inline-block; padding: 1px 6px; background: white;
+    border: 1px solid #cbd5e1; border-radius: 3px;
+    font-family: monospace; font-size: 0.9em; margin: 0 1px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.08);
+  }
+  .drag-hint .handle-valley { color: #16a34a; font-weight: 700; }
+  .drag-hint .handle-summit { color: #dc2626; font-weight: 700; }
+  .drag-hint .handle-label {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 6px; border-radius: 4px; background: white;
+    border: 1px solid #e2e8f0;
+  }
+  .chart-editing {
+    box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.5),
+                0 1px 3px rgba(0,0,0,0.08);
+  }
+  .no-select { user-select: none; -webkit-user-select: none; }
+  canvas { touch-action: none; }
+
+  th.refine-col, td.cell-refine {
+    font-size: 0.85em; color: #475569;
+    font-variant-numeric: tabular-nums;
+  }
+  td.cell-refine { color: #7c3aed; font-weight: 500; }
+  td.cell-refine.manual { color: #94a3b8; font-weight: 400; font-style: italic; }
+  tr.modified td.cell-refine { color: #c4b5fd; }
+
+  .collapsible-header {
+    display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; user-select: none;
+    margin: 0 0 0 0;
+    padding: 2px 4px 2px 0;
+    border-radius: 6px;
+    transition: background 0.15s;
+  }
+  .collapsible-header:hover { background: #f8fafc; }
+  .collapsible-header h2 { margin: 0; }
+  .collapse-toggle {
+    font-size: 0.95em; color: #94a3b8; font-weight: 700;
+    transition: color 0.15s;
+    padding: 4px 8px; border-radius: 4px;
+  }
+  .collapsible-header:hover .collapse-toggle { color: #3b82f6; }
+  .collapsible-body {
+    max-height: 1000px;
+    overflow: hidden;
+    transition: max-height 0.3s ease, opacity 0.2s ease, padding 0.2s ease;
+    opacity: 1;
+    padding-top: 10px;
+  }
+  .collapsible-body.collapsed {
+    max-height: 0 !important;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .collapsed-hint {
+    font-size: 0.78em; color: #94a3b8; font-style: italic;
+    padding: 4px 0 0 0;
+  }
+  #slopeCard { padding: 20px; }
+  #slopeCard.collapsed-card { padding: 12px 20px; }
+
+  tr.insertion-row td {
+    padding: 3px 8px;
+    background: #fafbfc;
+    border-bottom: 1px dashed #e2e8f0;
+    text-align: center;
+    line-height: 1.2;
+  }
+  tr.insertion-row:hover td {
+    background: #f1f5f9;
+  }
+  tr.insertion-row.empty-state td {
+    padding: 26px 20px;
+    background: #f8fafc;
+    border-bottom: 1px dashed #cbd5e1;
+  }
+  .insert-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 10px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 10px;
+    background: white;
+    font-family: inherit;
+    font-size: 0.74em;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.15s;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  .insert-btn:hover {
+    border-color: #3b82f6;
+    color: #2563eb;
+    background: #eff6ff;
+    border-style: solid;
+  }
+  .insert-btn .plus {
+    font-size: 1.15em; font-weight: 700; line-height: 1;
+    display: inline-block; margin-top: -1px;
+  }
+  .insert-btn .gap-info {
+    font-weight: 400;
+    color: #cbd5e1;
+    font-size: 0.92em;
+  }
+  .insert-btn:hover .gap-info { color: #60a5fa; }
+  .insert-btn.big {
+    padding: 8px 18px;
+    font-size: 0.85em;
+    border-radius: 20px;
+    border-style: dashed;
+    color: #64748b;
+  }
+  .insert-btn.big:hover {
+    color: #2563eb;
+    border-style: solid;
+  }
+
+  #debugPanel {
+    position: fixed; bottom: 0; right: 0; width: 480px; height: 220px;
+    background: rgba(0,0,0,0.88); color: #0f0;
+    font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+    font-size: 11px; line-height: 1.35;
+    overflow-y: auto; padding: 6px 10px; z-index: 9999;
+    border-top-left-radius: 8px; border-top: 2px solid #22c55e;
+    display: none;
+  }
+  #debugPanel.visible { display: block; }
+  #debugPanel .dbg-line { white-space: pre; }
+  #debugPanel .dbg-error { color: #f87171; }
+  #debugPanel .dbg-info { color: #60a5fa; }
+  #debugPanel .dbg-warn { color: #fbbf24; }
+  #debugToggle {
+    position: fixed; bottom: 8px; right: 8px; z-index: 10000;
+    padding: 6px 12px; border-radius: 6px;
+    background: #1e293b; color: white; border: none;
+    font-family: inherit; font-size: 12px; cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  }
+  #debugToggle:hover { background: #334155; }
+  #debugClear {
+    position: absolute; top: 6px; right: 40px;
+    background: transparent; border: none; color: #94a3b8;
+    cursor: pointer; font-size: 11px;
+  }
+  #debugClose {
+    position: absolute; top: 4px; right: 8px;
+    background: transparent; border: none; color: #f87171;
+    cursor: pointer; font-size: 14px; font-weight: bold;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>⛰️ Analyse GPX — Montées éditables <span style="font-size:0.55em;color:#94a3b8;font-weight:400">v2.3</span></h1>
+    <p class="subtitle">Détection automatique + édition directe par drag & drop sur le profil.</p>
+  </header>
+
+  <!-- [v2.3] Drop zone : toujours visible, devient compacte après chargement -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">📁</div>
+    <div class="drop-zone-text" id="dropZoneText">
+      Glissez-déposez un fichier <strong>.gpx</strong> ici<br>
+      ou <strong>cliquez pour choisir</strong>
+    </div>
+    <input type="file" id="fileInput" accept=".gpx,.txt,application/gpx+xml,text/xml" class="hidden">
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="card">
+      <h2>⚙️ Paramètres de détection automatique</h2>
+      <div class="controls">
+        <div class="control-group">
+          <label for="fenetreAffichage">Lissage altitude (pts)</label>
+          <input type="number" id="fenetreAffichage" value="50" step="2" min="3">
+        </div>
+        <div class="control-group">
+          <label for="fenetrePente">Lissage pente (pts)</label>
+          <input type="number" id="fenetrePente" value="30" step="2" min="1">
+        </div>
+        <div class="control-group">
+          <label for="fenetreCatM">Fenêtre catégorisation (m)</label>
+          <input type="number" id="fenetreCatM" value="500" step="100" min="50">
+        </div>
+        <div class="control-group">
+          <label for="seuilMontee">Seuil détection (%)</label>
+          <input type="number" id="seuilMontee" value="0.5" step="0.1" min="0.1">
+        </div>
+        <div class="control-group">
+          <label for="longueurMin">Longueur min. catégorie (m)</label>
+          <input type="number" id="longueurMin" value="250" step="10" min="0">
+        </div>
+        <div class="control-group">
+          <label for="refinePct">
+            Garde-fou refinage
+            <span class="adv-badge">Avancé</span>
+          </label>
+          <input type="number" id="refinePct" value="60" step="5" min="1" max="500">
+          <div class="field-hint">
+            <code>clamp(pct × longueur, 1500 m – 8000 m)</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="criteria-title">Critères de validation d'une montée</div>
+      <div class="criteria">
+        <div class="crit"><strong>≥ 1000 m</strong> · ≥ 3 %</div>
+        <div class="crit"><strong>750–1000 m</strong> · ≥ 4 %</div>
+        <div class="crit"><strong>500–750 m</strong> · ≥ 5 %</div>
+        <div class="crit"><strong>400–500 m</strong> · ≥ 6 %</div>
+        <div class="crit"><strong>300–400 m</strong> · ≥ 7 %</div>
+        <div class="crit" style="opacity:.6"><strong>&lt; 300 m</strong> · ignorée</div>
+      </div>
+
+      <div class="info-box purple">
+        🧪 <strong>Garde-fou de refinage</strong> — la distance maximale de recherche
+        de la vraie vallée / du vrai sommet est calculée <em>par montée</em> :
+        <br>
+        &nbsp;&nbsp;<code>effectiveRefine = clamp(refinePct% × longueurDétectée, 1500 m, 8000 m)</code>
+        <br>
+        Les bornes <strong>1500 m</strong> et <strong>8000 m</strong> sont des constantes internes.
+        La valeur effective de chaque montée est affichée dans la colonne
+        <em>Refine</em> du tableau ci-dessous.
+      </div>
+
+      <div class="info-box">
+        ℹ️ <strong>Édition directe</strong> : sélectionnez une montée dans le tableau
+        (colonne ☑), puis glissez les poignées <span style="color:#16a34a">▼ vallée</span>
+        et <span style="color:#dc2626">▼ sommet</span> directement sur le profil altimétrique.
+        <br>
+        ➕ <strong>Insertion contextuelle</strong> : des boutons d'insertion apparaissent
+        directement dans le tableau, entre les montées et aux extrémités de la trace.
+        <br>
+        ❌ <strong>Désélection</strong> : cliquer à nouveau sur la radio sélectionnée,
+        ou appuyer sur <kbd style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:3px;padding:1px 5px;font-family:monospace">Échap</kbd>.
+      </div>
+
+      <div class="toolbar">
+        <button id="btnReloadAuto" class="btn">↺ Recharger depuis la détection auto</button>
+      </div>
+    </div>
+
+    <div class="card"><h2>📊 Statistiques globales</h2><div class="stats" id="stats"></div></div>
+
+    <div class="card">
+      <h2>🧭 Segmentation par catégorie de pente</h2>
+      <div class="ribbon" id="ribbon"></div>
+      <div class="ribbon-axis" id="ribbonAxis"></div>
+      <div class="legend-grid" id="legend"></div>
+    </div>
+
+    <div class="card" id="elevCard">
+      <div class="chart-toolbar">
+        <h2 style="margin:0">🏔️ Profil altimétrique</h2>
+        <!-- [v2.3] Toggle avec états visuels -->
+        <label class="toggle-brut" id="toggleBrut" title="Renforce le trait de l'altitude brute pour mieux voir les bosses et creux">
+          <input type="checkbox" id="showRawDetail">
+          <span>Mettre en avant l'altitude brute</span>
+          <span class="auto-badge hidden" id="autoRawBadge">Auto</span>
+        </label>
+      </div>
+      <div class="chart-legend">
+        <span class="item"><span class="line" style="background:#cbd5e1"></span>Altitude brute</span>
+        <span class="item"><span class="line" style="background:#1e293b"></span>Altitude lissée ancrée</span>
+        <span class="item"><span class="line" style="background:#16a34a"></span>Vallée sélectionnée</span>
+        <span class="item"><span class="line" style="background:#dc2626;border-top:1px dashed #dc2626;height:0"></span>Sommet sélectionné</span>
+      </div>
+      <div class="chart-container"><canvas id="elevChart"></canvas></div>
+      <div class="drag-hint" id="dragHint">
+        💡 <strong>Édition directe</strong> : sélectionnez une montée (colonne ☑ du tableau),
+        puis glissez les poignées
+        <span class="handle-label"><span class="handle-valley">▼</span> vallée</span> et
+        <span class="handle-label"><span class="handle-summit">▼</span> sommet</span> sur le graphique.<br>
+        ⌨️ <strong>Clavier</strong> : <kbd>←</kbd><kbd>→</kbd> vallée ±10 m ·
+        <kbd>Alt</kbd>+<kbd>←</kbd><kbd>→</kbd> sommet ±10 m ·
+        <kbd>Shift</kbd> pour pas de 1 m ·
+        <kbd>Échap</kbd> pour désélectionner.
+      </div>
+    </div>
+
+    <div class="card" id="slopeCard">
+      <div class="collapsible-header" id="slopeHeader">
+        <h2>📈 Pente (%)</h2>
+        <span class="collapse-toggle" id="slopeToggle">▶</span>
+      </div>
+      <div class="collapsed-hint" id="slopeCollapsedHint">
+        Cliquez pour afficher le graphique de pente
+      </div>
+      <div class="collapsible-body collapsed" id="slopeChartBody">
+        <div class="chart-legend">
+          <span class="item"><span class="line" style="background:#e9d5ff"></span>Pente brute</span>
+          <span class="item"><span class="line" style="background:#7c3aed"></span>Pente lissée (= détection)</span>
+        </div>
+        <div class="chart-container"><canvas id="slopeChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="two-cols">
+      <div class="card">
+        <h2>📋 Statistiques par catégorie</h2>
+        <table id="catTable"><thead>
+          <tr><th>Catégorie</th><th class="num">Dist.</th><th class="num">D+</th><th class="num">Pente moy.</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>⛰️ Montées détectées <span style="font-size:0.75em;color:#94a3b8;font-weight:400">(sélection & édition)</span></h2>
+        <div class="scroll-list">
+          <table id="climbsTable"><thead>
+            <tr>
+              <th style="width:30px"></th>
+              <th>#</th>
+              <th class="num">Vallée (km)</th>
+              <th class="num">Sommet (km)</th>
+              <th class="num">Long.</th>
+              <th class="num">D+</th>
+              <th class="num">Pente</th>
+              <th class="num refine-col" title="Garde-fou de refinage effectif = clamp(pct × longueur, 1500 m, 8000 m)">Refine</th>
+              <th></th>
+            </tr>
+          </thead><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="debugPanel">
+  <button id="debugClear" title="Effacer">Effacer</button>
+  <button id="debugClose" title="Fermer">✕</button>
+  <div id="debugLog"></div>
+</div>
+<button id="debugToggle" title="Afficher les traces de debug">🐛 Debug</button>
+
+<script>
+/* =========================================================
+   0. Constantes
+   ========================================================= */
+const REFINE_MIN_M = 1500;
+const REFINE_MAX_M = 8000;
+const REFINE_PCT_DEFAULT = 60;
+const LONGUEUR_MIN_DEFAULT = 250;
+
+const INSERT_EDGE_MIN_KM = 1.0;
+const INSERT_BETWEEN_MIN_KM = 0.2;
+const INSERT_DEFAULT_LEN_KM = 1.0;
+
+let slopeChartExpanded = false;
+
+/* =========================================================
+   0b. Debug logger
+   ========================================================= */
+const DEBUG = true;
+const _dbgLog = document.getElementById('debugLog');
+
+function dbg(...args) {
+  if (!DEBUG) return;
+  const line = document.createElement('div');
+  line.className = 'dbg-line';
+  const ts = new Date().toISOString().slice(11, 23);
+  const text = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  line.textContent = `[${ts}] ${text}`;
+  _dbgLog.appendChild(line);
+  while (_dbgLog.childElementCount > 500) _dbgLog.removeChild(_dbgLog.firstChild);
+  _dbgLog.scrollTop = _dbgLog.scrollHeight;
+}
+function dbgInfo(...args) {
+  if (!DEBUG) return;
+  const line = document.createElement('div');
+  line.className = 'dbg-line dbg-info';
+  line.textContent = `[${new Date().toISOString().slice(11, 23)}] ${args.join(' ')}`;
+  _dbgLog.appendChild(line);
+  _dbgLog.scrollTop = _dbgLog.scrollHeight;
+}
+function dbgWarn(...args) {
+  if (!DEBUG) return;
+  const line = document.createElement('div');
+  line.className = 'dbg-line dbg-warn';
+  line.textContent = `[${new Date().toISOString().slice(11, 23)}] ${args.join(' ')}`;
+  _dbgLog.appendChild(line);
+  _dbgLog.scrollTop = _dbgLog.scrollHeight;
+}
+function dbgError(...args) {
+  if (!DEBUG) return;
+  const line = document.createElement('div');
+  line.className = 'dbg-line dbg-error';
+  line.textContent = `[${new Date().toISOString().slice(11, 23)}] ${args.join(' ')}`;
+  _dbgLog.appendChild(line);
+  _dbgLog.scrollTop = _dbgLog.scrollHeight;
+}
+
+document.getElementById('debugToggle').addEventListener('click', () => {
+  const p = document.getElementById('debugPanel');
+  p.classList.toggle('visible');
+  if (p.classList.contains('visible')) dbgInfo('Debug panel opened');
+});
+document.getElementById('debugClose').addEventListener('click', () => {
+  document.getElementById('debugPanel').classList.remove('visible');
+});
+document.getElementById('debugClear').addEventListener('click', () => {
+  _dbgLog.innerHTML = '';
+});
+
+/* =========================================================
+   0c. Repli / dépli du graphe de pente
+   ========================================================= */
+function toggleSlopeChart() {
+  slopeChartExpanded = !slopeChartExpanded;
+  const body = document.getElementById('slopeChartBody');
+  const toggle = document.getElementById('slopeToggle');
+  const hint = document.getElementById('slopeCollapsedHint');
+  const card = document.getElementById('slopeCard');
+
+  if (slopeChartExpanded) {
+    body.classList.remove('collapsed');
+    card.classList.remove('collapsed-card');
+    toggle.textContent = '▼';
+    hint.style.display = 'none';
+    setTimeout(() => {
+      if (STATE.slopeChart) {
+        STATE.slopeChart.resize();
+        dbgInfo('[v2.1] Slope chart expanded, resized');
+      }
+    }, 320);
+  } else {
+    body.classList.add('collapsed');
+    card.classList.add('collapsed-card');
+    toggle.textContent = '▶';
+    hint.style.display = 'block';
+    dbgInfo('[v2.1] Slope chart collapsed');
+  }
+}
+document.getElementById('slopeHeader').addEventListener('click', toggleSlopeChart);
+
+/* =========================================================
+   1. Utilitaires
+   ========================================================= */
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const phi1 = lat1 * Math.PI / 180, phi2 = lat2 * Math.PI / 180;
+  const dphi = (lat2 - lat1) * Math.PI / 180;
+  const dlam = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dphi/2)**2 + Math.cos(phi1)*Math.cos(phi2)*Math.sin(dlam/2)**2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function movingAverage(arr, win) {
+  const n = arr.length;
+  if (win < 2 || n < 2) return arr.slice();
+  const half = Math.floor(win / 2);
+  const p = new Array(n + 1).fill(0);
+  for (let i = 0; i < n; i++) p[i+1] = p[i] + arr[i];
+  const res = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - half), hi = Math.min(n - 1, i + half);
+    res[i] = (p[hi+1] - p[lo]) / (hi - lo + 1);
+  }
+  return res;
+}
+function computeSlope(ele, dist, minD = 0.05) {
+  const n = ele.length, s = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    const i1 = Math.max(0, i - 1), i2 = Math.min(n - 1, i + 1);
+    const d = dist[i2] - dist[i1];
+    if (d > minD) s[i] = ((ele[i2] - ele[i1]) / d) * 100;
+  }
+  return s;
+}
+function computeSlopeWindow(ele, dist, winM) {
+  const n = ele.length;
+  const s = new Array(n).fill(0);
+  if (n < 2) return s;
+  for (let i = 0; i < n; i++) {
+    let lo = i;
+    while (lo > 0 && dist[i] - dist[lo - 1] <= winM) lo--;
+    let hi = i;
+    while (hi < n - 1 && dist[hi + 1] - dist[i] <= winM) hi++;
+    const dDist = dist[hi] - dist[lo];
+    if (dDist > 0.5) s[i] = ((ele[hi] - ele[lo]) / dDist) * 100;
+  }
+  return s;
+}
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+const fmtKm = m => (m / 1000).toFixed(3);
+function findIdxAtDist(dist, targetM) {
+  let lo = 0, hi = dist.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dist[mid] < targetM) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+function argminRange(arr, lo, hi) {
+  let best = lo, v = arr[lo];
+  for (let i = lo + 1; i <= hi; i++) if (arr[i] < v) { v = arr[i]; best = i; }
+  return best;
+}
+function argmaxRange(arr, lo, hi) {
+  let best = lo, v = arr[lo];
+  for (let i = lo + 1; i <= hi; i++) if (arr[i] > v) { v = arr[i]; best = i; }
+  return best;
+}
+
+/* =========================================================
+   2. Lissage ancré
+   ========================================================= */
+function anchoredMovingAverage(raw, anchorIdxs, win) {
+  const n = raw.length;
+  if (n < 2) return raw.slice();
+  const base = movingAverage(raw, win);
+  const set = new Set([0, n - 1, ...anchorIdxs.filter(i => i > 0 && i < n - 1)]);
+  const anchors = [...set].sort((a, b) => a - b);
+  const result = base.slice();
+  for (let k = 0; k < anchors.length - 1; k++) {
+    const a = anchors[k], b = anchors[k + 1];
+    if (b - a < 2) continue;
+    const corrA = raw[a] - base[a];
+    const corrB = raw[b] - base[b];
+    for (let i = a; i <= b; i++) {
+      const t = (i - a) / (b - a);
+      result[i] = base[i] + corrA * (1 - t) + corrB * t;
+    }
+  }
+  return result;
+}
+
+/* =========================================================
+   3. Catégories + critères
+   ========================================================= */
+const CATEGORIES = [
+  { id:'dh3', label:'Descente raide',       color:'#1e40af', min:-Infinity, max:-8 },
+  { id:'dh2', label:'Descente',             color:'#3b82f6', min:-8, max:-3 },
+  { id:'dh1', label:'Faux plat descendant', color:'#93c5fd', min:-3, max:-1 },
+  { id:'pl',  label:'Plat',                 color:'#22c55e', min:-1, max:1 },
+  { id:'up1', label:'Faux plat montant',    color:'#fde68a', min:1,  max:3 },
+  { id:'up2', label:'Montée',               color:'#f97316', min:3,  max:7 },
+  { id:'up3', label:'Montée raide',         color:'#dc2626', min:7,  max:10 },
+  { id:'up4', label:'Montée très raide',    color:'#000000', min:10, max:Infinity }
+];
+const CAT_BY_ID = Object.fromEntries(CATEGORIES.map(c => [c.id, c]));
+function categorize(s) { for (const c of CATEGORIES) if (s >= c.min && s < c.max) return c.id; return 'pl'; }
+function colorForSlope(p) { return CAT_BY_ID[categorize(p)].color; }
+
+const CLIMB_CRITERIA = [
+  { minLen: 1000, minSlope: 3 }, { minLen: 750, minSlope: 4 },
+  { minLen: 500, minSlope: 5 }, { minLen: 400, minSlope: 6 },
+  { minLen: 300, minSlope: 7 }
+];
+function minSlopeForLength(len) {
+  for (const c of CLIMB_CRITERIA) if (len >= c.minLen) return c.minSlope;
+  return Infinity;
+}
+
+/* =========================================================
+   4. Parseur GPX
+   ========================================================= */
+function parseGPX(text) {
+  const xml = new DOMParser().parseFromString(text, "application/xml");
+  if (xml.querySelector("parsererror")) throw new Error("XML/GPX invalide.");
+  const pts = [];
+  for (const pt of xml.getElementsByTagName("trkpt")) {
+    const lat = parseFloat(pt.getAttribute("lat"));
+    const lon = parseFloat(pt.getAttribute("lon"));
+    const e = pt.getElementsByTagName("ele")[0];
+    if (!e) continue;
+    const ele = parseFloat(e.textContent);
+    if (isNaN(lat) || isNaN(lon) || isNaN(ele)) continue;
+    pts.push({ lat, lon, ele });
+  }
+  return pts;
+}
+
+/* =========================================================
+   5. Fusion segments courts + enrichissement
+   ========================================================= */
+function mergeShortSegments(raw, dist, minLen) {
+  let changed = true;
+  while (changed && raw.length > 1) {
+    changed = false;
+    for (let i = 0; i < raw.length; i++) {
+      const s = raw[i];
+      if (dist[s.endIdx] - dist[s.startIdx] >= minLen) continue;
+      const L = i > 0 ? dist[raw[i-1].endIdx] - dist[raw[i-1].startIdx] : -1;
+      const R = i < raw.length - 1 ? dist[raw[i+1].endIdx] - dist[raw[i+1].startIdx] : -1;
+      if (R >= L) raw[i+1].startIdx = s.startIdx; else raw[i-1].endIdx = s.endIdx;
+      raw.splice(i, 1); changed = true; break;
+    }
+  }
+  if (raw.length > 1) {
+    const res = [raw[0]];
+    for (let i = 1; i < raw.length; i++) {
+      const last = res[res.length - 1];
+      if (last.key === raw[i].key) last.endIdx = raw[i].endIdx;
+      else res.push(raw[i]);
+    }
+    return res;
+  }
+  return raw;
+}
+function enrichSegment(s, dist, eleMetric, slope) {
+  const startDist = dist[s.startIdx], endDist = dist[s.endIdx];
+  const length = endDist - startDist;
+  let dPlus = 0;
+  for (let k = s.startIdx + 1; k <= s.endIdx; k++) {
+    const d = eleMetric[k] - eleMetric[k-1];
+    if (d > 0) dPlus += d;
+  }
+  let weighted = 0;
+  for (let k = s.startIdx + 1; k <= s.endIdx; k++) {
+    weighted += slope[k] * (dist[k] - dist[k-1]);
+  }
+  return { ...s, startDist, endDist, length, dPlus,
+    avgSlope: length > 0 ? weighted / length : 0,
+    altStart: eleMetric[s.startIdx], altEnd: eleMetric[s.endIdx] };
+}
+function segmentByCategory(slopeForCat, dist, eleMetric, minLen) {
+  const cat = slopeForCat.map(categorize);
+  const raw = [];
+  let start = 0;
+  for (let i = 1; i <= cat.length; i++) {
+    if (i === cat.length || cat[i] !== cat[start]) {
+      const endIdx = (i === cat.length) ? i - 1 : i;
+      raw.push({ startIdx: start, endIdx, key: cat[start] });
+      start = i;
+    }
+  }
+  return mergeShortSegments(raw, dist, minLen)
+    .map(s => enrichSegment(s, dist, eleMetric, slopeForCat));
+}
+
+/* =========================================================
+   6. Détection
+   ========================================================= */
+function detectEvents(slope, seuil) {
+  const ev = []; let inC = false;
+  for (let i = 0; i < slope.length; i++) {
+    if (!inC && slope[i] > seuil)  { ev.push({ idx: i, type: 'start' });  inC = true; }
+    else if (inC && slope[i] < -seuil) { ev.push({ idx: i, type: 'summit' }); inC = false; }
+  }
+  if (inC) ev.push({ idx: slope.length - 1, type: 'summit' });
+  return ev;
+}
+function buildClimbCandidates(events, n) {
+  const segs = []; let prev = 0;
+  let cur = (events.length && events[0].type === 'summit') ? 'climb' : 'non-climb';
+  for (const e of events) {
+    if (e.idx > prev) segs.push({ startIdx: prev, endIdx: e.idx, key: cur });
+    cur = e.type === 'start' ? 'climb' : 'non-climb';
+    prev = e.idx;
+  }
+  if (prev < n - 1) segs.push({ startIdx: prev, endIdx: n - 1, key: cur });
+  return segs.filter(s => s.key === 'climb');
+}
+function findBestSubClimb(dist, eleMetric, startIdx, endIdx) {
+  const n = endIdx - startIdx + 1;
+  if (n < 2) return null;
+  const cum = new Float64Array(n);
+  for (let k = 1; k < n; k++) {
+    const d = eleMetric[startIdx + k] - eleMetric[startIdx + k - 1];
+    cum[k] = cum[k - 1] + (d > 0 ? d : 0);
+  }
+  const step = n > 800 ? Math.ceil(n / 800) : 1;
+  let best = null;
+  for (let si = 0; si < n - 1; si += step) {
+    for (let ei = si + 1; ei < n; ei += step) {
+      const len = dist[startIdx + ei] - dist[startIdx + si];
+      if (len < 300) continue;
+      if (best && len <= best.length) continue;
+      const dP = cum[ei] - cum[si];
+      const s = (dP / len) * 100;
+      if (s >= minSlopeForLength(len)) {
+        best = { startIdx: startIdx + si, endIdx: startIdx + ei,
+                 length: len, dPlus: dP, avgSlope: s };
+      }
+    }
+  }
+  return best;
+}
+
+/* =========================================================
+   7. Détection automatique complète
+   ========================================================= */
+function computeAuto(rawPoints, params) {
+  const { fenetreAffichage, fenetrePente, seuilMontee, refinePct } = params;
+  const n = rawPoints.length;
+  const dist = [0];
+  for (let i = 1; i < n; i++) {
+    dist.push(dist[i-1] + haversine(
+      rawPoints[i-1].lat, rawPoints[i-1].lon,
+      rawPoints[i].lat, rawPoints[i].lon));
+  }
+  const eleRaw = rawPoints.map(p => p.ele);
+
+  const eleBase   = movingAverage(eleRaw, fenetreAffichage);
+  const slopeBase = movingAverage(computeSlope(eleBase, dist), fenetrePente);
+  const candidates = buildClimbCandidates(detectEvents(slopeBase, seuilMontee), n);
+
+  const candidatesWithSub = [];
+  for (const c of candidates) {
+    const sub = findBestSubClimb(dist, eleBase, c.startIdx, c.endIdx);
+    if (sub) candidatesWithSub.push(sub);
+  }
+
+  const anchors = [];
+  const refined = [];
+  let lastEnd = -1;
+
+  for (const c of candidatesWithSub) {
+    const candidateLen = c.length;
+    const effectiveRefine = Math.max(
+      REFINE_MIN_M,
+      Math.min(REFINE_MAX_M, refinePct * candidateLen / 100)
+    );
+    dbgInfo(`[v2] climb len=${candidateLen.toFixed(0)} m × ${refinePct}% = ` +
+            `${(refinePct * candidateLen / 100).toFixed(0)} m → clamp = ${effectiveRefine.toFixed(0)} m`);
+
+    const hiIdx = findIdxAtDist(dist, Math.min(dist[n-1], dist[c.endIdx] + effectiveRefine));
+    const newEnd = (hiIdx > c.endIdx) ? argmaxRange(eleBase, c.endIdx, hiIdx) : c.endIdx;
+    if (newEnd <= c.startIdx) continue;
+    if (newEnd <= lastEnd) continue;
+
+    const naturalLow = lastEnd + 1;
+    const safetyLow  = findIdxAtDist(dist, Math.max(0, dist[c.startIdx] - effectiveRefine));
+    const loIdx = Math.max(naturalLow, safetyLow);
+    const newStart = (loIdx < c.startIdx) ? argminRange(eleBase, loIdx, c.startIdx) : c.startIdx;
+    if (newStart >= newEnd) continue;
+
+    anchors.push(newStart, newEnd);
+    refined.push({
+      startIdx: newStart,
+      endIdx: newEnd,
+      refineM: effectiveRefine,
+      candidateLen: candidateLen
+    });
+    lastEnd = newEnd;
+  }
+
+  const eleDisplay = anchoredMovingAverage(eleRaw, anchors, fenetreAffichage);
+  const slopeSemi = computeSlope(eleDisplay, dist);
+  const slopeDisplay = movingAverage(slopeSemi, fenetrePente);
+
+  const autoClimbs = [];
+  for (const c of refined) {
+    const sub = findBestSubClimb(dist, eleDisplay, c.startIdx, c.endIdx);
+    if (!sub) continue;
+    if (sub.length < 300) continue;
+    if (sub.avgSlope < minSlopeForLength(sub.length)) continue;
+    autoClimbs.push({
+      startKm: dist[c.startIdx] / 1000,
+      endKm:   dist[c.endIdx] / 1000,
+      refineM: c.refineM,
+      candidateLen: c.candidateLen
+    });
+  }
+
+  return { dist, eleRaw, autoClimbs };
+}
+
+/* =========================================================
+   8. État global
+   ========================================================= */
+const STATE = {
+  dist: null,
+  eleRaw: null,
+  eleDisplay: null,
+  rawPoints: null,
+  fileName: null,
+  autoClimbs: [],
+  userClimbs: [],
+  elevChart: null,
+  slopeChart: null,
+  syncing: false,
+  selectedClimbIdx: null,
+  showRawDetail: false,
+  dragPreview: null,
+  draggingHandle: null,
+  dragPointerId: null,
+  panOriginalState: null
+};
+
+function getParams() {
+  return {
+    fenetreAffichage: Math.max(3, parseInt(document.getElementById('fenetreAffichage').value) || 50),
+    fenetrePente:     Math.max(1, parseInt(document.getElementById('fenetrePente').value) || 30),
+    fenetreCatM:      Math.max(50, parseFloat(document.getElementById('fenetreCatM').value) || 500),
+    seuilMontee:      parseFloat(document.getElementById('seuilMontee').value) || 0.5,
+    refinePct:        Math.max(1, Math.min(500, parseFloat(document.getElementById('refinePct').value) || REFINE_PCT_DEFAULT)),
+    longueurMin:      parseFloat(document.getElementById('longueurMin').value) || LONGUEUR_MIN_DEFAULT
+  };
+}
+
+/* =========================================================
+   9. Rebuild complet à partir de userClimbs
+   ========================================================= */
+function rebuild() {
+  if (!STATE.dist || !STATE.eleRaw) return null;
+  const params = getParams();
+  const { dist, eleRaw, userClimbs } = STATE;
+
+  const sorted = userClimbs.slice().sort((a, b) => a.startKm - b.startKm);
+  let previousEndKm = -Infinity;
+  for (const c of sorted) {
+    c._constrainedStart = false;
+    c._constrainedEnd = false;
+
+    if (c.startKm < previousEndKm) {
+      c._constrainedStart = true;
+      c.startKm = previousEndKm + 0.001;
+    }
+    if (c.endKm <= c.startKm) {
+      c._constrainedEnd = true;
+      c.endKm = c.startKm + 0.1;
+    }
+    previousEndKm = c.endKm;
+  }
+
+  const anchors = [];
+  const resolved = [];
+  for (const c of sorted) {
+    const startIdx = findIdxAtDist(dist, c.startKm * 1000);
+    const endIdx = findIdxAtDist(dist, c.endKm * 1000);
+    if (startIdx >= endIdx) {
+      resolved.push({ startIdx, endIdx, ref: c, invalid: true,
+                      constrainedStart: c._constrainedStart,
+                      constrainedEnd: c._constrainedEnd });
+      continue;
+    }
+    anchors.push(startIdx, endIdx);
+    resolved.push({ startIdx, endIdx, ref: c, invalid: false,
+                    constrainedStart: c._constrainedStart,
+                    constrainedEnd: c._constrainedEnd });
+  }
+
+  const eleDisplay = anchoredMovingAverage(eleRaw, anchors, params.fenetreAffichage);
+  const eleBarely = movingAverage(eleRaw, 5);
+  const slopeRaw = computeSlope(eleBarely, dist);
+  const slopeSemi = computeSlope(eleDisplay, dist);
+  const slopeDisplay = movingAverage(slopeSemi, params.fenetrePente);
+  const slopeForCat = computeSlopeWindow(eleDisplay, dist, params.fenetreCatM);
+
+  const climbs = resolved.map(({ startIdx, endIdx, ref, invalid,
+                                constrainedStart, constrainedEnd }) => {
+    if (invalid) {
+      return { startIdx, endIdx, ref, invalid: true,
+        constrainedStart, constrainedEnd,
+        startDist: dist[startIdx], endDist: dist[endIdx],
+        length: 0, dPlus: 0, avgSlope: 0,
+        altStart: eleDisplay[startIdx] || 0, altEnd: eleDisplay[endIdx] || 0,
+        refineM: ref.refineM ?? null,
+        candidateLen: ref.candidateLen ?? null };
+    }
+    let dPlus = 0;
+    for (let k = startIdx + 1; k <= endIdx; k++) {
+      const d = eleDisplay[k] - eleDisplay[k-1];
+      if (d > 0) dPlus += d;
+    }
+    const length = dist[endIdx] - dist[startIdx];
+    return {
+      startIdx, endIdx, ref, invalid: false,
+      constrainedStart, constrainedEnd,
+      startDist: dist[startIdx], endDist: dist[endIdx],
+      length, dPlus, avgSlope: length > 0 ? (dPlus / length) * 100 : 0,
+      altStart: eleDisplay[startIdx], altEnd: eleDisplay[endIdx],
+      refineM: ref.refineM ?? null,
+      candidateLen: ref.candidateLen ?? null
+    };
+  });
+
+  const catSegments = segmentByCategory(slopeForCat, dist, eleDisplay, params.longueurMin);
+
+  const markers = [];
+  for (const c of climbs) {
+    if (c.invalid) continue;
+    const idx = STATE.userClimbs.indexOf(c.ref);
+    markers.push({ dist: c.startDist, type: 'valley', climbIdx: idx });
+    markers.push({ dist: c.endDist,   type: 'summit', climbIdx: idx });
+  }
+
+  STATE.eleDisplay = eleDisplay;
+
+  return { dist, eleRaw, eleDisplay, slopeRaw, slopeDisplay, slopeForCat,
+           catSegments, climbs, markers };
+}
+
+/* =========================================================
+   10. Plugin Chart.js : segmentation + marqueurs
+   ========================================================= */
+const segmentationPlugin = {
+  id: 'segmentation',
+  beforeDatasetsDraw(chart) {
+    const cfg = chart.options.plugins.segmentation;
+    if (!cfg) return;
+    const { segments, markers, hideSelected } = cfg;
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(chartArea.left, chartArea.top,
+             chartArea.right - chartArea.left, chartArea.bottom - chartArea.top);
+    ctx.clip();
+    if (segments) {
+      ctx.globalAlpha = 0.16;
+      for (const s of segments) {
+        const x1 = x.getPixelForValue(s.startDist / 1000);
+        const x2 = x.getPixelForValue(s.endDist / 1000);
+        ctx.fillStyle = CAT_BY_ID[s.key].color;
+        ctx.fillRect(x1, chartArea.top, Math.max(1, x2 - x1), chartArea.bottom - chartArea.top);
+      }
+    }
+    if (markers) {
+      ctx.globalAlpha = 1;
+      for (const m of markers) {
+        if (hideSelected != null && m.climbIdx === hideSelected) continue;
+        const px = x.getPixelForValue(m.dist / 1000);
+        if (px < chartArea.left || px > chartArea.right) continue;
+        ctx.strokeStyle = m.type === 'valley' ? '#16a34a' : '#dc2626';
+        ctx.lineWidth = 1.6;
+        ctx.setLineDash(m.type === 'valley' ? [] : [4, 3]);
+        ctx.beginPath(); ctx.moveTo(px, chartArea.top); ctx.lineTo(px, chartArea.bottom); ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+};
+
+const markerDragPlugin = {
+  id: 'markerDrag',
+  afterDatasetsDraw(chart) {
+    const cfg = chart.options.plugins.markerDrag;
+    if (!cfg?.enabled) return;
+
+    const idx = STATE.selectedClimbIdx;
+    if (idx == null) return;
+    const climb = STATE.userClimbs[idx];
+    if (!climb) return;
+
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x;
+
+    let startKm = climb.startKm;
+    let endKm   = climb.endKm;
+    if (STATE.dragPreview) {
+      if (STATE.dragPreview.handle === 'valley') startKm = STATE.dragPreview.km;
+      else                                        endKm   = STATE.dragPreview.km;
+    }
+
+    const xStart = x.getPixelForValue(startKm);
+    const xEnd   = x.getPixelForValue(endKm);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(chartArea.left, chartArea.top,
+             chartArea.right - chartArea.left,
+             chartArea.bottom - chartArea.top);
+    ctx.clip();
+
+    ctx.fillStyle = STATE.dragPreview
+      ? 'rgba(250, 204, 21, 0.22)'
+      : 'rgba(250, 204, 21, 0.12)';
+    ctx.fillRect(xStart, chartArea.top, xEnd - xStart, chartArea.bottom - chartArea.top);
+
+    ctx.strokeStyle = '#16a34a';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(xStart, chartArea.top);
+    ctx.lineTo(xStart, chartArea.bottom);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#dc2626';
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.moveTo(xEnd, chartArea.top);
+    ctx.lineTo(xEnd, chartArea.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const activeValley = STATE.draggingHandle === 'valley' ||
+                         STATE.dragPreview?.handle === 'valley' ||
+                         cfg.hoveredHandle === 'valley';
+    const activeSummit = STATE.draggingHandle === 'summit' ||
+                         STATE.dragPreview?.handle === 'summit' ||
+                         cfg.hoveredHandle === 'summit';
+    drawHandle(ctx, xStart, chartArea.top, '#16a34a', activeValley);
+    drawHandle(ctx, xEnd,   chartArea.top, '#dc2626', activeSummit);
+
+    ctx.restore();
+  }
+};
+
+function otherChart(chart) {
+  if (chart === STATE.elevChart) return STATE.slopeChart;
+  if (chart === STATE.slopeChart) return STATE.elevChart;
+  return null;
+}
+
+function findHandleAt(chart, px, py, climb) {
+  const { chartArea, scales } = chart;
+  if (py < chartArea.top - 12 || py > chartArea.top + 34) return null;
+
+  const x = scales.x;
+  const xV = x.getPixelForValue(climb.startKm);
+  const xS = x.getPixelForValue(climb.endKm);
+  const threshold = 14;
+  const dV = Math.abs(px - xV);
+  const dS = Math.abs(px - xS);
+
+  if (dV < threshold && dV <= dS) return 'valley';
+  if (dS < threshold) return 'summit';
+  return null;
+}
+
+function drawHandle(ctx, px, top, color, active) {
+  const size = active ? 11 : 9;
+  const y = top + 4;
+
+  if (active) {
+    ctx.beginPath();
+    ctx.arc(px, y + size * 0.6, size * 1.6, 0, Math.PI * 2);
+    ctx.fillStyle = color + '33';
+    ctx.fill();
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(px, y + size * 1.9);
+  ctx.lineTo(px - size, y);
+  ctx.lineTo(px + size, y);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(px - size * 0.4, y + size * 0.5);
+  ctx.lineTo(px, y + size * 1.2);
+  ctx.lineTo(px + size * 0.4, y + size * 0.5);
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+/* =========================================================
+   10c. Helpers drag
+   ========================================================= */
+function applyDragConstraint(handle, km, climb) {
+  const totalKm = STATE.dist[STATE.dist.length - 1] / 1000;
+  const minLen = 0.05;
+  const minGap = 0.001;
+
+  const sorted = STATE.userClimbs.slice().sort((a, b) => a.startKm - b.startKm);
+  const pos = sorted.indexOf(climb);
+  const prevClimb = pos > 0 ? sorted[pos - 1] : null;
+  const nextClimb = pos < sorted.length - 1 ? sorted[pos + 1] : null;
+
+  let lo = 0;
+  let hi = totalKm;
+  if (prevClimb) lo = prevClimb.endKm + minGap;
+  if (nextClimb) hi = nextClimb.startKm - minGap;
+
+  if (handle === 'valley') {
+    return Math.max(lo, Math.min(climb.endKm - minLen, km));
+  } else {
+    return Math.max(climb.startKm + minLen, Math.min(hi, km));
+  }
+}
+
+function updatePreviewMetrics(handle, km, climb) {
+  const idx = STATE.userClimbs.indexOf(climb);
+  if (idx < 0) return;
+  const row = document.querySelector(`#climbsTable tbody tr[data-idx="${idx}"]`);
+  if (!row) return;
+
+  const input = row.querySelector(`input[data-field="${handle === 'valley' ? 'startKm' : 'endKm'}"]`);
+  if (input) input.value = km.toFixed(3);
+
+  const startKm = handle === 'valley' ? km : climb.startKm;
+  const endKm   = handle === 'summit' ? km : climb.endKm;
+  const startIdx = findIdxAtDist(STATE.dist, startKm * 1000);
+  const endIdx   = findIdxAtDist(STATE.dist, endKm * 1000);
+
+  const cellLen = row.querySelector('.cell-length');
+  const cellDp  = row.querySelector('.cell-dplus');
+  const cellSl  = row.querySelector('.cell-slope');
+
+  if (startIdx >= endIdx) {
+    if (cellLen) cellLen.textContent = '—';
+    if (cellDp)  cellDp.textContent = '—';
+    if (cellSl)  cellSl.innerHTML = '—';
+    return;
+  }
+
+  const ele = STATE.eleDisplay || STATE.eleRaw;
+  const length = STATE.dist[endIdx] - STATE.dist[startIdx];
+  let dPlus = 0;
+  for (let k = startIdx + 1; k <= endIdx; k++) {
+    const d = ele[k] - ele[k - 1];
+    if (d > 0) dPlus += d;
+  }
+  const avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
+
+  if (cellLen) cellLen.textContent = length.toFixed(0);
+  if (cellDp)  cellDp.innerHTML = `<strong>${dPlus.toFixed(0)}</strong>`;
+  if (cellSl)  cellSl.innerHTML = `<span class="badge" style="background:${colorForSlope(avgSlope)}">${avgSlope.toFixed(1)} %</span>`;
+}
+
+function commitDrag(handle, km, climb) {
+  const field = handle === 'valley' ? 'startKm' : 'endKm';
+  dbgInfo(`commitDrag handle=${handle} km=${km.toFixed(4)}`);
+  climb[field] = km;
+  renderAll();
+}
+
+/* =========================================================
+   10d. Helpers d'insertion contextuelle
+   ========================================================= */
+function insertionRowHtml({ label, gapKm, attrs, big = false, colspan = 9 }) {
+  const gapText = gapKm >= 1
+    ? `${gapKm.toFixed(2)} km libres`
+    : `${(gapKm * 1000).toFixed(0)} m libres`;
+  return `
+    <tr class="insertion-row">
+      <td colspan="${colspan}">
+        <button class="insert-btn${big ? ' big' : ''}" ${attrs}
+                title="Insérer une montée — ${label}">
+          <span class="plus">+</span>
+          <span>${label}</span>
+          <span class="gap-info">· ${gapText}</span>
+        </button>
+      </td>
+    </tr>
+  `;
+}
+
+function emptyStateInsertionRowHtml() {
+  return `
+    <tr class="insertion-row empty-state">
+      <td colspan="9" style="text-align:center">
+        <button class="insert-btn big" data-insert="empty"
+                title="Ajouter la première montée">
+          <span class="plus">+</span>
+          <span>Ajouter une montée sur la trace</span>
+        </button>
+      </td>
+    </tr>
+  `;
+}
+
+function handleInsertClick(btn) {
+  const kind = btn.dataset.insert;
+  const totalKm = STATE.dist ? STATE.dist[STATE.dist.length - 1] / 1000 : 0;
+  if (!totalKm) return;
+
+  const sorted = STATE.userClimbs.slice().sort((a, b) => a.startKm - b.startKm);
+
+  if (kind === 'empty') {
+    const targetLen = Math.min(INSERT_DEFAULT_LEN_KM, Math.max(0.05, totalKm * 0.5));
+    const center = totalKm / 2;
+    const start = Math.max(0, center - targetLen / 2);
+    const end   = Math.min(totalKm, center + targetLen / 2);
+    addClimbAt(start, end);
+    return;
+  }
+
+  if (kind === 'before-first') {
+    const firstStart = sorted.length > 0 ? sorted[0].startKm : totalKm;
+    insertInGap(0, firstStart, 'avant la montée #1');
+    return;
+  }
+
+  if (kind === 'after-last') {
+    const lastEnd = sorted.length > 0 ? sorted[sorted.length - 1].endKm : 0;
+    insertInGap(lastEnd, totalKm, `après la montée #${sorted.length}`);
+    return;
+  }
+
+  if (kind === 'between') {
+    const gapIdx = +btn.dataset.gapIdx;
+    if (gapIdx < 0 || gapIdx >= sorted.length - 1) return;
+    const left = sorted[gapIdx];
+    const right = sorted[gapIdx + 1];
+    insertInGap(left.endKm, right.startKm, `entre #${gapIdx + 1} et #${gapIdx + 2}`);
+    return;
+  }
+}
+
+function insertInGap(gapStartKm, gapEndKm, label = '') {
+  const gapLen = gapEndKm - gapStartKm;
+  if (gapLen < INSERT_BETWEEN_MIN_KM) {
+    dbgWarn(`insertInGap: gap trop petit (${gapLen.toFixed(3)} km)`);
+    return;
+  }
+
+  const targetLen = Math.max(
+    0.1,
+    Math.min(INSERT_DEFAULT_LEN_KM, gapLen * 0.8)
+  );
+  const center = (gapStartKm + gapEndKm) / 2;
+  const start = Math.max(gapStartKm + 0.01, center - targetLen / 2);
+  const end   = Math.min(gapEndKm - 0.01,   center + targetLen / 2);
+
+  if (end <= start) return;
+
+  dbgInfo(`[v2.2] insertInGap ${label} → [${start.toFixed(3)}, ${end.toFixed(3)}] km`);
+  addClimbAt(start, end);
+}
+
+function addClimbAt(startKm, endKm) {
+  STATE.userClimbs.push({
+    startKm, endKm,
+    autoStartKm: null, autoEndKm: null,
+    refineM: null, candidateLen: null
+  });
+  STATE.selectedClimbIdx = STATE.userClimbs.length - 1;
+  renderAll();
+  requestAnimationFrame(() => {
+    const row = document.querySelector(
+      `#climbsTable tbody tr[data-idx="${STATE.selectedClimbIdx}"]`
+    );
+    if (row && row.scrollIntoView) {
+      row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  });
+}
+
+/* =========================================================
+   11. Rendu
+   ========================================================= */
+function renderAll() {
+  const data = rebuild();
+  if (!data) return;
+  const { dist, eleRaw, eleDisplay, slopeRaw, slopeDisplay, catSegments, climbs, markers } = data;
+  const totalDist = dist[dist.length - 1];
+
+  if (STATE.selectedClimbIdx != null &&
+      (STATE.selectedClimbIdx < 0 || STATE.selectedClimbIdx >= STATE.userClimbs.length)) {
+    STATE.selectedClimbIdx = null;
+  }
+
+  let dPlusRaw = 0, dMoinsRaw = 0;
+  for (let i = 1; i < eleRaw.length; i++) {
+    const d = eleRaw[i] - eleRaw[i-1];
+    if (d > 0) dPlusRaw += d; else dMoinsRaw -= d;
+  }
+  const validClimbs = climbs.filter(c => !c.invalid);
+  const totalDPlusClimbs = validClimbs.reduce((a, s) => a + s.dPlus, 0);
+  const totalClimbDist   = validClimbs.reduce((a, s) => a + s.length, 0);
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-label">Distance</div>
+      <div class="stat-value">${(totalDist/1000).toFixed(2)} <small>km</small></div></div>
+    <div class="stat"><div class="stat-label">D+ brut</div>
+      <div class="stat-value">${dPlusRaw.toFixed(0)} <small>m</small></div></div>
+    <div class="stat"><div class="stat-label">D− brut</div>
+      <div class="stat-value">${dMoinsRaw.toFixed(0)} <small>m</small></div></div>
+    <div class="stat"><div class="stat-label">Alt. min</div>
+      <div class="stat-value">${Math.min(...eleRaw).toFixed(0)} <small>m</small></div></div>
+    <div class="stat"><div class="stat-label">Alt. max</div>
+      <div class="stat-value">${Math.max(...eleRaw).toFixed(0)} <small>m</small></div></div>
+    <div class="stat climb"><div class="stat-label">Montées</div>
+      <div class="stat-value">${validClimbs.length}</div></div>
+    <div class="stat climb"><div class="stat-label">D+ des montées</div>
+      <div class="stat-value">${totalDPlusClimbs.toFixed(0)} <small>m</small></div></div>
+    <div class="stat climb"><div class="stat-label">Dist. en montée</div>
+      <div class="stat-value">${(totalClimbDist/1000).toFixed(2)} <small>km</small></div></div>
+    <div class="stat"><div class="stat-label">Segments catégorie</div>
+      <div class="stat-value">${catSegments.length}</div></div>
+  `;
+
+  const ribbon = document.getElementById('ribbon');
+  ribbon.innerHTML = catSegments.map((s, i) => {
+    const pct = (s.length / totalDist) * 100;
+    const cat = CAT_BY_ID[s.key];
+    const title = `${cat.label}\nkm ${fmtKm(s.startDist)} → ${fmtKm(s.endDist)}\nLong. ${s.length.toFixed(0)} m · Pente moy. ${s.avgSlope.toFixed(1)} %`;
+    return `<div class="ribbon-seg" style="width:${pct}%;background:${cat.color}" title="${title}" data-idx="${i}"></div>`;
+  }).join('');
+  ribbon.querySelectorAll('.ribbon-seg').forEach(el => {
+    el.addEventListener('click', () => {
+      const s = catSegments[+el.dataset.idx];
+      zoomTo(s.startDist / 1000, s.endDist / 1000);
+    });
+  });
+  let axisHTML = '';
+  for (let i = 0; i <= 8; i++) axisHTML += `<span>${(totalDist * i / 8 / 1000).toFixed(1)}</span>`;
+  document.getElementById('ribbonAxis').innerHTML = axisHTML;
+
+  document.getElementById('legend').innerHTML =
+    CATEGORIES.map(c => `<span class="legend-item"><span class="legend-swatch" style="background:${c.color}"></span>${c.label}</span>`).join('') +
+    `<span class="legend-item"><span style="display:inline-block;width:16px;height:3px;background:#16a34a;vertical-align:middle"></span>Vallée (départ)</span>
+     <span class="legend-item"><span style="display:inline-block;width:16px;height:0;border-top:3px dashed #dc2626;vertical-align:middle"></span>Sommet</span>`;
+
+  const catStats = {};
+  CATEGORIES.forEach(c => catStats[c.id] = { length: 0, dPlus: 0, slopeSum: 0 });
+  for (const s of catSegments) {
+    const cs = catStats[s.key];
+    cs.length += s.length; cs.dPlus += s.dPlus; cs.slopeSum += s.avgSlope * s.length;
+  }
+  document.querySelector('#catTable tbody').innerHTML = CATEGORIES.map(c => {
+    const cs = catStats[c.id];
+    if (cs.length < 0.5) return '';
+    const avg = cs.length > 0 ? cs.slopeSum / cs.length : 0;
+    const pct = totalDist > 0 ? (cs.length / totalDist * 100) : 0;
+    return `<tr>
+      <td><span class="badge" style="background:${c.color}">${c.label}</span></td>
+      <td class="num">${(cs.length/1000).toFixed(2)} <small>km</small><br><small style="color:#94a3b8">${pct.toFixed(1)} %</small></td>
+      <td class="num">${cs.dPlus.toFixed(0)} <small>m</small></td>
+      <td class="num">${avg.toFixed(1)} <small>%</small></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:20px">—</td></tr>';
+
+  /* --- Tableau des montées avec insertions contextuelles --- */
+  const climbsTbody = document.querySelector('#climbsTable tbody');
+  const tbodyParts = [];
+
+  if (climbs.length === 0) {
+    tbodyParts.push(emptyStateInsertionRowHtml());
+  } else {
+    if (climbs[0].startDist >= INSERT_EDGE_MIN_KM * 1000) {
+      tbodyParts.push(insertionRowHtml({
+        label: 'Avant la montée #1',
+        gapKm: climbs[0].startDist / 1000,
+        attrs: `data-insert="before-first"`
+      }));
+    }
+
+    climbs.forEach((s, i) => {
+      tbodyParts.push(climbRowHtml(s, i, totalDist));
+
+      if (i < climbs.length - 1) {
+        const nextClimb = climbs[i + 1];
+        const gapKm = (nextClimb.startDist - s.endDist) / 1000;
+        if (gapKm >= INSERT_BETWEEN_MIN_KM) {
+          tbodyParts.push(insertionRowHtml({
+            label: `Entre #${i + 1} et #${i + 2}`,
+            gapKm,
+            attrs: `data-insert="between" data-gap-idx="${i}"`
+          }));
+        }
+      }
+    });
+
+    const lastClimb = climbs[climbs.length - 1];
+    const endGapDist = totalDist - lastClimb.endDist;
+    if (endGapDist >= INSERT_EDGE_MIN_KM * 1000) {
+      tbodyParts.push(insertionRowHtml({
+        label: `Après la montée #${climbs.length}`,
+        gapKm: endGapDist / 1000,
+        attrs: `data-insert="after-last"`
+      }));
+    }
+  }
+
+  climbsTbody.innerHTML = tbodyParts.join('');
+
+  climbsTbody.querySelectorAll('tr.clickable').forEach(tr => {
+    tr.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+      selectClimb(+tr.dataset.idx);
+    });
+  });
+
+  /* --- Datasets --- */
+  const xKm = dist.map(d => d / 1000);
+  const step = Math.max(1, Math.ceil(xKm.length / 4000));
+  const idx = [];
+  for (let i = 0; i < xKm.length; i += step) idx.push(i);
+  if (idx[idx.length-1] !== xKm.length - 1) idx.push(xKm.length - 1);
+
+  const elevRawData = idx.map(i => ({ x: xKm[i], y: eleRaw[i] }));
+  const elevSmData  = idx.map(i => ({ x: xKm[i], y: eleDisplay[i] }));
+  const slopeRawData= idx.map(i => ({ x: xKm[i], y: slopeRaw[i] }));
+  const slopeSmData = idx.map(i => ({ x: xKm[i], y: slopeDisplay[i] }));
+
+  const prevZoom = (STATE.elevChart &&
+                    isFinite(STATE.elevChart.scales.x.min) &&
+                    isFinite(STATE.elevChart.scales.x.max))
+    ? { min: STATE.elevChart.scales.x.min, max: STATE.elevChart.scales.x.max }
+    : null;
+
+  const editing = STATE.selectedClimbIdx != null;
+  const showRaw = STATE.showRawDetail || editing;
+  const tooltipEnabled = !STATE.draggingHandle;
+
+  /* [v2.3] Mise à jour de l'apparence du toggle */
+  updateToggleBrutAppearance(showRaw, editing);
+
+  const common = {
+    responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        enabled: tooltipEnabled,
+        callbacks: {
+          title: items => items[0] ? `km ${items[0].parsed.x.toFixed(2)}` : '',
+          label: item => `${item.dataset.label}: ${item.parsed.y.toFixed(1)}`
+        }
+      },
+      zoom: {
+        zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x',
+                onZoom: ({ chart }) => syncZoom(chart) },
+        pan: { enabled: true, mode: 'x', onPan: ({ chart }) => syncZoom(chart) }
+      },
+      segmentation: {
+        segments: catSegments,
+        markers,
+        hideSelected: editing ? STATE.selectedClimbIdx : null
+      },
+      markerDrag: {
+        enabled: editing,
+        hoveredHandle: null
+      }
+    },
+    scales: {
+      x: { type: 'linear', title: { display: true, text: 'Distance (km)' }, ticks: { maxTicksLimit: 12 } },
+      y: { grace: '5%', grid: { color: 'rgba(0,0,0,0.05)' } }
+    },
+    elements: { point: { radius: 0 } }
+  };
+
+  if (STATE.elevChart) STATE.elevChart.destroy();
+  STATE.elevChart = new Chart(document.getElementById('elevChart'), {
+    type: 'line',
+    data: { datasets: [
+      {
+        label: 'Altitude brute',
+        data: elevRawData,
+        borderColor: showRaw ? '#64748b' : '#cbd5e1',
+        borderWidth: showRaw ? 1.8 : 1.2,
+        fill: false, tension: 0, order: 2
+      },
+      {
+        label: 'Altitude lissée',
+        data: elevSmData,
+        borderColor: editing ? 'rgba(30,41,59,0.55)' : '#1e293b',
+        backgroundColor: 'rgba(30,41,59,0.05)',
+        borderWidth: 1.8, fill: true, tension: 0.15, order: 1
+      }
+    ]},
+    options: { ...common, scales: {
+      x: common.scales.x,
+      y: { ...common.scales.y, title: { display: true, text: 'Altitude (m)' } }
+    }}
+  });
+
+  if (STATE.slopeChart) STATE.slopeChart.destroy();
+  STATE.slopeChart = new Chart(document.getElementById('slopeChart'), {
+    type: 'line',
+    data: { datasets: [
+      { label: 'Pente brute', data: slopeRawData, borderColor: '#e9d5ff',
+        borderWidth: 1, fill: false, tension: 0, order: 2 },
+      { label: 'Pente lissée', data: slopeSmData, borderColor: '#7c3aed',
+        backgroundColor: 'rgba(124,58,237,0.07)', borderWidth: 1.8, fill: true, tension: 0.15, order: 1 }
+    ]},
+    options: { ...common, plugins: { ...common.plugins,
+      tooltip: {
+        enabled: tooltipEnabled,
+        callbacks: {
+          title: items => items[0] ? `km ${items[0].parsed.x.toFixed(2)}` : '',
+          label: item => `${item.dataset.label}: ${item.parsed.y.toFixed(2)} %`
+        }
+      }}, scales: {
+      x: common.scales.x,
+      y: { ...common.scales.y, title: { display: true, text: 'Pente (%)' } }
+    }}
+  });
+
+  if (prevZoom) {
+    for (const ch of [STATE.elevChart, STATE.slopeChart]) {
+      ch.options.scales.x.min = prevZoom.min;
+      ch.options.scales.x.max = prevZoom.max;
+      ch.update('none');
+    }
+  }
+
+  if (slopeChartExpanded && STATE.slopeChart) {
+    setTimeout(() => {
+      if (STATE.slopeChart) STATE.slopeChart.resize();
+    }, 0);
+  }
+
+  attachCanvasHover(STATE.elevChart);
+  attachCanvasHover(STATE.slopeChart);
+
+  document.getElementById('elevCard').classList.toggle('chart-editing', editing);
+  document.getElementById('showRawDetail').checked = STATE.showRawDetail;
+}
+
+/* [v2.3] Mise à jour visuelle du toggle « mettre en avant » */
+function updateToggleBrutAppearance(showRaw, editing) {
+  const toggle = document.getElementById('toggleBrut');
+  const badge = document.getElementById('autoRawBadge');
+  if (!toggle) return;
+
+  toggle.classList.remove('user-on', 'auto-on');
+
+  if (STATE.showRawDetail) {
+    // L'utilisateur a explicitement coché la case
+    toggle.classList.add('user-on');
+    badge.classList.add('hidden');
+  } else if (editing && showRaw) {
+    // L'édition force l'affichage, mais l'utilisateur n'a pas coché
+    toggle.classList.add('auto-on');
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+function climbRowHtml(s, i, totalDist) {
+  const ref = s.ref;
+  const idx = STATE.userClimbs.indexOf(ref);
+  const isModified = ref.autoStartKm != null &&
+    (Math.abs(ref.startKm - ref.autoStartKm) > 0.0005 ||
+     Math.abs(ref.endKm - ref.autoEndKm) > 0.0005);
+  const isConstrained = s.constrainedStart || s.constrainedEnd;
+  const isSelected = STATE.selectedClimbIdx === idx;
+
+  let rowClass = 'clickable';
+  if (isModified) rowClass += ' modified';
+  if (isConstrained) rowClass += ' constrained';
+  if (s.invalid) rowClass += ' invalid';
+  if (isSelected) rowClass += ' selected';
+
+  let tooltip = '';
+  if (s.constrainedStart) tooltip = 'Début ajusté automatiquement (chevauchement)';
+  else if (s.constrainedEnd) tooltip = 'Fin ajustée automatiquement';
+
+  const delBtn = `<button class="btn-icon del" data-idx="${idx}" title="Supprimer">✕</button>`;
+  const resetBtn = ref.autoStartKm != null
+    ? `<button class="btn-icon reset" data-idx="${idx}" title="Restaurer la valeur auto">↺</button>`
+    : '';
+
+  const dispStart = s.invalid ? ref.startKm : s.startDist / 1000;
+  const dispEnd   = s.invalid ? ref.endKm   : s.endDist / 1000;
+
+  let refineCell, refineTitle, refineClass = 'num cell-refine';
+  if (ref.refineM == null) {
+    refineCell = '—';
+    refineClass += ' manual';
+    refineTitle = 'Créée manuellement — pas de garde-fou automatique';
+  } else {
+    refineCell = ref.refineM.toFixed(0);
+    const preClamp = ref.candidateLen != null
+      ? (ref.candidateLen * (params_refinePct() / 100)).toFixed(0)
+      : '?';
+    refineTitle =
+      `Longueur détectée : ${(ref.candidateLen ?? 0).toFixed(0)} m\n` +
+      `Calcul : ${params_refinePct()}% × ${(ref.candidateLen ?? 0).toFixed(0)} m = ${preClamp} m\n` +
+      `Clamp [${REFINE_MIN_M}, ${REFINE_MAX_M}] m → ${ref.refineM.toFixed(0)} m`;
+  }
+
+  return `
+    <tr class="${rowClass}" data-idx="${idx}" data-start="${dispStart}" data-end="${dispEnd}" title="${tooltip}">
+      <td class="climb-select-cell">
+        <input type="radio" name="climbSelect" value="${idx}"
+               ${isSelected ? 'checked' : ''}
+               aria-label="Sélectionner la montée ${i + 1}">
+      </td>
+      <td>${i + 1}</td>
+      <td class="num">
+        <input type="number" class="km-input" step="0.001" min="0"
+               max="${(totalDist/1000).toFixed(3)}"
+               value="${ref.startKm.toFixed(3)}"
+               data-idx="${idx}" data-field="startKm">
+      </td>
+      <td class="num">
+        <input type="number" class="km-input" step="0.001" min="0"
+               max="${(totalDist/1000).toFixed(3)}"
+               value="${ref.endKm.toFixed(3)}"
+               data-idx="${idx}" data-field="endKm">
+      </td>
+      <td class="num cell-length">${s.invalid ? '—' : s.length.toFixed(0)}</td>
+      <td class="num cell-dplus"><strong>${s.invalid ? '—' : s.dPlus.toFixed(0)}</strong></td>
+      <td class="num cell-slope">${s.invalid ? '—' :
+        `<span class="badge" style="background:${colorForSlope(s.avgSlope)}">${s.avgSlope.toFixed(1)} %</span>`}</td>
+      <td class="${refineClass}" title="${refineTitle}">${refineCell}</td>
+      <td style="white-space:nowrap">${resetBtn}${delBtn}</td>
+    </tr>`;
+}
+
+function params_refinePct() {
+  return Math.max(1, Math.min(500,
+    parseFloat(document.getElementById('refinePct').value) || REFINE_PCT_DEFAULT));
+}
+
+/* =========================================================
+   12. Sélection / désélection
+   ========================================================= */
+function selectClimb(idx) {
+  dbgInfo(`selectClimb idx=${idx}`);
+  STATE.selectedClimbIdx = idx;
+  STATE.dragPreview = null;
+  STATE.draggingHandle = null;
+  renderAll();
+
+  const climb = STATE.userClimbs[idx];
+  if (climb && STATE.elevChart) {
+    const xMin = STATE.elevChart.scales.x.min;
+    const xMax = STATE.elevChart.scales.x.max;
+    if (!isFinite(xMin) || climb.startKm < xMin || climb.endKm > xMax) {
+      const pad = Math.max(0.1, (climb.endKm - climb.startKm) * 0.15);
+      zoomTo(climb.startKm - pad, climb.endKm + pad);
+    }
+  }
+}
+
+/* [v2.3] Désélection explicite */
+function deselectClimb() {
+  if (STATE.selectedClimbIdx == null) return;
+  dbgInfo(`deselectClimb (was idx=${STATE.selectedClimbIdx})`);
+  STATE.selectedClimbIdx = null;
+  STATE.dragPreview = null;
+  STATE.draggingHandle = null;
+  renderAll();
+}
+
+/* =========================================================
+   13. Zoom / sync
+   ========================================================= */
+function zoomTo(kmStart, kmEnd) {
+  if (!STATE.elevChart || !STATE.slopeChart) return;
+  const pad = Math.max(0.05, (kmEnd - kmStart) * 0.05);
+  for (const ch of [STATE.elevChart, STATE.slopeChart]) {
+    ch.options.scales.x.min = kmStart - pad;
+    ch.options.scales.x.max = kmEnd + pad;
+    ch.update('none');
+  }
+}
+function syncZoom(source) {
+  if (STATE.syncing) return;
+  const target = source === STATE.elevChart ? STATE.slopeChart : STATE.elevChart;
+  if (!target) return;
+  STATE.syncing = true;
+  target.options.scales.x.min = source.scales.x.min;
+  target.options.scales.x.max = source.scales.x.max;
+  target.update('none');
+  STATE.syncing = false;
+}
+
+/* =========================================================
+   14. Chargement / détection auto
+   ========================================================= */
+function loadFile(file) {
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const rawPoints = parseGPX(e.target.result);
+      if (!rawPoints.length) throw new Error("Aucun point avec altitude.");
+      STATE.rawPoints = rawPoints;
+      STATE.fileName = file.name || 'trace.gpx';
+      const params = getParams();
+      const { dist, eleRaw, autoClimbs } = computeAuto(rawPoints, params);
+      STATE.dist = dist;
+      STATE.eleRaw = eleRaw;
+      STATE.autoClimbs = autoClimbs;
+      STATE.userClimbs = autoClimbs.map(c => ({
+        startKm: c.startKm, endKm: c.endKm,
+        autoStartKm: c.startKm, autoEndKm: c.endKm,
+        refineM: c.refineM ?? null,
+        candidateLen: c.candidateLen ?? null
+      }));
+      STATE.selectedClimbIdx = null;
+      STATE.draggingHandle = null;
+
+      /* [v2.3] Drop zone reste visible — passage en mode compact */
+      updateDropZoneCompact(STATE.fileName);
+
+      document.getElementById('app').classList.remove('hidden');
+      dbgInfo(`Loaded ${rawPoints.length} points, ${autoClimbs.length} climbs`);
+      renderAll();
+    } catch (err) { alert("Erreur : " + err.message); }
+  };
+  r.readAsText(file);
+}
+
+/* [v2.3] Passage de la drop-zone en mode compact */
+function updateDropZoneCompact(fileName) {
+  const dz = document.getElementById('dropZone');
+  const txt = document.getElementById('dropZoneText');
+  dz.classList.add('compact');
+  txt.innerHTML = `<strong>${escapeHtml(fileName)}</strong> — glissez un nouveau fichier <strong>.gpx</strong> ou <strong>cliquez pour changer</strong>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[c]));
+}
+
+function recomputeAuto() {
+  if (!STATE.rawPoints) return;
+  const params = getParams();
+  const { dist, eleRaw, autoClimbs } = computeAuto(STATE.rawPoints, params);
+  STATE.dist = dist;
+  STATE.eleRaw = eleRaw;
+  STATE.autoClimbs = autoClimbs;
+
+  for (const uc of STATE.userClimbs) {
+    const refStart = uc.autoStartKm != null ? uc.autoStartKm : uc.startKm;
+    const match = autoClimbs.find(a => Math.abs(a.startKm - refStart) < 0.1);
+    if (match) {
+      const wasModified = uc.autoStartKm != null &&
+        (Math.abs(uc.startKm - uc.autoStartKm) > 0.0005 ||
+         Math.abs(uc.endKm - uc.autoEndKm) > 0.0005);
+      uc.autoStartKm = match.startKm;
+      uc.autoEndKm = match.endKm;
+      uc.refineM = match.refineM ?? null;
+      uc.candidateLen = match.candidateLen ?? null;
+      if (!wasModified) {
+        uc.startKm = match.startKm;
+        uc.endKm = match.endKm;
+      }
+    }
+  }
+  renderAll();
+}
+
+/* =========================================================
+   15. Interface
+   ========================================================= */
+document.getElementById('btnReloadAuto').addEventListener('click', () => {
+  STATE.userClimbs = STATE.autoClimbs.map(c => ({
+    startKm: c.startKm, endKm: c.endKm,
+    autoStartKm: c.startKm, autoEndKm: c.endKm,
+    refineM: c.refineM ?? null,
+    candidateLen: c.candidateLen ?? null
+  }));
+  STATE.selectedClimbIdx = null;
+  STATE.draggingHandle = null;
+  renderAll();
+});
+
+document.getElementById('showRawDetail').addEventListener('change', (e) => {
+  STATE.showRawDetail = e.target.checked;
+  renderAll();
+});
+
+/* --- Tableau : change (inputs km + radios) --- */
+document.querySelector('#climbsTable').addEventListener('change', (e) => {
+  const target = e.target;
+  if (target.name === 'climbSelect') {
+    // La sélection est gérée par mousedown en capture (voir plus bas).
+    // On ne fait rien ici pour éviter le double-render.
+    return;
+  }
+  if (!target.classList.contains('km-input')) return;
+  const idx = +target.dataset.idx;
+  const field = target.dataset.field;
+  const val = parseFloat(target.value);
+  if (isNaN(val) || val < 0) { renderAll(); return; }
+  STATE.userClimbs[idx][field] = val;
+  renderAll();
+});
+
+/* [v2.3] Interception mousedown pour gérer la désélection des radios.
+   Utilise la phase de CAPTURE pour agir AVANT que le navigateur
+   ne change l'état du radio. */
+document.querySelector('#climbsTable').addEventListener('mousedown', (e) => {
+  const t = e.target;
+  if (t.type === 'radio' && t.name === 'climbSelect') {
+    const clickedIdx = +t.value;
+    // Si on clique sur la radio actuellement sélectionnée → désélection
+    if (STATE.selectedClimbIdx === clickedIdx) {
+      e.preventDefault();  // empêche le navigateur de re-cocher (inutile mais safe)
+      deselectClimb();
+    }
+  }
+}, true);
+
+/* --- Tableau : click (insertions, reset, delete) --- */
+document.querySelector('#climbsTable').addEventListener('click', (e) => {
+  const target = e.target;
+
+  const insertBtn = target.closest('.insert-btn');
+  if (insertBtn) {
+    e.stopPropagation();
+    handleInsertClick(insertBtn);
+    return;
+  }
+
+  if (target.classList.contains('btn-icon') && target.classList.contains('reset')) {
+    const idx = +target.dataset.idx;
+    const c = STATE.userClimbs[idx];
+    if (c.autoStartKm != null) {
+      c.startKm = c.autoStartKm;
+      c.endKm = c.autoEndKm;
+    }
+    renderAll();
+  } else if (target.classList.contains('btn-icon') && target.classList.contains('del')) {
+    const idx = +target.dataset.idx;
+    STATE.userClimbs.splice(idx, 1);
+    if (STATE.selectedClimbIdx === idx) STATE.selectedClimbIdx = null;
+    else if (STATE.selectedClimbIdx > idx) STATE.selectedClimbIdx -= 1;
+    renderAll();
+  }
+});
+
+/* --- Paramètres --- */
+const refreshParams = debounce(() => recomputeAuto(), 250);
+['fenetreAffichage','fenetrePente','fenetreCatM','seuilMontee','refinePct','longueurMin'].forEach(id => {
+  document.getElementById(id).addEventListener('input', refreshParams);
+});
+
+/* --- Dropzone (toujours visible) --- */
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+/* =========================================================
+   16. Édition au clavier + désélection
+   ========================================================= */
+document.addEventListener('keydown', (e) => {
+  // [v2.3] Échap → désélection
+  if (e.key === 'Escape') {
+    if (STATE.selectedClimbIdx != null) {
+      e.preventDefault();
+      deselectClimb();
+    }
+    return;
+  }
+
+  if (STATE.selectedClimbIdx == null) return;
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'radio') return;
+  if (e.target.tagName === 'TEXTAREA') return;
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+
+  e.preventDefault();
+  const climb = STATE.userClimbs[STATE.selectedClimbIdx];
+  if (!climb) return;
+
+  const dir = e.key === 'ArrowLeft' ? -1 : 1;
+  const stepM = e.shiftKey ? 1 : 10;
+  const stepKm = dir * stepM / 1000;
+  const handle = e.altKey ? 'summit' : 'valley';
+
+  if (handle === 'valley') {
+    climb.startKm = applyDragConstraint('valley', climb.startKm + stepKm, climb);
+  } else {
+    climb.endKm = applyDragConstraint('summit', climb.endKm + stepKm, climb);
+  }
+  renderAll();
+});
+
+/* =========================================================
+   17. Interception GLOBALE des événements de drag
+   ========================================================= */
+function onGlobalDown(e) {
+  dbg(`[${e.type}] target=${e.target.tagName} @(${e.clientX},${e.clientY}) dragActive=${!!STATE.draggingHandle}`);
+
+  if (STATE.draggingHandle) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    dbg('  → drag actif, event bloqué');
+    return;
+  }
+
+  const intercepted = tryInterceptHandleDrag(e, e.clientX, e.clientY);
+  if (intercepted) {
+    dbg('  → INTERCEPTED (poignée détectée)');
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  } else {
+    dbg('  → pas sur une poignée, laissé passer (pan autorisé)');
+  }
+}
+
+window.addEventListener('pointerdown', onGlobalDown, true);
+window.addEventListener('mousedown',    onGlobalDown, true);
+
+window.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) return;
+  const t = e.touches[0];
+  dbg(`[touchstart] target=${e.target.tagName} @(${t.clientX},${t.clientY})`);
+  if (STATE.draggingHandle) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    return;
+  }
+  const intercepted = tryInterceptHandleDrag(e, t.clientX, t.clientY);
+  if (intercepted) {
+    dbg('  → INTERCEPTED (touch)');
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+}, { capture: true, passive: false });
+
+function tryInterceptHandleDrag(e, clientX, clientY) {
+  const idx = STATE.selectedClimbIdx;
+  if (idx == null) return false;
+  const climb = STATE.userClimbs[idx];
+  if (!climb) return false;
+
+  let chart = null;
+  if (STATE.elevChart && e.target === STATE.elevChart.canvas) chart = STATE.elevChart;
+  else if (STATE.slopeChart && e.target === STATE.slopeChart.canvas) chart = STATE.slopeChart;
+  if (!chart) return false;
+
+  const rect = chart.canvas.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const py = clientY - rect.top;
+
+  const handle = findHandleAt(chart, px, py, climb);
+  if (!handle) return false;
+
+  startHandleDrag(chart, handle, climb);
+  return true;
+}
+
+/* =========================================================
+   18. Gestion du drag
+   ========================================================= */
+function startHandleDrag(chart, handle, climb) {
+  dbgInfo(`startHandleDrag handle=${handle} climb=[${climb.startKm.toFixed(3)},${climb.endKm.toFixed(3)}]`);
+
+  STATE.draggingHandle = handle;
+  STATE.dragPreview = { handle, km: handle === 'valley' ? climb.startKm : climb.endKm };
+  chart.canvas.style.cursor = 'ew-resize';
+  document.body.classList.add('no-select');
+
+  STATE.panOriginalState = {
+    elev: STATE.elevChart?.options.plugins.zoom.pan.enabled,
+    slope: STATE.slopeChart?.options.plugins.zoom.pan.enabled
+  };
+  if (STATE.elevChart)  STATE.elevChart.options.plugins.zoom.pan.enabled = false;
+  if (STATE.slopeChart) STATE.slopeChart.options.plugins.zoom.pan.enabled = false;
+
+  for (const ch of [STATE.elevChart, STATE.slopeChart]) {
+    if (!ch) continue;
+    ch.options.plugins.tooltip.enabled = false;
+    if (ch.tooltip && typeof ch.tooltip.setActiveElements === 'function') {
+      ch.tooltip.setActiveElements([], { x: 0, y: 0 });
+      ch.tooltip.update();
+    }
+  }
+
+  let moveCount = 0;
+  let lastKm = null;
+
+  const onMove = (me) => {
+    if (STATE.draggingHandle !== handle) {
+      cleanup();
+      return;
+    }
+    let cx, cy;
+    if (me.touches) {
+      if (me.touches.length !== 1) return;
+      cx = me.touches[0].clientX;
+      cy = me.touches[0].clientY;
+    } else {
+      cx = me.clientX;
+      cy = me.clientY;
+    }
+
+    const rect = chart.canvas.getBoundingClientRect();
+    const px = cx - rect.left;
+    const km = chart.scales.x.getValueForPixel(px);
+    if (km == null || !isFinite(km)) return;
+
+    const constrainedKm = applyDragConstraint(handle, km, climb);
+    if (constrainedKm === lastKm) return;
+    lastKm = constrainedKm;
+    moveCount++;
+
+    STATE.dragPreview = { handle, km: constrainedKm };
+    updatePreviewMetrics(handle, constrainedKm, climb);
+    chart.draw();
+    if (STATE.slopeChart) STATE.slopeChart.draw();
+
+    me.stopImmediatePropagation();
+    me.preventDefault();
+  };
+
+  const onUp = (ue) => {
+    if (STATE.draggingHandle !== handle) return;
+    dbgInfo(`onUp (${moveCount} moves) → commit`);
+
+    cleanup();
+
+    const preview = STATE.dragPreview;
+    STATE.draggingHandle = null;
+    STATE.dragPreview = null;
+    chart.canvas.style.cursor = 'default';
+    document.body.classList.remove('no-select');
+
+    if (STATE.elevChart && STATE.panOriginalState) {
+      STATE.elevChart.options.plugins.zoom.pan.enabled = STATE.panOriginalState.elev !== false;
+    }
+    if (STATE.slopeChart && STATE.panOriginalState) {
+      STATE.slopeChart.options.plugins.zoom.pan.enabled = STATE.panOriginalState.slope !== false;
+    }
+    STATE.panOriginalState = null;
+
+    for (const ch of [STATE.elevChart, STATE.slopeChart]) {
+      if (!ch) continue;
+      ch.options.plugins.tooltip.enabled = true;
+    }
+
+    if (preview) commitDrag(handle, preview.km, climb);
+    else renderAll();
+
+    if (ue) {
+      ue.stopImmediatePropagation();
+      ue.preventDefault();
+    }
+  };
+
+  function cleanup() {
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', onUp, true);
+    window.removeEventListener('pointercancel', onUp, true);
+    window.removeEventListener('mousemove', onMove, true);
+    window.removeEventListener('mouseup', onUp, true);
+    window.removeEventListener('touchmove', onMove, true);
+    window.removeEventListener('touchend', onUp, true);
+    window.removeEventListener('touchcancel', onUp, true);
+  }
+
+  window.addEventListener('pointermove', onMove, true);
+  window.addEventListener('pointerup', onUp, true);
+  window.addEventListener('pointercancel', onUp, true);
+  window.addEventListener('mousemove', onMove, true);
+  window.addEventListener('mouseup', onUp, true);
+  window.addEventListener('touchmove', onMove, { capture: true, passive: false });
+  window.addEventListener('touchend', onUp, true);
+  window.addEventListener('touchcancel', onUp, true);
+}
+
+/* =========================================================
+   19. Survol des poignées
+   ========================================================= */
+function attachCanvasHover(chart) {
+  if (!chart || !chart.canvas) return;
+  if (chart.canvas._hoverAttached) return;
+  chart.canvas._hoverAttached = true;
+
+  chart.canvas.addEventListener('mousemove', (e) => {
+    if (STATE.draggingHandle) return;
+
+    const idx = STATE.selectedClimbIdx;
+    if (idx == null) {
+      if (chart.canvas.style.cursor !== 'default') {
+        chart.canvas.style.cursor = 'default';
+        chart.options.plugins.markerDrag.hoveredHandle = null;
+        chart.draw();
+      }
+      return;
+    }
+    const climb = STATE.userClimbs[idx];
+    if (!climb) return;
+
+    const rect = chart.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const handle = findHandleAt(chart, px, py, climb);
+    const cursor = handle ? 'ew-resize' : 'default';
+    if (chart.canvas.style.cursor !== cursor) {
+      chart.canvas.style.cursor = cursor;
+      chart.options.plugins.markerDrag.hoveredHandle = handle;
+      chart.draw();
+      const other = otherChart(chart);
+      if (other) {
+        other.options.plugins.markerDrag.hoveredHandle = handle;
+        other.draw();
+      }
+    }
+  });
+}
+
+/* =========================================================
+   20. Enregistrement des plugins
+   ========================================================= */
+Chart.register(segmentationPlugin, markerDragPlugin);
+
+(function initSlopeCollapse() {
+  const card = document.getElementById('slopeCard');
+  card.classList.add('collapsed-card');
+})();
+
+dbgInfo('v2.3 initialisée — drop-zone persistante, désélection radio/Échap, toggle brut avec état auto.');
+</script>
+</body>
+</html>

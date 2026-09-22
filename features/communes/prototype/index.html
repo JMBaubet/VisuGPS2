@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Communes traversées par une trace GPX</title>
+<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+<script src="https://unpkg.com/osmtogeojson@3.0.0-beta.5/osmtogeojson.js"></script>
+<style>
+  :root { --accent:#2b6cb0; --bg:#f7fafc; --border:#cbd5e0; --text:#1a202c; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    max-width: 1100px; margin: 2rem auto; padding: 0 1rem;
+    color: var(--text); background: var(--bg); line-height: 1.5;
+  }
+  h1 { font-size: 1.35rem; margin-bottom: .25rem; }
+  p.lead { color: #4a5568; margin-top: 0; font-size: .95rem; }
+  #drop {
+    border: 3px dashed var(--border); border-radius: 12px;
+    padding: 2.5rem 1rem; text-align: center; color: #718096;
+    cursor: pointer; transition: all .15s ease; background: #fff;
+  }
+  #drop.hover { border-color: var(--accent); background: #ebf8ff; color: var(--accent); }
+  #status { margin: 1rem 0; font-size: .95rem; min-height: 1.2em; }
+  #status.error { color: #c53030; }
+  #status.success { color: #2f855a; }
+  #status.info { color: #2b6cb0; }
+  #status.warn { color: #b7791f; }
+  #results { margin-top: 1.5rem; }
+  #results h2 { font-size: 1.05rem; margin-bottom: .5rem; }
+  .summary {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: .75rem 1rem; margin-bottom: 1rem; font-size: .9rem;
+  }
+  .summary strong { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; background: #fff;
+    border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    font-size: .9rem; }
+  th, td { padding: .5rem .6rem; border-bottom: 1px solid var(--border); text-align: left;
+    vertical-align: top; }
+  th { background: #edf2f7; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #f7fafc; }
+  .km { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; font-weight: 600; color: #2b6cb0; }
+  .len { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+  .badge { display: inline-block; background: #ebf8ff; color: #2b6cb0;
+    border-radius: 4px; padding: 0 .35rem; font-size: .72rem; margin-left: .3rem;
+    font-weight: 600; }
+  .btn {
+    display: inline-block; padding: .5rem 1rem; background: var(--accent);
+    color: #fff; border: none; border-radius: 6px; cursor: pointer;
+    font-size: .9rem; margin-top: .75rem;
+  }
+  .btn:hover { background: #2c5282; }
+  .btn.secondary { background: #edf2f7; color: var(--text); }
+  .btn.secondary:hover { background: #e2e8f0; }
+  .meta { color: #718096; font-size: .85rem; margin-top: .75rem; }
+  .diag {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: .75rem 1rem; margin-top: 1rem; font-size: .85rem;
+    color: #4a5568; font-family: ui-monospace, Menlo, monospace;
+  }
+  .diag strong { color: var(--text); }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .8s linear infinite;
+    vertical-align: -2px; margin-right: .5rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress { height: 6px; background: #e2e8f0; border-radius: 3px;
+    overflow: hidden; margin: .5rem 0 1rem; }
+  .progress > div { height: 100%; background: var(--accent); width: 0%;
+    transition: width .3s ease; }
+
+  .chart-wrap {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; margin-bottom: 1.25rem;
+  }
+  .chart-title { font-weight: 600; margin-bottom: .25rem; }
+  .chart-axis {
+    display: flex; justify-content: space-between;
+    font-size: .75rem; color: #718096;
+    padding-left: 160px; padding-right: 70px;
+    margin-bottom: .25rem;
+  }
+  .chart { display: flex; flex-direction: column; gap: 3px; }
+  .chart-row {
+    display: grid;
+    grid-template-columns: 155px 1fr 65px;
+    align-items: center;
+    gap: .5rem;
+    font-size: .8rem;
+  }
+  .chart-label {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: #2d3748; font-weight: 500;
+  }
+  .chart-track {
+    position: relative;
+    height: 16px;
+    background: #edf2f7;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .chart-bar {
+    position: absolute;
+    top: 0; bottom: 0;
+    border-radius: 3px;
+    transition: filter .15s ease;
+  }
+  .chart-bar:hover { filter: brightness(1.15); }
+  .chart-km {
+    text-align: right; color: #4a5568;
+    font-family: ui-monospace, Menlo, monospace; font-size: .75rem;
+  }
+  @media (max-width: 640px) {
+    .chart-row { grid-template-columns: 100px 1fr 55px; }
+    .chart-axis { padding-left: 100px; padding-right: 55px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Communes traversées par une trace GPX V0.4 11:01</h1>
+<p class="lead">
+  Déposez un fichier <code>.gpx</code>. Pour chaque commune traversée : point d'entrée,
+  point de sortie, position kilométrique et longueur parcourue.
+  France, Espagne, Italie, Suisse (<code>admin_level=8</code>).
+</p>
+
+<div id="drop">
+  <input type="file" id="file" accept=".gpx,application/gpx+xml" hidden>
+  <p><strong>Glissez-déposez</strong> votre fichier GPX ici<br>ou cliquez pour parcourir</p>
+</div>
+
+<div class="progress" id="progressWrap" style="display:none"><div id="progressBar"></div></div>
+<div id="status"></div>
+<div id="results"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const drop = document.getElementById('drop');
+  const fileInput = document.getElementById('file');
+  const statusEl = document.getElementById('status');
+  const resultsEl = document.getElementById('results');
+  const progressWrap = document.getElementById('progressWrap');
+  const progressBar = document.getElementById('progressBar');
+
+  const CONFIG = {
+    adminLevel: '8',
+    bboxBufferDeg: 0.01,
+    simplifyTolerance: 0.00005,
+    targetSamples: 2000,
+    minSampleStepKm: 0.1,
+    maxAreaRatio: 10,
+    // Filtre très court (élimine le bruit de simplification)
+    minSegmentKm: 0.015,
+    // Filtre post-traitement : passages < 500 m fusionnés dans le voisin
+    minKeepKm: 0.5,
+    // Détection d'oscillation : 0 = DÉSACTIVÉE (recommandé)
+    // Sinon, ratio minor/major en dessous duquel un pattern A-B-A-B-... est fusionné.
+    oscillationRatio: 0,
+    // Comblement des trous de timeline : nb max d'échantillons consécutifs
+    // sans match qui peuvent être comblés (0 = désactivé)
+    maxGapFillSamples: 1,
+    overpassEndpoints: [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://overpass.private.coffee/api/interpreter',
+      'https://overpass.osm.ch/api/interpreter'
+    ],
+    overpassTimeoutSec: 180,
+    debug: true
+  };
+
+  const log  = (...a) => CONFIG.debug && console.log('%c[GPX]', 'color:#2b6cb0', ...a);
+  const warn = (...a) => console.warn('%c[GPX]', 'color:#b7791f', ...a);
+  const err  = (...a) => console.error('%c[GPX]', 'color:#c53030', ...a);
+  const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+  function setStatus(html, cls) { statusEl.innerHTML = html; statusEl.className = cls || ''; }
+  function setProgress(p) {
+    if (p <= 0) { progressWrap.style.display = 'none'; progressBar.style.width = '0%'; return; }
+    progressWrap.style.display = 'block';
+    progressBar.style.width = Math.min(100, p) + '%';
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  const fmt = (n, d = 4) => Number(n).toFixed(d);
+  function safeArea(feature) { try { return turf.area(feature); } catch (e) { return Infinity; } }
+  function safeCentroid(feature) { try { return turf.centroid(feature); } catch (e) { return null; } }
+  function median(arr) {
+    if (!arr.length) return 0;
+    const s = [...arr].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  drop.addEventListener('click', () => fileInput.click());
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('hover'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); drop.classList.remove('hover');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', e => {
+    if (e.target.files.length) handleFile(e.target.files[0]);
+    fileInput.value = '';
+  });
+
+  async function handleFile(file) {
+    resultsEl.innerHTML = '';
+    setProgress(0);
+    if (!/\.gpx$/i.test(file.name)) {
+      setStatus('Veuillez fournir un fichier <code>.gpx</code>.', 'error'); return;
+    }
+    log('Fichier reçu :', file.name, file.size + ' octets');
+    setStatus('<span class="spinner"></span>Lecture du fichier GPX…', 'info');
+    setProgress(5);
+
+    try {
+      const text = await file.text();
+      const coords = parseGPX(text);
+      log('Points extraits :', coords.length);
+      if (coords.length < 2) throw new Error('Trace vide ou invalide.');
+
+      const line = turf.lineString(coords);
+      const simplified = turf.simplify(line, { tolerance: CONFIG.simplifyTolerance, highQuality: true });
+      const rawBbox = turf.bbox(simplified);
+      const bbox = [
+        rawBbox[0] - CONFIG.bboxBufferDeg, rawBbox[1] - CONFIG.bboxBufferDeg,
+        rawBbox[2] + CONFIG.bboxBufferDeg, rawBbox[3] + CONFIG.bboxBufferDeg
+      ];
+      const lengthKm = turf.length(simplified, { units: 'kilometers' });
+      log('Longueur :', fmt(lengthKm, 2), 'km | BBox :', bbox.map(v => fmt(v)));
+
+      setProgress(15);
+      setStatus(`<span class="spinner"></span>Interrogation d'OpenStreetMap…`, 'info');
+      await nextFrame();
+
+      const query = buildOverpassQuery(bbox);
+      const data = await overpassQuery(query);
+      const nElements = (data.elements || []).length;
+      log('Éléments OSM reçus :', nElements);
+      setProgress(55);
+
+      if (nElements === 0) {
+        showDiagnostic(bbox, lengthKm, 0, 0, 'Aucune relation dans la zone.');
+        setStatus('Aucune commune trouvée.', 'warn'); return;
+      }
+
+      setStatus(`<span class="spinner"></span>Conversion de ${nElements} relations…`, 'info');
+      await nextFrame();
+
+      const geojson = osmtogeojson(data, { flatProperties: false });
+      const withName = geojson.features.filter(f =>
+        f.properties && f.properties.tags && f.properties.tags.name);
+      setProgress(65);
+
+      const intersected = [];
+      for (const f of withName) {
+        try { if (turf.booleanIntersects(simplified, f)) intersected.push(f); }
+        catch (e) {}
+      }
+      log('Communes intersectant la trace :', intersected.length);
+
+      if (intersected.length === 0) {
+        showDiagnostic(bbox, lengthKm, nElements, withName.length, 'Aucune commune n\'intersecte la trace.');
+        setStatus('Aucune commune traversée détectée.', 'warn'); return;
+      }
+
+      const withArea = intersected.map(f => ({ feature: f, area: safeArea(f) }));
+      const areas = withArea.map(x => x.area).filter(a => isFinite(a) && a > 0);
+      const medArea = median(areas);
+      const threshold = medArea * CONFIG.maxAreaRatio;
+      const kept = [], excluded = [];
+      for (const x of withArea) {
+        if (isFinite(x.area) && x.area > threshold) excluded.push(x);
+        else kept.push(x.feature);
+      }
+      const candidates = kept.length > 0 ? kept : intersected;
+      log('Candidates retenues :', candidates.length);
+
+      setStatus(`<span class="spinner"></span>Analyse fine…`, 'info');
+      await nextFrame();
+
+      const results = await analyzeTraversal(simplified, lengthKm, candidates);
+      setProgress(100);
+
+      if (results.length === 0) { setStatus('Aucune traversée détectée.', 'warn'); return; }
+
+      const totalKm = results.reduce((s, r) => s + r.lengthKm, 0);
+      setStatus(`${results.length} passage(s) — ${fmt(totalKm, 2)} km cumulés.`, 'success');
+      renderResults(results, lengthKm, nElements, candidates.length, excluded.length);
+    } catch (e) {
+      err(e); setProgress(0);
+      setStatus('Erreur : ' + escapeHtml(e.message || String(e)), 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Analyse fine — timeline + post-traitement
+  // ---------------------------------------------------------------------------
+  async function analyzeTraversal(simplified, lengthKm, candidates) {
+    const enriched = candidates.map((f, idx) => ({
+      idx, feature: f, name: f.properties.tags.name,
+      bbox: turf.bbox(f), area: safeArea(f),
+      centroid: safeCentroid(f),
+      code: String.fromCharCode(65 + idx)
+    }));
+
+    log('Candidates :');
+    enriched.forEach(c => {
+      log(`  [${c.code}] ${c.name} — ${(c.area / 1e6).toFixed(2)} km²`);
+    });
+
+    const step = Math.max(CONFIG.minSampleStepKm, lengthKm / CONFIG.targetSamples);
+    const samples = [];
+    for (let d = 0; d <= lengthKm; d += step) {
+      samples.push({ d, pt: turf.along(simplified, d, { units: 'kilometers' }) });
+    }
+    if (samples.length === 0 || samples[samples.length - 1].d < lengthKm - 1e-9) {
+      samples.push({ d: lengthKm, pt: turf.along(simplified, lengthKm, { units: 'kilometers' }) });
+    }
+    log('Échantillons :', samples.length, '| pas =', fmt(step, 4), 'km');
+
+    // ----- Timeline brute -----
+    const timeline = new Array(samples.length).fill(null);
+    let noMatchCount = 0;
+
+    for (let i = 0; i < samples.length; i++) {
+      const [lon, lat] = samples[i].pt.geometry.coordinates;
+      const matches = [];
+      for (const c of enriched) {
+        const [minX, minY, maxX, maxY] = c.bbox;
+        if (lon < minX || lon > maxX || lat < minY || lat > maxY) continue;
+        let inside = false;
+        try { inside = turf.booleanPointInPolygon(samples[i].pt, c.feature); } catch (e) {}
+        if (inside) matches.push(c);
+      }
+      if (matches.length === 0) { noMatchCount++; continue; }
+
+      let winner = matches[0];
+      if (matches.length > 1) {
+        let bestDist = Infinity;
+        for (const m of matches) {
+          if (!m.centroid) continue;
+          let d;
+          try { d = turf.distance(samples[i].pt, m.centroid, { units: 'kilometers' }); }
+          catch (e) { continue; }
+          if (d < bestDist) { bestDist = d; winner = m; }
+        }
+      }
+      timeline[i] = winner;
+    }
+
+    log(`Sans match : ${noMatchCount} échantillon(s)`);
+
+    // ----- Comblement des trous TRÈS COURTS uniquement -----
+    // On ne comble que les trous de 1 échantillon entourés de la même commune,
+    // ou de 1 échantillon bordé par deux communes identiques. Un trou plus grand
+    // est laissé tel quel, ce qui permet d'extraire deux passages distincts.
+    let gapFilled = 0;
+    const maxGap = CONFIG.maxGapFillSamples;
+    if (maxGap > 0) {
+      for (let i = 0; i < timeline.length; i++) {
+        if (timeline[i] !== null) continue;
+        // Trou de quelle longueur ?
+        let gapEnd = i;
+        while (gapEnd < timeline.length && timeline[gapEnd] === null) gapEnd++;
+        const gapLen = gapEnd - i;
+        if (gapLen > maxGap) { i = gapEnd - 1; continue; }
+
+        const prev = i > 0 ? timeline[i - 1] : null;
+        const next = gapEnd < timeline.length ? timeline[gapEnd] : null;
+        if (prev && next && prev.idx === next.idx) {
+          // Ne combler QUE si les deux voisins sont identiques (trou de précision)
+          for (let j = i; j < gapEnd; j++) timeline[j] = prev;
+          gapFilled += gapLen;
+        }
+        // Sinon, on laisse le trou : cela crée une vraie césure entre deux passages
+        i = gapEnd - 1;
+      }
+    }
+    if (gapFilled > 0) log(`${gapFilled} échantillon(s) comblé(s) (trou court flanqué de la même commune).`);
+
+    let timelineStr = '';
+    for (let i = 0; i < timeline.length; i++) {
+      timelineStr += timeline[i] ? timeline[i].code : '.';
+    }
+    log('Timeline (après comblement) :', timelineStr);
+
+    // ----- Extraction des segments -----
+    let current = null, segStart = -1;
+    const rawSegments = [];
+    for (let i = 0; i <= timeline.length; i++) {
+      const w = i < timeline.length ? timeline[i] : null;
+      const wIdx = w ? w.idx : null;
+      const curIdx = current ? current.idx : null;
+      if (wIdx !== curIdx) {
+        if (current && segStart >= 0) {
+          rawSegments.push({
+            name: current.name,
+            startIdx: segStart,
+            endIdx: i - 1
+          });
+        }
+        if (w) { current = w; segStart = i; }
+        else { current = null; segStart = -1; }
+      }
+    }
+
+    log('Segments bruts :', rawSegments.length);
+
+    // ----- Raffinement des bornes + filtrage court -----
+    let refined = [];
+    for (const seg of rawSegments) {
+      const c = enriched.find(x => x.name === seg.name);
+      if (!c) continue;
+
+      const startSample = samples[seg.startIdx];
+      const endSample = samples[seg.endIdx];
+
+      let entryKm = startSample.d;
+      if (seg.startIdx > 0) {
+        const before = samples[seg.startIdx - 1];
+        const r = refineTransition(before, startSample, c.feature);
+        entryKm = kmAt(before, startSample, r);
+      }
+
+      let exitKm = endSample.d;
+      if (seg.endIdx < samples.length - 1) {
+        const after = samples[seg.endIdx + 1];
+        const r = refineTransition(endSample, after, c.feature);
+        exitKm = kmAt(endSample, after, r);
+      }
+
+      const lengthKm = Math.max(0, exitKm - entryKm);
+      if (lengthKm < CONFIG.minSegmentKm) continue;
+      refined.push({ name: seg.name, entryKm, exitKm, lengthKm });
+    }
+
+    log('Après filtrage < 15 m :', refined.length, 'passage(s)');
+
+    // ----- Post-traitement (oscillations optionnelles + courts + contigus) -----
+    const cleaned = postProcess(refined, CONFIG);
+    log('Après post-traitement :', cleaned.length, 'passage(s)');
+
+    return cleaned;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Post-traitement
+  // ---------------------------------------------------------------------------
+  function postProcess(flat, config) {
+    let result = [...flat];
+
+    // 1. Fusion des oscillations (optionnelle, désactivée si ratio = 0)
+    if (config.oscillationRatio > 0) {
+      result = mergeOscillations(result, config.oscillationRatio);
+    }
+
+    // 2. Boucle : fusion passages courts + contigus jusqu'à stabilité
+    let changed = true, guard = 0;
+    while (changed && guard < 50) {
+      changed = false; guard++;
+      const before = result.length;
+
+      result = mergeShortSegments(result, config.minKeepKm);
+      result = mergeContiguous(result);
+
+      if (result.length < before) changed = true;
+    }
+
+    return result;
+  }
+
+  // Fusionne les patterns A-B-A-B-...-A où minor_total / dominant_total < ratio
+  // DÉSACTIVÉE par défaut (oscillationRatio = 0).
+  // Ne devrait être activée que si on observe de vraies oscillations de frontière,
+  // pas des A-B-A légitimes (aller-retour dans un couloir).
+  function mergeOscillations(flat, ratio) {
+    let changed = true, guard = 0;
+    const out = [...flat];
+    while (changed && guard < 20) {
+      changed = false; guard++;
+      for (let start = 0; start < out.length - 2; start++) {
+        const A_name = out[start].name;
+        const B_name = out[start + 1].name;
+        if (A_name === B_name) continue;
+
+        let end = start + 1;
+        let totalA = out[start].lengthKm;
+        let totalB = out[start + 1].lengthKm;
+
+        for (let i = start + 2; i < out.length; i++) {
+          const expected = ((i - start) % 2 === 0) ? A_name : B_name;
+          if (out[i].name !== expected) break;
+          if (expected === A_name) totalA += out[i].lengthKm;
+          else totalB += out[i].lengthKm;
+          end = i;
+        }
+
+        const count = end - start + 1;
+        // Il faut au moins 4 segments (A-B-A-B) pour parler d'oscillation
+        if (count < 4) continue;
+
+        const dominant = totalA >= totalB ? A_name : B_name;
+        const totalDominant = Math.max(totalA, totalB);
+        const totalMinor = Math.min(totalA, totalB);
+
+        if (totalMinor / totalDominant > ratio) continue;
+
+        const merged = {
+          name: dominant,
+          entryKm: out[start].entryKm,
+          exitKm: out[end].exitKm,
+          lengthKm: out[end].exitKm - out[start].entryKm
+        };
+        out.splice(start, count, merged);
+        changed = true;
+        break;
+      }
+    }
+    return out;
+  }
+
+  // Fusionne chaque segment < minKeepKm dans son voisin le plus long
+  function mergeShortSegments(flat, minKeepKm) {
+    const out = [...flat];
+    let changed = true, guard = 0;
+    while (changed && guard < 100) {
+      changed = false; guard++;
+      for (let i = 0; i < out.length; i++) {
+        const seg = out[i];
+        if (seg.lengthKm >= minKeepKm) continue;
+        if (out.length === 1) break;
+
+        const prev = i > 0 ? out[i - 1] : null;
+        const next = i < out.length - 1 ? out[i + 1] : null;
+        if (!prev && !next) continue;
+
+        let targetIdx;
+        if (prev && next) targetIdx = prev.lengthKm >= next.lengthKm ? i - 1 : i + 1;
+        else if (prev) targetIdx = i - 1;
+        else targetIdx = i + 1;
+
+        const target = out[targetIdx];
+        if (targetIdx < i) {
+          target.exitKm = seg.exitKm;
+        } else {
+          target.entryKm = seg.entryKm;
+        }
+        target.lengthKm = target.exitKm - target.entryKm;
+        out.splice(i, 1);
+        changed = true;
+        break;
+      }
+    }
+    return out;
+  }
+
+  // Fusionne les segments contigus de même commune
+  function mergeContiguous(flat) {
+    const out = [...flat];
+    let changed = true, guard = 0;
+    while (changed && guard < 100) {
+      changed = false; guard++;
+      for (let i = 1; i < out.length; i++) {
+        if (out[i].name === out[i - 1].name) {
+          out[i - 1].exitKm = out[i].exitKm;
+          out[i - 1].lengthKm = out[i - 1].exitKm - out[i - 1].entryKm;
+          out.splice(i, 1);
+          changed = true;
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  function refineTransition(sampleBefore, sampleAfter, feature) {
+    try {
+      const seg = turf.lineString([
+        sampleBefore.pt.geometry.coordinates,
+        sampleAfter.pt.geometry.coordinates
+      ]);
+      const intersections = turf.lineIntersect(seg, feature);
+      if (intersections.features.length > 0) {
+        const afterCoord = sampleAfter.pt.geometry.coordinates;
+        let best = intersections.features[0].geometry.coordinates;
+        let bestDist = turf.distance(turf.point(best), turf.point(afterCoord), { units: 'kilometers' });
+        for (let i = 1; i < intersections.features.length; i++) {
+          const cc = intersections.features[i].geometry.coordinates;
+          const d = turf.distance(turf.point(cc), turf.point(afterCoord), { units: 'kilometers' });
+          if (d < bestDist) { best = cc; bestDist = d; }
+        }
+        return best;
+      }
+    } catch (e) {}
+    return sampleAfter.pt.geometry.coordinates;
+  }
+
+  function kmAt(sampleBefore, sampleAfter, coord) {
+    try {
+      const d1 = turf.distance(sampleBefore.pt, turf.point(coord), { units: 'kilometers' });
+      const d2 = turf.distance(turf.point(coord), sampleAfter.pt, { units: 'kilometers' });
+      const total = d1 + d2;
+      if (total < 1e-9) return sampleAfter.d;
+      return sampleBefore.d + (d1 / total) * (sampleAfter.d - sampleBefore.d);
+    } catch (e) {
+      return sampleAfter.d;
+    }
+  }
+
+  function buildOverpassQuery(bbox) {
+    const S = bbox[1], W = bbox[0], N = bbox[3], E = bbox[2];
+    return `[out:json][timeout:${CONFIG.overpassTimeoutSec}];
+relation["boundary"="administrative"]["admin_level"="${CONFIG.adminLevel}"](${S},${W},${N},${E});
+out geom;`;
+  }
+
+  async function overpassQuery(query) {
+    let lastError = null;
+    for (const url of CONFIG.overpassEndpoints) {
+      const t0 = performance.now();
+      try {
+        log('Overpass →', url);
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+          body: 'data=' + encodeURIComponent(query)
+        });
+        const dt = Math.round(performance.now() - t0);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const json = await resp.json();
+        log('OK', url, dt + ' ms');
+        return json;
+      } catch (e) { warn('Échec', url, e.message); lastError = e; }
+    }
+    throw new Error('Tous les serveurs Overpass ont échoué : ' + (lastError && lastError.message));
+  }
+
+  function parseGPX(text) {
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.querySelector('parsererror')) throw new Error('GPX illisible.');
+    const coords = [];
+    const push = el => {
+      const lat = parseFloat(el.getAttribute('lat'));
+      const lon = parseFloat(el.getAttribute('lon'));
+      if (isFinite(lat) && isFinite(lon) && !(lat === 0 && lon === 0)) coords.push([lon, lat]);
+    };
+    doc.querySelectorAll('trkpt').forEach(push);
+    if (coords.length < 2) doc.querySelectorAll('rtept').forEach(push);
+    if (coords.length < 2) doc.querySelectorAll('wpt').forEach(push);
+    return coords.filter(([lon, lat]) => lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90);
+  }
+
+  function showDiagnostic(bbox, lengthKm, nElements, nWithName, message) {
+    const el = document.createElement('div');
+    el.className = 'diag';
+    el.innerHTML = `<strong>Diagnostic</strong><br>Longueur : ${fmt(lengthKm, 2)} km<br>BBox : ${bbox.map(v => fmt(v)).join(', ')}<br>Relations : ${nElements} (nommées : ${nWithName})<br><br>${message}`;
+    resultsEl.appendChild(el);
+  }
+
+  function renderResults(events, lengthKm, nElements, nCandidates, nExcluded) {
+    const counts = {};
+    for (const e of events) counts[e.name] = (counts[e.name] || 0) + 1;
+    const seq = {};
+    for (const e of events) {
+      seq[e.name] = (seq[e.name] || 0) + 1;
+      e.passage = seq[e.name];
+      e.passages = counts[e.name];
+    }
+
+    const totalKm = events.reduce((s, e) => s + e.lengthKm, 0);
+    const uniqueCommunes = new Set(events.map(e => e.name.toLowerCase())).size;
+
+    let chartHtml = `
+      <div class="chart-wrap">
+        <div class="chart-title">Répartition des communes le long de la trace</div>
+        <div class="chart-axis">
+          <span>0 km</span><span>${fmt(lengthKm / 2, 1)} km</span><span>${fmt(lengthKm, 1)} km</span>
+        </div>
+        <div class="chart">
+    `;
+    events.forEach((e, i) => {
+      const leftPct  = (e.entryKm / lengthKm) * 100;
+      const widthPct = Math.max(0.3, (e.lengthKm / lengthKm) * 100);
+      const bg = `hsl(${(i * 47) % 360}, 65%, 55%)`;
+      const label = e.passages > 1 ? `${e.name} (${e.passage}/${e.passages})` : e.name;
+      chartHtml += `
+        <div class="chart-row" title="${escapeHtml(label)} — km ${e.entryKm.toFixed(2)} → ${e.exitKm.toFixed(2)}">
+          <div class="chart-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+          <div class="chart-track"><div class="chart-bar" style="left:${leftPct}%; width:${widthPct}%; background:${bg};"></div></div>
+          <div class="chart-km">${e.lengthKm.toFixed(2)} km</div>
+        </div>`;
+    });
+    chartHtml += `</div></div>`;
+
+    let html = `
+      <div class="summary">
+        <strong>${events.length}</strong> passage(s) — <strong>${uniqueCommunes}</strong> commune(s) —
+        <strong>${fmt(totalKm, 2)} km</strong> cumulés (trace : ${fmt(lengthKm, 2)} km).<br>
+        <span class="meta">${nElements} relations OSM, ${nCandidates} retenues${nExcluded > 0 ? ', ' + nExcluded + ' exclue(s)' : ''}.</span>
+      </div>
+      ${chartHtml}
+      <h2>Détail chronologique</h2>
+      <table>
+        <thead><tr><th>Km entrée</th><th>Commune</th><th>Km sortie</th><th>Longueur</th></tr></thead>
+        <tbody>`;
+
+    events.forEach(e => {
+      const multi = e.passages > 1 ? `<span class="badge">passage ${e.passage}/${e.passages}</span>` : '';
+      html += `<tr>
+        <td class="km">km ${e.entryKm.toFixed(2)}</td>
+        <td><strong>${escapeHtml(e.name)}</strong>${multi}</td>
+        <td class="km">km ${e.exitKm.toFixed(2)}</td>
+        <td class="len">${e.lengthKm.toFixed(2)} km</td>
+      </tr>`;
+    });
+
+    html += `</tbody></table>
+      <button class="btn" id="dlCsv">Télécharger CSV</button>
+      <button class="btn secondary" id="dlJson">Télécharger JSON</button>
+      <p class="meta">
+        Positions calculées à partir des limites administratives OSM.
+        Les passages courts (&lt; ${CONFIG.minKeepKm * 1000} m) sont fusionnés dans la commune voisine.
+        La détection d'oscillation est désactivée par défaut.
+      </p>`;
+    resultsEl.innerHTML = html;
+    document.getElementById('dlCsv').addEventListener('click', () => downloadCSV(events));
+    document.getElementById('dlJson').addEventListener('click', () => downloadJSON(events));
+  }
+
+  function downloadCSV(events) {
+    const rows = [['Km_entree', 'Commune', 'Passage', 'Nb_passages_total', 'Km_sortie', 'Longueur_km']];
+    for (const e of events) {
+      rows.push([
+        e.entryKm.toFixed(3), e.name, e.passage, e.passages,
+        e.exitKm.toFixed(3), e.lengthKm.toFixed(3)
+      ]);
+    }
+    const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+    triggerDownload(csv, 'communes.csv', 'text/csv;charset=utf-8;');
+  }
+
+  function downloadJSON(events) {
+    const data = events.map(e => ({
+      commune: e.name,
+      passage: e.passage,
+      nb_passages_total: e.passages,
+      km_entree: +e.entryKm.toFixed(3),
+      km_sortie: +e.exitKm.toFixed(3),
+      longueur_km: +e.lengthKm.toFixed(3)
+    }));
+    triggerDownload(JSON.stringify(data, null, 2), 'communes.json', 'application/json');
+  }
+
+  function triggerDownload(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+})();
+</script>
+
+</body>
+</html>

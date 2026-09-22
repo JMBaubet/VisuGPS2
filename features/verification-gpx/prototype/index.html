@@ -1,0 +1,3408 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Détecteur d'anomalies GPX — aller-retours & boucles de giratoire</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1114; --panel:#14171c; --panel2:#1a1e25; --line:#262c36; --line2:#323a46;
+    --tx:#e8ebf0; --tx2:#9aa2af; --tx3:#67707d;
+    --c-primary:#3564e0;
+    --c-info:#ec9c11;
+    --c-warn:#dd3327;
+    --ok:#3ecf8e;
+    --fp:#6ea8ff;
+    --orig:#8a919c;
+    --sel-a:#f0d24a;
+    --sel-b:#ec9c11;
+    --anchor-a:#c084fc;
+    --anchor-b:#7e22ce;
+    --route-car:#f0d24a;
+    --route-bike:#ec9c11;
+    --del-drop:#d9dde3;
+    --del-keep:#8fc1ff;
+    --del-join:#3564e0;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; overflow:hidden; }
+  body{
+    display:flex; background:var(--bg); color:var(--tx);
+    font-family:'Space Grotesk',sans-serif; font-size:14px;
+  }
+
+  aside{
+    width:16.6667%; min-width:300px; max-width:420px; height:100%;
+    background:var(--panel); border-right:1px solid var(--line);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  aside .scroll{ flex:1; overflow-y:auto; padding:0 18px 18px; scrollbar-width:thin; scrollbar-color:var(--line2) transparent; }
+  aside .scroll::-webkit-scrollbar{ width:8px; }
+  aside .scroll::-webkit-scrollbar-thumb{ background:var(--line2); border-radius:4px; }
+
+  .brand{
+    display:flex; align-items:center; gap:11px;
+    padding:18px 18px 16px; border-bottom:1px solid var(--line);
+  }
+  .brand .mark{
+    width:34px; height:34px; border-radius:9px; flex:none;
+    background:var(--panel2); border:1px solid var(--line2);
+    display:flex; align-items:center; justify-content:center; color:var(--tx);
+  }
+  .brand h1{ font-size:15px; font-weight:700; letter-spacing:.06em; }
+  .brand p{ font-size:11px; color:var(--tx3); margin-top:1px; }
+
+  .sect{ margin-top:18px; }
+  .sect-title{
+    font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:600;
+    letter-spacing:.16em; text-transform:uppercase; color:var(--tx3); margin-bottom:9px;
+  }
+
+  details.fold{
+    border:1px solid var(--line); border-radius:10px; background:var(--panel2);
+    margin-bottom:10px;
+  }
+  details.fold > summary{
+    cursor:pointer; padding:10px 13px; font-weight:600; font-size:13px;
+    list-style:none; display:flex; align-items:center; gap:8px; user-select:none;
+  }
+  details.fold > summary::-webkit-details-marker{ display:none; }
+  details.fold > summary::before{
+    content:'▸'; color:var(--tx3); font-size:11px; transition:transform .15s;
+  }
+  details.fold[open] > summary::before{ transform:rotate(90deg); }
+  details.fold > summary .cnt{
+    margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:10.5px;
+    color:var(--tx3); font-weight:500;
+  }
+  details.fold .fold-body{ padding:2px 13px 12px; }
+  details.fold .fold-body details.fold{ background:var(--panel); margin-bottom:8px; }
+  details.fold .fold-body details.fold:last-child{ margin-bottom:2px; }
+  details.fold .fold-body details.fold > summary{ font-size:12.5px; padding:8px 11px; }
+
+  .drop{
+    border:1.5px dashed var(--line2); border-radius:10px;
+    padding:20px 14px; text-align:center; cursor:pointer;
+    transition:border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over{ border-color:var(--tx2); background:var(--panel2); }
+  .drop svg{ color:var(--tx2); margin-bottom:8px; }
+  .drop .d1{ font-size:13px; font-weight:600; }
+  .drop .d2{ font-size:11px; color:var(--tx3); margin-top:3px; font-family:'IBM Plex Mono',monospace; }
+
+  .fileinfo{
+    background:var(--panel2); border:1px solid var(--line); border-radius:9px;
+    padding:11px 13px; margin-top:12px; font-family:'IBM Plex Mono',monospace;
+  }
+  .fileinfo .fname{ font-size:12px; font-weight:600; word-break:break-all; color:var(--tx); }
+  .fileinfo .frow{
+    display:flex; justify-content:space-between; font-size:11px;
+    color:var(--tx2); margin-top:5px;
+  }
+  .fileinfo .frow b{ color:var(--tx); font-weight:500; }
+
+  .param{ margin-bottom:13px; }
+  .param .lab{
+    display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px;
+  }
+  .param .lab span:first-child{ font-size:12px; color:var(--tx2); }
+  .param .lab b{
+    font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; color:var(--tx);
+  }
+  input[type=range]{
+    width:100%; accent-color:#c8cfda; height:18px; cursor:pointer; background:transparent;
+  }
+
+  input[type=range].del-track{ -webkit-appearance:none; appearance:none; }
+  input[type=range].del-track::-webkit-slider-runnable-track{
+    height:5px; border-radius:3px;
+    background:var(--del-track-bg, var(--line2));
+  }
+  input[type=range].del-track::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none;
+    width:14px; height:14px; border-radius:50%;
+    background:#ffffff; border:2px solid var(--del-keep);
+    margin-top:-4.5px; cursor:grab;
+  }
+  input[type=range].del-track::-moz-range-track{
+    height:5px; border-radius:3px; background:var(--del-track-bg, var(--line2));
+  }
+  input[type=range].del-track::-moz-range-thumb{
+    width:14px; height:14px; border-radius:50%;
+    background:#ffffff; border:2px solid var(--del-keep); cursor:grab;
+  }
+  input[type=range].del-track::-moz-range-progress{ background:transparent; }
+
+  .keyinput{
+    width:100%; background:var(--panel2); border:1px solid var(--line2); border-radius:8px;
+    color:var(--tx); padding:8px 10px; font:12px 'IBM Plex Mono',monospace; outline:none;
+  }
+  .keyinput:focus{ border-color:var(--tx2); }
+
+  .keyrow{ display:flex; align-items:center; gap:7px; margin-bottom:6px; }
+  .keydot{
+    width:9px; height:9px; border-radius:50%; flex:none;
+    background:var(--line2); border:1px solid var(--line2);
+    transition:background .15s, box-shadow .15s;
+  }
+  .keyrow.active .keydot{ background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  .keyrow .keyinput{ flex:1; }
+  .keyrow.active .keyinput{ border-color:var(--tx2); }
+
+  #btnAnalyze{
+    width:100%; margin-top:6px; padding:13px 12px;
+    background:var(--tx); color:#0d0f12; border:none; border-radius:9px;
+    font:600 13px 'Space Grotesk',sans-serif; text-transform:uppercase; letter-spacing:.14em;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; gap:9px;
+    position:relative; transition:background .15s, opacity .15s;
+  }
+  #btnAnalyze:disabled{ opacity:.32; cursor:not-allowed; }
+  #btnAnalyze:not(:disabled):hover{ background:#ffffff; }
+  #btnAnalyze.dirty::after{
+    content:''; position:absolute; top:7px; right:9px; width:7px; height:7px;
+    border-radius:50%; background:var(--c-info);
+  }
+  #btnAnalyze .spin{
+    width:14px; height:14px; border:2px solid #0d0f12; border-right-color:transparent;
+    border-radius:50%; animation:rot .7s linear infinite; display:none;
+  }
+  #btnAnalyze.busy .spin{ display:block; }
+  #btnAnalyze.busy svg{ display:none; }
+  @keyframes rot{ to{ transform:rotate(360deg); } }
+
+  #btnGenerate{
+    width:100%; margin-top:12px; padding:13px 10px;
+    background:var(--tx); color:#0d0f12; border:none; border-radius:9px;
+    font:600 13px 'Space Grotesk',sans-serif; text-transform:uppercase; letter-spacing:.1em;
+    cursor:pointer; transition:opacity .15s, background .15s;
+  }
+  #btnGenerate:disabled{ opacity:.32; cursor:not-allowed; }
+  #btnGenerate.st-green{ background:var(--ok); color:#08281b; }
+  #btnGenerate.st-yellow{ background:#f0d24a; color:#3a3413; }
+  #btnGenerate.st-orange{ background:var(--c-info); color:#2e1d05; }
+  #btnGenerate.st-red{ background:var(--c-warn); color:#ffffff; }
+  #btnGenerate.st-red:disabled{ opacity:.55; }
+
+  .legend{
+    display:flex; flex-wrap:wrap; gap:10px 14px; margin:0 0 10px;
+    font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--tx2);
+  }
+  .legend span{ display:flex; align-items:center; gap:5px; }
+  .sw{ width:14px; height:4px; border-radius:2px; display:inline-block; }
+
+  .seg{
+    border:1px solid var(--line); border-radius:10px; padding:9px 12px;
+    margin-bottom:8px; cursor:pointer; transition:border-color .15s, background .15s;
+  }
+  .seg:hover{ border-color:var(--line2); background:var(--panel2); }
+  .seg.active{ border-color:var(--c-info); background:var(--panel2); }
+  .seg.done{ opacity:.75; }
+  .seg-top{ display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .seg-top .nm{ font-weight:600; font-size:13px; }
+
+  .empty{
+    border:1px solid var(--line); border-radius:10px; padding:16px 14px;
+    font-size:12.5px; color:var(--tx2); line-height:1.6;
+  }
+  .empty span{ display:block; margin-top:6px; font-size:11px; color:var(--tx3);
+    font-family:'IBM Plex Mono',monospace; }
+
+  .synth .frow{
+    display:flex; justify-content:space-between; font-size:11.5px;
+    color:var(--tx2); margin-top:6px; font-family:'IBM Plex Mono',monospace;
+  }
+  .synth .frow b{ color:var(--tx); font-weight:600; }
+
+  .tag{
+    font-family:'IBM Plex Mono',monospace; font-size:9.5px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.08em;
+    padding:2px 8px; border-radius:4px; border:1px solid; white-space:nowrap;
+  }
+  .tag.st-pending{ color:#f07068; border-color:#5e221d; background:#2e1512; }
+  .tag.st-fp{ color:#f0d24a; border-color:#5e4c1d; background:#2e2712; }
+  .tag.st-ok{ color:#7fe0b4; border-color:#1d5c40; background:#12301f; }
+
+  main{ flex:1; height:100%; position:relative; }
+  #map{ width:100%; height:100%; background:#dfe3e8; }
+
+  .map-placeholder{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#dfe3e8; color:#2c333c; text-align:center; padding:24px; z-index:500;
+  }
+  .map-placeholder[hidden]{ display:none; }
+  .map-placeholder .mp-box{ max-width:420px; }
+  .map-placeholder .mp-title{ font:700 20px 'Space Grotesk',sans-serif; letter-spacing:.02em; }
+  .map-placeholder .mp-sub{ margin-top:8px; font:13px 'IBM Plex Mono',monospace; color:#4b5563; line-height:1.55; }
+
+  .mapboxgl-popup-content{
+    background:#171b22; color:var(--tx); border-radius:10px;
+    box-shadow:0 8px 30px rgba(0,0,0,.4); padding:11px 15px;
+    font:11.5px/1.75 'IBM Plex Mono',monospace;
+  }
+  .mapboxgl-popup-tip{ border-top-color:#171b22; border-bottom-color:#171b22; border-left-color:#171b22; border-right-color:#171b22; }
+  .mapboxgl-popup-close-button{
+    color:var(--tx3); font-size:16px; padding:0 6px; background:none; border:none;
+  }
+  .mapboxgl-popup-close-button:hover{ color:var(--tx); background:var(--panel2); }
+
+  .mapboxgl-ctrl-group{
+    background:#171b22; border:1px solid var(--line2); border-radius:8px;
+  }
+  .mapboxgl-ctrl-group button{
+    background:transparent; color:var(--tx);
+  }
+  .mapboxgl-ctrl-group button:hover{ background:var(--panel2); }
+  .mapboxgl-ctrl-group button + button{ border-top:1px solid var(--line2); }
+  .mapboxgl-ctrl-attrib{ background:rgba(23,27,34,.75) !important; }
+  .mapboxgl-ctrl-attrib a{ color:var(--tx2); }
+
+  .popup-t{ font:600 12px 'Space Grotesk',sans-serif; margin-bottom:4px; }
+  .popup-row{ color:var(--tx2); }
+  .popup-row b{ color:var(--tx); font-weight:500; }
+
+  .rp-x{
+    display:inline-block;
+    font:700 16px/1 'IBM Plex Mono',monospace;
+    color:#f0d24a;
+    text-shadow:0 0 3px #000, 0 0 3px #000, 0 1px 2px #000;
+    white-space:nowrap; user-select:none;
+    transform:translate(-50%,-50%);
+  }
+
+  .pt-label{
+    display:inline-block; white-space:nowrap;
+    background:#10131a; border:1px solid var(--line2); color:var(--tx);
+    font:600 10px/1.6 'IBM Plex Mono',monospace;
+    padding:0 5px; border-radius:4px;
+    box-shadow:0 2px 8px rgba(0,0,0,.45);
+    transform:translate(calc(-50% + var(--dx,0px)), calc(-50% + var(--dy,0px)));
+    cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none;
+  }
+  .pt-label.dragging{ cursor:grabbing; box-shadow:0 4px 14px rgba(0,0,0,.6); }
+  .pt-label.pk{ border-color:var(--c-warn); color:#ffb3ad; font-size:11px; font-weight:600; }
+  .pt-label.ctx{ border-color:var(--ok); color:#7fe0b4; }
+  .pt-label.del{ background:#3a414d; border-color:#565f6d; color:#d6dbe3; }
+  .pt-label.fpl{ background:#17304f; border-color:#3b5e8f; color:#a8ccff; }
+  .pt-label.keep{ border-color:var(--del-keep); color:#cfe6ff; }
+
+  #actionPanel{
+    position:absolute; top:14px; right:14px; z-index:1000; width:290px;
+    background:#171b22; border:1px solid var(--line2); border-radius:12px;
+    box-shadow:0 10px 34px rgba(0,0,0,.5); padding:12px;
+  }
+  .ap-head{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
+  .ap-head b{ font-size:12.5px; }
+  #apClose{
+    background:none; border:none; color:var(--tx3); font-size:15px; cursor:pointer;
+    padding:2px 7px; border-radius:6px; line-height:1;
+  }
+  #apClose:hover{ color:var(--tx); background:var(--panel2); }
+  .ap-btn{
+    display:block; width:100%; margin-top:7px; padding:9px 11px; text-align:left;
+    background:var(--panel2); color:var(--tx); border:1px solid var(--line2); border-radius:8px;
+    font:600 12.5px 'Space Grotesk',sans-serif; cursor:pointer;
+    transition:border-color .12s, background .12s;
+  }
+  .ap-btn:hover:not(:disabled){ border-color:var(--tx2); }
+  .ap-btn:disabled{ opacity:.4; cursor:not-allowed; }
+  .ap-note{ font-size:11.5px; color:var(--tx2); margin:4px 0 4px; line-height:1.55; }
+  .ap-slider{ margin:8px 0 2px; }
+  .ap-slider label{
+    display:flex; justify-content:space-between; align-items:baseline;
+    font-size:12px; color:var(--tx2); margin-bottom:2px;
+  }
+  .ap-slider label b{ font-family:'IBM Plex Mono',monospace; color:var(--tx); font-size:12px; }
+  .ap-slider input[type=range]{ accent-color:var(--sel-b); }
+  .ap-slider.sl-a input[type=range]{ accent-color:var(--sel-a); }
+  .ap-choice{ margin-top:4px; }
+  .ap-choice .ap-ct{
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--tx3); margin:6px 0 2px;
+  }
+  .ap-choice label{
+    display:flex; align-items:center; gap:7px; padding:6px 4px;
+    font-size:12.5px; cursor:pointer; border-radius:6px;
+  }
+  .ap-choice label:hover{ background:var(--panel2); }
+  .ap-choice label.off{ opacity:.45; cursor:not-allowed; }
+  .ap-choice .meta{ color:var(--tx3); font-family:'IBM Plex Mono',monospace; font-size:10.5px; margin-left:auto; }
+  .ap-choice .lbl-car{ color:#f0d24a; }
+  .ap-choice .lbl-bike{ color:#ec9c11; }
+  .ap-row{ display:flex; gap:8px; margin-top:10px; }
+  .ap-row button{
+    flex:1; padding:9px 6px; border-radius:8px; border:1px solid var(--line2);
+    cursor:pointer; font:600 12px 'Space Grotesk',sans-serif;
+  }
+  #apDoRoute, #apApply{ background:var(--ok); border-color:transparent; color:#08281b; }
+  #apDoDelete{ background:var(--c-warn); border-color:transparent; color:#fff; }
+  .ap-row button.ghost{ background:var(--panel2); color:var(--tx); }
+  #apUnfp, #apUndo{
+    width:100%; margin-top:7px; padding:9px 11px; text-align:center;
+    background:var(--panel2); color:var(--tx); border:1px solid var(--line2); border-radius:8px;
+    font:600 12.5px 'Space Grotesk',sans-serif; cursor:pointer;
+  }
+  #apUndo{ background:#2a2140; border-color:#4a3a6e; color:#cdb6ff; }
+
+  #dropOverlay{
+    position:fixed; inset:0; z-index:4000; background:rgba(10,12,15,.86);
+    display:none; align-items:center; justify-content:center;
+  }
+  #dropOverlay.on{ display:flex; }
+  #dropOverlay .box{
+    border:2px dashed var(--tx2); border-radius:18px; padding:60px 80px; text-align:center;
+  }
+  #dropOverlay .box .big{ font-size:20px; font-weight:700; letter-spacing:.04em; }
+  #dropOverlay .box .small{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--tx2); margin-top:8px; }
+
+  #toasts{ position:fixed; right:18px; bottom:18px; z-index:5000; display:flex; flex-direction:column; gap:8px; }
+  .toast{
+    background:#1a1f28; border:1px solid var(--line2); border-left:3px solid var(--tx2);
+    color:var(--tx); border-radius:9px; padding:11px 15px; font-size:12.5px; max-width:340px;
+    box-shadow:0 8px 28px rgba(0,0,0,.45); animation:tin .22s ease-out;
+  }
+  .toast.err{ border-left-color:var(--c-warn); }
+  .toast.ok{ border-left-color:var(--ok); }
+  @keyframes tin{ from{ transform:translateY(10px); opacity:0; } to{ transform:none; opacity:1; } }
+
+  @media (max-width:860px){
+    body{ flex-direction:column; }
+    aside{ width:100%; max-width:none; min-width:0; height:48%; border-right:none; border-bottom:1px solid var(--line); }
+    main{ height:52%; }
+  }
+</style>
+</head>
+<body>
+
+<aside>
+  <header class="brand">
+    <span class="mark">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 21V6"/><path d="M4.5 9.5 8 6l3.5 3.5"/>
+        <path d="M16 3v15"/><path d="M12.5 14.5 16 18l3.5-3.5"/>
+      </svg>
+    </span>
+    <div>
+      <h1>GPX AUDIT</h1>
+      <p>Aller-retours · boucles de giratoire</p>
+    </div>
+  </header>
+
+  <div class="scroll">
+    <section class="sect">
+      <div class="sect-title">Trace</div>
+      <div class="drop" id="dropzone" role="button" tabindex="0" aria-label="Importer un fichier GPX">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/>
+        </svg>
+        <div class="d1">Déposez un fichier GPX</div>
+        <div class="d2">ou cliquez pour parcourir</div>
+      </div>
+      <div class="fileinfo" id="fileinfo" hidden></div>
+    </section>
+
+    <section class="sect">
+      <details class="fold" id="foldParams">
+        <summary>Paramètres</summary>
+        <div class="fold-body" id="params">
+          <details class="fold" id="foldParamsCom">
+            <summary>Communs</summary>
+            <div class="fold-body">
+              <div class="param">
+                <div class="lab"><span>Consolidation des points</span><b id="p-consolVal">0,5 m</b></div>
+                <input type="range" id="p-consol" data-unit="m" min="0" max="5" step="0.1" value="0.5">
+              </div>
+              <div class="param">
+                <div class="lab"><span>Nom de l'application (export)</span></div>
+                <input type="text" id="appName" class="keyinput" value="VérificationGPX"
+                       autocomplete="off" spellcheck="false"
+                       aria-label="Nom de l'application inséré dans les métadonnées d'export">
+              </div>
+            </div>
+          </details>
+          <details class="fold" id="foldParamsAR">
+            <summary>Détecteur aller-retours</summary>
+            <div class="fold-body">
+              <div class="param">
+                <div class="lab"><span>Tolérance angulaire</span><b id="p-tolVal">20 °</b></div>
+                <input type="range" id="p-tol" data-unit="°" min="0" max="90" step="1" value="20">
+              </div>
+              <div class="param">
+                <div class="lab"><span>Seuil distance paire</span><b id="p-pairVal">50 m</b></div>
+                <input type="range" id="p-pair" data-unit="m" min="0" max="500" step="5" value="50">
+              </div>
+              <div class="param">
+                <div class="lab"><span>Nombre max de paires</span><b id="p-maxpairsVal">5</b></div>
+                <input type="range" id="p-maxpairs" min="1" max="10" step="1" value="5">
+              </div>
+              <div class="param">
+                <div class="lab"><span>Branches max du sommet</span><b id="p-segVal">200 m</b></div>
+                <input type="range" id="p-seg" data-unit="m" min="10" max="1000" step="10" value="200">
+              </div>
+            </div>
+          </details>
+          <details class="fold" id="foldParamsRP">
+            <summary>Détecteur boucles giratoires</summary>
+            <div class="fold-body">
+              <div class="param">
+                <div class="lab"><span>Seuil de fermeture</span><b id="p-closeVal">15 m</b></div>
+                <input type="range" id="p-close" data-unit="m" min="5" max="60" step="1" value="15">
+              </div>
+              <div class="param">
+                <div class="lab"><span>Angle cumulé minimal</span><b id="p-angleVal">270 °</b></div>
+                <input type="range" id="p-angle" data-unit="°" min="270" max="360" step="5" value="270">
+              </div>
+            </div>
+          </details>
+        </div>
+      </details>
+    </section>
+
+    <!-- Clés API — boîte repliable (fermée par défaut).
+         Le badge « n/3 » reflète le nombre de clés renseignées
+         (Mapbox + ORS n°1 + ORS n°2) — mis à jour par updateApiKeysBadge(). -->
+    <details class="fold" id="foldApiKeys">
+      <summary>Clés API <span class="cnt" id="apiKeysBadge">0/3</span></summary>
+      <div class="fold-body">
+        <div class="sect-title" style="margin-top:2px">Mapbox — fond de carte</div>
+        <div class="keyrow" id="keyRowMb">
+          <span class="keydot" title="Clé renseignée"></span>
+          <input type="text" id="mapboxKey" class="keyinput"
+                 placeholder="Clé publique Mapbox (pk.…)"
+                 autocomplete="off" spellcheck="false"
+                 aria-label="Clé API Mapbox">
+        </div>
+        <div class="ap-note">Sans clé, le fond de carte ne se charge pas —
+          la trace et les anomalies restent affichées dès qu'une clé est saisie.</div>
+
+        <div class="sect-title" style="margin-top:16px">OpenRouteService — routage</div>
+        <div class="keyrow" id="keyRowA">
+          <span class="keydot" title="Clé active"></span>
+          <input type="text" id="orsKeyA" class="keyinput" placeholder="Clé API n°1 (principale)"
+                 autocomplete="off" spellcheck="false" aria-label="Clé API OpenRouteService n°1">
+        </div>
+        <div class="keyrow" id="keyRowB">
+          <span class="keydot" title="Clé active"></span>
+          <input type="text" id="orsKeyB" class="keyinput" placeholder="Clé API n°2 (secours, optionnelle)"
+                 autocomplete="off" spellcheck="false" aria-label="Clé API OpenRouteService n°2">
+        </div>
+        <div class="ap-note">En cas de refus 403 (quota épuisé), la requête
+          est automatiquement relancée avec l'autre clé — le point vert marque la clé active.</div>
+      </div>
+    </details>
+
+    <button id="btnAnalyze" disabled>
+      <span class="spin"></span>
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3"/>
+      </svg>
+      <span id="btnLabel">Analyser</span>
+    </button>
+
+    <section class="sect">
+      <div class="sect-title">Résultats</div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--c-primary)"></i>trace</span>
+        <span><i class="sw" style="background:var(--c-warn)"></i>anomalie</span>
+        <span><i class="sw" style="background:var(--ok)"></i>contexte</span>
+        <span><i class="sw" style="background:var(--fp)"></i>faux positif</span>
+        <span><i class="sw" style="background:var(--orig)"></i>d'origine</span>
+      </div>
+      <div id="results">
+        <div class="empty">Importez une trace GPX puis lancez l'analyse.
+          <span>Traitement local. Une demande de routage n'envoie que deux
+          coordonnées à OpenRouteService.</span>
+        </div>
+      </div>
+    </section>
+
+    <details class="fold" id="synthFold">
+      <summary>Synthèse <span class="cnt" id="synthBadge">—</span></summary>
+      <div class="fold-body synth" id="synthBody"></div>
+    </details>
+
+    <button id="btnGenerate" disabled title="Lancez l'analyse pour détecter les anomalies, puis traitez-les.">Générer GPX</button>
+  </div>
+</aside>
+
+<main>
+  <div id="map"></div>
+  <div id="mapPlaceholder" class="map-placeholder">
+    <div class="mp-box">
+      <div class="mp-title">Clé Mapbox requise</div>
+      <div class="mp-sub">Renseignez une clé API Mapbox dans le panneau de gauche (section « Clés API › Mapbox »)
+        pour afficher le fond de carte. La trace, l'analyse et les corrections restent pleinement fonctionnelles.</div>
+    </div>
+  </div>
+
+  <div id="actionPanel" hidden>
+    <div class="ap-head">
+      <b id="apTitle">Anomalie</b>
+      <button id="apClose" title="Fermer">✕</button>
+    </div>
+
+    <div id="apMain">
+      <button class="ap-btn" id="apRoute">🧭 Demande de routage</button>
+      <button class="ap-btn" id="apDelete">✂ Suppression de points</button>
+      <button class="ap-btn" id="apFp">🚫 Faux positif</button>
+    </div>
+
+    <div id="apRouteSel" hidden>
+      <div class="ap-note">La zone sélectionnée sera remplacée par le tracé routier
+        entre les points <b>Début</b> et <b>Fin</b> (conservés). Points proposés
+        par défaut : ancres de l'anomalie (routes droites encadrant la boucle,
+        ou contexte sain). Extension possible de ±3 points, sans mordre sur les
+        anomalies voisines. Une zone plus courte = réponse plus rapide.</div>
+      <div class="ap-slider sl-a">
+        <label><span>Début</span><b id="apStartNo"></b></label>
+        <input type="range" id="apStart">
+      </div>
+      <div class="ap-slider">
+        <label><span>Fin</span><b id="apEndNo"></b></label>
+        <input type="range" id="apEnd">
+      </div>
+      <div class="ap-row">
+        <button id="apDoRoute">Demander le routage</button>
+        <button id="apRouteCancel" class="ghost">Annuler</button>
+      </div>
+    </div>
+
+    <div id="apChoice" class="ap-choice" hidden>
+      <div class="ap-ct" id="apChoiceTitle">Routage proposé — choisissez le tracé à retenir :</div>
+      <div id="apProfiles">
+        <label id="apLabCar">
+          <input type="radio" name="apProfile" value="driving-car" checked>
+          <span class="lbl-car">Voiture</span><span class="meta" id="apCarInfo"></span>
+        </label>
+        <label id="apLabBike">
+          <input type="radio" name="apProfile" value="cycling-road">
+          <span class="lbl-bike">Vélo de route</span><span class="meta" id="apBikeInfo"></span>
+        </label>
+      </div>
+      <div class="ap-note" id="apSameNote" hidden></div>
+      <div class="ap-row">
+        <button id="apApply">Appliquer</button>
+        <button id="apCancel" class="ghost">Annuler</button>
+      </div>
+    </div>
+
+    <div id="apDelSel" hidden>
+      <div class="ap-note">Aperçu : les points <b>grisés</b> seront supprimés, les
+        points <b>bleus</b> seront conservés ; la ligne bleue montre le
+        raccord direct entre les points conservés. Un point isolé est possible
+        en amenant Début sur Fin. Plage limitée à l'emprise de l'anomalie.</div>
+      <div class="ap-slider sl-a">
+        <label><span>Début</span><b id="apDStartNo"></b></label>
+        <input type="range" id="apDStart">
+      </div>
+      <div class="ap-slider">
+        <label><span>Fin</span><b id="apDEndNo"></b></label>
+        <input type="range" id="apDEnd">
+      </div>
+      <div class="ap-row">
+        <button id="apDoDelete">Supprimer</button>
+        <button id="apDelCancel" class="ghost">Annuler</button>
+      </div>
+    </div>
+
+    <div id="apFpMode" hidden>
+      <div class="ap-note">Cette anomalie est marquée <b>faux positif</b> : elle sera
+        laissée telle quelle dans le GPX généré.</div>
+      <button id="apUnfp">Retirer le marqueur</button>
+    </div>
+
+    <div id="apUndoMode" hidden>
+      <div class="ap-note" id="apUndoNote"></div>
+      <button id="apUndo">↩ Annuler la correction</button>
+    </div>
+  </div>
+</main>
+
+<div id="dropOverlay">
+  <div class="box">
+    <div class="big">Déposez la trace GPX</div>
+    <div class="small">.gpx — lecture locale · le routage n'envoie que 2 coordonnées</div>
+  </div>
+</div>
+<div id="toasts"></div>
+<input type="file" id="fileInput" accept=".gpx,application/gpx+xml" hidden>
+
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
+<script>
+'use strict';
+
+/* ====================== 0. Diagnostique & garde-fous ====================== */
+window.addEventListener('error', e => {
+  console.error('[GPX] erreur :', e.message, 'ligne', e.lineno);
+  try{ toast('Erreur script : ' + e.message, 'error'); }catch(_){}
+});
+window.addEventListener('unhandledrejection', e => {
+  console.error('[GPX] promesse rejetée :', e.reason);
+  try{ toast('Erreur : ' + (e.reason?.message || e.reason), 'error'); }catch(_){}
+});
+if (typeof mapboxgl === 'undefined'){
+  document.body.innerHTML = '<div style="color:#e8ebf0;background:#0f1114;height:100vh;' +
+    'display:flex;align-items:center;justify-content:center;font-family:sans-serif">' +
+    'Mapbox GL JS n\u2019a pas pu être chargé (CDN injoignable ?). Vérifiez la connexion réseau.</div>';
+  throw new Error('Mapbox GL JS non chargé');
+}
+
+const $ = s => document.querySelector(s);
+const COLORS = { primary:'#3564e0', info:'#ec9c11', warn:'#dd3327', trace:'#3564e0', ctx:'#3ecf8e' };
+const FP_COLOR   = '#6ea8ff';
+const ORIG_COLOR = '#8a919c';
+const APPLIED_COLOR = '#6ea8ff';
+const SEL_A = '#f0d24a', SEL_B = '#ec9c11';
+const ANCHOR_A = '#c084fc', ANCHOR_B = '#7e22ce';
+const ROUTE_COLORS = { car:'#f0d24a', bike:'#ec9c11' };
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const DEL_DROP_COLOR = cssVar('--del-drop');
+const DEL_KEEP_COLOR = cssVar('--del-keep');
+const DEL_JOIN_COLOR = cssVar('--del-join');
+
+const MAPBOX_STYLE_DEFAULT = 'mapbox://styles/mapbox/outdoors-v12';
+const MAPBOX_FALLBACK_CENTER = [2.6, 46.6];
+const MAPBOX_FALLBACK_ZOOM = 6;
+
+const ORS_TIMEOUT_MS = 12000;
+let orsCtl = null;
+let orsStoppedByUser = false;
+
+const CONSOL_THRESHOLD = 0.5;
+const ptNo = j => j + 1;
+
+const RP_STEP_DEFAULT = 4;
+const RP_MAX_SAMPLES  = 120000;
+const RP_MIN_SAMPLES  = 12;
+const RP_LMAX         = 800;
+const RP_MAX_GAP_M    = 4000;
+const RP_MAX_PAIRS    = 40000;
+const RP_MAX_TESTS    = 1500000;
+const RP_MIN_SEP      = 6;
+const RP_EPS_CROSS    = 1e-7;
+const RP_CIRC_MIN     = 0.10;
+const RP_MIRROR_MAX   = 0.95;
+const RP_COIN_LO      = 130;
+const RP_COIN_HI      = 240;
+const RP_PROPRE_DEG   = 60;
+const RP_QUANT_TOL    = 40;
+const RP_PAIRS_TOP    = 6;
+const LABEL_MAX       = 120;
+const LABEL_DUP_M     = 8;
+const RP_ZONE_M       = 80;
+
+const RP_ANCHOR_DELTA_ABS   = 12;
+const RP_ANCHOR_DELTA_K     = 0.4;
+const RP_ANCHOR_EXT_M       = 15;
+const RP_ANCHOR_SEARCH_BASE = 150;
+const RP_ANCHOR_HARD_M      = 2000;
+const RP_ANCHOR_PERSIST     = 2;
+const RP_ANCHOR_MAX_SAMPLES = 200;
+const RP_ANCHOR_DEBUG       = false;
+
+const ROUTE_SAME_TOL     = 15;
+const ROUTE_SAME_LEN_TOL = 0.02;
+
+const GPX_AUDIT_NS = 'http://VérificationGPX.example/gpx/audit/1';
+const GPX_APP_DEFAULT = 'VérificationGPX';
+
+/* ============================== 1. Carte ============================== */
+
+let map = null;
+let mapboxReady = false;
+const mapReadyQueue = [];
+function whenMapReady(fn){ if (mapboxReady && map) fn(); else mapReadyQueue.push(fn); }
+
+let currentPopup = null;
+function showPopupAt(lngLat, html){
+  if (currentPopup){ currentPopup.remove(); currentPopup = null; }
+  if (!html) return;
+  currentPopup = new mapboxgl.Popup({ offset: 10, maxWidth:'320px', closeButton:true })
+    .setLngLat(lngLat).setHTML(html).addTo(map);
+}
+
+class LayerRegistry {
+  constructor(){ this.map = null; this.names = new Set(); }
+  attach(m){ this.map = m; }
+  add(id, fc, layerSpec, onClick){
+    if (!this.map) return;
+    if (this.map.getSource(id)){ this.update(id, fc); return; }
+    this.map.addSource(id, { type:'geojson', data: fc });
+    const layer = Object.assign({ id, source: id }, layerSpec);
+    this.map.addLayer(layer);
+    this.names.add(id);
+    if (onClick) this.map.on('click', id, onClick);
+  }
+  update(id, fc){
+    if (!this.map) return;
+    const src = this.map.getSource(id);
+    if (src) src.setData(fc);
+  }
+  remove(id){
+    if (!this.map) return;
+    if (this.map.getLayer(id)) this.map.removeLayer(id);
+    if (this.map.getSource(id)) this.map.removeSource(id);
+    this.names.delete(id);
+  }
+  clear(){
+    if (!this.map) return;
+    for (const id of [...this.names]) this.remove(id);
+  }
+  reset(m){ this.names.clear(); this.map = m; }
+}
+const traceRegistry    = new LayerRegistry();
+const appliedRegistry  = new LayerRegistry();
+const previewRegistry  = new LayerRegistry();
+const anomalyRegistry  = new LayerRegistry();
+const deleteRegistry   = new LayerRegistry();
+
+let sliderMarkers = [];
+let labelMarkers = [];
+let labelLeaderFeatures = [];
+
+const emptyFC = () => ({ type:'FeatureCollection', features: [] });
+
+function getMapboxKey(){
+  return ($('#mapboxKey')?.value ?? '').trim();
+}
+
+function refreshMapboxKeyUI(){
+  $('#keyRowMb').classList.toggle('active', !!getMapboxKey());
+}
+
+function destroyMap(){
+  if (currentPopup){ currentPopup.remove(); currentPopup = null; }
+  for (const m of sliderMarkers) m.remove();
+  sliderMarkers = [];
+  for (const it of labelMarkers) it.marker.remove();
+  labelMarkers = [];
+  labelLeaderFeatures = [];
+  traceRegistry.reset(null);
+  appliedRegistry.reset(null);
+  previewRegistry.reset(null);
+  anomalyRegistry.reset(null);
+  deleteRegistry.reset(null);
+  if (map){ try { map.remove(); } catch(_){} }
+  map = null;
+  mapboxReady = false;
+}
+
+function showMapPlaceholder(show){
+  const el = $('#mapPlaceholder');
+  if (el) el.hidden = !show;
+}
+
+function initMap(view){
+  const key = getMapboxKey();
+  if (!key){ showMapPlaceholder(true); return; }
+  showMapPlaceholder(false);
+  mapboxgl.accessToken = key;
+
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: MAPBOX_STYLE_DEFAULT,
+    center: view?.center ? [view.center.lng, view.center.lat] : MAPBOX_FALLBACK_CENTER,
+    zoom: view?.zoom ?? MAPBOX_FALLBACK_ZOOM,
+    attributionControl: true
+  });
+  map.addControl(new mapboxgl.NavigationControl({ showCompass:false }), 'bottom-right');
+
+  map.on('error', e => {
+    const msg = e?.error?.message || '';
+    if (/access token|401|403|token/i.test(msg)){
+      toast('Clé Mapbox refusée — vérifiez la clé et ses restrictions d\u2019URL.', 'error');
+    } else if (msg) {
+      console.warn('[Mapbox]', msg);
+    }
+  });
+
+  map.on('load', () => {
+    mapboxReady = true;
+    attachRegistries();
+    initMapLayers();
+    const q = mapReadyQueue.splice(0);
+    for (const fn of q){ try { fn(); } catch(e){ console.error(e); } }
+    replayCurrentState();
+    map.on('move', updateLabelLines);
+    map.on('zoom', updateLabelLines);
+    map.on('resize', updateLabelLines);
+  });
+}
+
+function attachRegistries(){
+  traceRegistry.attach(map);
+  appliedRegistry.attach(map);
+  previewRegistry.attach(map);
+  anomalyRegistry.attach(map);
+  deleteRegistry.attach(map);
+}
+
+function initMapLayers(){
+  appliedRegistry.add('lyr-applied', emptyFC(), {
+    type:'line',
+    paint:{
+      'line-color': APPLIED_COLOR,
+      'line-width': 8,
+      'line-opacity': 0.9,
+      'line-cap': 'round',
+      'line-join': 'round'
+    },
+    layout:{ 'line-cap':'round', 'line-join':'round' }
+  }, e => {
+    e.originalEvent.stopPropagation();
+    const f = e.features?.[0];
+    if (f?.properties?.popupHtml) showPopupAt(e.lngLat, f.properties.popupHtml);
+  });
+
+  traceRegistry.add('lyr-trace', emptyFC(), {
+    type:'line',
+    paint:{
+      'line-color': COLORS.trace,
+      'line-width': 3,
+      'line-opacity': 0.95,
+      'line-cap': 'round',
+      'line-join': 'round'
+    }
+  });
+  traceRegistry.add('lyr-trace-ends', emptyFC(), {
+    type:'circle',
+    paint:{
+      'circle-radius': 4.5,
+      'circle-color': ['case', ['==', ['get','kind'], 'start'], '#ffffff', '#20242b'],
+      'circle-stroke-color': '#20242b',
+      'circle-stroke-width': 2
+    }
+  }, e => {
+    e.originalEvent.stopPropagation();
+    const f = e.features?.[0];
+    if (f?.properties?.popupHtml) showPopupAt(e.lngLat, f.properties.popupHtml);
+  });
+
+  previewRegistry.add('lyr-preview-car', emptyFC(), {
+    type:'line',
+    paint:{
+      'line-color': ROUTE_COLORS.car,
+      'line-width': 10,
+      'line-opacity': 0.9,
+      'line-cap':'round', 'line-join':'round'
+    }
+  });
+  previewRegistry.add('lyr-preview-car-pts', emptyFC(), {
+    type:'circle',
+    paint:{
+      'circle-radius': 4,
+      'circle-color': ROUTE_COLORS.car,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.2
+    }
+  });
+  previewRegistry.add('lyr-preview-bike', emptyFC(), {
+    type:'line',
+    paint:{
+      'line-color': ROUTE_COLORS.bike,
+      'line-width': 6,
+      'line-opacity': 0.9,
+      'line-cap':'round', 'line-join':'round'
+    }
+  });
+  previewRegistry.add('lyr-preview-bike-pts', emptyFC(), {
+    type:'circle',
+    paint:{
+      'circle-radius': 3,
+      'circle-color': ROUTE_COLORS.bike,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.2
+    }
+  });
+
+  anomalyRegistry.add('lyr-anomaly-lines', emptyFC(), {
+    type:'line',
+    paint:{
+      'line-color': ['get','color'],
+      'line-width': ['get','width'],
+      'line-opacity': ['get','opacity'],
+      'line-cap':'round', 'line-join':'round'
+    }
+  }, e => {
+    e.originalEvent.stopPropagation();
+    const f = e.features?.[0];
+    if (f?.properties?.popupHtml) showPopupAt(e.lngLat, f.properties.popupHtml);
+  });
+  anomalyRegistry.add('lyr-anomaly-points', emptyFC(), {
+    type:'circle',
+    paint:{
+      'circle-radius': ['get','radius'],
+      'circle-color': ['get','fill'],
+      'circle-stroke-color': ['get','stroke'],
+      'circle-stroke-width': ['get','strokeWidth']
+    }
+  }, e => {
+    e.originalEvent.stopPropagation();
+    const f = e.features?.[0];
+    if (f?.properties?.popupHtml) showPopupAt(e.lngLat, f.properties.popupHtml);
+  });
+
+  const setPointer = () => { if (map) map.getCanvas().style.cursor = 'pointer'; };
+  const clearPointer = () => { if (map) map.getCanvas().style.cursor = ''; };
+  for (const id of ['lyr-anomaly-lines','lyr-anomaly-points','lyr-trace-ends','lyr-applied']){
+    map.on('mouseenter', id, setPointer);
+    map.on('mouseleave', id, clearPointer);
+  }
+
+  deleteRegistry.add('lyr-del-red', emptyFC(), {
+    type:'line',
+    paint:{
+      'line-color': COLORS.warn,
+      'line-width': 5,
+      'line-opacity': 0.95,
+      'line-cap':'round', 'line-join':'round'
+    },
+    layout:{ 'line-cap':'round', 'line-join':'round' }
+  });
+  deleteRegistry.add('lyr-del-join', emptyFC(), {
+    type:'line',
+    paint:{
+      'line-color': DEL_JOIN_COLOR,
+      'line-width': 4,
+      'line-opacity': 0.95,
+      'line-cap':'round', 'line-join':'round'
+    },
+    layout:{ 'line-cap':'round', 'line-join':'round' }
+  });
+
+  labelRegistryInit();
+}
+
+function labelRegistryInit(){
+  if (!map) return;
+  map.addSource('lyr-label-leaders', { type:'geojson', data: emptyFC() });
+  map.addLayer({
+    id:'lyr-label-leaders', source:'lyr-label-leaders', type:'line',
+    paint:{
+      'line-color': ['get','color'],
+      'line-width': 2,
+      'line-opacity': 0.9
+    }
+  });
+}
+
+function replayCurrentState(){
+  if (!map || !mapboxReady) return;
+  if (state.geo){
+    renderBaseTrace(false);
+    if (state.analysis){ renderAnalysis(); }
+  }
+}
+
+function onMapboxKeyChange(){
+  const key = getMapboxKey();
+  refreshMapboxKeyUI();
+  const prev = map ? { center: map.getCenter(), zoom: map.getZoom() } : null;
+  destroyMap();
+  if (!key){ showMapPlaceholder(true); return; }
+  initMap(prev);
+}
+
+/* ============================== 2. État ============================== */
+const state = {
+  fileName:null,
+  raw:null,
+  sourceMetaXml:null,
+  sourceGpxAttrs:null,
+  sourceTrkName:null,
+  working:null,
+  geo:null,
+  analysis:null,
+  consol:CONSOL_THRESHOLD,
+  consolRemoved:0,
+  selected:null
+};
+let analyzedSignature = null;
+let nextPointId = 0;
+let pendingRoutes = { car:null, bike:null, start:0, end:0, identical:false };
+
+/* ============================== 3. Utilitaires ============================== */
+function toast(msg, type='info'){
+  const t = document.createElement('div');
+  t.className = 'toast' + (type==='error' ? ' err' : type==='ok' ? ' ok' : '');
+  t.textContent = msg;
+  $('#toasts').appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(), 320); }, 4200);
+}
+const fmtNum = v => {
+  const n = +v;
+  return (n % 1 ? n.toFixed(1) : String(n)).replace('.', ',');
+};
+const fmtDur = s => s < 90 ? Math.round(s) + ' s'
+  : s < 5400 ? Math.round(s/60) + ' min' : (s/3600).toFixed(1).replace('.', ',') + ' h';
+
+function makeProjector(p0){
+  const kx = Math.cos(p0.lat * Math.PI/180) * 111320;
+  const ky = 110540;
+  return {
+    fwd: p => ({ x:(p.lon - p0.lon) * kx, y:(p.lat - p0.lat) * ky }),
+    inv: (x, y) => ({ lat: p0.lat + y/ky, lon: p0.lon + x/kx })
+  };
+}
+
+/* ---------- Conversion point métrique → coordonnées carte ---------- */
+/* Trois variantes, à ne pas confondre :
+   · geoLatLonObj : objet {lat, lon}  — usage métier (popups, textes,
+                    calculs ORS : le contrat ORS consomme {lat, lon}).
+   · geoLngLat    : tuple [lon, lat]  — usage Mapbox (markers, bounds,
+                    sources GeoJSON — l'ordre des coordonnées y est
+                    [lon, lat] par convention GeoJSON).
+   · pt.lat / pt.lon directs          — quand on a déjà l'objet point. */
+function geoLatLonObj(g, i){
+  return g.proj.inv(g.px[i], g.py[i]);
+}
+function geoLngLat(g, i){
+  const p = g.proj.inv(g.px[i], g.py[i]);
+  return [p.lon, p.lat];
+}
+
+/* ============================== 4. Données ============================== */
+function parseGpx(text){
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Fichier XML illisible.');
+  const metaNode = doc.getElementsByTagNameNS('*', 'metadata')[0];
+  const sourceMetaXml = metaNode
+    ? new XMLSerializer().serializeToString(metaNode)
+    : null;
+  const gpxAttrs = Array.from(doc.documentElement.attributes)
+    .map(a => `${a.name}="${a.value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`)
+    .join(' ');
+  const trk0 = doc.getElementsByTagNameNS('*', 'trk')[0];
+  const trkNameNode = trk0 && trk0.getElementsByTagNameNS('*', 'name')[0];
+  const trkName = trkNameNode ? trkNameNode.textContent : null;
+
+  let nodes = doc.getElementsByTagNameNS('*', 'trkpt');
+  if (!nodes.length) nodes = doc.getElementsByTagNameNS('*', 'rtept');
+  const pts = [];
+  for (const n of nodes){
+    const lat = parseFloat(n.getAttribute('lat')), lon = parseFloat(n.getAttribute('lon'));
+    if (!isFinite(lat) || !isFinite(lon)) continue;
+    const p = { id: nextPointId++, lat, lon };
+    const eleNode = n.getElementsByTagNameNS('*', 'ele')[0];
+    const ele = eleNode ? parseFloat(eleNode.textContent) : NaN;
+    if (isFinite(ele)) p.ele = ele;
+    pts.push(p);
+  }
+  if (pts.length < 2) throw new Error('Aucun point de trace (trkpt) trouvé dans le fichier.');
+  return { pts, sourceMetaXml, gpxAttrs, trkName };
+}
+
+function consolidatePoints(raw, threshold){
+  const proj = makeProjector(raw[0]);
+  const pts = [];
+  let removed = 0, ax = 0, ay = 0;
+  for (let i = 0; i < raw.length; i++){
+    const q = proj.fwd(raw[i]);
+    if (pts.length && Math.hypot(q.x - ax, q.y - ay) < threshold){ removed++; continue; }
+    pts.push(raw[i]); ax = q.x; ay = q.y;
+  }
+  return { pts, removed };
+}
+
+function buildGeometry(points){
+  const proj = makeProjector(points[0]);
+  const m = points.length;
+  const PX = new Float64Array(m), PY = new Float64Array(m);
+  const ids = new Array(m);
+  for (let i = 0; i < m; i++){
+    const q = proj.fwd(points[i]);
+    PX[i] = q.x; PY[i] = q.y; ids[i] = points[i].id;
+  }
+  const cum = new Float64Array(m);
+  for (let i = 1; i < m; i++) cum[i] = cum[i-1] + Math.hypot(PX[i]-PX[i-1], PY[i]-PY[i-1]);
+  return { proj, px: PX, py: PY, cum, total: cum[m-1], ids };
+}
+
+function loadFile(file){
+  if (!/\.gpx$/i.test(file.name)){ toast('Le fichier doit être au format GPX (.gpx).', 'error'); return; }
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const { pts, sourceMetaXml, gpxAttrs, trkName } = parseGpx(rd.result);
+      resetAnalysis();
+      state.fileName = file.name;
+      state.raw = pts;
+      state.sourceMetaXml = sourceMetaXml;
+      state.sourceGpxAttrs = gpxAttrs;
+      state.sourceTrkName = trkName;
+      const consol = +($('#p-consol')?.value ?? CONSOL_THRESHOLD);
+      const { pts: work, removed } = consolidatePoints(pts, consol);
+      state.working = work;
+      state.consol = consol; state.consolRemoved = removed;
+      state.geo = buildGeometry(state.working);
+      renderBaseTrace();
+      renderFileInfo();
+      $('#btnLabel').textContent = 'Analyser';
+      updateLocks();
+      toast(`Trace « ${file.name} » chargée — ${pts.length} points` +
+        (removed ? ` · ${removed} redondant${removed > 1 ? 's' : ''} supprimé${removed > 1 ? 's' : ''} (< ${fmtNum(consol)} m).` : '.'),
+        'ok');
+    } catch(e){ toast(e.message || 'Fichier illisible.', 'error'); }
+  };
+  rd.onerror = () => toast('Impossible de lire le fichier.', 'error');
+  rd.readAsText(file);
+}
+
+/* =====================================================================
+   5. DÉTECTION AR
+   ===================================================================== */
+function detectAR(geo, params){
+  const findings = [];
+  const m = geo.px.length;
+  if (m < 5) return findings;
+
+  const tolDeg  = params['p-tol']      ?? 20;
+  const pairMax = params['p-pair']     ?? 50;
+  const kMax    = params['p-maxpairs'] ?? 5;
+  const brMax   = params['p-seg']      ?? 200;
+
+  const px = geo.px, py = geo.py, ids = geo.ids;
+
+  const closed = Math.hypot(px[m-1] - px[0], py[m-1] - py[0]) < 100;
+  const margin = closed ? 3 : 1;
+
+  const EPS = 0.05;
+  const head = new Float64Array(m - 1);
+  let prevHead = NaN;
+  for (let j = 0; j < m - 1; j++){
+    const dx = px[j+1] - px[j], dy = py[j+1] - py[j];
+    if (Math.hypot(dx, dy) >= EPS){
+      head[j] = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+      prevHead = head[j];
+    } else head[j] = prevHead;
+  }
+  let nxt = NaN;
+  for (let j = m - 2; j >= 0; j--){
+    if (!Number.isNaN(head[j])) nxt = head[j];
+    else head[j] = nxt;
+  }
+  if (Number.isNaN(head[0])) return findings;
+
+  const cands = [];
+  for (let i = margin; i <= m - 1 - margin; i++){
+    let diff = Math.abs(head[i] - head[i-1]) % 360;
+    if (diff > 180) diff = 360 - diff;
+    if (180 - diff > tolDeg) continue;
+    const d1 = Math.hypot(px[i] - px[i-1], py[i] - py[i-1]);
+    const d2 = Math.hypot(px[i+1] - px[i], py[i+1] - py[i]);
+    if (d1 > brMax || d2 > brMax) continue;
+    cands.push({ i, diff, d1, d2 });
+  }
+
+  const FUSE_GAP = 6;
+  cands.sort((a, b) => a.i - b.i);
+  const groups = [];
+  for (const c of cands){
+    const g = groups[groups.length - 1];
+    if (g){
+      const ref = g[g.length - 1];
+      const gap = c.i - ref.i;
+      if (gap < 3){ g.push(c); continue; }
+      if (gap <= FUSE_GAP){
+        let d = Math.abs(head[g[0].i - 1] - head[c.i]) % 360;
+        if (d > 180) d = 360 - d;
+        const far = Math.hypot(px[c.i] - px[ref.i], py[c.i] - py[ref.i]);
+        if (d <= tolDeg || Math.abs(180 - d) <= tolDeg || far <= pairMax){ g.push(c); continue; }
+      }
+    }
+    groups.push([c]);
+  }
+  const peaks = groups.map(g => {
+    if (g.length === 1) return g[0];
+    const mid = (g[0].i + g[g.length - 1].i) / 2;
+    let best = g[0];
+    for (const c of g){
+      const dc = Math.abs(c.i - mid), db = Math.abs(best.i - mid);
+      if (dc < db || (dc === db && c.diff > best.diff)) best = c;
+    }
+    return best;
+  });
+
+  let prevEnd = -1;
+  for (const c of peaks){
+    const i = c.i;
+    const pairs = [];
+    for (let k = 1; k <= kMax; k++){
+      const a = i - k - 1, b = i + k + 1;
+      if (a < 0 || b > m - 1 || a <= prevEnd) break;
+      const d = Math.hypot(px[b] - px[a], py[b] - py[a]);
+      if (d > pairMax) break;
+      pairs.push({ a, b, d });
+    }
+    const k = pairs.length;
+    const s = i - k - 1, e = i + k + 1;
+    if (s <= prevEnd) continue;
+
+    const ctx = {
+      up: (s - 1 >= 0)     ? s - 1 : null,
+      dn: (e + 1 <= m - 1) ? e + 1 : null
+    };
+    const pairTxt = pairs
+      .map(p => `pts ${ptNo(p.a)}\u2194${ptNo(p.b)} (${p.d < 10 ? p.d.toFixed(1) : Math.round(p.d)} m)`)
+      .join(' \u00b7 ');
+
+    findings.push({
+      kind: 'ar',
+      label: 'Aller-retour',
+      summary: `sommet pt ${ptNo(i)} \u00b7 ${k} paire${k > 1 ? 's' : ''} \u00b7 \u00e9cart ${(180 - c.diff).toFixed(0)}\u00b0`,
+      peak: i, peakId: ids[i],
+      pairs: pairs.map(p => ({ aid: ids[p.a], bid: ids[p.b], a: p.a, b: p.b, d: p.d })),
+      pairIdx: pairs.flatMap(p => [p.a, p.b]),
+      ecart: 180 - c.diff, d1: c.d1, d2: c.d2,
+      zoneIds: ids.slice(s, e + 1),
+      ctxIds: { up: ctx.up != null ? ids[ctx.up] : null, dn: ctx.dn != null ? ids[ctx.dn] : null },
+      status: 'pending', correction: null, undo: null,
+      ctx,
+      parts: [
+        { s, e, role: 'warn', text: k ? `paires miroirs : ${pairTxt}` : 'retournement isol\u00e9, aucune paire miroir' },
+        { s: i - 1, e: i + 1, role: 'info', text: `c\u0153ur : demi-tour \u00b7 branches ${c.d1.toFixed(0)}/${c.d2.toFixed(0)} m` }
+      ]
+    });
+    prevEnd = e;
+  }
+  return findings;
+}
+
+/* =====================================================================
+   5b. DÉTECTION RP
+   ===================================================================== */
+function resampleGeo(geo, step){
+  const m = geo.px.length, total = geo.total;
+  let n = Math.max(1, Math.round(total / step));
+  if (n > RP_MAX_SAMPLES) n = RP_MAX_SAMPLES;
+  const eff = total / n;
+  const RX = new Float64Array(n + 1), RY = new Float64Array(n + 1);
+  const cumR = new Float64Array(n + 1);
+  const orig = new Uint32Array(n + 1);
+  let k = 0;
+  for (let i = 0; i <= n; i++){
+    const d = Math.min(i * eff, total);
+    while (k < m - 2 && geo.cum[k+1] < d) k++;
+    const segLen = geo.cum[k+1] - geo.cum[k];
+    const t = segLen > 0 ? (d - geo.cum[k]) / segLen : 0;
+    RX[i] = geo.px[k]   + t * (geo.px[k+1] - geo.px[k]);
+    RY[i] = geo.py[k]   + t * (geo.py[k+1] - geo.py[k]);
+    cumR[i] = i === 0 ? 0 : cumR[i-1] + Math.hypot(RX[i]-RX[i-1], RY[i]-RY[i-1]);
+    orig[i] = (i === n) ? m - 1 : k;
+  }
+  return { n, RX, RY, cumR, orig, step: eff };
+}
+
+function segsCross(R, a, b){
+  const ax = R.RX[a], ay = R.RY[a], bx = R.RX[a+1], by = R.RY[a+1];
+  const cx = R.RX[b], cy = R.RY[b], dx = R.RX[b+1], dy = R.RY[b+1];
+  const o1 = (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
+  const o2 = (bx-ax)*(dy-ay) - (by-ay)*(dx-ax);
+  const o3 = (dx-cx)*(ay-cy) - (dy-cy)*(ax-cx);
+  const o4 = (dx-cx)*(by-cy) - (dy-cy)*(bx-cx);
+  if (o1*o2 < 0 && o3*o4 < 0) return true;
+  const EPS = RP_EPS_CROSS, BX = 1e-6;
+  const onSeg = (px, py, ux, uy, vx, vy) => {
+    const cr = (vx-ux)*(py-uy) - (vy-uy)*(px-ux);
+    if (Math.abs(cr) > EPS) return false;
+    return px >= Math.min(ux,vx)-BX && px <= Math.max(ux,vx)+BX &&
+           py >= Math.min(uy,vy)-BX && py <= Math.max(uy,vy)+BX;
+  };
+  return onSeg(cx,cy,ax,ay,bx,by) || onSeg(dx,dy,ax,ay,bx,by) ||
+         onSeg(ax,ay,cx,cy,dx,dy) || onSeg(bx,by,cx,cy,dx,dy);
+}
+
+function rpWalk(R, from, dir, minM = 8, maxSeg = 4){
+  let i = from, acc = 0, segs = 0;
+  while (segs < maxSeg){
+    const ni = i + dir;
+    if (ni < 0 || ni > R.n) break;
+    const d = Math.hypot(R.RX[ni]-R.RX[i], R.RY[ni]-R.RY[i]);
+    i = ni;
+    if (d < 0.05) continue;
+    segs++; acc += d;
+    if (acc >= minM) return i;
+  }
+  return acc > 0 ? i : null;
+}
+
+const rpNorm180 = a => { let x = ((a % 360) + 540) % 360 - 180; return x <= -180 ? 180 : x; };
+
+function closingTurn(R, rb){
+  const ja = rpWalk(R, rb, -1), ka = rpWalk(R, rb, +1);
+  if (ja == null || ka == null) return null;
+  const hIn  = Math.atan2(R.RY[rb]-R.RY[ja], R.RX[rb]-R.RX[ja]);
+  const hOut = Math.atan2(R.RY[ka]-R.RY[rb], R.RX[ka]-R.RX[rb]);
+  return rpNorm180((hOut - hIn) * 180 / Math.PI);
+}
+
+function closingDelta(R, ra, rb){
+  const ja = rpWalk(R, ra, -1), ka = rpWalk(R, rb, +1);
+  if (ja == null || ka == null) return null;
+  const hIn  = Math.atan2(R.RY[ra]-R.RY[ja], R.RX[ra]-R.RX[ja]);
+  const hOut = Math.atan2(R.RY[ka]-R.RY[rb], R.RX[ka]-R.RX[rb]);
+  return rpNorm180((hOut - hIn) * 180 / Math.PI);
+}
+
+function loopDegenerate(R, a, b, closeThr){
+  let A2 = 0, L = 0;
+  for (let i = a; i < b; i++){
+    A2 += R.RX[i]*R.RY[i+1] - R.RX[i+1]*R.RY[i];
+    L  += Math.hypot(R.RX[i+1]-R.RX[i], R.RY[i+1]-R.RY[i]);
+  }
+  A2 += R.RX[b]*R.RY[a] - R.RX[a]*R.RY[b];
+  L  += Math.hypot(R.RX[a]-R.RX[b], R.RY[a]-R.RY[b]);
+  if (L > 0 && 4*Math.PI*Math.abs(A2/2)/(L*L) < RP_CIRC_MIN) return true;
+  const total = b - a + 1, thr2 = closeThr*closeThr;
+  let near = 0;
+  for (let i = a; i <= b; i++){
+    const mi = b - (i - a);
+    const dx = R.RX[i]-R.RX[mi], dy = R.RY[i]-R.RY[mi];
+    if (dx*dx + dy*dy < thr2) near++;
+  }
+  return near / total >= RP_MIRROR_MAX;
+}
+
+function turnText(total){
+  const k = Math.round(total / 360);
+  if (k >= 1 && Math.abs(total - 360*k) <= 30)
+    return k === 1 ? 'tour complet (1\u00d7)' : `${k} tours complets`;
+  if (total < 240) return 'demi-tour d\u00e9pass\u00e9';
+  const base = Math.floor(total / 360);
+  const q = Math.round((total - 360*base) / 90);
+  const quart = ['', '1/4 de tour', '1/2 tour', '3/4 de tour', 'tour complet'][q] || '';
+  if (base === 0) return quart || `${Math.round(total)}\u00b0`;
+  if (q === 0) return `${base} tours complets`;
+  return `${base} tour${base > 1 ? 's' : ''} complet${base > 1 ? 's' : ''} + ${quart}`;
+}
+
+function detectRP(geo, R, params){
+  const out = [];
+  const n = R.n;
+  if (n < RP_MIN_SAMPLES) return out;
+
+  const closeThr = params['p-close'] ?? 15;
+  const angThr   = params['p-angle'] ?? 270;
+  const step     = R.step;
+  const refX = geo.px, refY = geo.py, ids = geo.ids;
+
+  const heads = new Float64Array(n + 1).fill(NaN);
+  for (let k = 1; k <= n - 1; k++){
+    const dx = R.RX[k+1] - R.RX[k-1], dy = R.RY[k+1] - R.RY[k-1];
+    if (Math.hypot(dx, dy) > 1e-9) heads[k] = Math.atan2(dy, dx) * 180 / Math.PI;
+  }
+  const pre = new Float64Array(n + 1);
+  pre[0] = 0; pre[1] = 0;
+  for (let k = 2; k <= n - 1; k++){
+    let d = heads[k] - heads[k-1];
+    if (!isFinite(d)) d = 0;
+    else { if (d > 180) d -= 360; else if (d < -180) d += 360; }
+    pre[k] = pre[k-1] + d;
+  }
+  pre[n] = pre[n-1] ?? 0;
+  const angleBetween = (i, j) => pre[j] - pre[i];
+
+  const cell = Math.max(closeThr, 1);
+  const maxGap = Math.min(n, Math.ceil(RP_MAX_GAP_M / step) + 8);
+  const grid = new Map();
+  const cands = [];
+  outer1:
+  for (let i = 0; i <= n; i++){
+    const cx = Math.floor(R.RX[i] / cell), cy = Math.floor(R.RY[i] / cell);
+    for (let gx = -1; gx <= 1; gx++){
+      for (let gy = -1; gy <= 1; gy++){
+        const bucket = grid.get((cx+gx) + '|' + (cy+gy));
+        if (!bucket) continue;
+        for (const j of bucket){
+          if (i - j < RP_MIN_SEP || i - j > maxGap) continue;
+          const dx = R.RX[i]-R.RX[j], dy = R.RY[i]-R.RY[j];
+          if (dx*dx + dy*dy < closeThr*closeThr){
+            cands.push({ s: j, e: i, paire: [j, i] });
+            if (cands.length >= RP_MAX_PAIRS) break outer1;
+          }
+        }
+      }
+    }
+    const key = cx + '|' + cy;
+    let b2 = grid.get(key);
+    if (!b2){ b2 = []; grid.set(key, b2); }
+    b2.push(i);
+  }
+
+  const cell2 = Math.max(closeThr, 3 * step);
+  const segGrid = new Map();
+  const seenCross = new Set();
+  let tests = 0;
+  outer2:
+  for (let k = 0; k <= n - 1; k++){
+    const ax = R.RX[k], ay = R.RY[k], bx = R.RX[k+1], by = R.RY[k+1];
+    const x0 = Math.floor(Math.min(ax,bx)/cell2), x1 = Math.floor(Math.max(ax,bx)/cell2);
+    const y0 = Math.floor(Math.min(ay,by)/cell2), y1 = Math.floor(Math.max(ay,by)/cell2);
+    for (let gx = x0; gx <= x1; gx++){
+      for (let gy = y0; gy <= y1; gy++){
+        const bucket = segGrid.get(gx + '|' + gy);
+        if (!bucket) continue;
+        for (const m of bucket){
+          if (k - m < 3) continue;
+          const key = m * 1e6 + k;
+          if (seenCross.has(key)) continue;
+          seenCross.add(key);
+          if (++tests > RP_MAX_TESTS) break outer2;
+          if (segsCross(R, m, k))
+            cands.push({ s: m, e: k + 1, croisement: [m, k + 1] });
+        }
+      }
+    }
+    for (let gx = x0; gx <= x1; gx++)
+      for (let gy = y0; gy <= y1; gy++){
+        const key = gx + '|' + gy;
+        let b2 = segGrid.get(key);
+        if (!b2){ b2 = []; segGrid.set(key, b2); }
+        b2.push(k);
+      }
+  }
+
+  cands.sort((u, v) => u.s - v.s || u.e - v.e);
+  const merged = [];
+  for (const c of cands){
+    const last = merged[merged.length - 1];
+    if (last && c.s <= last.e){
+      if (c.e > last.e) last.e = c.e;
+      if (c.paire) last.paires.push(c.paire);
+      if (c.croisement) last.croisements.push(c.croisement);
+    } else {
+      merged.push({ s: c.s, e: c.e,
+        paires: c.paire ? [c.paire] : [],
+        croisements: c.croisement ? [c.croisement] : [] });
+    }
+  }
+
+  const refDist = (ia, ib) => {
+    const oa = R.orig[ia], ob = R.orig[ib];
+    return Math.hypot(refX[oa] - refX[ob], refY[oa] - refY[ob]);
+  };
+  const refined = [];
+  const seenPair = new Set();
+  for (const g of merged){
+    for (const [a, b] of g.paires){
+      let best = null;
+      for (let da = -2; da <= 2; da++){
+        for (let db = -2; db <= 2; db++){
+          const ia = a + da, ib = b + db;
+          if (ia < 0 || ib > n || ib - ia < RP_MIN_SEP) continue;
+          const d = refDist(ia, ib);
+          if (!best || d < best.d) best = { a: ia, b: ib, d };
+        }
+      }
+      if (!best) continue;
+      const key = best.a * 1e6 + best.b;
+      if (seenPair.has(key)) continue;
+      seenPair.add(key);
+      refined.push(best);
+    }
+  }
+  const dMin = refined.length ? Math.min(...refined.map(p => p.d)) : 0;
+
+  const windows = [];
+  const pushWindow = (a, b, d, withCoin) => {
+    if (b - a < RP_MIN_SEP) return;
+    if (R.cumR[b] - R.cumR[a] > RP_LMAX) return;
+    const ang = angleBetween(a, b);
+    let coin = 0;
+    if (withCoin && d != null && d <= dMin + Math.max(2, 0.25 * closeThr)){
+      let t = closingTurn(R, b);
+      if (t != null && Math.abs(t) >= RP_COIN_LO && Math.abs(t) <= RP_COIN_HI){
+        if (Math.abs(ang) > 30 && Math.sign(t) !== Math.sign(ang))
+          t -= 360 * Math.sign(t);
+        coin = t;
+      }
+    }
+    let total = Math.abs(ang + coin);
+    const kk = Math.round(total / 360);
+    if (kk >= 1 && Math.abs(total - 360*kk) <= RP_QUANT_TOL) total = 360 * kk;
+    if (total < angThr) return;
+    if (loopDegenerate(R, a, b, closeThr)) return;
+    const dc = withCoin ? closingDelta(R, a, b) : null;
+    windows.push({ a, b, d, total,
+      propre: withCoin ? (dc == null || Math.abs(dc) >= RP_PROPRE_DEG) : true,
+      pairsIn: [] });
+  };
+  for (const p of refined) pushWindow(p.a, p.b, p.d, true);
+  for (const g of merged)
+    for (const [ca, cb] of g.croisements) pushWindow(ca, cb, null, false);
+
+  refined.sort((u, v) => u.a - v.a || u.b - v.b);
+  for (const w of windows){
+    for (const q of refined){
+      if (q.a < w.a) continue;
+      if (q.a > w.b) break;
+      if (q.b <= w.b) w.pairsIn.push(q);
+    }
+  }
+
+  windows.sort((u, v) =>
+    ((v.propre ? 1 : 0) - (u.propre ? 1 : 0)) ||
+    (v.total - u.total) ||
+    ((u.d ?? Infinity) - (v.d ?? Infinity)) ||
+    ((u.b - u.a) - (v.b - v.a)));
+  const taken = [];
+  for (const w of windows)
+    if (!taken.some(t => !(w.b < t.a || w.a > t.b))) taken.push(w);
+  taken.sort((u, v) => u.a - v.a);
+
+  const W = Math.max(2, Math.round(RP_ZONE_M / step));
+  const Mref = ids.length;
+  let prevERef = -1;
+  taken.forEach((w, wi) => {
+    const csRef = R.orig[w.a], ceRef = R.orig[w.b];
+    if (ceRef <= prevERef) return;
+    const nextCsRef = (wi + 1 < taken.length) ? R.orig[taken[wi + 1].a] : Mref;
+    let sRef = Math.max(0, prevERef + 1, R.orig[Math.max(0, w.a - W)]);
+    if (sRef > csRef) sRef = csRef;
+    let eRef = Math.min(Mref - 1, nextCsRef - 1, R.orig[Math.min(n, w.b + W)]);
+    if (eRef < ceRef) eRef = ceRef;
+    const an0 = rpAnchorIndices(geo, csRef, ceRef, closeThr);
+    if (an0.up != null && an0.up < sRef) sRef = Math.max(prevERef + 1, an0.up);
+    if (an0.dn != null && an0.dn > eRef) eRef = Math.min(nextCsRef - 1, an0.dn);
+    if (sRef > csRef) sRef = csRef;
+    if (eRef < ceRef) eRef = ceRef;
+    prevERef = eRef;
+    const juncRef = csRef;
+    const pairs = w.pairsIn.slice()
+      .sort((p, q) => p.d - q.d)
+      .slice(0, RP_PAIRS_TOP)
+      .map(p => ({ aid: ids[R.orig[p.a]], bid: ids[R.orig[p.b]],
+                   a: R.orig[p.a], b: R.orig[p.b], d: p.d }));
+    const pairTxt = pairs
+      .map(p => `pts ${ptNo(p.a)}\u2194${ptNo(p.b)} (${p.d < 10 ? p.d.toFixed(1) : Math.round(p.d)} m)`)
+      .join(' \u00b7 ');
+    const tt = turnText(w.total);
+    const ctxUp = sRef > 0 ? ids[sRef - 1] : null;
+    const ctxDn = eRef < Mref - 1 ? ids[eRef + 1] : null;
+    out.push({
+      kind: 'rp',
+      label: w.total > 340 ? 'Tour de rond-point' : 'Boucle giratoire',
+      summary: `jonction pt ${ptNo(juncRef)} \u00b7 ${Math.round(w.total)}\u00b0 (${tt})` +
+               ` \u00b7 ${pairs.length} paire${pairs.length > 1 ? 's' : ''}`,
+      totalAngle: Math.round(w.total), turnText: tt,
+      peak: juncRef, peakId: ids[juncRef],
+      pairs,
+      pairIdx: pairs.flatMap(p => [p.a, p.b]),
+      zoneIds: ids.slice(sRef, eRef + 1),
+      coreIds: ids.slice(csRef, ceRef + 1),
+      ctxIds: { up: ctxUp, dn: ctxDn },
+      status: 'pending', correction: null, undo: null,
+      ctx: { up: ctxUp != null ? sRef - 1 : null, dn: ctxDn != null ? eRef + 1 : null },
+      parts: [
+        { s: sRef, e: eRef, role: 'warn',
+          text: pairs.length ? `superpositions : ${pairTxt}` : 'refermeture par croisement de trace' },
+        { s: csRef, e: ceRef, role: 'warn',
+          text: `c\u0153ur : angle cumul\u00e9 ${Math.round(w.total)}\u00b0 (${tt})` }
+      ]
+    });
+  });
+  return out;
+}
+
+function rpAnchorIndices(g, junc, ce, closeThr){
+  const M = g.px.length;
+  if (junc < 0 || ce > M - 1 || ce < junc || closeThr == null)
+    return { up: null, dn: null, cx: null, cy: null, r: null };
+
+  const count = ce - junc + 1;
+  const stride = Math.max(1, Math.ceil(count / RP_ANCHOR_MAX_SAMPLES));
+  const P = [];
+  for (let i = junc; i <= ce; i += stride) P.push({ x: g.px[i], y: g.py[i] });
+  let cx = 0, cy = 0;
+  for (const p of P){ cx += p.x; cy += p.y; }
+  cx /= P.length; cy /= P.length;
+  if (P.length >= 3){
+    let Suu=0, Suv=0, Svv=0, Su=0, Sv=0, nn=0, Suz=0, Svz=0, Sz=0;
+    for (const p of P){
+      const u = p.x - cx, v = p.y - cy, z = u*u + v*v;
+      Suu += u*u; Suv += u*v; Svv += v*v;
+      Su += u; Sv += v; nn++;
+      Suz += u*z; Svz += v*z; Sz += z;
+    }
+    const det = Suu*(Svv*nn - Sv*Sv) - Suv*(Suv*nn - Su*Sv) + Su*(Suv*Sv - Svv*Su);
+    if (isFinite(det) && Math.abs(det) > 1e-6){
+      const da = Suz*(Svv*nn - Sv*Sv) - Suv*(Svz*nn - Sv*Sz) + Su*(Svz*Sv - Svv*Sz);
+      const db = Suu*(Svz*nn - Sv*Sz) - Suz*(Suv*nn - Su*Sv) + Su*(Suv*Sz - Svz*Su);
+      const dc = Suu*(Svv*Sz - Svz*Sv) - Suv*(Suv*Sz - Svz*Su) + Suz*(Suv*Sv - Svv*Su);
+      const a = da / det, b = db / det, c = dc / det;
+      const rFit = Math.sqrt(Math.max(0, c + a*a/4 + b*b/4));
+      if (isFinite(rFit) && rFit >= 3 && rFit <= 1000){
+        cx += a / 2; cy += b / 2;
+      }
+    }
+  }
+
+  const ds = P.map(p => Math.hypot(p.x - cx, p.y - cy)).sort((u, v) => u - v);
+  const r = ds[Math.floor(ds.length / 2)] || 1;
+  const disc = r + Math.max(RP_ANCHOR_DELTA_ABS, RP_ANCHOR_DELTA_K * r);
+  const searchMax = Math.max(RP_ANCHOR_SEARCH_BASE, 2.5 * r);
+  const distC = i => Math.hypot(g.px[i] - cx, g.py[i] - cy);
+  const nearCore = i => {
+    const x = g.px[i], y = g.py[i];
+    let m = Infinity;
+    for (const q of P){
+      const d = Math.hypot(q.x - x, q.y - y);
+      if (d < m){ m = d; if (m <= closeThr) return m; }
+    }
+    return m;
+  };
+  const inZone = i => distC(i) <= disc || nearCore(i) <= closeThr;
+  const segLen = i => Math.hypot(g.px[i+1] - g.px[i], g.py[i+1] - g.py[i]);
+
+  const walkSide = (start, dir) => {
+    let i = start, hard = 0, outAcc = 0,
+        outStart = null, outRun = 0, floor = null, atBound = false;
+    while (true){
+      const ni = i + dir;
+      if (ni < 0 || ni > M - 1){ atBound = true; break; }
+      const stepL = segLen(Math.min(i, ni));
+      if (hard + stepL > RP_ANCHOR_HARD_M) break;
+      hard += stepL; i = ni;
+      if (!inZone(i)){
+        if (outStart == null) outStart = i;
+        outAcc += stepL;
+        if (outAcc > searchMax) break;
+        if (++outRun >= RP_ANCHOR_PERSIST){ floor = outStart; break; }
+      } else { outStart = null; outRun = 0; outAcc = 0; }
+    }
+    if (floor == null && atBound && outStart != null) floor = outStart;
+    if (floor == null) return null;
+    let anchor = floor, accE = 0;
+    while (accE < RP_ANCHOR_EXT_M){
+      const ni = anchor + dir;
+      if (ni < 0 || ni > M - 1) break;
+      const stepL = segLen(Math.min(anchor, ni));
+      if (accE + stepL > RP_ANCHOR_EXT_M) break;
+      if (inZone(ni)) break;
+      accE += stepL; anchor = ni;
+    }
+    return anchor;
+  };
+
+  return { up: walkSide(junc, -1), dn: walkSide(ce, +1), cx, cy, r };
+}
+
+function rpAnchors(f){
+  const s = f.parts[0].s, e = f.parts[0].e;
+  const cs = f.parts[1].s, ce = f.parts[1].e;
+  const closeThr = state.analysis?.params?.['p-close'] ?? 15;
+  const an = rpAnchorIndices(state.geo, f.peak, ce, closeThr);
+  const up = Math.max(s, Math.min(an.up ?? cs - 1, cs - 1));
+  const dn = Math.min(e, Math.max(an.dn ?? ce + 1, ce + 1));
+  if (RP_ANCHOR_DEBUG){
+    const ll = an.cx != null ? state.geo.proj.inv(an.cx, an.cy) : null;
+    console.info(`[RP-ancre] c\u0153ur pts ${ptNo(cs)}\u2192${ptNo(ce)}` +
+      (ll ? ` \u00b7 centre (${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)}) \u00b7 r\u2248${an.r.toFixed(0)} m` : '') +
+      ` \u00b7 IN ${an.up != null ? 'pt ' + ptNo(an.up) + ' (radiale)' : 'pt ' + ptNo(cs - 1) + ' (repli)'}` +
+      ` \u00b7 OUT ${an.dn != null ? 'pt ' + ptNo(an.dn) + ' (radiale)' : 'pt ' + ptNo(ce + 1) + ' (repli)'}`);
+  }
+  return { up, dn,
+    natural: an.up != null || an.dn != null,
+    cx: an.cx, cy: an.cy, r: an.r };
+}
+
+/* =====================================================================
+   6. CORRECTIONS
+   ===================================================================== */
+
+const isProcessed = () =>
+  !!state.analysis && state.analysis.findings.some(f => f.status !== 'pending');
+
+function idIndexMap(){
+  const m = new Map();
+  state.working.forEach((p, i) => m.set(p.id, i));
+  return m;
+}
+
+function rebuildTexts(f){
+  const k = f.pairs.length;
+  const pairTxt = f.pairs
+    .map(p => `pts ${ptNo(p.a)}\u2194${ptNo(p.b)} (${p.d < 10 ? p.d.toFixed(1) : Math.round(p.d)} m)`)
+    .join(' \u00b7 ');
+  if (f.kind === 'rp'){
+    f.summary = `jonction pt ${ptNo(f.peak)} \u00b7 ${f.totalAngle}\u00b0 (${f.turnText})` +
+                ` \u00b7 ${k} paire${k > 1 ? 's' : ''}`;
+    f.parts[0].text = k ? `superpositions : ${pairTxt}` : 'refermeture par croisement de trace';
+    f.parts[1].text = `c\u0153ur : angle cumul\u00e9 ${f.totalAngle}\u00b0 (${f.turnText})`;
+  } else {
+    f.summary = `sommet pt ${ptNo(f.peak)} \u00b7 ${k} paire${k > 1 ? 's' : ''} \u00b7 \u00e9cart ${f.ecart.toFixed(0)}\u00b0`;
+    f.parts[0].text = k ? `paires miroirs : ${pairTxt}` : 'retournement isol\u00e9, aucune paire miroir';
+  }
+}
+
+function syncIndexes(){
+  if (!state.working || !state.analysis) return;
+  const idx = idIndexMap();
+  const M = state.working.length;
+  for (const f of state.analysis.findings){
+    if (f.status === 'corrected') continue;
+    const s = idx.get(f.zoneIds[0]);
+    const e = idx.get(f.zoneIds[f.zoneIds.length - 1]);
+    const pk = idx.get(f.peakId);
+    if (s == null || e == null || pk == null){
+      console.error('[GPX] emprise introuvable pour', f.label);
+      continue;
+    }
+    f.parts[0].s = s; f.parts[0].e = e;
+    f.peak = pk;
+    if (f.kind === 'rp'){
+      const cs = idx.get(f.coreIds[0]);
+      const ce = idx.get(f.coreIds[f.coreIds.length - 1]);
+      if (cs != null && ce != null){ f.parts[1].s = cs; f.parts[1].e = ce; }
+      else console.error('[GPX] cœur introuvable pour', f.label);
+    } else {
+      f.parts[1].s = Math.max(0, pk - 1);
+      f.parts[1].e = Math.min(M - 1, pk + 1);
+    }
+    f.pairs.forEach(p => { p.a = idx.get(p.aid); p.b = idx.get(p.bid); });
+    f.pairIdx = f.pairs.flatMap(p => [p.a, p.b]);
+    f.ctx.up = f.ctxIds.up != null ? (idx.get(f.ctxIds.up) ?? null) : null;
+    f.ctx.dn = f.ctxIds.dn != null ? (idx.get(f.ctxIds.dn) ?? null) : null;
+    rebuildTexts(f);
+  }
+  state.analysis.findings.sort((u, v) => u.parts[0].s - v.parts[0].s);
+}
+
+function afterTraceEdit(f, detail){
+  state.geo = buildGeometry(state.working);
+  state.analysis.geo = state.geo;
+  syncIndexes();
+  renderBaseTrace(false);
+  renderFileInfo();
+  renderAnalysis();
+  renderResults();
+  clearLabelLayers();
+  clearSliderMarkers();
+  updateLocks();
+  const pend = state.analysis.findings.filter(x => x.status === 'pending').length;
+  toast(`Anomalie traitée (${detail}) — trace : ${state.working.length} points · ${pend} à traiter.`, 'ok');
+  if (pend === 0)
+    toast('Toutes les anomalies sont traitées — vous pouvez générer le GPX corrigé.', 'info');
+  showActionPanel(f);
+}
+
+function nestingGuard(f, zs, ze){
+  if (zs > ze) return null;
+  for (const g of state.analysis.findings){
+    if (g === f || g.status !== 'pending') continue;
+    if (g.parts[0].e >= zs && g.parts[0].s <= ze) return g;
+  }
+  return null;
+}
+
+function absorbFpFindings(f, zs, ze){
+  if (zs > ze) return [];
+  const absorbed = [], keep = [];
+  for (const g of state.analysis.findings){
+    if (g !== f && g.status === 'fp' && g.parts[0].e >= zs && g.parts[0].s <= ze){
+      absorbed.push(g);
+      toast(`« ${g.label} » (faux positif) absorbée par la correction.`, 'info');
+    } else keep.push(g);
+  }
+  if (absorbed.length) state.analysis.findings = keep;
+  return absorbed;
+}
+
+/* ---------- Suppression d'une plage ---------- */
+function openDeleteSel(){
+  const f = state.selected;
+  if (!f || f.status !== 'pending') return;
+  const s = f.parts[0].s, e = f.parts[0].e;
+  if (f.kind === 'rp' && e - s < 2){
+    toast('Emprise trop courte pour une suppression de points.', 'error');
+    return;
+  }
+  const a = $('#apDStart'), b = $('#apDEnd');
+  a.min = s; a.max = e; a.value = s;
+  b.min = s; b.max = e; b.value = e;
+  showView('apDelSel');
+  a.classList.add('del-track'); b.classList.add('del-track');
+  if (f.kind === 'rp'){
+    clearLabelLayers();
+  } else {
+    showStandardLabels(f);
+  }
+  updateDeleteSelUI();
+}
+
+function updateDeleteSelUI(){
+  const f = state.selected;
+  if (!f) return;
+  const a = $('#apDStart'), b = $('#apDEnd');
+  if (f.kind === 'rp'){
+    const s0 = f.parts[0].s, e0 = f.parts[0].e;
+    let start = Math.min(Math.max(+a.value, s0), e0);
+    let end   = Math.min(Math.max(+b.value, s0), e0);
+    if (start > end - 1) start = end - 1;
+    if (end < start + 1) end = start + 1;
+    a.value = start; b.value = end;
+    $('#apDStartNo').textContent = `Points conserv\u00e9s : [${ptNo(s0)} \u2013 ${ptNo(start)}]`;
+    $('#apDEndNo').textContent   = `Points conserv\u00e9s : [${ptNo(end)} \u2013 ${ptNo(e0)}]`;
+    rpDelUpdate(f, start, end);
+    return;
+  }
+  let start = +a.value, end = +b.value;
+  if (start > end) start = end;
+  a.value = start; b.value = end;
+  $('#apDStartNo').textContent = 'pt ' + ptNo(start);
+  $('#apDEndNo').textContent = 'pt ' + ptNo(end);
+  updateDeleteLabels(start, end);
+  delUpdate(f);
+}
+
+function updateDeleteLabels(start, end){
+  for (const it of labelMarkers){
+    if (it.idx == null) continue;
+    const hidden = (it.idx >= start && it.idx <= end);
+    it.cls = hidden ? it.cls : it.cls0;
+    const el = it.marker.getElement();
+    if (el) el.style.display = hidden ? 'none' : '';
+    if (it.lineRef) it.lineRef.properties.opacity = hidden ? 0 : 0.9;
+    it.lineHidden = hidden;
+  }
+  refreshLabelLeaders();
+}
+
+/* ---------- Prévisualisation de suppression (AR) ---------- */
+function delPointFeatures(f){
+  return (f._render?.points || []).filter(p => p._idx != null);
+}
+function delPaintTrack(inp, leftColor, rightColor){
+  const min = +inp.min, max = +inp.max, val = +inp.value;
+  const p = max > min ? ((val - min) / (max - min)) * 100 : 0;
+  inp.style.setProperty('--del-track-bg',
+    `linear-gradient(to right, ${leftColor} 0%, ${leftColor} ${p}%, ${rightColor} ${p}%, ${rightColor} 100%)`);
+}
+function delPaintTracks(){
+  delPaintTrack($('#apDStart'), 'var(--line2)', DEL_KEEP_COLOR);
+  delPaintTrack($('#apDEnd'), DEL_KEEP_COLOR, 'var(--line2)');
+}
+function delPaintTracksRP(){
+  delPaintTrack($('#apDStart'), DEL_KEEP_COLOR, COLORS.warn);
+  delPaintTrack($('#apDEnd'), COLORS.warn, DEL_KEEP_COLOR);
+}
+
+function delUpdate(f){
+  const g = state.geo, m = g.px.length;
+  const start = +$('#apDStart').value, end = +$('#apDEnd').value;
+  const s0 = f.parts[0].s, e0 = f.parts[0].e;
+  for (const p of delPointFeatures(f))
+    p.properties.fill = (p._idx < start || p._idx > end) ? DEL_KEEP_COLOR : DEL_DROP_COLOR;
+  rebuildAnomalySource();
+  const aIdx = start - 1, bIdx = end + 1;
+  const path = [];
+  if (aIdx >= 0)
+    for (let i = Math.max(0, s0 - 1); i <= aIdx; i++) path.push(geoLngLat(g, i));
+  if (bIdx <= m - 1)
+    for (let i = bIdx; i <= Math.min(m - 1, e0 + 1); i++) path.push(geoLngLat(g, i));
+  deleteRegistry.update('lyr-del-join', fcLine(path, DEL_JOIN_COLOR, 4, 0.95));
+  deleteRegistry.update('lyr-del-red', emptyFC());
+  const cA = aIdx >= 0 ? aIdx : start, cB = bIdx <= m - 1 ? bIdx : end;
+  setSliderMarkers(cA, cB, DEL_KEEP_COLOR, DEL_KEEP_COLOR,
+    aIdx >= 0 ? 'conserv\u00e9' : 'bord de trace',
+    bIdx <= m - 1 ? 'conserv\u00e9' : 'bord de trace');
+  delPaintTracks();
+}
+
+/* ---------- Prévisualisation de suppression (RP) ---------- */
+function rpDelUpdate(f, debut, fin){
+  const g = state.geo, m = g.px.length;
+  const s0 = f.parts[0].s, e0 = f.parts[0].e;
+  for (const p of delPointFeatures(f)){
+    const i = p._idx;
+    const kept = (i >= s0 && i <= debut) || (i >= fin && i <= e0);
+    p.properties.fill = kept ? DEL_KEEP_COLOR : DEL_DROP_COLOR;
+    if (p._isAnchor){
+      p.properties.radius = 2.5;
+      p.properties.strokeWidth = 1;
+      p.properties.popupHtml = `<div class="popup-t">${f.label}</div>
+        <div class="popup-row">pt <b>${ptNo(i)}</b> · ${kept ? 'conserv\u00e9' : '\u00e0 supprimer'}</div>`;
+    }
+  }
+  rebuildAnomalySource();
+  const path = [];
+  for (let i = s0; i <= debut; i++) path.push(geoLngLat(g, i));
+  for (let i = fin; i <= e0; i++) path.push(geoLngLat(g, i));
+  deleteRegistry.update('lyr-del-join', fcLine(path, DEL_JOIN_COLOR, 4, 0.95));
+  const red = [];
+  for (let i = debut + 1; i <= fin - 1; i++) red.push(geoLngLat(g, i));
+  deleteRegistry.update('lyr-del-red', fcLine(red, COLORS.warn, 5, 0.95));
+  setSliderMarkers(debut, fin, DEL_KEEP_COLOR, DEL_KEEP_COLOR, 'conserv\u00e9', 'conserv\u00e9');
+  const keptIdx = [];
+  for (let i = s0; i <= debut; i++) keptIdx.push(i);
+  for (let i = fin; i <= e0; i++) keptIdx.push(i);
+  rpDelLabels(f, keptIdx);
+  delPaintTracksRP();
+}
+
+function rpDelLabels(f, keptIdx){
+  const g = state.analysis.geo;
+  const cs = f.parts[1].s, ce = f.parts[1].e;
+  let cxm = 0, cym = 0, cnt = 0;
+  const cstep = Math.max(1, Math.ceil((ce - cs + 1) / 200));
+  for (let i = cs; i <= ce; i += cstep){ cxm += g.px[i]; cym += g.py[i]; cnt++; }
+  cxm /= cnt; cym /= cnt;
+  const pts = keptIdx.map(i => ({ x: g.px[i], y: g.py[i] }));
+  const offs = radialOffsets(pts, cxm, cym);
+  showPointLabels(keptIdx.map((i, r) => ({
+    idx: i, lngLat: geoLngLat(g, i), no: ptNo(i),
+    cls: 'keep', dx: offs[r].dx, dy: offs[r].dy
+  })));
+}
+
+function delClose(f){
+  const a = $('#apDStart'), b = $('#apDEnd');
+  a.classList.remove('del-track'); b.classList.remove('del-track');
+  a.style.removeProperty('--del-track-bg');
+  b.style.removeProperty('--del-track-bg');
+  deleteRegistry.update('lyr-del-join', emptyFC());
+  deleteRegistry.update('lyr-del-red', emptyFC());
+  if (f){
+    for (const p of delPointFeatures(f)){
+      if (p._baseFill) p.properties.fill = p._baseFill;
+      if (p._isAnchor){
+        p.properties.radius = p._baseRadius ?? 7;
+        p.properties.strokeWidth = p._baseWeight ?? 2;
+        if (p._anchorPopup) p.properties.popupHtml = p._anchorPopup;
+      }
+    }
+    rebuildAnomalySource();
+    clearLabelLayers();
+  }
+}
+
+function doDeleteRange(){
+  const f = state.selected;
+  if (!f || f.status !== 'pending') return;
+  let ds, de;
+  if (f.kind === 'rp'){
+    ds = +$('#apDStart').value + 1;
+    de = +$('#apDEnd').value - 1;
+    if (ds > de){
+      toast('Aucun point \u00e0 supprimer entre les curseurs — \u00e9cartez-les d\u2019abord.', 'error');
+      return;
+    }
+  } else {
+    ds = +$('#apDStart').value;
+    de = +$('#apDEnd').value;
+  }
+  const guard = nestingGuard(f, ds, de);
+  if (guard){
+    toast(`Correction refusée : traitez d'abord « ${guard.label} », imbriquée dans cette zone (ou marquez-la faux positif).`, 'error');
+    return;
+  }
+  const absorbed = absorbFpFindings(f, ds, de);
+  const seg = state.working.slice(ds, de + 1);
+  if (state.working.length - seg.length < 2){
+    toast('Suppression refusée : la trace deviendrait dégénérée.', 'error'); return;
+  }
+  f.undo = {
+    type: 'delete',
+    origPts: seg.map(p => ({ ...p })),
+    anchorLeftId:  ds > 0 ? state.working[ds - 1].id : null,
+    anchorRightId: de < state.working.length - 1 ? state.working[de + 1].id : null,
+    firstNo: ds + 1,
+    absorbedFp: absorbed
+  };
+  state.working = state.working.slice(0, ds).concat(state.working.slice(de + 1));
+  f.status = 'corrected'; f.correction = 'delete';
+  afterTraceEdit(f, `suppression de ${seg.length} point${seg.length > 1 ? 's' : ''}`);
+  delClose(f);
+}
+
+/* ---------- Routage OpenRouteService ----------
+   Contrat de coordonnées : orsRoute reçoit des objets {lat, lon}
+   (cf. geoLatLonObj) et sérialise au format ORS [lon, lat]. */
+async function orsRoute(profile, aLL, bLL, key, signal){
+  const res = await fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
+    method: 'POST',
+    headers: { 'Authorization': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      coordinates: [[aLL.lon, aLL.lat], [bLL.lon, bLL.lat]],
+      elevation: true
+    }),
+    signal
+  });
+  if (!res.ok){
+    let msg = 'HTTP ' + res.status;
+    try{ const j = await res.json(); msg = (j.error && j.error.message) || msg; }catch(_){}
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  const j = await res.json();
+  const feat = j.features && j.features[0];
+  if (!feat || !feat.geometry || !feat.geometry.coordinates.length) throw new Error('aucun itinéraire');
+  const coords = feat.geometry.coordinates.map(c => {
+    const p = { lat: c[1], lon: c[0] };
+    if (c.length > 2 && isFinite(c[2])) p.ele = c[2];
+    return p;
+  });
+  const s = (feat.properties && feat.properties.summary) || {};
+  return { coords, distance: s.distance ?? 0, duration: s.duration ?? 0 };
+}
+
+function routesIdentical(car, bike){
+  if (!car || !bike || !car.coords.length || !bike.coords.length) return false;
+  const lc = car.distance ?? 0, lb = bike.distance ?? 0;
+  if (Math.abs(lc - lb) > ROUTE_SAME_LEN_TOL * Math.max(lc, lb, 1)) return false;
+  const proj = makeProjector(car.coords[0]);
+  const A = car.coords.map(p => proj.fwd(p));
+  const B = bike.coords.map(p => proj.fwd(p));
+  const segDist2 = (p, a, b) => {
+    const abx = b.x - a.x, aby = b.y - a.y;
+    const l2 = abx*abx + aby*aby;
+    let t = l2 > 0 ? ((p.x - a.x)*abx + (p.y - a.y)*aby) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const dx = p.x - (a.x + t*abx), dy = p.y - (a.y + t*aby);
+    return dx*dx + dy*dy;
+  };
+  const maxDist = (X, Y) => {
+    let m = 0;
+    for (const p of X){
+      let best = Infinity;
+      if (Y.length < 2){
+        const dx = p.x - Y[0].x, dy = p.y - Y[0].y;
+        best = dx*dx + dy*dy;
+      } else {
+        for (let j = 0; j < Y.length - 1; j++){
+          const d = segDist2(p, Y[j], Y[j+1]);
+          if (d < best) best = d;
+        }
+      }
+      if (best > m) m = best;
+    }
+    return Math.sqrt(m);
+  };
+  return maxDist(A, B) <= ROUTE_SAME_TOL && maxDist(B, A) <= ROUTE_SAME_TOL;
+}
+
+function openRouteSel(){
+  const f = state.selected;
+  if (!f || f.status !== 'pending') return;
+  const M = state.working.length;
+  let lo = 0, hi = M - 1;
+  for (const g of state.analysis.findings){
+    if (g === f || g.status === 'corrected') continue;
+    if (g.parts[0].e < f.parts[0].s) lo = Math.max(lo, g.parts[0].e + 1);
+    if (g.parts[0].s > f.parts[0].e) hi = Math.min(hi, g.parts[0].s - 1);
+  }
+  let u, v;
+  if (f.kind === 'rp'){
+    const an = rpAnchors(f);
+    u = an.up; v = an.dn;
+  } else {
+    u = f.ctx.up != null ? f.ctx.up : f.parts[0].s;
+    v = f.ctx.dn != null ? f.ctx.dn : f.parts[0].e;
+  }
+  const a = $('#apStart'), b = $('#apEnd');
+  a.min = Math.max(0, lo, u - 3); a.max = Math.min(v - 1, hi);
+  b.min = Math.max(0, lo, u - 3) + 1; b.max = Math.min(M - 1, hi, v + 3);
+  a.value = u; b.value = v;
+  showView('apRouteSel');
+  updateRouteSelUI();
+}
+
+function updateRouteSelUI(){
+  const a = $('#apStart'), b = $('#apEnd');
+  let start = +a.value, end = +b.value;
+  if (start > end - 1) start = end - 1;
+  if (end < start + 1) end = start + 1;
+  a.value = start; b.value = end;
+  $('#apStartNo').textContent = 'pt ' + ptNo(start);
+  $('#apEndNo').textContent = 'pt ' + ptNo(end);
+  setSliderMarkers(start, end);
+}
+
+async function startRouting(){
+  const f = state.selected;
+  if (!f || f.status !== 'pending') return;
+
+  if (orsCtl){
+    orsStoppedByUser = true;
+    orsCtl.abort();
+    return;
+  }
+
+  if (!getActiveKey()){
+    if (getOtherKey()) switchActiveKey();
+    else {
+      toast('Renseignez au moins une clé API OpenRouteService.', 'error');
+      (orsActive === 'a' ? orsKeyAEl : orsKeyBEl).focus();
+      return;
+    }
+  }
+  const start = +$('#apStart').value, end = +$('#apEnd').value;
+  const btn = $('#apDoRoute');
+  orsCtl = new AbortController();
+  orsStoppedByUser = false;
+  let to = setTimeout(() => orsCtl.abort(), ORS_TIMEOUT_MS);
+  btn.textContent = `⏳ ORS… (cliquer pour annuler · ${Math.round(ORS_TIMEOUT_MS/1000)} s max)`;
+  const msgOf = r =>
+    r.status === 'rejected'
+      ? (r.reason?.name === 'AbortError'
+          ? `délai dépassé (${Math.round(ORS_TIMEOUT_MS/1000)} s)`
+          : r.reason.message)
+      : null;
+
+  try {
+    const a = geoLatLonObj(state.geo, start), b = geoLatLonObj(state.geo, end);
+    let carRes, bikeRes, carVal = null, bikeVal = null;
+    for (let attempt = 1; ; attempt++){
+      [carRes, bikeRes] = await Promise.allSettled([
+        orsRoute('driving-car', a, b, getActiveKey(), orsCtl.signal),
+        orsRoute('cycling-road', a, b, getActiveKey(), orsCtl.signal)
+      ]);
+      clearTimeout(to);
+      if (orsStoppedByUser){
+        toast('Requête annulée — vous pouvez relancer immédiatement.', 'info');
+        return;
+      }
+      carVal = carRes.status === 'fulfilled' ? carRes.value : null;
+      bikeVal = bikeRes.status === 'fulfilled' ? bikeRes.value : null;
+      if (carVal || bikeVal) break;
+
+      const quotaFail = [carRes, bikeRes].some(r =>
+        r.status === 'rejected' && (r.reason?.status === 403 || r.reason?.status === 429));
+      if (attempt === 1 && quotaFail && getOtherKey()){
+        const prevNo = orsActive === 'a' ? 1 : 2, nextNo = orsActive === 'a' ? 2 : 1;
+        switchActiveKey();
+        toast(`Clé ${prevNo} refusée (quota ?) — nouvelle tentative avec la clé ${nextNo}.`, 'info');
+        to = setTimeout(() => orsCtl.abort(), ORS_TIMEOUT_MS);
+        continue;
+      }
+      const why = [msgOf(carRes), msgOf(bikeRes)].filter(Boolean).join(' · ');
+      if (attempt === 2 && quotaFail)
+        toast('Routage impossible : les deux clés sont refusées (403) — quota épuisé ou clés invalides.', 'error');
+      else
+        toast('Routage impossible : ' + (why || 'service injoignable.') +
+          ' — relancez, ou réduisez la zone avec les sliders.', 'error');
+      return;
+    }
+
+    pendingRoutes = {
+      car: carVal, bike: bikeVal, start, end,
+      identical: routesIdentical(carVal, bikeVal)
+    };
+    drawRoutePreview();
+    showView('apChoice');
+    if (pendingRoutes.identical){
+      $('#apProfiles').hidden = true;
+      $('#apSameNote').hidden = false;
+      $('#apSameNote').textContent =
+        `Tracé unique — voiture et vélo de route identiques ` +
+        `(${(pendingRoutes.car.distance/1000).toFixed(2).replace('.', ',')} km).`;
+    } else {
+      $('#apProfiles').hidden = false;
+      $('#apSameNote').hidden = true;
+      $('#apLabCar').classList.toggle('off', !pendingRoutes.car);
+      $('#apLabBike').classList.toggle('off', !pendingRoutes.bike);
+      $('#apLabCar').querySelector('input').disabled = !pendingRoutes.car;
+      $('#apLabBike').querySelector('input').disabled = !pendingRoutes.bike;
+      $('#apCarInfo').textContent = pendingRoutes.car
+        ? `${(pendingRoutes.car.distance/1000).toFixed(2).replace('.', ',')} km · ${fmtDur(pendingRoutes.car.duration)}` : 'indisponible';
+      $('#apBikeInfo').textContent = pendingRoutes.bike
+        ? `${(pendingRoutes.bike.distance/1000).toFixed(2).replace('.', ',')} km · ${fmtDur(pendingRoutes.bike.duration)}` : 'indisponible';
+      document.querySelector(`input[name=apProfile][value="${pendingRoutes.car ? 'driving-car' : 'cycling-road'}"]`).checked = true;
+    }
+  } finally {
+    orsCtl = null;
+    btn.disabled = false;
+    btn.textContent = 'Demander le routage';
+  }
+}
+
+function drawRoutePreview(){
+  clearRoutePreview();
+  let bounds = null;
+  const extendBounds = coords => {
+    if (!coords.length) return;
+    if (!bounds) bounds = new mapboxgl.LngLatBounds(coords[0], coords[0]);
+    for (const c of coords) bounds.extend(c);
+  };
+  const addLine = (pts, color, weight, regId) => {
+    const coords = pts.map(p => [p.lon, p.lat]);
+    previewRegistry.update(regId, fcLine(coords, color, weight, 0.9));
+    extendBounds(coords);
+  };
+  const addPts = (pts, color, r, regId) => {
+    const inner = pts.slice(1, -1);
+    previewRegistry.update(regId, fcPoints(inner.map(p => [p.lon, p.lat]), () => ({
+      radius: r, fill: color, stroke: '#ffffff', strokeWidth: 1.2
+    })));
+  };
+  if (pendingRoutes.identical){
+    addLine(pendingRoutes.car.coords, ROUTE_COLORS.car, 9, 'lyr-preview-car');
+    addPts(pendingRoutes.car.coords, ROUTE_COLORS.car, 4, 'lyr-preview-car-pts');
+    previewRegistry.update('lyr-preview-bike', emptyFC());
+    previewRegistry.update('lyr-preview-bike-pts', emptyFC());
+  } else {
+    if (pendingRoutes.car){
+      addLine(pendingRoutes.car.coords, ROUTE_COLORS.car, 10, 'lyr-preview-car');
+      addPts(pendingRoutes.car.coords, ROUTE_COLORS.car, 4, 'lyr-preview-car-pts');
+    } else {
+      previewRegistry.update('lyr-preview-car', emptyFC());
+      previewRegistry.update('lyr-preview-car-pts', emptyFC());
+    }
+    if (pendingRoutes.bike){
+      addLine(pendingRoutes.bike.coords, ROUTE_COLORS.bike, 6, 'lyr-preview-bike');
+      addPts(pendingRoutes.bike.coords, ROUTE_COLORS.bike, 3, 'lyr-preview-bike-pts');
+    } else {
+      previewRegistry.update('lyr-preview-bike', emptyFC());
+      previewRegistry.update('lyr-preview-bike-pts', emptyFC());
+    }
+  }
+  if (bounds) map.fitBounds(bounds, { padding: 60, maxZoom: 18, duration: 500 });
+}
+
+function clearRoutePreview(){
+  previewRegistry.update('lyr-preview-car', emptyFC());
+  previewRegistry.update('lyr-preview-car-pts', emptyFC());
+  previewRegistry.update('lyr-preview-bike', emptyFC());
+  previewRegistry.update('lyr-preview-bike-pts', emptyFC());
+}
+
+function applyRoute(){
+  const f = state.selected;
+  if (!f || f.status !== 'pending') return;
+  const val = pendingRoutes.identical
+    ? 'driving-car'
+    : document.querySelector('input[name=apProfile]:checked').value;
+  const r = val === 'driving-car' ? pendingRoutes.car : pendingRoutes.bike;
+  if (!r){ toast('Ce tracé est indisponible.', 'error'); return; }
+  const { start, end } = pendingRoutes;
+  const guard = nestingGuard(f, start + 1, end - 1);
+  if (guard){
+    toast(`Correction refusée : traitez d'abord « ${guard.label} », imbriquée dans cette zone (ou marquez-la faux positif).`, 'error');
+    return;
+  }
+  const absorbed = absorbFpFindings(f, start + 1, end - 1);
+  const inner = state.working.slice(start + 1, end);
+  const mids = r.coords.slice(1, -1).map(c => {
+    const p = { id: nextPointId++, lat: c.lat, lon: c.lon };
+    if (isFinite(c.ele)) p.ele = c.ele;
+    return p;
+  });
+  f.undo = {
+    type: 'route',
+    origPts: inner.map(p => ({ ...p })),
+    insertedIds: mids.map(p => p.id),
+    routePts: [
+      { lat: state.working[start].lat, lon: state.working[start].lon },
+      ...mids.map(p => ({ lat: p.lat, lon: p.lon })),
+      { lat: state.working[end].lat, lon: state.working[end].lon }
+    ],
+    startPt: { lat: state.working[start].lat, lon: state.working[start].lon },
+    endPt:   { lat: state.working[end].lat,   lon: state.working[end].lon },
+    firstNo: start + 2,
+    absorbedFp: absorbed
+  };
+  state.working = state.working.slice(0, start + 1).concat(mids, state.working.slice(end));
+  f.status = 'corrected';
+  f.correction = val === 'driving-car' ? 'route-car' : 'route-bike';
+  afterTraceEdit(f, `routage ${val === 'driving-car' ? 'voiture' : 'vélo de route'}`);
+}
+
+function cancelRouteChoice(){
+  pendingRoutes = { car:null, bike:null, start:0, end:0, identical:false };
+  clearRoutePreview();
+  showView('apMain');
+}
+
+/* ---------- Faux positif ---------- */
+function markFp(){
+  const f = state.selected;
+  if (!f || f.status !== 'pending') return;
+  f.status = 'fp';
+  renderAnalysis();
+  renderResults();
+  renderSummary();
+  clearLabelLayers();
+  updateLocks();
+  const pend = state.analysis.findings.filter(x => x.status === 'pending').length;
+  toast(`Anomalie marquée faux positif — ${pend} à traiter.`, 'info');
+  showActionPanel(f);
+}
+
+function unmarkFp(){
+  const f = state.selected;
+  if (!f || f.status !== 'fp') return;
+  f.status = 'pending'; f.correction = null;
+  renderAnalysis();
+  renderResults();
+  renderSummary();
+  updateLocks();
+  showActionPanel(f);
+  toast('Marqueur faux positif retiré — statut : à traiter.', 'info');
+}
+
+/* ---------- Annulation ---------- */
+function undoCorrection(f){
+  if (!f || !f.undo) return;
+  const undo = f.undo;
+  if (undo.type === 'route'){
+    const usedByOther = state.analysis.findings.some(g =>
+      g !== f && g.undo && g.undo.origPts.some(p => undo.insertedIds.includes(p.id)));
+    if (usedByOther){
+      toast('Annulation impossible : la zone routée a été réutilisée par une correction ultérieure.', 'error');
+      return;
+    }
+    const pos = state.working.findIndex(p => p.id === undo.insertedIds[0]);
+    if (pos < 0){ toast('Annulation impossible : points de routage introuvables.', 'error'); return; }
+    for (let k = 0; k < undo.insertedIds.length; k++){
+      if (!state.working[pos + k] || state.working[pos + k].id !== undo.insertedIds[k]){
+        toast('Annulation impossible : la zone a été modifiée par une correction ultérieure.', 'error');
+        return;
+      }
+    }
+    state.working = state.working.slice(0, pos)
+      .concat(undo.origPts.map(p => ({ ...p })), state.working.slice(pos + undo.insertedIds.length));
+  } else {
+    const idx = idIndexMap();
+    const pos = undo.anchorRightId != null ? idx.get(undo.anchorRightId)
+      : undo.anchorLeftId != null ? (idx.get(undo.anchorLeftId) != null ? idx.get(undo.anchorLeftId) + 1 : null)
+      : null;
+    if (pos == null){
+      toast('Annulation impossible : points d\u2019ancrage disparus (corrections ultérieures).', 'error');
+      return;
+    }
+    state.working = state.working.slice(0, pos)
+      .concat(undo.origPts.map(p => ({ ...p })), state.working.slice(pos));
+  }
+  f.status = 'pending'; f.correction = null; f.undo = null;
+  let nFp = 0;
+  if (undo.absorbedFp && undo.absorbedFp.length){
+    nFp = undo.absorbedFp.length;
+    for (const g of undo.absorbedFp){ g.status = 'fp'; state.analysis.findings.push(g); }
+  }
+  state.geo = buildGeometry(state.working);
+  state.analysis.geo = state.geo;
+  syncIndexes();
+  renderBaseTrace(false);
+  renderFileInfo();
+  renderAnalysis();
+  renderResults();
+  clearLabelLayers();
+  clearSliderMarkers();
+  updateLocks();
+  toast(`Correction de « ${f.label} » annulée — points restaurés, statut : à traiter` +
+    (nFp ? ` · ${nFp} faux positif${nFp > 1 ? 's' : ''} restauré${nFp > 1 ? 's' : ''}` : '') + '.', 'info');
+  showActionPanel(f);
+}
+
+/* ---------- Marqueurs de sliders (HTML) ---------- */
+function setSliderMarkers(startIdx, endIdx, colA = SEL_A, colB = SEL_B, tipA, tipB){
+  clearSliderMarkers();
+  if (!state.geo || !mapboxReady) return;
+  const pa = geoLngLat(state.geo, startIdx), pb = geoLngLat(state.geo, endIdx);
+  const mk = (lngLat, col, title) => {
+    const el = document.createElement('div');
+    el.style.cssText = `width:14px;height:14px;border-radius:50%;background:${col};` +
+      `border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(0,0,0,.35),0 2px 6px rgba(0,0,0,.4);`;
+    el.title = title;
+    el.style.pointerEvents = 'auto';
+    return new mapboxgl.Marker({ element: el, anchor:'center' }).setLngLat(lngLat).addTo(map);
+  };
+  sliderMarkers.push(mk(pa, colA, (tipA || 'Début') + ' · pt ' + ptNo(startIdx)));
+  sliderMarkers.push(mk(pb, colB, (tipB || 'Fin') + ' · pt ' + ptNo(endIdx)));
+}
+
+function clearSliderMarkers(){
+  for (const m of sliderMarkers) m.remove();
+  sliderMarkers = [];
+}
+
+/* ============================== 7. Orchestration ============================== */
+function collectParams(){
+  const out = {};
+  document.querySelectorAll('#params input[type=range]').forEach(inp => { out[inp.id] = +inp.value; });
+  return out;
+}
+const paramSignature = () =>
+  [...document.querySelectorAll('#params input[type=range]')].map(i => i.value).join('|');
+
+function updateLocks(){
+  const has = !!state.working;
+  const processed = isProcessed();
+  const btn = $('#btnAnalyze');
+  btn.disabled = !has || processed;
+  btn.title = processed
+    ? 'Corrections en cours — annulez-les ou générez/rechargez un GPX pour réanalyser.'
+    : '';
+  updateGenerateState();
+}
+
+function updateGenerateState(){
+  const g = $('#btnGenerate');
+  const fs = state.analysis ? state.analysis.findings : null;
+  const classes = ['st-green', 'st-yellow', 'st-orange', 'st-red'];
+  if (!state.working || !fs || !fs.length){
+    g.disabled = true;
+    g.classList.remove(...classes);
+    g.title = 'Lancez l\u2019analyse pour détecter les anomalies, puis traitez-les.';
+    return;
+  }
+  const np = fs.filter(f => f.status === 'pending').length;
+  const nf = fs.filter(f => f.status === 'fp').length;
+  g.classList.remove(...classes);
+  if (np === fs.length){
+    g.disabled = true;
+    g.classList.add('st-red');
+    g.title = 'Aucune anomalie traitée — traitez-en au moins une (ou marquez un faux positif) pour générer.';
+  } else if (np === 0 && nf === 0){
+    g.disabled = false;
+    g.classList.add('st-green');
+    g.title = 'Toutes les anomalies sont traitées — générez le GPX corrigé.';
+  } else if (np === 0){
+    g.disabled = false;
+    g.classList.add('st-yellow');
+    g.title = `Tout est traité (${nf} faux positif${nf > 1 ? 's' : ''} conservé${nf > 1 ? 's' : ''}) — générez le GPX.`;
+  } else {
+    g.disabled = false;
+    g.classList.add('st-orange');
+    g.title = `${np} anomalie${np > 1 ? 's' : ''} restante${np > 1 ? 's' : ''} à traiter — vous pouvez générer quand vous voulez.`;
+  }
+}
+
+function runAnalysis(){
+  if (!state.raw) return;
+  if (isProcessed()){
+    toast('Des corrections sont en cours — annulez-les ou générez/rechargez un GPX pour réanalyser.', 'error');
+    return;
+  }
+  const btn = $('#btnAnalyze');
+  btn.disabled = true; btn.classList.add('busy');
+  $('#btnLabel').textContent = 'Analyse…';
+  setTimeout(() => {
+    try {
+      const t0 = performance.now();
+      const params = collectParams();
+      const { pts, removed } = consolidatePoints(state.raw, params['p-consol']);
+      state.working = pts;
+      state.consol = params['p-consol'];
+      state.consolRemoved = removed;
+      state.geo = buildGeometry(state.working);
+      renderBaseTrace();
+      renderFileInfo();
+      const arF = detectAR(state.geo, params);
+      const R = resampleGeo(state.geo, RP_STEP_DEFAULT);
+      const rpF = detectRP(state.geo, R, params);
+      const findings = arF.concat(rpF).sort((u, v) => u.parts[0].s - v.parts[0].s);
+      let nAR = 0, nRP = 0;
+      const counters = new Map();
+      for (const f of findings){
+        const c = (counters.get(f.label) ?? 0) + 1;
+        counters.set(f.label, c);
+        f.label = `${f.label} : ${c}`;
+        if (f.kind === 'rp') nRP++; else nAR++;
+      }
+      state.analysis = { findings, geo: state.geo, params, ms: Math.round(performance.now()-t0) };
+      analyzedSignature = paramSignature();
+      renderAnalysis();
+      renderResults();
+      btn.classList.remove('dirty');
+      toast(findings.length
+        ? `${findings.length} anomalie${findings.length > 1 ? 's' : ''} détectée${findings.length > 1 ? 's' : ''}` +
+          ` — ${nAR} aller-retour${nAR > 1 ? 's' : ''} · ${nRP} boucle${nRP > 1 ? 's' : ''} de giratoire.`
+        : 'Aucune anomalie détectée.', findings.length ? 'ok' : 'info');
+    } catch(e){ toast('Erreur pendant l\u2019analyse : ' + e.message, 'error'); }
+    btn.classList.remove('busy');
+    $('#btnLabel').textContent = 'Analyser';
+    updateLocks();
+  }, 40);
+}
+
+/* ============================== 8. Rendus ============================== */
+
+function fcLine(coords, color, width, opacity){
+  if (!coords || coords.length < 2) return emptyFC();
+  return { type:'FeatureCollection', features: [{
+    type:'Feature', properties:{ color, width, opacity },
+    geometry:{ type:'LineString', coordinates: coords }
+  }]};
+}
+function fcPoints(coords, propsFn){
+  if (!coords || !coords.length) return emptyFC();
+  return { type:'FeatureCollection', features: coords.map((c, i) => ({
+    type:'Feature', properties: propsFn(c, i),
+    geometry:{ type:'Point', coordinates: c }
+  }))};
+}
+
+function renderBaseTrace(fit = true){
+  whenMapReady(() => {
+    if (!state.geo) return;
+    const g = state.geo;
+    const coords = [];
+    for (let i = 0; i < g.px.length; i++) coords.push(geoLngLat(g, i));
+
+    traceRegistry.update('lyr-trace', fcLine(coords, COLORS.trace, 3, 0.95));
+    const start = coords[0], end = coords[coords.length - 1];
+    traceRegistry.update('lyr-trace-ends', {
+      type:'FeatureCollection',
+      features: [
+        { type:'Feature',
+          properties:{ kind:'start', popupHtml:'<div class="popup-t">Départ</div>' },
+          geometry:{ type:'Point', coordinates: start } },
+        { type:'Feature',
+          properties:{ kind:'end', popupHtml:'<div class="popup-t">Arrivée</div>' },
+          geometry:{ type:'Point', coordinates: end } }
+      ]
+    });
+    if (fit){
+      const b = new mapboxgl.LngLatBounds(coords[0], coords[0]);
+      for (const c of coords) b.extend(c);
+      map.fitBounds(b, { padding: 40, duration: 0 });
+    }
+  });
+}
+
+function renderFileInfo(){
+  const g = state.geo;
+  const el = $('#fileinfo');
+  el.hidden = false;
+  el.innerHTML =
+    `<div class="fname"></div>
+     <div class="frow"><span>points fichier</span><b>${state.raw.length}</b></div>` +
+    (state.consolRemoved
+      ? `<div class="frow"><span>consolidation (&lt; ${fmtNum(state.consol)} m)</span><b>\u2212 ${state.consolRemoved}</b></div>`
+      : '') +
+    `<div class="frow"><span>points trace de travail</span><b>${state.working.length}</b></div>
+     <div class="frow"><span>distance</span><b>${(g.total/1000).toFixed(1)} km</b></div>`;
+  el.querySelector('.fname').textContent = state.fileName;
+}
+
+/* ---------- Anomalies ---------- */
+function clearAnomalyHtmlMarkers(){
+  if (!state.analysis) return;
+  for (const f of state.analysis.findings){
+    for (const m of (f._htmlMarkers || [])) m.remove();
+    f._htmlMarkers = [];
+  }
+}
+function clearAnalysisLayers(){
+  clearAnomalyHtmlMarkers();
+  if (map){
+    anomalyRegistry.update('lyr-anomaly-lines', emptyFC());
+    anomalyRegistry.update('lyr-anomaly-points', emptyFC());
+  }
+  deleteRegistry.update('lyr-del-join', emptyFC());
+  deleteRegistry.update('lyr-del-red', emptyFC());
+  if (currentPopup){ currentPopup.remove(); currentPopup = null; }
+}
+
+function rebuildAnomalySource(){
+  if (!state.analysis || !map) return;
+  const pts = [];
+  for (const f of state.analysis.findings){
+    if (!f._render) continue;
+    for (const p of f._render.points) pts.push(p);
+  }
+  anomalyRegistry.update('lyr-anomaly-points', { type:'FeatureCollection', features: pts });
+}
+
+function renderAnalysis(){
+  whenMapReady(() => {
+    clearAnalysisLayers();
+    const { findings, geo } = state.analysis;
+    findings.forEach(f => {
+      f._render = { points: [], lines: [] };
+      if (!f._htmlMarkers) f._htmlMarkers = [];
+      if (f.status === 'corrected'){
+        const pts = f.undo ? f.undo.origPts : [];
+        if (f.correction && f.correction.startsWith('route') && f.undo?.routePts?.length){
+          const rl = f.undo.routePts.map(p => [p.lon, p.lat]);
+          const fc = { type:'FeatureCollection', features: [{
+            type:'Feature',
+            properties:{ popupHtml:
+              `<div class="popup-t">${f.label}</div>
+               <div class="popup-row">Trac\u00e9 de routage appliqu\u00e9 (${f.correction === 'route-car' ? 'voiture' : 'v\u00e9lo de route'})</div>
+               <div class="popup-row">points ins\u00e9r\u00e9s : <b>${rl.length}</b></div>` },
+            geometry:{ type:'LineString', coordinates: rl }
+          }]};
+          appliedRegistry.update('lyr-applied', fc);
+        } else {
+          appliedRegistry.update('lyr-applied', emptyFC());
+        }
+        pts.forEach((p, rank) => {
+          f._render.points.push({
+            type:'Feature',
+            properties:{
+              radius:3.5, fill:ORIG_COLOR, stroke:'#ffffff', strokeWidth:1.2,
+              popupHtml:
+                `<div class="popup-t">${f.label}</div>
+                 <div class="popup-row">Point d\u2019origine · ex-pt <b>${f.undo.firstNo + rank}</b></div>`
+            },
+            geometry:{ type:'Point', coordinates: [p.lon, p.lat] }
+          });
+        });
+        if (f.correction && f.correction.startsWith('route')){
+          const drawBound = (pt, color, label) => {
+            if (!pt) return;
+            f._render.points.push({
+              type:'Feature',
+              properties:{
+                radius:3.5, fill:color, stroke:'#ffffff', strokeWidth:1.2,
+                popupHtml:
+                  `<div class="popup-t">${f.label}</div>
+                   <div class="popup-row">${label} · lat/lon : <b>${pt.lat.toFixed(5)}, ${pt.lon.toFixed(5)}</b></div>`
+              },
+              geometry:{ type:'Point', coordinates:[pt.lon, pt.lat] }
+            });
+          };
+          drawBound(f.undo?.startPt, SEL_A, 'Point D\u00e9but de la correction (conserv\u00e9)');
+          drawBound(f.undo?.endPt, SEL_B, 'Point Fin de la correction (conserv\u00e9)');
+        }
+        f.bounds = null;
+        for (const p of f._render.points){
+          const c = p.geometry.coordinates;
+          if (!f.bounds) f.bounds = new mapboxgl.LngLatBounds(c, c);
+          else f.bounds.extend(c);
+        }
+        return;
+      }
+      const isFp = f.status === 'fp';
+      const col = isFp ? FP_COLOR : COLORS.warn;
+      const s = f.parts[0].s, e = f.parts[0].e;
+
+      if (f.kind === 'rp'){
+        const cs = f.parts[1].s, ce = f.parts[1].e;
+        const an = rpAnchors(f);
+
+        const zone = [];
+        for (let i = s; i <= e; i++) zone.push(geoLngLat(geo, i));
+        if (zone.length >= 2){
+          f._render.lines.push({
+            type:'Feature',
+            properties:{
+              color: col, width: 2.5, opacity: 0.8, _delHide: true, _baseOpacity: 0.8,
+              popupHtml:
+                `<div class="popup-t">${f.label}</div>
+                 <div class="popup-row">${f.summary}</div>
+                 <div class="popup-row">Emprise : <b>${ptNo(s)} \u2192 ${ptNo(e)}</b></div>`
+            },
+            geometry:{ type:'LineString', coordinates: zone }
+          });
+        }
+        const core = [];
+        for (let i = cs; i <= ce; i++) core.push(geoLngLat(geo, i));
+        if (core.length >= 2){
+          f._render.lines.push({
+            type:'Feature',
+            properties:{
+              color: col, width: 5, opacity: 0.95, _delHide: true, _baseOpacity: 0.95,
+              popupHtml:
+                `<div class="popup-t">${f.label}</div>
+                 <div class="popup-row">${f.parts[1].text}</div>
+                 <div class="popup-row">C\u0153ur : <b>${ptNo(cs)} \u2192 ${ptNo(ce)}</b></div>`
+            },
+            geometry:{ type:'LineString', coordinates: core }
+          });
+        }
+        f.bounds = new mapboxgl.LngLatBounds(zone[0], zone[0]);
+        for (const c of zone) f.bounds.extend(c);
+
+        if (an.cx != null){
+          const cLL = geo.proj.inv(an.cx, an.cy);
+          const el = document.createElement('div');
+          el.className = 'rp-x';
+          el.textContent = '\u2715';
+          el.style.transform = 'translate(-50%,-50%)';
+          const mk = new mapboxgl.Marker({ element: el, anchor: 'center' })
+            .setLngLat([cLL.lon, cLL.lat]).addTo(map);
+          mk.setPopup(new mapboxgl.Popup({ offset: 10 }).setHTML(
+            `<div class="popup-t">${f.label}</div>
+             <div class="popup-row">Centre de l\u2019anneau (ajustement de cercle)</div>
+             <div class="popup-row">rayon m\u00e9dian \u2248 <b>${an.r != null ? an.r.toFixed(0) : '?'} m</b></div>
+             <div class="popup-row">lat/lon : <b>${cLL.lat.toFixed(5)}, ${cLL.lon.toFixed(5)}</b></div>`));
+          f._htmlMarkers.push(mk);
+        }
+        for (let i = s; i <= e; i++){
+          const isAnchor = (i === an.up || i === an.dn);
+          const fillColor = isAnchor ? (i === an.up ? ANCHOR_A : ANCHOR_B) : col;
+          const ll = geoLngLat(geo, i);
+          const llObj = geoLatLonObj(geo, i);
+          let html;
+          if (isAnchor){
+            const role = i === an.up
+              ? 'ancre de routage amont — début de la zone remplacée par défaut'
+              : 'ancre de routage aval — fin de la zone remplacée par défaut';
+            html = `<div class="popup-t">${f.label}</div>
+              <div class="popup-row">${role} · pt <b>${ptNo(i)}</b></div>
+              <div class="popup-row">lat/lon : <b>${llObj.lat.toFixed(5)}, ${llObj.lon.toFixed(5)}</b></div>`;
+          } else {
+            html = `<div class="popup-t">${f.label}</div>
+              <div class="popup-row">pt <b>${ptNo(i)}</b></div>
+              <div class="popup-row">lat/lon : <b>${llObj.lat.toFixed(5)}, ${llObj.lon.toFixed(5)}</b></div>`;
+          }
+          const feat = {
+            type:'Feature',
+            properties:{
+              radius: isAnchor ? 7 : 2.5,
+              fill: fillColor,
+              stroke:'#ffffff',
+              strokeWidth: isAnchor ? 2 : 1,
+              popupHtml: html
+            },
+            geometry:{ type:'Point', coordinates: ll }
+          };
+          feat._idx = i;
+          feat._baseFill = fillColor;
+          if (isAnchor){
+            feat._isAnchor = true;
+            feat._anchorPopup = html;
+            feat._baseRadius = 7;
+            feat._baseWeight = 2;
+          }
+          f._render.points.push(feat);
+        }
+      } else {
+        const coords = [];
+        for (let i = s; i <= e; i++) coords.push(geoLngLat(geo, i));
+        if (coords.length >= 2){
+          f._render.lines.push({
+            type:'Feature',
+            properties:{
+              color: col, width: 5, opacity: 0.95,
+              popupHtml:
+                `<div class="popup-t">${f.label}</div>
+                 <div class="popup-row">${f.summary}</div>
+                 <div class="popup-row">Points : <b>${ptNo(s)} \u2192 ${ptNo(e)}</b></div>`
+            },
+            geometry:{ type:'LineString', coordinates: coords }
+          });
+        }
+        f.bounds = new mapboxgl.LngLatBounds(coords[0], coords[0]);
+        for (const c of coords) f.bounds.extend(c);
+
+        for (let i = s; i <= e; i++){
+          const ll = geoLngLat(geo, i);
+          const llObj = geoLatLonObj(geo, i);
+          const feat = {
+            type:'Feature',
+            properties:{
+              radius:4, fill:col, stroke:'#ffffff', strokeWidth:1.5,
+              popupHtml:
+                `<div class="popup-t">${f.label}</div>
+                 <div class="popup-row">pt <b>${ptNo(i)}</b></div>
+                 <div class="popup-row">lat/lon : <b>${llObj.lat.toFixed(5)}, ${llObj.lon.toFixed(5)}</b></div>`
+            },
+            geometry:{ type:'Point', coordinates: ll }
+          };
+          feat._idx = i;
+          feat._baseFill = col;
+          f._render.points.push(feat);
+        }
+      }
+      if (!isFp){
+        for (const side of ['up', 'dn']){
+          const ci = f.ctx[side];
+          if (ci == null) continue;
+          const ll = geoLngLat(geo, ci);
+          f._render.points.push({
+            type:'Feature',
+            properties:{
+              radius:5, fill:COLORS.ctx, stroke:'#ffffff', strokeWidth:1.5,
+              popupHtml:
+                `<div class="popup-t">${f.label}</div>
+                 <div class="popup-row">pt <b>${ptNo(ci)}</b> · ${side === 'up' ? 'amont' : 'aval'} (sain)</div>`
+            },
+            geometry:{ type:'Point', coordinates: ll }
+          });
+          f.bounds.extend(ll);
+        }
+      }
+    });
+    const lineFeatures = [];
+    for (const f of findings)
+      for (const lf of (f._render?.lines || [])) lineFeatures.push(lf);
+    anomalyRegistry.update('lyr-anomaly-lines', { type:'FeatureCollection', features: lineFeatures });
+    rebuildAnomalySource();
+  });
+}
+
+/* ---------- Callouts ---------- */
+function clearLabelLayers(){
+  for (const it of labelMarkers) it.marker.remove();
+  labelMarkers = [];
+  labelLeaderFeatures = [];
+  if (map && map.getSource('lyr-label-leaders'))
+    map.getSource('lyr-label-leaders').setData(emptyFC());
+}
+
+function refreshLabelLeaders(){
+  if (!map || !map.getSource('lyr-label-leaders')) return;
+  map.getSource('lyr-label-leaders').setData({
+    type:'FeatureCollection',
+    features: labelLeaderFeatures.filter(lf => lf.properties.opacity > 0)
+  });
+}
+
+function updateLabelLine(it){
+  if (!it.lineRef) return;
+  const p0 = map.project(it.lngLat);
+  const p1 = { x: p0.x + it.dx, y: p0.y + it.dy };
+  const end = map.unproject(p1);
+  it.lineRef.geometry.coordinates = [it.lngLat, [end.lng, end.lat]];
+  it.lineRef.properties.opacity = it.lineHidden ? 0 : 0.9;
+}
+function updateLabelLines(){
+  if (!mapboxReady) return;
+  for (const it of labelMarkers) updateLabelLine(it);
+  refreshLabelLeaders();
+}
+
+function makeLabelDraggable(it, el){
+  const span = el.querySelector('.pt-label');
+  if (!span) return;
+  let pid = null, sx = 0, sy = 0, dx0 = 0, dy0 = 0;
+  el.style.cursor = 'grab';
+  el.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    pid = e.pointerId;
+    try{ el.setPointerCapture(pid); }catch(_){}
+    sx = e.clientX; sy = e.clientY;
+    dx0 = it.dx; dy0 = it.dy;
+    el.style.zIndex = 2000;
+    span.classList.add('dragging');
+    if (map) map.dragPan.disable();
+  });
+  el.addEventListener('pointermove', e => {
+    if (pid === null || e.pointerId !== pid) return;
+    e.preventDefault();
+    it.dx = dx0 + (e.clientX - sx);
+    it.dy = dy0 + (e.clientY - sy);
+    span.style.setProperty('--dx', it.dx + 'px');
+    span.style.setProperty('--dy', it.dy + 'px');
+    updateLabelLine(it);
+    refreshLabelLeaders();
+  });
+  const end = () => {
+    if (pid === null) return;
+    pid = null;
+    span.classList.remove('dragging');
+    if (map) map.dragPan.enable();
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('lostpointercapture', end);
+  el.addEventListener('dblclick', e => {
+    e.stopPropagation();
+    it.dx = it.dx0; it.dy = it.dy0;
+    span.style.setProperty('--dx', it.dx + 'px');
+    span.style.setProperty('--dy', it.dy + 'px');
+    updateLabelLine(it);
+    refreshLabelLeaders();
+  });
+}
+
+function showPointLabels(items){
+  clearLabelLayers();
+  if (!mapboxReady) return;
+  for (const it of items){
+    it.dx0 = it.dx; it.dy0 = it.dy;
+    it.cls0 = it.cls;
+    const lineColor = it.cls === 'pk' ? COLORS.warn
+      : it.cls === 'ctx' ? COLORS.ctx
+      : it.cls === 'del' ? ORIG_COLOR
+      : it.cls === 'keep' ? DEL_KEEP_COLOR
+      : it.cls === 'fpl' ? FP_COLOR : '#9aa2af';
+    const lf = {
+      type:'Feature',
+      properties:{ color: lineColor, opacity: 0.9 },
+      geometry:{ type:'LineString', coordinates: [it.lngLat, it.lngLat] }
+    };
+    it.lineRef = lf;
+    it.lineHidden = false;
+    labelLeaderFeatures.push(lf);
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'pointer-events:auto;';
+    wrap.innerHTML = `<span class="pt-label ${it.cls}" style="--dx:${it.dx}px;--dy:${it.dy}px">${it.no}</span>`;
+    const marker = new mapboxgl.Marker({ element: wrap, anchor:'center' })
+      .setLngLat(it.lngLat).addTo(map);
+    it.marker = marker;
+    makeLabelDraggable(it, wrap);
+    labelMarkers.push(it);
+  }
+  updateLabelLines();
+}
+
+function fanItems(geo, idxs, pkIdx, cls, withCtx, ctx){
+  const items = [];
+  for (const j of idxs){
+    if (j === pkIdx) continue;
+    const r = Math.abs(j - pkIdx), up = j < pkIdx;
+    items.push({
+      idx: j, lngLat: geoLngLat(geo, j), no: ptNo(j), cls,
+      dx: (up ? -1 : 1) * (20 * r + 8),
+      dy: (up ? -1 : 1) * (r % 2 ? 34 : 58)
+    });
+  }
+  items.push({ idx: pkIdx, lngLat: geoLngLat(geo, pkIdx), no: ptNo(pkIdx),
+    cls: cls === 'fpl' ? 'fpl' : 'pk', dx: 0, dy: -84 });
+  if (withCtx){
+    if (ctx.up != null)
+      items.push({ idx: ctx.up, lngLat: geoLngLat(geo, ctx.up), no: ptNo(ctx.up), cls: 'ctx',
+        dx: -(20 * (pkIdx - idxs[0] + 2) + 8), dy: -34 });
+    if (ctx.dn != null)
+      items.push({ idx: ctx.dn, lngLat: geoLngLat(geo, ctx.dn), no: ptNo(ctx.dn), cls: 'ctx',
+        dx: 20 * (idxs[idxs.length-1] - pkIdx + 2) + 8, dy: 34 });
+  }
+  return items;
+}
+
+function radialOffsets(pts, cxm, cym){
+  const placed = [];
+  return pts.map((p, r) => {
+    const pa = pts[r > 0 ? r - 1 : 0];
+    const pb = pts[r < pts.length - 1 ? r + 1 : pts.length - 1];
+    let tx = pb.x - pa.x, ty = pb.y - pa.y;
+    const tl = Math.hypot(tx, ty);
+    let nx, ny;
+    if (tl < 1e-6){
+      nx = p.x - cxm; ny = p.y - cym;
+      const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+    } else {
+      tx /= tl; ty /= tl;
+      nx = ty; ny = -tx;
+      const ex = p.x - cxm, ey = p.y - cym;
+      if (nx*ex + ny*ey < 0){ nx = -nx; ny = -ny; }
+    }
+    let dup = 0;
+    for (const q of placed)
+      if (Math.hypot(q.x - p.x, q.y - p.y) < LABEL_DUP_M) dup++;
+    placed.push(p);
+    const dist = (r % 2 ? 84 : 60) + 24 * dup;
+    return { dx: nx * dist, dy: -ny * dist };
+  });
+}
+
+function rpLabelItems(f){
+  const g = state.analysis.geo;
+  const s = f.parts[0].s, e = f.parts[0].e;
+  const cs = f.parts[1].s, ce = f.parts[1].e;
+  const fp = f.status === 'fp';
+  const an = rpAnchors(f);
+  let cxm = 0, cym = 0, cnt = 0;
+  const cstep = Math.max(1, Math.ceil((ce - cs + 1) / 200));
+  for (let i = cs; i <= ce; i += cstep){ cxm += g.px[i]; cym += g.py[i]; cnt++; }
+  cxm /= cnt; cym /= cnt;
+  const count = e - s + 1;
+  const stride = count > LABEL_MAX ? Math.ceil(count / LABEL_MAX) : 1;
+  const idxs = [];
+  for (let i = s; i <= e; i += stride) idxs.push(i);
+  for (const j of [s, an.up, f.peak, an.dn, e])
+    if (j >= s && j <= e && !idxs.includes(j)) idxs.push(j);
+  idxs.sort((a, b) => a - b);
+  const pts = idxs.map(i => ({ x: g.px[i], y: g.py[i] }));
+  const offs = radialOffsets(pts, cxm, cym);
+  return idxs.map((i, r) => ({
+    idx: i, lngLat: geoLngLat(g, i), no: ptNo(i),
+    cls: fp ? 'fpl' : '',
+    dx: offs[r].dx, dy: offs[r].dy
+  }));
+}
+
+function showStandardLabels(f){
+  const g = state.analysis.geo;
+  if (f.status === 'corrected'){
+    const orig = f.undo ? f.undo.origPts : [];
+    if (f.kind === 'rp' && orig.length){
+      const proj = g.proj;
+      const pts = orig.map(p => { const q = proj.fwd(p); return { x: q.x, y: q.y }; });
+      let cxm = 0, cym = 0;
+      for (const q of pts){ cxm += q.x; cym += q.y; }
+      cxm /= pts.length; cym /= pts.length;
+      const juncRank = f.peakId != null ? orig.findIndex(p => p.id === f.peakId) : -1;
+      const stride = pts.length > LABEL_MAX ? Math.ceil(pts.length / LABEL_MAX) : 1;
+      const ranks = [];
+      for (let r = 0; r < pts.length; r += stride) ranks.push(r);
+      for (const r of [0, juncRank, pts.length - 1])
+        if (r >= 0 && !ranks.includes(r)) ranks.push(r);
+      ranks.sort((a, b) => a - b);
+      const sel = ranks.map(r => pts[r]);
+      const offs = radialOffsets(sel, cxm, cym);
+      showPointLabels(ranks.map((r, k) => ({
+        lngLat: [orig[r].lon, orig[r].lat],
+        no: f.undo.firstNo + r, cls: 'del',
+        dx: offs[k].dx, dy: offs[k].dy
+      })));
+      return;
+    }
+    const items = orig.map((p, rank) => ({
+      lngLat: [p.lon, p.lat], no: f.undo.firstNo + rank, cls: 'del',
+      dx: (rank % 2 ? -1 : 1) * (24 * (rank + 1)), dy: -50 - 22 * (rank % 3)
+    }));
+    showPointLabels(items);
+    return;
+  }
+  if (f.kind === 'rp'){ showPointLabels(rpLabelItems(f)); return; }
+  const s = f.parts[0].s, e = f.parts[0].e;
+  const idxs = [];
+  for (let i = s; i <= e; i++) idxs.push(i);
+  showPointLabels(fanItems(g, idxs, f.peak, f.status === 'fp' ? 'fpl' : '', f.status === 'pending', f.ctx));
+}
+
+/* ---------- Liste ---------- */
+const STATUS = {
+  pending:                    { txt: 'À traiter',        cls: 'st-pending' },
+  fp:                         { txt: 'Faux positif',     cls: 'st-fp' },
+  'corrected:delete':         { txt: 'Points supprimés', cls: 'st-ok' },
+  'corrected:route-bike':     { txt: 'Routage vélo',     cls: 'st-ok' },
+  'corrected:route-car':      { txt: 'Routage voiture',  cls: 'st-ok' }
+};
+const statusOf = f => f.status === 'corrected' ? STATUS['corrected:' + f.correction] : STATUS[f.status];
+
+function renderResults(){
+  const box = $('#results');
+  const a = state.analysis;
+  if (!a || !a.findings.length){
+    box.innerHTML = `<div class="empty">Aucune anomalie détectée sur cette trace.
+      <span>Ajustez les paramètres ou les seuils de détection, puis relancez l'analyse.</span></div>`;
+    renderSummary();
+    return;
+  }
+  let html = '';
+  a.findings.forEach((f, fi) => {
+    const st = statusOf(f);
+    html += `<article class="seg${f.status !== 'pending' ? ' done' : ''}" data-f="${fi}">
+      <div class="seg-top">
+        <span class="nm">${f.label}</span>
+        <span class="tag ${st.cls}">${st.txt}</span>
+      </div></article>`;
+  });
+  box.innerHTML = html;
+  renderSummary();
+}
+
+function renderSummary(){
+  const a = state.analysis;
+  const badge = $('#synthBadge'), body = $('#synthBody');
+  if (!a){
+    badge.textContent = '—';
+    body.innerHTML = `<div class="frow"><span>aucune analyse</span><b>—</b></div>`;
+    return;
+  }
+  const fs = a.findings;
+  const c = t => fs.filter(f => statusOf(f).txt === t).length;
+  const nAR = fs.filter(f => f.kind === 'ar').length;
+  const nRP = fs.length - nAR;
+  badge.textContent = `${fs.length} anomalie${fs.length > 1 ? 's' : ''}`;
+  body.innerHTML =
+    `<div class="frow"><span>Anomalies</span><b>${fs.length}</b></div>
+     <div class="frow"><span>Aller-retours</span><b>${nAR}</b></div>
+     <div class="frow"><span>Boucles giratoires</span><b>${nRP}</b></div>
+     <div class="frow"><span>À traiter</span><b>${c('À traiter')}</b></div>
+     <div class="frow"><span>Faux positifs</span><b>${c('Faux positif')}</b></div>
+     <div class="frow"><span>Points supprimés</span><b>${c('Points supprimés')}</b></div>
+     <div class="frow"><span>Routage vélo</span><b>${c('Routage vélo')}</b></div>
+     <div class="frow"><span>Routage voiture</span><b>${c('Routage voiture')}</b></div>
+     <div class="frow"><span>Points trace</span><b>${state.working.length}</b></div>
+     <div class="frow"><span>Distance</span><b>${(state.geo.total/1000).toFixed(1)} km</b></div>`;
+}
+
+/* ================= 9. Panneau d'action ================= */
+const AP_VIEWS = ['apMain', 'apRouteSel', 'apChoice', 'apDelSel', 'apFpMode', 'apUndoMode'];
+function showView(id){ AP_VIEWS.forEach(v => $('#' + v).hidden = v !== id); }
+
+function stopOrs(){
+  if (orsCtl){ orsStoppedByUser = true; orsCtl.abort(); }
+}
+
+function showActionPanel(f){
+  state.selected = f;
+  pendingRoutes = { car:null, bike:null, start:0, end:0, identical:false };
+  clearRoutePreview();
+  clearSliderMarkers();
+  $('#apTitle').textContent = f.status === 'corrected'
+    ? f.label
+    : `${f.label} · pts ${ptNo(f.parts[0].s)} \u2192 ${ptNo(f.parts[0].e)}`;
+  if (f.status === 'pending') showView('apMain');
+  else if (f.status === 'fp') showView('apFpMode');
+  else {
+    $('#apUndoNote').innerHTML =
+      `Anomalie <b>corrigée</b> (${f.correction === 'delete' ? 'points supprimés' :
+        f.correction === 'route-car' ? 'routage voiture' : 'routage vélo'}).
+       L\u2019annulation restaure les points d\u2019origine et remet le statut à « À traiter ».`;
+    showView('apUndoMode');
+  }
+  $('#actionPanel').hidden = false;
+}
+
+function hideActionPanel(){
+  stopOrs();
+  delClose(state.selected);
+  state.selected = null;
+  pendingRoutes = { car:null, bike:null, start:0, end:0, identical:false };
+  clearRoutePreview();
+  clearSliderMarkers();
+  $('#actionPanel').hidden = true;
+}
+
+function selectFinding(segEl){
+  try {
+    const fi = +segEl.dataset.f;
+    const f = state.analysis?.findings[fi];
+    if (!f){ toast('Anomalie introuvable — relancez l\u2019analyse.', 'error'); return; }
+    document.querySelectorAll('#results .seg.active').forEach(el => el.classList.remove('active'));
+    segEl.classList.add('active');
+
+    let b;
+    if (f.status === 'corrected'){
+      b = f.bounds;
+    } else {
+      const g = state.analysis.geo;
+      const coords = [];
+      for (let i = f.parts[0].s; i <= f.parts[0].e; i++) coords.push(geoLngLat(g, i));
+      b = new mapboxgl.LngLatBounds(coords[0], coords[0]);
+      for (const c of coords) b.extend(c);
+      if (f.ctx.up != null) b.extend(geoLngLat(g, f.ctx.up));
+      if (f.ctx.dn != null) b.extend(geoLngLat(g, f.ctx.dn));
+    }
+    if (b && map) map.fitBounds(b, { padding: 80, maxZoom: 18, duration: 500 });
+
+    showStandardLabels(f);
+    showActionPanel(f);
+  } catch(err){
+    console.error(err);
+    toast('Erreur à l\u2019affichage de l\u2019anomalie : ' + err.message, 'error');
+  }
+}
+
+$('#results').addEventListener('click', e => {
+  const segEl = e.target.closest('.seg');
+  if (segEl) selectFinding(segEl);
+});
+
+$('#apClose').addEventListener('click', hideActionPanel);
+$('#apRoute').addEventListener('click', openRouteSel);
+$('#apStart').addEventListener('input', updateRouteSelUI);
+$('#apEnd').addEventListener('input', updateRouteSelUI);
+$('#apDoRoute').addEventListener('click', startRouting);
+$('#apRouteCancel').addEventListener('click', () => {
+  stopOrs(); clearSliderMarkers(); showView('apMain');
+});
+$('#apApply').addEventListener('click', applyRoute);
+$('#apCancel').addEventListener('click', cancelRouteChoice);
+$('#apDelete').addEventListener('click', openDeleteSel);
+$('#apDStart').addEventListener('input', updateDeleteSelUI);
+$('#apDEnd').addEventListener('input', updateDeleteSelUI);
+$('#apDoDelete').addEventListener('click', doDeleteRange);
+$('#apDelCancel').addEventListener('click', () => {
+  const f = state.selected;
+  delClose(f);
+  clearSliderMarkers();
+  if (f && f.status === 'pending') showStandardLabels(f);
+  showView('apMain');
+});
+$('#apFp').addEventListener('click', markFp);
+$('#apUnfp').addEventListener('click', unmarkFp);
+$('#apUndo').addEventListener('click', () => undoCorrection(state.selected));
+
+/* ============================== 10. Export GPX ============================== */
+const xmlEsc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+function appName(){
+  const v = ($('#appName')?.value ?? '').trim();
+  return v || GPX_APP_DEFAULT;
+}
+const isoNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+const GPX_HEADER_ATTRS =
+  'version="1.1" creator="' + xmlEsc(appName()) + '" xmlns="http://www.topografix.com/GPX/1/1"';
+
+function buildMetadataXml(name){
+  const tool = appName();
+  const fs = state.analysis ? state.analysis.findings : [];
+  const routes  = fs.filter(f => f.correction === 'route-car' || f.correction === 'route-bike').length;
+  const dels    = fs.filter(f => f.correction === 'delete').length;
+  const fps     = fs.filter(f => f.status === 'fp').length;
+  const total   = routes + dels + fps;
+  const audit =
+    `  <extensions>\n` +
+    `    <audit xmlns="${GPX_AUDIT_NS}">\n` +
+    `      <modified>${isoNow()}</modified>\n` +
+    `      <tool>${xmlEsc(tool)}</tool>\n` +
+    `      <corrections total="${total}" routes="${routes}" deletions="${dels}" falsePositives="${fps}"/>\n` +
+    `    </audit>\n` +
+    `  </extensions>\n`;
+
+  let meta = state.sourceMetaXml;
+  if (meta){
+    meta = meta
+      .replace(/<desc\b[\s\S]*?<\/desc\s*>/gi, '')
+      .replace(/<extensions\b[\s\S]*?<\/extensions\s*>/gi, '');
+    meta = meta
+      .replace(/^(<metadata\b[^>]*>)/i, `$1\n    <desc>Trace auditée et corrigée avec ${xmlEsc(tool)}</desc>`)
+      .replace(/<\/metadata\s*>/i, `${audit}</metadata>`);
+    return meta + '\n';
+  }
+
+  return `  <metadata>\n` +
+         `    <name>${xmlEsc(name)}</name>\n` +
+         `    <desc>Trace auditée et corrigée avec ${xmlEsc(tool)}</desc>\n` +
+         `    <time>${isoNow()}</time>\n` +
+         audit +
+         `  </metadata>\n`;
+}
+
+function buildGpxXml(points, name){
+  const attrs = state.sourceGpxAttrs || GPX_HEADER_ATTRS;
+  const trkName = state.sourceTrkName || name;
+  let x = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    + `<gpx ${attrs}>\n`
+    + buildMetadataXml(trkName)
+    + `  <trk><name>${xmlEsc(trkName)}</name><trkseg>\n`;
+  for (const p of points){
+    x += `    <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lon.toFixed(7)}">`;
+    if (isFinite(p.ele)) x += `<ele>${(+p.ele).toFixed(2)}</ele>`;
+    x += '</trkpt>\n';
+  }
+  x += '  </trkseg></trk>\n</gpx>\n';
+  return x;
+}
+
+function generateGpx(){
+  if (!state.working || state.working.length < 2){ toast('Aucune trace à exporter.', 'error'); return; }
+  const base = state.fileName.replace(/\.gpx$/i, '');
+  const xml = buildGpxXml(state.working, base);
+  const blob = new Blob([xml], { type:'application/gpx+xml' });
+  const aEl = document.createElement('a');
+  aEl.href = URL.createObjectURL(blob);
+  aEl.download = base + '.gpx';
+  document.body.appendChild(aEl);
+  aEl.click();
+  aEl.remove();
+  setTimeout(() => URL.revokeObjectURL(aEl.href), 2000);
+  const fs = state.analysis ? state.analysis.findings : [];
+  const c = t => fs.filter(f => statusOf(f).txt === t).length;
+  const done = c('Points supprimés') + c('Routage vélo') + c('Routage voiture');
+  toast(`GPX généré : ${state.working.length} points · ${c('À traiter')} à traiter · ` +
+    `${c('Faux positif')} faux positif${c('Faux positif') > 1 ? 's' : ''} · ` +
+    `${done} corrigée${done > 1 ? 's' : ''}.`, 'ok');
+}
+$('#btnGenerate').addEventListener('click', generateGpx);
+
+/* ============================== 11. IHM ============================== */
+function resetAnalysis(){
+  stopOrs();
+  clearAnalysisLayers();
+  clearRoutePreview();
+  clearSliderMarkers();
+  hideActionPanel();
+  state.analysis = null;
+  state.selected = null;
+  analyzedSignature = null;
+  $('#btnAnalyze').classList.remove('dirty');
+  $('#results').innerHTML = `<div class="empty">Trace chargée. Lancez l'analyse pour détecter les anomalies
+    (aller-retours et boucles de giratoire).
+    <span>Les paramètres peuvent être ajustés avant chaque analyse.</span></div>`;
+  renderSummary();
+}
+
+const dz = $('#dropzone'), fi = $('#fileInput'), ov = $('#dropOverlay');
+dz.addEventListener('click', () => fi.click());
+dz.addEventListener('keydown', e => { if (e.key==='Enter'||e.key===' '){ e.preventDefault(); fi.click(); } });
+fi.addEventListener('change', () => { if (fi.files[0]) loadFile(fi.files[0]); fi.value=''; });
+
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { e.preventDefault(); if (++dragDepth === 1) ov.classList.add('on'); });
+window.addEventListener('dragover',  e => e.preventDefault());
+window.addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0){ dragDepth=0; ov.classList.remove('on'); } });
+window.addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0; ov.classList.remove('on');
+  const f = [...(e.dataTransfer?.files || [])].find(f => /\.gpx$/i.test(f.name)) || e.dataTransfer?.files?.[0];
+  if (f) loadFile(f);
+});
+
+document.querySelectorAll('#params input[type=range]').forEach(inp => {
+  const out = $('#' + inp.id + 'Val');
+  const fmt = () => {
+    const unit = inp.dataset.unit ?? '';
+    out.textContent = `${fmtNum(inp.value)}${unit ? ' ' + unit : ''}`;
+  };
+  fmt();
+  inp.addEventListener('input', () => {
+    fmt();
+    if (analyzedSignature && paramSignature() !== analyzedSignature)
+      $('#btnAnalyze').classList.add('dirty');
+  });
+});
+
+/* Stockage local défensif */
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(_){ return null; } },
+  set(k, v){ try{ localStorage.setItem(k, v); }catch(_){} }
+};
+
+/* --- Clé Mapbox --- */
+const mapboxKeyEl = $('#mapboxKey');
+mapboxKeyEl.value = store.get('mapboxKey') || '';
+mapboxKeyEl.addEventListener('input', () => store.set('mapboxKey', mapboxKeyEl.value.trim()));
+mapboxKeyEl.addEventListener('change', onMapboxKeyChange);
+
+/* --- Clés ORS --- */
+const orsKeyAEl = $('#orsKeyA'), orsKeyBEl = $('#orsKeyB');
+if (store.get('orsKeyA') == null && store.get('orsKey'))
+  store.set('orsKeyA', store.get('orsKey'));
+orsKeyAEl.value = store.get('orsKeyA') || '';
+orsKeyBEl.value = store.get('orsKeyB') || '';
+let orsActive = store.get('orsActive') === 'b' ? 'b' : 'a';
+function getActiveKey(){
+  return (orsActive === 'a' ? orsKeyAEl : orsKeyBEl).value.trim();
+}
+function getOtherKey(){
+  return (orsActive === 'a' ? orsKeyBEl : orsKeyAEl).value.trim() || null;
+}
+function switchActiveKey(){
+  orsActive = orsActive === 'a' ? 'b' : 'a';
+  store.set('orsActive', orsActive);
+  refreshKeyUI();
+}
+function refreshKeyUI(){
+  $('#keyRowA').classList.toggle('active', orsActive === 'a');
+  $('#keyRowB').classList.toggle('active', orsActive === 'b');
+}
+orsKeyAEl.addEventListener('input', () => store.set('orsKeyA', orsKeyAEl.value.trim()));
+orsKeyBEl.addEventListener('input', () => store.set('orsKeyB', orsKeyBEl.value.trim()));
+refreshKeyUI();
+
+/* --- Badge « n/3 » de la boîte Clés API repliable ---
+   Compte les 3 clés (Mapbox + ORS n°1 + ORS n°2) actuellement renseignées
+   et met à jour le badge affiché dans le <summary> de #foldApiKeys.
+   Le badge passe en vert dès qu'au moins une clé est présente — signal
+   discret mais utile sans déplier la boîte. */
+function updateApiKeysBadge(){
+  const el = $('#apiKeysBadge');
+  if (!el) return;
+  const n = [getMapboxKey(), orsKeyAEl.value.trim(), orsKeyBEl.value.trim()]
+    .filter(Boolean).length;
+  el.textContent = `${n}/3`;
+  el.style.color = n > 0 ? 'var(--ok)' : '';
+}
+mapboxKeyEl.addEventListener('input', updateApiKeysBadge);
+orsKeyAEl.addEventListener('input', updateApiKeysBadge);
+orsKeyBEl.addEventListener('input', updateApiKeysBadge);
+updateApiKeysBadge();
+
+$('#btnAnalyze').addEventListener('click', runAnalysis);
+renderSummary();
+
+/* --- Démarrage --- */
+refreshMapboxKeyUI();
+(function start(){
+  const key = getMapboxKey();
+  if (key) initMap(null);
+  else showMapPlaceholder(true);
+})();
+</script>
+</body>
+</html>

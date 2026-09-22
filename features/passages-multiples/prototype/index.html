@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Sens — Segments répétés dans une trace GPX</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#0f1114; --panel:#14171c; --panel2:#1a1e25; --line:#262c36; --line2:#323a46;
+    --tx:#e8ebf0; --tx2:#9aa2af; --tx3:#67707d;
+    --c-ref:#3564e0;   /* premier passage : bleu */
+    --c-ret:#dd3327;   /* second passage sens inverse : rouge */
+    --c-all:#ec9c11;   /* second passage même sens : orange */
+    --ok:#3ecf8e;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; overflow:hidden; }
+  body{
+    display:flex; background:var(--bg); color:var(--tx);
+    font-family:'Space Grotesk',sans-serif; font-size:14px;
+  }
+  .mono{ font-family:'IBM Plex Mono',monospace; }
+
+  /* ---------- Colonne gauche (1/6) ---------- */
+  aside{
+    width:16.6667%; min-width:300px; max-width:420px; height:100%;
+    background:var(--panel); border-right:1px solid var(--line);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  aside .scroll{ flex:1; overflow-y:auto; padding:0 18px 18px; scrollbar-width:thin; scrollbar-color:var(--line2) transparent; }
+  aside .scroll::-webkit-scrollbar{ width:8px; }
+  aside .scroll::-webkit-scrollbar-thumb{ background:var(--line2); border-radius:4px; }
+
+  .brand{
+    display:flex; align-items:center; gap:11px;
+    padding:18px 18px 16px; border-bottom:1px solid var(--line);
+  }
+  .brand .mark{
+    width:34px; height:34px; border-radius:9px; flex:none;
+    background:var(--panel2); border:1px solid var(--line2);
+    display:flex; align-items:center; justify-content:center; color:var(--tx);
+  }
+  .brand h1{ font-size:15px; font-weight:700; letter-spacing:.06em; }
+  .brand p{ font-size:11px; color:var(--tx3); margin-top:1px; }
+
+  .sect{ margin-top:20px; }
+  .sect-title{
+    font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:600;
+    letter-spacing:.16em; text-transform:uppercase; color:var(--tx3); margin-bottom:9px;
+  }
+
+  /* Zone de dépôt */
+  .drop{
+    border:1.5px dashed var(--line2); border-radius:10px;
+    padding:20px 14px; text-align:center; cursor:pointer;
+    transition:border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over{ border-color:var(--tx2); background:var(--panel2); }
+  .drop svg{ color:var(--tx2); margin-bottom:8px; }
+  .drop .d1{ font-size:13px; font-weight:600; }
+  .drop .d2{ font-size:11px; color:var(--tx3); margin-top:3px; font-family:'IBM Plex Mono',monospace; }
+
+  /* Infos fichier */
+  .fileinfo{
+    background:var(--panel2); border:1px solid var(--line); border-radius:9px;
+    padding:11px 13px; margin-top:12px; font-family:'IBM Plex Mono',monospace;
+  }
+  .fileinfo .fname{ font-size:12px; font-weight:600; word-break:break-all; color:var(--tx); }
+  .fileinfo .frow{
+    display:flex; justify-content:space-between; font-size:11px;
+    color:var(--tx2); margin-top:5px;
+  }
+  .fileinfo .frow b{ color:var(--tx); font-weight:500; }
+
+  /* Paramètres */
+  .param{ margin-bottom:13px; }
+  .param .lab{
+    display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px;
+  }
+  .param .lab > span:first-child{ font-size:12px; color:var(--tx2); display:flex; align-items:center; }
+  .param .lab b{
+    font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; color:var(--tx);
+  }
+  input[type=range]{
+    width:100%; accent-color:#c8cfda; height:18px; cursor:pointer; background:transparent;
+  }
+  .help{
+    width:15px; height:15px; border-radius:50%;
+    border:1px solid var(--line2); background:transparent;
+    color:var(--tx3); font-size:10px; font-weight:700;
+    font-family:'IBM Plex Mono',monospace;
+    cursor:pointer; padding:0; margin-left:6px;
+    display:inline-flex; align-items:center; justify-content:center;
+    vertical-align:middle; line-height:1;
+    transition:border-color .15s, color .15s, background .15s;
+  }
+  .help:hover, .help.on{ border-color:var(--tx2); color:var(--tx); background:var(--panel2); }
+  .param-help{
+    font-size:11px; color:var(--tx2); line-height:1.6;
+    margin-top:7px; padding:9px 11px;
+    background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+  }
+  .param-help b{ color:var(--tx); font-weight:600; }
+  .param-help code{ font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--c-all); background:transparent; }
+  .param-help ul{ margin:5px 0 0 15px; }
+  .param-help li{ margin-top:2px; }
+
+  /* Bouton analyser */
+  #btnAnalyze{
+    width:100%; margin-top:6px; padding:13px 12px;
+    background:var(--tx); color:#0d0f12; border:none; border-radius:9px;
+    font:600 13px 'Space Grotesk',sans-serif; text-transform:uppercase; letter-spacing:.14em;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; gap:9px;
+    position:relative; transition:background .15s, opacity .15s;
+  }
+  #btnAnalyze:disabled{ opacity:.32; cursor:not-allowed; }
+  #btnAnalyze:not(:disabled):hover{ background:#ffffff; }
+  #btnAnalyze.dirty::after{
+    content:''; position:absolute; top:7px; right:9px; width:7px; height:7px;
+    border-radius:50%; background:var(--c-all);
+  }
+  #btnAnalyze .spin{
+    width:14px; height:14px; border:2px solid #0d0f12; border-right-color:transparent;
+    border-radius:50%; animation:rot .7s linear infinite; display:none;
+  }
+  #btnAnalyze.busy .spin{ display:block; }
+  #btnAnalyze.busy svg{ display:none; }
+  @keyframes rot{ to{ transform:rotate(360deg); } }
+
+  /* Résultats */
+  .legend{
+    display:flex; gap:14px; margin:14px 0 4px;
+    font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--tx2);
+  }
+  .legend span{ display:flex; align-items:center; gap:5px; }
+  .sw{ width:14px; height:4px; border-radius:2px; display:inline-block; }
+
+  .summary{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--tx2);
+    background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+    padding:9px 12px; margin-bottom:10px; line-height:1.7;
+  }
+  .summary b{ color:var(--tx); font-weight:600; }
+  .summary .sum-actions{
+    display:flex; gap:6px; margin-top:8px;
+  }
+
+  .btn-small{
+    padding:7px 11px;
+    background:var(--panel); color:var(--tx);
+    border:1px solid var(--line2); border-radius:6px;
+    font:600 10.5px 'Space Grotesk',sans-serif;
+    text-transform:uppercase; letter-spacing:.1em;
+    cursor:pointer; transition:border-color .15s, background .15s;
+  }
+  .btn-small:hover{ border-color:var(--tx2); background:var(--panel); color:#fff; }
+  .btn-small.warn{ color: #f07068; border-color:#5e221d; }
+  .btn-small.warn:hover{ background:#2e1512; }
+
+  .seg{
+    border:1px solid var(--line); border-radius:10px; padding:11px 12px;
+    margin-bottom:10px; cursor:pointer; transition:border-color .15s, background .15s, opacity .2s;
+  }
+  .seg:hover{ border-color:var(--line2); background:var(--panel2); }
+  .seg.seg-fp{ opacity:.52; }
+  .seg.seg-fp:hover{ opacity:.8; }
+  .seg.seg-fp .seg-top .nm{ text-decoration:line-through; text-decoration-color:var(--c-ret); }
+  .seg-top{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:9px; gap:6px; }
+  .seg-top .nm{ font-weight:600; font-size:13px; display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
+  .seg-top .mt{ font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--tx3); white-space:nowrap; }
+
+  .badge{
+    font-family:'IBM Plex Mono',monospace; font-size:9px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.08em;
+    padding:2px 6px; border-radius:4px; border:1px solid;
+    display:inline-block; vertical-align:middle;
+  }
+  .badge.merge{ background:#1a2338; color:#7d9bf0; border-color:#2c3f74; }
+  .badge.fp{ background:#2e1512; color:#f07068; border-color:#5e221d; }
+
+  .ribbon{
+    display:flex; flex-direction:column; gap:3px;
+    background:#10131a; border:1px solid var(--line); border-radius:6px;
+    padding:7px 9px; margin-bottom:10px;
+  }
+  .rail{ height:4px; border-radius:2px; background:#222835; position:relative; overflow:hidden; }
+  .rail i{ position:absolute; top:0; bottom:0; border-radius:2px; }
+
+  .pass{
+    display:flex; align-items:center; gap:9px; padding:6px 7px; border-radius:7px;
+    transition:background .12s;
+  }
+  .pass:hover{ background:var(--panel2); }
+  .pass .dot{ width:8px; height:8px; border-radius:3px; flex:none; }
+  .pass .pi{ flex:1; min-width:0; }
+  .pass .l1{ display:flex; align-items:center; gap:7px; }
+  .pass .l1 b{ font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; }
+  .pass .l2{
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--tx3); margin-top:2px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .tag{
+    font-family:'IBM Plex Mono',monospace; font-size:9px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.08em;
+    padding:2px 7px; border-radius:4px; border:1px solid;
+  }
+  .tag.ref{ color:#7d9bf0; border-color:#2c3f74; background:#1a2338; }
+  .tag.all{ color:#f0b445; border-color:#5c430f; background:#2c230f; }
+  .tag.ret{ color:#f07068; border-color:#5e221d; background:#2e1512; }
+
+  /* Actions par segment (fusion / faux positif) */
+  .seg-actions{
+    display:flex; gap:7px; margin-top:10px; padding-top:9px;
+    border-top:1px solid var(--line);
+  }
+  .btn-act{
+    flex:1; padding:7px 8px;
+    background:transparent; color:var(--tx2);
+    border:1px solid var(--line2); border-radius:6px;
+    font:600 10px 'Space Grotesk',sans-serif;
+    text-transform:uppercase; letter-spacing:.08em;
+    cursor:pointer; transition:all .15s;
+    display:flex; align-items:center; justify-content:center; gap:5px;
+  }
+  .btn-act:hover{ border-color:var(--tx2); color:var(--tx); background:var(--panel); }
+  .btn-act:disabled{ opacity:.3; cursor:not-allowed; }
+  .btn-act.danger{ color:#f07068; border-color:#5e221d; }
+  .btn-act.danger:hover{ background:#2e1512; border-color:#f07068; }
+  .btn-act.active{ background:#2e1512; color:#f07068; border-color:#5e221d; }
+  .btn-act.active:hover{ background:#3e1c18; }
+
+  .empty{
+    border:1px solid var(--line); border-radius:10px; padding:18px 14px;
+    font-size:12.5px; color:var(--tx2); line-height:1.6;
+  }
+  .empty span{ display:block; margin-top:6px; font-size:11px; color:var(--tx3);
+    font-family:'IBM Plex Mono',monospace; }
+
+  /* ---------- Carte (5/6) ---------- */
+  main{ flex:1; height:100%; }
+  #map{ width:100%; height:100%; background:#dfe3e8; }
+  .leaflet-popup-content-wrapper{ background:#171b22; color:var(--tx); border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.4); }
+  .leaflet-popup-tip{ background:#171b22; }
+  .leaflet-popup-content{ margin:11px 15px; font:11.5px/1.75 'IBM Plex Mono',monospace; }
+  .popup-t{ font:600 12px 'Space Grotesk',sans-serif; margin-bottom:4px; }
+  .popup-row{ color:var(--tx2); }
+  .popup-row b{ color:var(--tx); font-weight:500; }
+  .leaflet-container a.leaflet-popup-close-button{ color:var(--tx3); }
+
+  /* Overlay de dépôt */
+  #dropOverlay{
+    position:fixed; inset:0; z-index:4000; background:rgba(10,12,15,.86);
+    display:none; align-items:center; justify-content:center;
+  }
+  #dropOverlay.on{ display:flex; }
+  #dropOverlay .box{
+    border:2px dashed var(--tx2); border-radius:18px; padding:60px 80px; text-align:center;
+  }
+  #dropOverlay .box .big{ font-size:20px; font-weight:700; letter-spacing:.04em; }
+  #dropOverlay .box .small{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--tx2); margin-top:8px; }
+
+  /* Overlay de progression */
+  #progressOverlay{
+    position:fixed; inset:0; z-index:4500; background:rgba(10,12,15,.75);
+    display:none; align-items:center; justify-content:center;
+    backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
+  }
+  #progressOverlay.on{ display:flex; }
+  #progressOverlay .pbox{
+    background:var(--panel); border:1px solid var(--line2);
+    border-radius:14px; padding:26px 34px; min-width:340px; max-width:480px;
+    text-align:center; box-shadow:0 20px 60px rgba(0,0,0,.55);
+  }
+  #progressOverlay .plabel{ font-size:14px; font-weight:600; letter-spacing:.03em; }
+  #progressOverlay .pbar{
+    height:4px; background:var(--line); border-radius:2px;
+    margin:16px 0 10px; overflow:hidden;
+  }
+  #progressOverlay .pbar i{
+    display:block; height:100%; width:0%; background:var(--tx);
+    border-radius:2px; transition:width .35s cubic-bezier(.4,.2,.2,1);
+  }
+  #progressOverlay .pstep{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--tx3); margin-top:4px;
+  }
+
+  /* Toasts */
+  #toasts{ position:fixed; right:18px; bottom:18px; z-index:5000; display:flex; flex-direction:column; gap:8px; }
+  .toast{
+    background:#1a1f28; border:1px solid var(--line2); border-left:3px solid var(--tx2);
+    color:var(--tx); border-radius:9px; padding:11px 15px; font-size:12.5px; max-width:340px;
+    box-shadow:0 8px 28px rgba(0,0,0,.45); animation:tin .22s ease-out;
+  }
+  .toast.err{ border-left-color:var(--c-ret); }
+  .toast.ok{ border-left-color:var(--ok); }
+  @keyframes tin{ from{ transform:translateY(10px); opacity:0; } to{ transform:none; opacity:1; } }
+
+  @media (max-width:860px){
+    body{ flex-direction:column; }
+    aside{ width:100%; max-width:none; min-width:0; height:48%; border-right:none; border-bottom:1px solid var(--line); }
+    main{ height:52%; }
+  }
+</style>
+</head>
+<body>
+
+<aside>
+  <header class="brand">
+    <span class="mark">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 21V6"/><path d="M4.5 9.5 8 6l3.5 3.5"/>
+        <path d="M16 3v15"/><path d="M12.5 14.5 16 18l3.5-3.5"/>
+      </svg>
+    </span>
+    <div>
+      <h1>MULTI-SENS</h1>
+      <p>Portions répétées d'une trace GPX</p>
+    </div>
+  </header>
+
+  <div class="scroll">
+    <section class="sect">
+      <div class="sect-title">Trace</div>
+      <div class="drop" id="dropzone" role="button" tabindex="0" aria-label="Importer un fichier GPX">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/>
+        </svg>
+        <div class="d1">Déposez un fichier GPX</div>
+        <div class="d2">ou cliquez pour parcourir</div>
+      </div>
+      <div class="fileinfo" id="fileinfo" hidden></div>
+    </section>
+
+    <section class="sect">
+      <div class="sect-title">Paramètres</div>
+
+      <div class="param">
+        <div class="lab">
+          <span>Tolérance de superposition <button class="help" data-help="tol" aria-label="Aide">?</button></span>
+          <b id="tolVal">10 m</b>
+        </div>
+        <input type="range" id="tol" min="3" max="30" step="1" value="10">
+        <div class="param-help" id="help-tol" hidden>
+          Distance maximale entre deux points pour qu'ils soient considérés comme <b>le même lieu géographique</b>.
+          <ul>
+            <li><b>Trop basse</b> (&lt; 5 m) : rate les portions répétées à cause du bruit GPS (5–15 m en zone ouverte, plus en forêt).</li>
+            <li><b>Trop haute</b> (&gt; 25 m) : mélange des voies parallèles distinctes (route et sentier adjacents).</li>
+            <li><b>Conseillé</b> : <code>8–15 m</code> selon la qualité de la trace. Défaut <code>10 m</code>.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="param">
+        <div class="lab">
+          <span>Longueur minimale <button class="help" data-help="len" aria-label="Aide">?</button></span>
+          <b id="lenVal">100 m</b>
+        </div>
+        <input type="range" id="len" min="20" max="500" step="10" value="100">
+        <div class="param-help" id="help-len" hidden>
+          Longueur minimale d'un segment pour être <b>signalé dans les résultats</b>.
+          <ul>
+            <li>Filtre les micro-doublons : demi-tour dans un parking, passage sur un pont, arrêt technique.</li>
+            <li><b>Valeur haute</b> : moins de bruit, mais peut rater des portions réellement répétées.</li>
+            <li><b>Conseillé</b> : <code>50–200 m</code>. Défaut <code>100 m</code>.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="param">
+        <div class="lab">
+          <span>Pas d'échantillonnage <button class="help" data-help="step" aria-label="Aide">?</button></span>
+          <b id="stepVal">4 m</b>
+        </div>
+        <input type="range" id="step" min="2" max="10" step="1" value="4">
+        <div class="param-help" id="help-step" hidden>
+          Granularité à laquelle la trace est <b>rééchantillonnée</b> avant détection.
+          <ul>
+            <li><b>Pas petit</b> : détection plus précise mais coût CPU/mémoire croissant (grille spatiale plus dense).</li>
+            <li><b>Pas grand</b> : plus rapide, mais peut manquer un chevauchement court ou imprécis.</li>
+            <li>Un plafond automatique de <code>120 000 points</code> est appliqué pour préserver les performances.</li>
+            <li><b>Conseillé</b> : <code>4 m</code> (bon compromis).</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="param">
+        <div class="lab">
+          <span>Fusion références proches <button class="help" data-help="fuse" aria-label="Aide">?</button></span>
+          <b id="fuseVal">100 m</b>
+        </div>
+        <input type="range" id="fuse" min="0" max="200" step="5" value="100">
+        <div class="param-help" id="help-fuse" hidden>
+          Distance en deçà de laquelle deux passages <b>dont les intervalles temporels sont adjacents</b> sont considérés comme un seul passage logique.
+          <ul>
+            <li>Utile quand la trace comporte des micro-coupures : pause, arrêt photo, redémarrage GPS.</li>
+            <li><b>Fusion haute</b> : moins de segments fragmentés, mais risque de coller des passages réellement différents.</li>
+            <li><code>0</code> = aucune fusion, chaque appariement est strict.</li>
+            <li><b>Conseillé</b> : <code>50–150 m</code>. Défaut <code>100 m</code>.</li>
+            <li>Cette valeur pilote aussi la <b>fusion intra-segment</b> (passages contigus de même sens) avec un facteur ×2.</li>
+            <li>Pour les cas extrêmes (traversée de village, sens uniques), utilisez la <b>fusion manuelle</b> sur les segments.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <button id="btnAnalyze" disabled>
+      <span class="spin"></span>
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3"/>
+      </svg>
+      <span id="btnLabel">Analyser</span>
+    </button>
+
+    <section class="sect">
+      <div class="sect-title">Résultats</div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--c-ref)"></i>référence</span>
+        <span><i class="sw" style="background:var(--c-all)"></i>aller</span>
+        <span><i class="sw" style="background:var(--c-ret)"></i>retour</span>
+      </div>
+      <div id="results">
+        <div class="empty">Importez une trace GPX puis lancez l'analyse.
+          <span>La détection fonctionne entièrement en local, dans votre navigateur.</span></div>
+      </div>
+    </section>
+  </div>
+</aside>
+
+<main><div id="map"></div></main>
+
+<div id="dropOverlay">
+  <div class="box">
+    <div class="big">Déposez la trace GPX</div>
+    <div class="small">.gpx — lecture locale, aucun envoi réseau</div>
+  </div>
+</div>
+
+<div id="progressOverlay" aria-live="polite">
+  <div class="pbox">
+    <div class="plabel" id="progressLabel">Analyse…</div>
+    <div class="pbar"><i id="progressBar"></i></div>
+    <div class="pstep" id="progressStep">Préparation</div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<input type="file" id="fileInput" accept=".gpx,application/gpx+xml" hidden>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@turf/turf@7.1.0/turf.min.js"></script>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const C = { ref:'#3564e0', ret:'#dd3327', all:'#ec9c11', trace:'#7a818c' };
+
+/* ============================================================
+   CONFIG — Constantes magiques centralisées.
+   ============================================================ */
+const CONFIG = {
+  /* --- Détection (findRuns) --- */
+  MAXGAP: 3,
+  TANGENT_SPAN: 2,
+  PERPENDICULAR_COS: 0.12,
+  MIN_SEP_FACTOR: 0.5,
+  MIN_SEP_STEPS: 4,
+
+  /* --- Assemblage (buildSegments) --- */
+  SAME_PASSAGE_OVERLAP: 4,
+  MAX_ITERATIONS: 5,
+  REVERSE_DOT: -0.5,
+  REEMPRUNT_FACTOR: 0.5,
+  REEMPRUNT_GATE_TOL2: 4,
+  REEMPRUNT_LOOKAHEAD: 18,
+  REEMPRUNT_STRIDE_MAX: 300,
+  MERGE_WITHIN_SEGMENT_FACTOR: 2,   /* fusion intra-segment auto : ≤ 2× fusePts */
+
+  /* --- Sens relatif (relativeDirection) --- */
+  DIR_MIN_SAMPLES: 8,
+  DIR_MAX_SAMPLES: 60,
+  DIR_SAMPLE_PER: 8,
+  DIR_WINDOW: 90,
+  DIR_TOL_FACTOR2: 1.44,
+
+  /* --- Nettoyage / perf --- */
+  DUP_THRESHOLD2: 0.0025,
+  MAX_SAMPLES: 120000,
+  YIELD_MS: 16,
+
+  /* --- Fusion manuelle (mergeWorkingGroups) ---
+     Tolérance volontairement généreuse : l'utilisateur fusionne
+     explicitement, on lui fait confiance pour ne rapprocher que des
+     passages qu'il juge contigus sur le terrain (jusqu'à 1 km).
+     Indépendant de `fuse` : ne modifie pas la détection automatique. */
+  MERGE_MANUAL_TOL_KM: 1.0,
+
+  /* --- Rendu des polylignes --- */
+  FP_OPACITY: 0.15   /* opacité des polylignes d'un segment marqué faux positif */
+};
+
+/* ============================== Carte ============================== */
+const map = L.map('map', { zoomControl:false }).setView([46.6, 2.6], 6);
+L.control.zoom({ position:'bottomright' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom:19,
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+}).addTo(map);
+map.createPane('tracePane'); map.getPane('tracePane').style.zIndex = 395;
+map.createPane('pass1Pane'); map.getPane('pass1Pane').style.zIndex = 410;
+map.createPane('pass2Pane'); map.getPane('pass2Pane').style.zIndex = 420;
+const rendererTrace = L.canvas({ pane:'tracePane' });
+const rendererRef   = L.canvas({ pane:'pass1Pane' });
+const rendererSub   = L.canvas({ pane:'pass2Pane' });
+
+const traceGroup     = L.layerGroup().addTo(map);
+const analysisGroup  = L.layerGroup().addTo(map);
+
+/* ============================== État ============================== */
+const state = { fileName:null, raw:null, geo:null, analysis:null, working:null };
+let analyzedSignature = null;
+
+/* ============================== Utilitaires ============================== */
+function toast(msg, type='info'){
+  const t = document.createElement('div');
+  t.className = 'toast' + (type==='error' ? ' err' : type==='ok' ? ' ok' : '');
+  t.textContent = msg;
+  $('#toasts').appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(), 320); }, 4600);
+}
+
+const progressEl = $('#progressOverlay');
+function showProgress(label, pct, step){
+  $('#progressLabel').textContent = label;
+  $('#progressBar').style.width = pct + '%';
+  $('#progressStep').textContent = step || '';
+  progressEl.classList.add('on');
+}
+function hideProgress(){ progressEl.classList.remove('on'); }
+const yieldUI = () => new Promise(r => setTimeout(r, CONFIG.YIELD_MS));
+
+function makeProjector(p0){
+  const kx = Math.cos(p0.lat * Math.PI/180) * 111320;
+  const ky = 110540;
+  return {
+    fwd: p => ({ x:(p.lon - p0.lon) * kx, y:(p.lat - p0.lat) * ky }),
+    inv: (x, y) => ({ lat: p0.lat + y/ky, lon: p0.lon + x/kx })
+  };
+}
+
+/* ============================== Lecture GPX ============================== */
+function parseGpx(text){
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Fichier XML illisible.');
+  let nodes = doc.getElementsByTagNameNS('*', 'trkpt');
+  if (!nodes.length) nodes = doc.getElementsByTagNameNS('*', 'rtept');
+  const pts = [];
+  for (const n of nodes){
+    const lat = parseFloat(n.getAttribute('lat')), lon = parseFloat(n.getAttribute('lon'));
+    if (isFinite(lat) && isFinite(lon)) pts.push({ lat, lon });
+  }
+  if (pts.length < 2) throw new Error('Aucun point de trace (trkpt) trouvé dans le fichier.');
+  return pts;
+}
+
+function loadFile(file){
+  if (!/\.gpx$/i.test(file.name)){ toast('Le fichier doit être au format GPX (.gpx).', 'error'); return; }
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const raw = parseGpx(rd.result);
+      resetAnalysis();
+      state.fileName = file.name;
+      state.raw = raw;
+      state.geo = buildGeometry(raw);
+      renderBaseTrace();
+      renderFileInfo();
+      $('#btnAnalyze').disabled = false;
+      $('#btnLabel').textContent = 'Analyser';
+      toast(`Trace « ${file.name} » chargée — ${raw.length} points.`, 'ok');
+    } catch(e){ toast(e.message || 'Fichier illisible.', 'error'); }
+  };
+  rd.onerror = () => toast('Impossible de lire le fichier.', 'error');
+  rd.readAsText(file);
+}
+
+function buildGeometry(raw){
+  const proj = makeProjector(raw[0]);
+  const px = [], py = [];
+  let last = null;
+  for (const p of raw){
+    const q = proj.fwd(p);
+    if (last && (q.x-last.x)**2 + (q.y-last.y)**2 < CONFIG.DUP_THRESHOLD2) continue;
+    px.push(q.x); py.push(q.y); last = q;
+  }
+  const m = px.length;
+  const cum = new Float64Array(m);
+  for (let i=1; i<m; i++) cum[i] = cum[i-1] + Math.hypot(px[i]-px[i-1], py[i]-py[i-1]);
+  return { proj, px, py, cum, total: cum[m-1] };
+}
+
+/* ============================== Rééchantillonnage ============================== */
+function resampleGeo(geo, step){
+  const { px, py, cum, proj, total } = geo;
+  const n = Math.max(1, Math.round(total / step));
+  const eff = total / n;
+  const lat = new Float64Array(n+1), lon = new Float64Array(n+1);
+  const RX  = new Float64Array(n+1), RY  = new Float64Array(n+1);
+  const orig = new Uint32Array(n+1);
+  let k = 0;
+  for (let i = 0; i <= n; i++){
+    const d = Math.min(i * eff, total);
+    while (k < cum.length-2 && cum[k+1] < d) k++;
+    const t = (d - cum[k]) / Math.max(1e-9, cum[k+1]-cum[k]);
+    const x = px[k] + (px[k+1]-px[k])*t, y = py[k] + (py[k+1]-py[k])*t;
+    RX[i]=x; RY[i]=y;
+    const g = proj.inv(x,y); lat[i]=g.lat; lon[i]=g.lon;
+    orig[i] = k;
+  }
+  const cumR = new Float64Array(n+1);
+  for (let i=1; i<=n; i++) cumR[i] = cumR[i-1] + Math.hypot(RX[i]-RX[i-1], RY[i]-RY[i-1]);
+  return { n, lat, lon, RX, RY, cumR, orig, step:eff };
+}
+
+/* ============================== Détection ============================== */
+function findRuns(R, tol, minLen){
+  const { n, RX, RY, cumR, step } = R;
+  const cell = Math.max(tol, step * 1.5);
+  const grid = new Map();
+  for (let i=0; i<=n; i++){
+    const k = Math.floor(RX[i]/cell) + ',' + Math.floor(RY[i]/cell);
+    let a = grid.get(k); if (!a) grid.set(k, a=[]); a.push(i);
+  }
+  const SPAN = CONFIG.TANGENT_SPAN;
+  const TX = new Float64Array(n+1), TY = new Float64Array(n+1);
+  for (let i=0; i<=n; i++){
+    const a = Math.max(0,i-SPAN), b = Math.min(n,i+SPAN);
+    TX[i] = RX[b]-RX[a]; TY[i] = RY[b]-RY[a];
+  }
+  const tol2 = tol*tol;
+  const minSep = Math.max(minLen * CONFIG.MIN_SEP_FACTOR, step * CONFIG.MIN_SEP_STEPS);
+  const matches = new Map();
+  const offs = [];
+  for (let dx=-1; dx<=1; dx++) for (let dy=-1; dy<=1; dy++) offs.push([dx,dy]);
+  for (let i=0; i<=n; i++){
+    const cx = Math.floor(RX[i]/cell), cy = Math.floor(RY[i]/cell);
+    for (const [dx,dy] of offs){
+      const arr = grid.get((cx+dx)+','+(cy+dy)); if (!arr) continue;
+      for (const j of arr){
+        if (j <= i || cumR[j]-cumR[i] < minSep) continue;
+        const ax = RX[j]-RX[i], ay = RY[j]-RY[i];
+        if (ax*ax + ay*ay > tol2) continue;
+        const dot = TX[i]*TX[j] + TY[i]*TY[j];
+        const nn = Math.hypot(TX[i],TY[i]) * Math.hypot(TX[j],TY[j]) || 1e-9;
+        if (Math.abs(dot) <= CONFIG.PERPENDICULAR_COS * nn) continue;
+        matches.set(i*(n+1)+j, dot > 0 ? 1 : -1);
+      }
+    }
+  }
+  const visited = new Set();
+  const runs = [];
+  const MAXGAP = CONFIG.MAXGAP;
+  for (const [k0, dir0] of matches){
+    if (visited.has(k0)) continue;
+    let dir = dir0;
+    let ci = Math.floor(k0/(n+1)), cj = k0 % (n+1);
+    for(;;){
+      let moved = false;
+      for (let d=1; d<=MAXGAP; d++){
+        const pi = ci-d, pj = cj-d*dir;
+        if (pi < 0 || pj < 0 || pj > n) break;
+        const pk = pi*(n+1)+pj;
+        if (visited.has(pk)) break;
+        if (matches.has(pk)){ ci=pi; cj=pj; moved=true; break; }
+      }
+      if (!moved) break;
+    }
+    let ei = ci, ej = cj;
+    for(;;){
+      visited.add(ei*(n+1)+ej);
+      let moved = false;
+      for (let d=1; d<=MAXGAP; d++){
+        const ni = ei+d, nj = ej+d*dir;
+        if (ni > n || nj > n || nj < 0) break;
+        if (matches.has(ni*(n+1)+nj)){ ei=ni; ej=nj; moved=true; break; }
+      }
+      if (!moved) break;
+    }
+    const b0 = Math.min(cj, ej), b1 = Math.max(cj, ej);
+    const lenA = cumR[ei]-cumR[ci], lenB = cumR[b1]-cumR[b0];
+    if (Math.min(lenA, lenB) >= minLen)
+      runs.push({ a0:ci, a1:ei, b0, b1, dir });
+  }
+  return runs;
+}
+
+function relativeDirection(R, first, other, tol){
+  const { lat, lon } = R;
+  const span = first.e - first.s;
+  const nS = Math.max(CONFIG.DIR_MIN_SAMPLES,
+               Math.min(CONFIG.DIR_MAX_SAMPLES,
+                 Math.floor(span / CONFIG.DIR_SAMPLE_PER)));
+  const tolDeg = tol / 111320;
+  const maxD2 = tolDeg * tolDeg * CONFIG.DIR_TOL_FACTOR2;
+  const W = CONFIG.DIR_WINDOW;
+  let score = 0, p = other.s;
+  for (let s2 = 0; s2 <= nS; s2++){
+    const f = first.s + Math.round(span * s2 / nS);
+    let best = -1, bd = Infinity;
+    const lo = Math.max(other.s, p-W), hi = Math.min(other.e, p+W);
+    for (let q = lo; q <= hi; q++){
+      const d = (lat[q]-lat[f])**2 + (lon[q]-lon[f])**2;
+      if (d < bd){ bd = d; best = q; }
+    }
+    if (best < 0 || bd > maxD2) continue;
+    p = best;
+    const f2 = Math.min(f+3, first.e), g2 = Math.min(best+3, other.e);
+    if (f2 === f || g2 === best) continue;
+    try {
+      const b1 = turf.bearing([lon[f], lat[f]], [lon[f2], lat[f2]]);
+      const b2 = turf.bearing([lon[best], lat[best]], [lon[g2], lat[g2]]);
+      if (!isFinite(b1) || !isFinite(b2)) continue;
+      let diff = b2 - b1;
+      while (diff > 180) diff -= 360; while (diff < -180) diff += 360;
+      score += Math.cos(diff * Math.PI/180);
+    } catch(_){}
+  }
+  return score >= 0 ? 1 : -1;
+}
+
+/* ---------- Assemblage en segments ---------- */
+function buildSegments(runs, R, tol, fuseDist, minLen){
+  const step = R.step;
+  const fusePts = fuseDist / step;
+
+  let items = [], links = [];
+  runs.forEach((r) => {
+    const a = items.push({ s:r.a0, e:r.a1 }) - 1;
+    const b = items.push({ s:r.b0, e:r.b1 }) - 1;
+    links.push([a, b]);
+  });
+  const key = (a, b) => Math.min(a, b) + ':' + Math.max(a, b);
+
+  const samePassage = (X, Y) => {
+    const ov = Math.min(X.e, Y.e) - Math.max(X.s, Y.s);
+    if (ov >= CONFIG.SAME_PASSAGE_OVERLAP) return true;
+    const gap = Math.max(X.s, Y.s) - Math.min(X.e, Y.e);
+    return gap >= 0 && gap <= fusePts;
+  };
+
+  const boundaryBetweenPasses = (X, Y) => {
+    const { RX, RY } = R;
+    const i0 = Math.max(X.s, X.e - 4), j1 = Math.min(Y.e, Y.s + 4);
+    const dx1 = RX[X.e] - RX[i0], dy1 = RY[X.e] - RY[i0];
+    const dx2 = RX[j1] - RX[Y.s], dy2 = RY[j1] - RY[Y.s];
+    const n1 = Math.hypot(dx1, dy1), n2 = Math.hypot(dx2, dy2);
+    if (n1 > 1 && n2 > 1 && (dx1*dx2 + dy1*dy2) / (n1*n2) < CONFIG.REVERSE_DOT) return true;
+    const stride = Math.max(1, Math.round((X.e - X.s) / CONFIG.REEMPRUNT_STRIDE_MAX));
+    const gate = CONFIG.REEMPRUNT_GATE_TOL2 * tol * tol;
+    for (let q = Math.max(Y.s + 6, X.e + 2); q <= Math.min(Y.e, Y.s + CONFIG.REEMPRUNT_LOOKAHEAD); q += 4){
+      const ex = RX[q] - RX[X.e], ey = RY[q] - RY[X.e];
+      const dE = ex*ex + ey*ey;
+      if (dE <= 1) continue;
+      const lim = CONFIG.REEMPRUNT_FACTOR * dE;
+      for (let t = X.e; t >= X.s; t -= stride){
+        const ddx = RX[q] - RX[t], ddy = RY[q] - RY[t];
+        const dd = ddx*ddx + ddy*ddy;
+        if (dd < lim && dd <= gate) return true;
+      }
+    }
+    return false;
+  };
+
+  for (let iter = 0; iter < CONFIG.MAX_ITERATIONS; iter++){
+    const runLinked = new Set(links.map(([a, b]) => key(a, b)));
+    const par = items.map((_, i) => i);
+    const find = x => { while (par[x] !== x){ par[x] = par[par[x]]; x = par[x]; } return x; };
+    const order = items.map((_, i) => i).sort((a, b) => items[a].s - items[b].s);
+    for (let ii = 0; ii < order.length; ii++){
+      const i = order[ii];
+      for (let jj = ii + 1; jj < order.length; jj++){
+        const j = order[jj];
+        if (items[j].s - items[i].e > fusePts) break;
+        if (find(i) === find(j) || runLinked.has(key(i, j))) continue;
+        if (!samePassage(items[i], items[j])) continue;
+        if (boundaryBetweenPasses(items[i], items[j])) continue;
+        par[find(i)] = find(j);
+      }
+    }
+    const cl = new Map();
+    items.forEach((it, i) => {
+      const c = find(i);
+      if (!cl.has(c)) cl.set(c, { s:it.s, e:it.e, m:[] });
+      const p = cl.get(c);
+      p.s = Math.min(p.s, it.s); p.e = Math.max(p.e, it.e); p.m.push(i);
+    });
+    const passages = [...cl.values()].sort((a, b) => a.s - b.s);
+    const pid = new Array(items.length);
+    passages.forEach((p, k) => p.m.forEach(i => { pid[i] = k; }));
+
+    const seen = new Set();
+    links = links.map(([a, b]) => [pid[a], pid[b]])
+                 .filter(([a, b]) => a !== b)
+                 .filter(([a, b]) => {
+                   const k = key(a, b);
+                   if (seen.has(k)) return false;
+                   seen.add(k); return true;
+                 });
+
+    const par2 = passages.map((_, k) => k);
+    const find2 = x => { while (par2[x] !== x){ par2[x] = par2[par2[x]]; x = par2[x]; } return x; };
+    links.forEach(([a, b]) => { par2[find2(a)] = find2(b); });
+    const compMap = new Map();
+    passages.forEach((p, k) => {
+      const c = find2(k);
+      if (!compMap.has(c)) compMap.set(c, []);
+      compMap.get(c).push(k);
+    });
+    const segs = [...compMap.values()].map(list => {
+      const ps = list.map(k => passages[k]).sort((a, b) => a.s - b.s);
+      return { ps, rS: ps[0].s, rE: ps[0].e };
+    }).sort((a, b) => a.rS - b.rS);
+
+    let fused = false;
+    const groups = [];
+    for (const sg of segs){
+      const g = groups[groups.length - 1];
+      if (g){
+        const ov  = Math.min(sg.rE, g.hE) - Math.max(sg.rS, g.hS);
+        const gap = sg.rS - g.hE;
+        if (ov > 0 || (gap > 0 && gap <= fusePts)){
+          g.segs.push(sg);
+          g.hS = Math.min(g.hS, sg.rS); g.hE = Math.max(g.hE, sg.rE);
+          fused = true;
+          continue;
+        }
+      }
+      groups.push({ segs:[sg], hS:sg.rS, hE:sg.rE });
+    }
+    if (!fused || iter === CONFIG.MAX_ITERATIONS - 1){
+      const out = [];
+      for (const g of groups){
+        const pool = [];
+        g.segs.forEach(sg => pool.push(...sg.ps));
+        pool.sort((a, b) => a.s - b.s);
+        const merged = [];
+        for (const p of pool){
+          const last = merged[merged.length - 1];
+          if (last && p.s < last.e) last.e = Math.max(last.e, p.e);
+          else merged.push({ s:p.s, e:p.e });
+        }
+        if (merged.length >= 2) out.push(merged);
+      }
+      out.sort((a, b) => a[0].s - b[0].s);
+      out.forEach(ps => {
+        ps.forEach((p, k) => {
+          p.rel = k === 0 ? 0 : relativeDirection(R, ps[0], p, tol);
+          p.km0 = R.cumR[p.s] / 1000;  p.km1 = R.cumR[p.e] / 1000;
+          p.pt0 = R.orig[p.s] + 1;     p.pt1 = R.orig[p.e] + 1;
+        });
+      });
+
+      /* Passe D — fusion intra-segment : passages contigus de même sens. */
+      const maxGapPts = Math.max(fusePts,
+                          Math.round(CONFIG.MERGE_WITHIN_SEGMENT_FACTOR * fusePts));
+      const final = [];
+      for (const ps of out){
+        const merged = [];
+        for (const p of ps){
+          const last = merged[merged.length - 1];
+          const contiguous = last
+                          && p.s >= last.e
+                          && (p.s - last.e) <= maxGapPts
+                          && last.rel === p.rel;
+          if (contiguous){
+            if (p.e > last.e){
+              last.e   = p.e;
+              last.km1 = R.cumR[last.e] / 1000;
+              last.pt1 = R.orig[last.e] + 1;
+            }
+          } else {
+            merged.push({ ...p });
+          }
+        }
+        if (merged.length >= 2) final.push(merged);
+      }
+      return final.map(p => ({ passages: p }));
+    }
+    items = passages.map(p => ({ s:p.s, e:p.e }));
+  }
+  return [];
+}
+
+/* ============================== Analyse ============================== */
+async function runAnalysis(){
+  if (!state.geo) return;
+  const btn = $('#btnAnalyze');
+  btn.disabled = true; btn.classList.add('busy');
+  $('#btnLabel').textContent = 'Analyse…';
+
+  try {
+    const t0 = performance.now();
+    const tol    = +$('#tol').value;
+    const minLen = +$('#len').value;
+    const fuse   = +$('#fuse').value;
+    let    step  = +$('#step').value;
+    let    stepCapped = false;
+
+    if (state.geo.total / step > CONFIG.MAX_SAMPLES){
+      step = state.geo.total / CONFIG.MAX_SAMPLES;
+      stepCapped = true;
+    }
+
+    showProgress('Analyse en cours…', 5, 'Rééchantillonnage de la trace');
+    await yieldUI();
+    const R = resampleGeo(state.geo, step);
+
+    showProgress('Analyse en cours…', 30, `Détection des passages (${R.n.toLocaleString('fr')} points)`);
+    await yieldUI();
+    const runs = findRuns(R, tol, minLen);
+
+    showProgress('Analyse en cours…', 70, `Assemblage de ${runs.length} appariement${runs.length>1?'s':''}`);
+    await yieldUI();
+    const segments = buildSegments(runs, R, tol, fuse, minLen);
+
+    showProgress('Analyse en cours…', 95, 'Rendu cartographique');
+    await yieldUI();
+
+    state.analysis = { segments, R, tol, minLen, step, fuse, ms: Math.round(performance.now()-t0), stepCapped };
+    state.working = buildWorkingGroups(segments);
+    analyzedSignature = paramSignature();
+    renderWorkingOnMap();
+    renderResults();
+    hideProgress();
+    btn.classList.remove('dirty');
+
+    toast(segments.length
+      ? `${segments.length} segment${segments.length>1?'s':''} répété${segments.length>1?'s':''} détecté${segments.length>1?'s':''}.`
+      : 'Aucun segment répété détecté.', segments.length ? 'ok' : 'info');
+
+    if (stepCapped){
+      toast(`Pas d'échantillonnage augmenté à ${step.toFixed(2)} m (plafond ${CONFIG.MAX_SAMPLES.toLocaleString('fr')} points pour préserver les performances).`, 'info');
+    }
+  } catch(e){
+    hideProgress();
+    toast('Erreur pendant l\u2019analyse : ' + (e.message || e), 'error');
+  }
+  btn.disabled = false; btn.classList.remove('busy');
+  $('#btnLabel').textContent = 'Analyser';
+}
+
+const paramSignature = () => [$('#tol').value, $('#len').value, $('#step').value, $('#fuse').value].join('|');
+
+/* ============================================================
+   Working groups — modifications utilisateur (fusion / faux positif)
+   ============================================================ */
+function buildWorkingGroups(segments){
+  return segments.map((seg, idx) => ({
+    passages: seg.passages.map(p => ({
+      s: p.s, e: p.e,
+      km0: p.km0, km1: p.km1,
+      pt0: p.pt0, pt1: p.pt1,
+      rel: p.rel,
+      layers: []                              /* rempli par renderWorkingOnMap() */
+    })),
+    fp: false,
+    merged: false,
+    mergedCount: 1,
+    origIdx: idx
+  }));
+}
+
+function getPassageLayers(p){
+  if (p.layers && p.layers.length) return p.layers;
+  if (p.layer) return [p.layer];
+  return [];
+}
+
+/* Fusion manuelle : le segment `idx` fusionne avec `idx-1`.
+   Combine les passages, trie par km, et concatène ceux qui se chevauchent
+   OU qui sont contigus dans le même sens (tolérance large : action manuelle).
+
+   Règles :
+   1) Deux passages consécutifs ne fusionnent que s'ils vont DANS LE MÊME SENS.
+      Un changement de sens marque une frontière entre un aller et un retour.
+   2) La tolérance est volontairement généreuse (CONFIG.MERGE_MANUAL_TOL_KM).
+   3) Les `layers` sont reconstruits par renderWorkingOnMap() — pas conservés. */
+function mergeWorkingGroups(idx){
+  if (!state.working) return;
+  if (idx < 1 || idx >= state.working.length) return;
+  const A = state.working[idx - 1];
+  const B = state.working[idx];
+
+  const all = [...A.passages, ...B.passages];
+  all.sort((a, b) => a.km0 - b.km0 || a.km1 - b.km1);
+
+  const K = CONFIG.MERGE_MANUAL_TOL_KM;
+  const isForward = r => r >= 0;
+
+  const merged = [];
+  for (const p of all){
+    const last = merged[merged.length - 1];
+    const sameDir = last && (isForward(last.rel) === isForward(p.rel));
+    const gap = last ? p.km0 - last.km1 : Infinity;
+    const canMerge = sameDir && gap <= K;
+
+    if (canMerge){
+      last.km1 = Math.max(last.km1, p.km1);
+      last.e   = Math.max(last.e, p.e);
+      last.pt1 = Math.max(last.pt1, p.pt1);
+    } else {
+      merged.push({
+        km0: p.km0, km1: p.km1,
+        s: p.s, e: p.e,
+        pt0: p.pt0, pt1: p.pt1,
+        rel: p.rel,
+        layers: []
+      });
+    }
+  }
+
+  merged.forEach((p, i) => {
+    if (i === 0) p.rel = 0;
+    else if (p.rel === 0) p.rel = 1;
+  });
+
+  const newGroup = {
+    passages: merged,
+    fp: A.fp || B.fp,
+    merged: true,
+    mergedCount: (A.mergedCount || 1) + (B.mergedCount || 1),
+    origIdx: A.origIdx
+  };
+  state.working.splice(idx - 1, 2, newGroup);
+
+  /* Re-rendu complet : la carte doit montrer le nouveau segment unifié
+     à la place des deux polylignes précédentes. */
+  renderWorkingOnMap();
+  renderResults();
+}
+
+function toggleFp(idx){
+  if (!state.working) return;
+  const g = state.working[idx];
+  if (!g) return;
+  g.fp = !g.fp;
+  renderWorkingOnMap();
+  renderResults();
+}
+
+function resetWorking(){
+  if (!state.analysis) return;
+  state.working = buildWorkingGroups(state.analysis.segments);
+  renderWorkingOnMap();
+  renderResults();
+}
+
+/* ============================== Rendus ============================== */
+function renderBaseTrace(){
+  traceGroup.clearLayers();
+  const coords = state.geo.px.map((_, i) =>
+    state.geo.proj.inv(state.geo.px[i], state.geo.py[i])).map(p => [p.lat, p.lon]);
+  L.polyline(coords, { renderer:rendererTrace, color:C.trace, weight:3, opacity:.95,
+    lineCap:'round', lineJoin:'round' }).addTo(traceGroup);
+  const a = coords[0], b = coords[coords.length-1];
+  L.circleMarker(a, { radius:4.5, color:'#20242b', weight:2, fillColor:'#ffffff', fillOpacity:1 }).addTo(traceGroup).bindPopup('Départ');
+  L.circleMarker(b, { radius:4.5, color:'#20242b', weight:2, fillColor:'#20242b', fillOpacity:1 }).addTo(traceGroup).bindPopup('Arrivée');
+  map.fitBounds(L.latLngBounds(coords), { padding:[40,40] });
+}
+
+function renderFileInfo(){
+  const g = state.geo;
+  const line = turf.lineString(state.raw.map(p => [p.lon, p.lat]));
+  const km = turf.length(line, { units:'kilometers' }).toFixed(1);
+  const el = $('#fileinfo');
+  el.hidden = false;
+  el.innerHTML =
+    `<div class="fname"></div>
+     <div class="frow"><span>points bruts</span><b>${state.raw.length}</b></div>
+     <div class="frow"><span>après nettoyage</span><b>${g.px.length}</b></div>
+     <div class="frow"><span>distance</span><b>${km} km</b></div>`;
+  el.querySelector('.fname').textContent = state.fileName;
+}
+
+function clearAnalysisLayers(){ analysisGroup.clearLayers(); }
+
+/* Rendu des polylignes depuis state.working.
+   Appelé après CHAQUE modification (analyse, fusion, FP, reset) pour que la
+   carte reste synchrone avec la liste latérale. Chaque passage reçoit UNE
+   seule polyligne, couvrant ses indices s..e ; les working passages portent
+   une référence p.layers=[pl] pour le survol / clic depuis la liste. */
+function renderWorkingOnMap(){
+  clearAnalysisLayers();
+  const a = state.analysis;
+  if (!a) return;
+  const { R } = a;
+  const groups = state.working || [];
+  groups.forEach(g => {
+    const fpMul = g.fp ? CONFIG.FP_OPACITY : 1;
+    g.passages.forEach((p, pi) => {
+      const coords = [];
+      for (let i = p.s; i <= p.e; i++) coords.push([R.lat[i], R.lon[i]]);
+      const isRef = pi === 0;
+      const color = isRef ? C.ref : (p.rel < 0 ? C.ret : C.all);
+      const base = {
+        weight: isRef ? 9 : 4.5,
+        opacity: (isRef ? .85 : .95) * fpMul
+      };
+      const pl = L.polyline(coords, {
+        renderer: isRef ? rendererRef : rendererSub,
+        color, ...base, lineCap:'round', lineJoin:'round'
+      });
+      pl._base = base;
+      pl.bindPopup(popupHtml(p, pi));
+      analysisGroup.addLayer(pl);
+      p.layers = [pl];
+    });
+  });
+}
+
+function popupHtml(p, pi){
+  const sens = pi === 0 ? '<b>référence</b> (premier passage)'
+    : p.rel < 0 ? '<b>Retour</b> (sens inverse)' : '<b>Aller</b> (même sens)';
+  return `<div class="popup-t">Passage ${pi+1}</div>
+    <div class="popup-row">Sens : ${sens}</div>
+    <div class="popup-row">Points : <b>${p.pt0} \u2192 ${p.pt1}</b></div>
+    <div class="popup-row">Distance : <b>${p.km0.toFixed(2)} \u2192 ${p.km1.toFixed(2)} km</b>
+    (${Math.abs(p.km1-p.km0).toFixed(2)} km)</div>`;
+}
+
+function computeGroupBounds(g){
+  let b = null;
+  g.passages.forEach(p => {
+    getPassageLayers(p).forEach(l => {
+      const lb = l.getBounds();
+      b = b ? b.extend(lb) : lb;
+    });
+  });
+  return b;
+}
+
+function renderResults(){
+  const box = $('#results');
+  const a = state.analysis;
+  if (!a){ return; }
+  const groups = state.working || [];
+  if (!groups.length){
+    box.innerHTML = `<div class="empty">Aucun segment répété détecté sur cette trace.
+      <span>Astuce : augmentez la tolérance de superposition, réduisez la longueur minimale
+      ou augmentez la fusion de références, puis relancez l'analyse.</span></div>`;
+    return;
+  }
+
+  const fpCount = groups.filter(g => g.fp).length;
+  const mergeCount = groups.filter(g => g.merged).reduce((s, g) => s + (g.mergedCount - 1), 0);
+  const visibleCount = groups.length - fpCount;
+  const totalKm = a.R.cumR[a.R.n]/1000;
+  const repeatedKm = groups.filter(g => !g.fp).reduce((s, g) =>
+    s + Math.abs(g.passages[0].km1 - g.passages[0].km0), 0);
+  const cappedNote = a.stepCapped ? ` · <span style="color:var(--c-all)">pas plafonné</span>` : '';
+  const anyModif = fpCount > 0 || mergeCount > 0;
+
+  let html = `<div class="summary"><b>${visibleCount}</b> segment${visibleCount>1?'s':''} visible${visibleCount>1?'s':''}`;
+  if (fpCount > 0) html += ` · <b>${fpCount}</b> faux positif${fpCount>1?'s':''} (masqué${fpCount>1?'s':''})`;
+  if (mergeCount > 0) html += ` · <b>${mergeCount}</b> fusion${mergeCount>1?'s':''}`;
+  html += ` · <b>${repeatedKm.toFixed(1)} km</b> empruntés plusieurs fois · ${a.ms} ms${cappedNote}
+    <br>total trace ${totalKm.toFixed(1)} km · tolérance ${a.tol} m · min ${a.minLen} m · fusion ${a.fuse} m
+    <div class="sum-actions">
+      <button class="btn-small" id="btnExport" type="button">Exporter GeoJSON</button>`;
+  if (anyModif) html += `<button class="btn-small warn" id="btnReset" type="button">Réinitialiser modifs</button>`;
+  html += `</div></div>`;
+
+  groups.forEach((g, si) => {
+    const isFp = g.fp;
+    const refLen = Math.abs(g.passages[0].km1 - g.passages[0].km0);
+    const nmBadges = (g.merged ? ` <span class="badge merge">fusionné</span>` : '')
+                   + (isFp ? ` <span class="badge fp">FP</span>` : '');
+    html += `<article class="seg${isFp?' seg-fp':''}" data-seg="${si}">
+      <div class="seg-top">
+        <span class="nm">Segment ${si+1}${nmBadges}</span>
+        <span class="mt">${g.passages.length} passages · ${refLen.toFixed(2)} km</span>
+      </div>
+      <div class="ribbon">`;
+    g.passages.forEach(p => {
+      const col = p.rel === 0 ? 'var(--c-ref)' : (p.rel < 0 ? 'var(--c-ret)' : 'var(--c-all)');
+      const left = (p.km0/totalKm*100).toFixed(2);
+      const w = Math.max(.8, (p.km1-p.km0)/totalKm*100).toFixed(2);
+      html += `<div class="rail"><i style="left:${left}%;width:${w}%;background:${col}"></i></div>`;
+    });
+    html += `</div><div class="pass-list">`;
+    g.passages.forEach((p, pi) => {
+      const col = p.rel === 0 ? 'var(--c-ref)' : (p.rel < 0 ? 'var(--c-ret)' : 'var(--c-all)');
+      const tag = p.rel === 0 ? '<span class="tag ref">référence</span>'
+        : p.rel < 0 ? '<span class="tag ret">retour</span>' : '<span class="tag all">aller</span>';
+      html += `<div class="pass" data-seg="${si}" data-pass="${pi}">
+        <span class="dot" style="background:${col}"></span>
+        <div class="pi">
+          <div class="l1"><b>P${pi+1}</b> ${tag}</div>
+          <div class="l2">pts ${p.pt0}\u2013${p.pt1} · ${p.km0.toFixed(2)} \u2192 ${p.km1.toFixed(2)} km</div>
+        </div></div>`;
+    });
+    html += `</div>
+      <div class="seg-actions">
+        ${si > 0 ? `<button class="btn-act" data-act="merge" data-seg="${si}" title="Fusionner avec le segment ${si}">&#8617; Fusionner S${si}</button>` : ''}
+        <button class="btn-act ${isFp?'active':'danger'}" data-act="fp" data-seg="${si}">${isFp?'Retirer FP':'Faux positif'}</button>
+      </div>
+    </article>`;
+  });
+  box.innerHTML = html;
+}
+
+/* ============================== Export GeoJSON ==============================
+   Version compacte : ne duplique pas les points de la trace.
+   Chaque passage est exporté avec :
+   - son point d'entrée et son point de sortie (lat/lon) ;
+   - ses indices dans la trace d'origine (point_entree, point_sortie) ;
+   - ses distances cumulées depuis le km 0 de la trace (km_entree, km_sortie) ;
+   - sa longueur effective.
+
+   La géométrie est un LineString à 2 coordonnées (entrée → sortie) : c'est
+   une représentation « bornes » du passage. Pour reconstituer la portion
+   complète de trace, joindre sur les indices point_entree / point_sortie
+   avec la trace GPX d'origine. */
+function exportGeoJSON(){
+  const a = state.analysis;
+  const groups = state.working || [];
+  if (!a || !groups.length) return;
+
+  const feats = [];
+  let fpExcluded = 0;
+
+  groups.forEach((g, si) => {
+    if (g.fp){ fpExcluded++; return; }
+    g.passages.forEach((p, pi) => {
+      const entry = [+a.R.lon[p.s].toFixed(7), +a.R.lat[p.s].toFixed(7)];
+      const exit  = [+a.R.lon[p.e].toFixed(7), +a.R.lat[p.e].toFixed(7)];
+      feats.push({
+        type: 'Feature',
+        properties: {
+          segment:      si + 1,
+          passage:      pi + 1,
+          sens:         pi === 0 ? 'reference' : (p.rel < 0 ? 'retour' : 'aller'),
+          point_entree: p.pt0,
+          point_sortie: p.pt1,
+          km_entree:    +p.km0.toFixed(3),
+          km_sortie:    +p.km1.toFixed(3),
+          longueur_km:  +(Math.abs(p.km1 - p.km0)).toFixed(3),
+          fusionne:     !!g.merged
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: [entry, exit]
+        }
+      });
+    });
+  });
+
+  const fc = {
+    type: 'FeatureCollection',
+    properties: {
+      source: state.fileName,
+      date: new Date().toISOString(),
+      trace: {
+        point_count: state.raw.length,
+        length_km:   +(a.R.cumR[a.R.n] / 1000).toFixed(3)
+      },
+      parametres: {
+        tolerance_m:           a.tol,
+        longueur_min_m:        a.minLen,
+        pas_echantillonnage_m: +a.step.toFixed(3),
+        fusion_references_m:   a.fuse,
+        pas_plafonne:          !!a.stepCapped
+      },
+      ajustements: {
+        fusions_manuelles:    groups.filter(g => g.merged)
+                                    .reduce((s, g) => s + (g.mergedCount - 1), 0),
+        faux_positifs_exclus: fpExcluded
+      },
+      note: 'Chaque Feature représente un passage. La géométrie LineString ne contient que les 2 points bornes (entrée, sortie). Pour reconstituer la portion de trace, joindre point_entree / point_sortie avec la trace d\'origine.'
+    },
+    features: feats
+  };
+
+  const blob = new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = state.fileName.replace(/\.gpx$/i, '') + '_segments.geojson';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  toast(`Export GeoJSON : ${feats.length} passage${feats.length>1?'s':''} · ${fpExcluded} FP exclu${fpExcluded>1?'s':''}.`, 'ok');
+}
+
+/* ============================== Interactions liste → carte ============================== */
+$('#results').addEventListener('click', e => {
+  if (e.target.closest('#btnExport')){ exportGeoJSON(); return; }
+  if (e.target.closest('#btnReset')){ resetWorking(); return; }
+
+  const actBtn = e.target.closest('.btn-act');
+  if (actBtn){
+    const si = +actBtn.dataset.seg;
+    if (actBtn.dataset.act === 'merge'){ mergeWorkingGroups(si); return; }
+    if (actBtn.dataset.act === 'fp'){ toggleFp(si); return; }
+  }
+
+  const segEl = e.target.closest('.seg'); if (!segEl) return;
+  const g = state.working?.[+segEl.dataset.seg]; if (!g) return;
+  const bounds = computeGroupBounds(g);
+  if (!bounds) return;
+  map.fitBounds(bounds, { padding:[60,60], maxZoom:17 });
+  g.passages.forEach(p => {
+    getPassageLayers(p).forEach(l => {
+      if (!l._base) return;
+      l.setStyle({ weight: l._base.weight + 6, opacity: 1 });
+      setTimeout(() => l.setStyle(l._base), 950);
+    });
+  });
+});
+$('#results').addEventListener('mouseover', e => {
+  const pEl = e.target.closest('.pass'); if (!pEl) return;
+  const p = state.working?.[+pEl.dataset.seg]?.passages?.[+pEl.dataset.pass];
+  if (!p) return;
+  getPassageLayers(p).forEach(l => {
+    if (l._base) l.setStyle({ weight: l._base.weight + 4, opacity: 1 });
+  });
+});
+$('#results').addEventListener('mouseout', e => {
+  const pEl = e.target.closest('.pass'); if (!pEl) return;
+  const p = state.working?.[+pEl.dataset.seg]?.passages?.[+pEl.dataset.pass];
+  if (!p) return;
+  getPassageLayers(p).forEach(l => { if (l._base) l.setStyle(l._base); });
+});
+
+/* ============================== IHM ============================== */
+function resetAnalysis(){
+  clearAnalysisLayers();
+  state.analysis = null;
+  state.working = null;
+  analyzedSignature = null;
+  $('#btnAnalyze').classList.remove('dirty');
+  $('#results').innerHTML = `<div class="empty">Trace chargée. Lancez l'analyse pour détecter les portions répétées.
+    <span>Les paramètres peuvent être ajustés avant chaque analyse.</span></div>`;
+}
+
+/* Import */
+const dz = $('#dropzone'), fi = $('#fileInput'), ov = $('#dropOverlay');
+dz.addEventListener('click', () => fi.click());
+dz.addEventListener('keydown', e => { if (e.key==='Enter'||e.key===' '){ e.preventDefault(); fi.click(); } });
+fi.addEventListener('change', () => { if (fi.files[0]) loadFile(fi.files[0]); fi.value=''; });
+
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { e.preventDefault(); if (++dragDepth === 1) ov.classList.add('on'); });
+window.addEventListener('dragover',  e => e.preventDefault());
+window.addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0){ dragDepth=0; ov.classList.remove('on'); } });
+window.addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0; ov.classList.remove('on');
+  const f = [...(e.dataTransfer?.files || [])].find(f => /\.gpx$/i.test(f.name)) || e.dataTransfer?.files?.[0];
+  if (f) loadFile(f);
+});
+
+/* Paramètres */
+[['#tol','#tolVal', v => `${v} m`], ['#len','#lenVal', v => `${v} m`],
+ ['#step','#stepVal', v => `${v} m`], ['#fuse','#fuseVal', v => v === '0' ? 'off' : `${v} m`]]
+.forEach(([inp, out, fmt]) => {
+  $(inp).addEventListener('input', () => {
+    $(out).textContent = fmt($(inp).value);
+    if (analyzedSignature && paramSignature() !== analyzedSignature)
+      $('#btnAnalyze').classList.add('dirty');
+  });
+});
+
+/* Bulles d'aide paramètres */
+document.querySelectorAll('.help').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const help = document.getElementById('help-' + btn.dataset.help);
+    if (!help) return;
+    help.hidden = !help.hidden;
+    btn.classList.toggle('on', !help.hidden);
+  });
+});
+
+$('#btnAnalyze').addEventListener('click', runAnalysis);
+</script>
+</body>
+</html>
