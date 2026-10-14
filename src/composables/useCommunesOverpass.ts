@@ -18,6 +18,12 @@ import { bboxOfCoordinates } from '../utils/geo'
  * Miroirs Overpass, essayés en cascade : un miroir en panne (erreur HTTP, délai
  * dépassé, réseau) laisse la place au suivant. Le serveur principal est
  * régulièrement saturé.
+ *
+ * **`overpass.osm.ch` ne publie que l'extrait suisse.** Pour toute zone hors de
+ * Suisse, il répond « aucun élément » en quelques dixièmes de seconde, sans
+ * erreur ni `remark` — un faux vide indétectable côté réponse. C'est pourquoi
+ * une réponse vide n'est acceptée qu'après avoir interrogé **tous** les miroirs
+ * et seulement si aucun n'a échoué (voir `fetchCommunes`).
  */
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -114,8 +120,19 @@ export function useCommunesOverpass() {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
       }
-      const payload = (await response.json()) as { elements?: unknown[] }
-      return Array.isArray(payload.elements) ? payload.elements : []
+      const payload = (await response.json()) as { elements?: unknown[]; remark?: string }
+
+      // Overpass signale ses erreurs d'exécution (délai dépassé, mémoire) par un
+      // HTTP 200 portant un `remark` : c'est un **échec**, jamais un résultat
+      // vide — le confondre avec « aucune commune » consignerait une détection
+      // qui n'a pas eu lieu.
+      if (typeof payload.remark === 'string' && payload.remark.trim()) {
+        throw new Error(`Overpass : ${payload.remark}`)
+      }
+      if (!Array.isArray(payload.elements)) {
+        throw new Error('Réponse Overpass inattendue (tableau `elements` absent).')
+      }
+      return payload.elements
     } finally {
       window.clearTimeout(timer)
     }
@@ -125,8 +142,10 @@ export function useCommunesOverpass() {
    * Récupère les limites administratives autour d'une trace.
    *
    * Retourne les `elements` de la réponse Overpass, sérialisés en JSON : c'est
-   * la charge transmise à la commande `communes_detect`. Un tableau **vide** est
-   * une réponse valide — aucune commune connue dans la zone.
+   * la charge transmise à la commande `communes_detect`. Un tableau **vide**
+   * n'est un résultat que s'il est **franc** — tous les miroirs ont répondu, et
+   * aucun n'a échoué ; sinon la détection échoue et sera reprise, plutôt que de
+   * consigner « aucune commune » sur une zone qu'on n'a pas su interroger.
    */
   async function fetchCommunes(traceId: string): Promise<string> {
     const bbox = await queryBbox(traceId)
@@ -135,17 +154,40 @@ export function useCommunesOverpass() {
 
     isLoading.value = true
     const failures: string[] = []
+    /** Première réponse valide mais vide, gardée en réserve. */
+    let emptyPayload: string | null = null
     try {
       for (const endpoint of OVERPASS_ENDPOINTS) {
         try {
-          return JSON.stringify(await fetchFrom(endpoint, query))
+          const elements = await fetchFrom(endpoint, query)
+          // Une réponse non vide est la réponse utile : elle prime sur toute
+          // réponse vide, même obtenue plus tôt.
+          if (elements.length > 0) {
+            return JSON.stringify(elements)
+          }
+          // Vide : la zone est sans commune… ou le miroir ne la couvre pas.
+          // On garde de côté, et on interroge les suivants.
+          emptyPayload ??= JSON.stringify(elements)
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
           failures.push(`${new URL(endpoint).host} (${reason})`)
           console.warn(`[communes] Miroir Overpass indisponible : ${endpoint} — ${reason}`)
         }
       }
-      throw new Error(`Aucun miroir Overpass n'a répondu : ${failures.join(', ')}`)
+
+      // Tous les miroirs ont répondu sans erreur : la zone ne contient
+      // réellement aucune commune, le vide est un résultat.
+      if (emptyPayload !== null && failures.length === 0) {
+        return emptyPayload
+      }
+
+      // Sinon le vide est ambigu — un miroir partiel (osm.ch) ou une panne a pu
+      // le produire. Mieux vaut échouer : la détection sera relancée.
+      throw new Error(
+        emptyPayload !== null
+          ? `Réponse vide ambiguë (${failures.length} miroir(s) en échec) : ${failures.join(', ')}`
+          : `Aucun miroir Overpass n'a répondu : ${failures.join(', ')}`,
+      )
     } finally {
       isLoading.value = false
     }
