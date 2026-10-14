@@ -43,7 +43,7 @@ simple peut se contenter du `PRD.md`, une feature algorithmique ajoutera
 | Feature            | Statut               | Documentation                     | Prototype                                     | Livrée le   |
 |--------------------|----------------------|-----------------------------------|-----------------------------------------------|-------------|
 | altimetrie         | 🔵 Prototype validé  | [dossier](./altimetrie/)          | [prototype](./altimetrie/prototype/)          | —           |
-| communes           | 🔵 Prototype validé  | [dossier](./communes/)            | [prototype](./communes/prototype/)            | —           |
+| communes           | ✅ Livrée            | [dossier](./communes/)            | [prototype](./communes/prototype/)            | 14 oct 2026 |
 | etiquettes         | 🔵 Prototype validé  | [dossier](./etiquettes/)          | [prototype](./etiquettes/prototype/)          | —           |
 | passages-multiples | ✅ Livrée            | [dossier](./passages-multiples/)  | [prototype](./passages-multiples/prototype/)  | 17 sep 2026 |
 | verification-gpx   | ✅ Livrée            | [dossier](./verification-gpx/)    | [prototype](./verification-gpx/prototype/)    | 16 sep 2026 |

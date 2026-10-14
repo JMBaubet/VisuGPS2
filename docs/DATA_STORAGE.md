@@ -33,6 +33,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │           ├── {filename}.gpx.orig     # backup de l'original (posé par audit_validate)
 │           ├── audit.json              # archive de l'audit (anomalies + traitements)
 │           ├── multiride.json          # description des passages multiples (contrat)
+│           ├── communes.json           # communes traversées (module Communes)
 │           ├── trace.geojson           # LineString GeoJSON
 │           ├── keyframes_169.json      # keyframes ratio 16:9
 │           └── keyframes_43.json       # keyframes ratio 4:3
@@ -45,6 +46,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
         ├── {filename}.gpx
         ├── audit.json
         ├── multiride.json
+        ├── communes.json
         ├── trace.geojson
         └── keyframes_169.json / keyframes_43.json
 ```
@@ -126,7 +128,8 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "is_displayed": false,
     "audit_status": "needs_review",
     "audit_archived": false,
-    "multiride_status": "pending"
+    "multiride_status": "pending",
+    "communes_completed": false
   }
 ]
 ```
@@ -136,6 +139,8 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 **Archivage de l'audit** (`audit_archived`) : `true` quand un audit **appliqué** a laissé une archive dans le dossier de la trace (`audit.json`). C'est ce drapeau, lu par la carte du circuit, qui **rend** le bouton « Voir les anomalies de la source » (anomalies et traitements consultables) : il est **absent** tant qu'il est faux — il n'existe plus d'état gris informatif. Posé par `audit_validate`, en même temps que `"clean"` ; absent des registres antérieurs → `false` (ces audits n'ont pas laissé d'archive, et les corrections ne sont pas restituables).
 
 **Statut des passages multiples** (`multiride_status`) : `"none"` (détection jouée, aucune portion répétée), `"pending"` (au moins un passage reste à valider — **l'édition caméra est fermée**) ou `"validated"` (passages validés). Il vaut `null` pour une trace dont la détection n'a pas été jouée : la valeur est **permissive**, la barrière ne s'appliquant qu'aux traces détectées depuis l'introduction du module. Posé par `multiride_detect` (`none`/`pending`) et par `multiride_validate` (`validated`), et **reposé par chacune des commandes de geste** — approbation, fusion, faux positif, annulation, réinitialisation — : un geste invalide la validation de la détection, donc le statut retombe à `pending` (ou `none` si la détection ne trouve plus rien) et la barrière se referme. Comme `audit_archived`, ce champ évite à la carte du circuit de lire un fichier pour connaître l'état de la trace.
+
+**Détection des communes** (`communes_completed`) : `true` quand le fichier `communes.json` de la trace est présent et à jour — la fonctionnalité a été menée à son terme pour cette trace. L'information **absente** vaut `false` (« la tâche n'a pas été réalisée ») : c'est ce qui permet à la tâche de fond du lancement de rattraper les traces nettoyées avant l'introduction du module. Posé par `communes_detect`, reposé à `false` par `audit_validate` — le GPX réécrit change la géométrie de la trace, la description est donc supprimée et la détection rejouée.
 
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
@@ -342,6 +347,54 @@ remontée à l'utilisateur.
 
 > **Suppression** : le fichier disparaît avec le dossier de la trace
 > (`delete_trace`), comme les autres artefacts.
+
+### `traces/{trace_id}/communes.json` — Communes traversées
+
+Description des **communes traversées** par la trace, produite par la commande
+`communes_detect` : la trace nettoyée est croisée avec les limites
+administratives d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
+
+```json
+[
+  {
+    "commune": "Nice",
+    "passage": 1,
+    "nb_passages_total": 1,
+    "km_entree": 0,
+    "km_sortie": 5.131,
+    "longueur_km": 5.131
+  },
+  {
+    "commune": "La Trinité",
+    "passage": 1,
+    "nb_passages_total": 1,
+    "km_entree": 5.131,
+    "km_sortie": 8.001,
+    "longueur_km": 2.87
+  }
+]
+```
+
+- **Tableau racine** d'objets à six clés, **sans objet englobant ni géométrie** :
+  les coordonnées d'entrée et de sortie sont reconstituables depuis la trace et
+  les kilomètres. C'est le format de référence de la spécification du module
+  (`features/communes/`, `Specifications.md` §3.2).
+- Une entrée **par passage** : une commune traversée deux fois donne deux
+  entrées, numérotées par `passage` sur `nb_passages_total`.
+- Kilomètres arrondis au mètre ; `longueur_km` est la **différence des bornes
+  arrondies**, l'invariant `longueur = sortie − entrée` tient donc exactement
+  dans le fichier écrit.
+- Un tableau **vide** est un résultat : la trace ne traverse aucune commune
+  connue (pleine mer, zone absente d'OSM) — ce n'est pas un échec, et le
+  drapeau est posé.
+- Nom **uniforme** `communes.json`, comme `audit.json` et `multiride.json` : la
+  trace est désignée par son dossier. Écriture **atomique** (`.tmp` puis
+  `rename`), et **suppression** par `audit_validate` — le GPX réécrit change la
+  géométrie de la trace, la description ne décrit plus cette trace.
+
+> La **restitution** des passages (vue dédiée, carte, tableau) n'est pas encore
+> branchée : le fichier est produit et son état exposé sur la carte du circuit
+> (icône `mdi-home-edit`).
 
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 

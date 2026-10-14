@@ -1207,6 +1207,85 @@ micro-répétitions, `pasEchantillonnage` règle la granularité de l'analyse, e
 `fusionReferences` recoud les fentes courtes — sans jamais franchir une frontière
 entre deux sens, qui est tranchée par la géométrie et non par ce seuil.
 
+## Détection des communes (module Communes)
+
+La fonctionnalité détermine les **communes traversées** par une trace nettoyée
+et, pour chaque passage, les kilomètres d'entrée et de sortie. Elle se déclenche
+**seule** — à l'import d'une trace déjà propre, à la validation d'un audit — ou à
+la demande, depuis la carte du circuit.
+
+### Découpage front / backend
+
+Le **réseau reste côté front** (WebView), comme pour OpenRouteService : le
+composable `src/composables/useCommunesOverpass.ts` interroge l'API Overpass
+d'OpenStreetMap (quatre miroirs en cascade, délai d'abandon par miroir) pour les
+relations `boundary=administrative` de niveau `admin_level = 8` autour de la
+trace. Seule la **boîte englobante** de la trace est transmise au serveur, jamais
+la trace elle-même.
+
+Le **backend** (`src-tauri/src/gpx_communes/`) fait le reste, sur la réponse
+brute reçue en IPC :
+
+| Module | Rôle |
+|---|---|
+| `osm` | réponse Overpass → communes nommées (assemblage des anneaux depuis les ways membres, rôles `outer`/`inner`) |
+| `geometry` | primitives pures : distances, échantillonnage au pas fixe, surfaces, appartenance, intersections |
+| `pipeline` | l'algorithme : simplification, filtrage des candidates, timeline, arbitrage par centroïde, raffinement des transitions, post-traitement |
+| `file` | chemin et écriture atomique de `communes.json` |
+| `commands` | la commande `communes_detect` et la lecture des paramètres |
+
+La trace est relue depuis son propre stockage (`trace.geojson`, régénéré depuis
+le GPX au besoin) : aucune géométrie de trace ne franchit l'IPC. C'est le portage
+du prototype validé (`features/communes/`) — `oscillationRatio`, désactivé par
+défaut là-bas, n'est pas implémenté.
+
+### Orchestration : file d'attente et tâche de fond
+
+Le store `src/stores/communes.ts` porte la **file d'attente** : une seule analyse
+à la fois, une requête Overpass à la fois, un temps mort entre deux traces. Deux
+points d'entrée :
+
+- `request(traceId)` — un circuit précis (import d'une trace propre, validation
+  d'un audit, clic sur la carte du circuit) : la trace passe **en tête** de file,
+  l'analyse en cours se termine d'abord ;
+- `startCatchUp()` — au lancement (fenêtre principale **uniquement** : la fenêtre
+  secondaire monte aussi l'accueil le temps d'une frame), toutes les traces **déjà
+  nettoyées** dont la détection n'a pas abouti ; rien à faire → aucune tâche ne
+  démarre.
+
+L'éligibilité — trace nettoyée (`audit_status = "clean"`) sans détection aboutie —
+est revérifiée avant chaque trace, registre relu à la source. Un échec (Overpass
+indisponible, réponse illisible) laisse la détection à faire : elle est retentée
+au lancement suivant ou au clic, jamais en boucle dans la même session.
+
+### État et restitution
+
+- `communes_completed` (registre `traces.json`) porte l'état : **absent** vaut
+  `false`, donc une trace nettoyée avant l'introduction du module est reprise au
+  lancement. `audit_validate` le repose à `false` et supprime la description : le
+  GPX réécrit a changé la géométrie de la trace.
+- L'icône `mdi-home-edit` de la carte du circuit matérialise cet état : **grise**
+  (trace non nettoyée — la détection ne porte que sur une trace propre),
+  **orange** (détection en cours de traitement ou en file), **verte** (détection
+  aboutie) et **rouge** dans les autres cas — seule couleur active, et **forcée
+  visible** hors survol, un clic lançant alors la détection pour ce seul circuit.
+  L'ordre d'évaluation fait qu'un circuit **déjà détecté reste vert** pendant
+  qu'une tâche de fond traite d'autres circuits.
+- La **restitution** des passages (vue dédiée, carte, tableau) n'est pas encore
+  branchée : `communes.json` est produit, et son état est exposé sur la carte.
+
+### Paramètres (`Communes.*`)
+
+Le namespace expose une catégorie dans le drawer de la vue **Accueil** — la
+détection se déclenche depuis la carte d'un circuit, elle n'a pas de vue dédiée :
+
+| Catégorie | Paramètres |
+|---|---|
+| `Communes.Detection` | `adminLevel` (8), `bboxBufferDeg` (0.01°), `simplifyTolerance` (0.00005°), `targetSamples` (2000), `minSampleStepKm` (0.1 km), `maxAreaRatio` (10×), `minSegmentKm` (0.015 km), `minKeepKm` (0.5 km). |
+
+Ces huit seuils reprennent ceux du prototype validé : la `documentation` de chaque
+paramètre décrit son effet et les faux positifs qu'il expose.
+
 ## Vue d'édition caméra (`/edition-camera`)
 
 La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox ») est l'interface de réglage de la caméra qui suit une trace. Elle dispose d'un **playback fonctionnel** avec : génération de keyframes, boucle d'animation `requestAnimationFrame`, contrôles de lecture (Composant A), **graphe SVG d'avancement (§4.6)** et HUD de télémétrie (Composant C). S'y ajoutent le **Composant B** (édition fine des keyframes via `CameraEditor`) et l'**algorithme intelligent de frustum** (spec §3.3) — le tout décrit ci-dessous.
