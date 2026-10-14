@@ -33,14 +33,18 @@ const OVERPASS_ENDPOINTS = [
 ]
 
 /**
- * Délai accordé au serveur par la requête Overpass (s), et délai d'abandon du
- * client (ms) — volontairement plus long, pour que ce soit l'erreur du serveur
- * (504, plus informative) qui clôt la tentative.
+ * Délai par défaut accordé à chaque miroir, en secondes, quand le paramètre
+ * `Communes.Overpass.delaiSec` est indisponible. Le client patiente
+ * `DELAI_CLIENT_SUPPLEMENT_MS` de plus que le délai demandé au serveur, pour que
+ * ce soit l'erreur du serveur (plus informative) qui clôt la tentative.
  */
-const OVERPASS_QUERY_TIMEOUT_S = 25
-const OVERPASS_FETCH_TIMEOUT_MS = 30_000
+const DEFAULT_DELAI_SEC = 60
+const DELAI_CLIENT_SUPPLEMENT_MS = 5_000
 
-/** Replis si un paramètre `Communes.Detection.*` est absent ou inexploitable. */
+/** Plancher de sécurité si le délai paramétré est inexploitable. */
+const DELAI_MINIMUM_SEC = 10
+
+/** Replis si un paramètre du module est absent ou inexploitable. */
 const DEFAULT_BBOX_BUFFER_DEG = 0.01
 const DEFAULT_ADMIN_LEVEL = '8'
 
@@ -97,19 +101,27 @@ export function useCommunesOverpass() {
    * dans la zone. Overpass attend `(S, W, N, E)` là où la bbox GeoJSON est
    * `[minLon, minLat, maxLon, maxLat]`.
    */
-  function buildQuery(bbox: [number, number, number, number], adminLevel: string): string {
+  function buildQuery(
+    bbox: [number, number, number, number],
+    adminLevel: string,
+    delaiSec: number,
+  ): string {
     const [minLon, minLat, maxLon, maxLat] = bbox
     return (
-      `[out:json][timeout:${OVERPASS_QUERY_TIMEOUT_S}];` +
+      `[out:json][timeout:${delaiSec}];` +
       `relation["boundary"="administrative"]["admin_level"="${adminLevel}"]` +
       `(${minLat},${minLon},${maxLat},${maxLon});out geom;`
     )
   }
 
   /** Interroge un miroir et retourne ses `elements`. */
-  async function fetchFrom(endpoint: string, query: string): Promise<unknown[]> {
+  async function fetchFrom(
+    endpoint: string,
+    query: string,
+    timeoutMs: number,
+  ): Promise<unknown[]> {
     const controller = new AbortController()
-    const timer = window.setTimeout(() => controller.abort(), OVERPASS_FETCH_TIMEOUT_MS)
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs)
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -142,15 +154,22 @@ export function useCommunesOverpass() {
    * Récupère les limites administratives autour d'une trace.
    *
    * Retourne les `elements` de la réponse Overpass, sérialisés en JSON : c'est
-   * la charge transmise à la commande `communes_detect`. Un tableau **vide**
-   * n'est un résultat que s'il est **franc** — tous les miroirs ont répondu, et
-   * aucun n'a échoué ; sinon la détection échoue et sera reprise, plutôt que de
-   * consigner « aucune commune » sur une zone qu'on n'a pas su interroger.
+   * la charge transmise à la commande `communes_detect`. Le délai accordé à
+   * chaque miroir vient du paramètre `Communes.Overpass.delaiSec`. Un tableau
+   * **vide** n'est un résultat que s'il est **franc** — tous les miroirs ont
+   * répondu, et aucun n'a échoué ; sinon la détection échoue et sera reprise,
+   * plutôt que de consigner « aucune commune » sur une zone qu'on n'a pas su
+   * interroger.
    */
   async function fetchCommunes(traceId: string): Promise<string> {
     const bbox = await queryBbox(traceId)
     const adminLevel = await settingString('Communes.Detection.adminLevel', DEFAULT_ADMIN_LEVEL)
-    const query = buildQuery(bbox, adminLevel)
+    const delaiSec = Math.max(
+      DELAI_MINIMUM_SEC,
+      Math.round(await settingNumber('Communes.Overpass.delaiSec', DEFAULT_DELAI_SEC)),
+    )
+    const query = buildQuery(bbox, adminLevel, delaiSec)
+    const timeoutMs = delaiSec * 1000 + DELAI_CLIENT_SUPPLEMENT_MS
 
     isLoading.value = true
     const failures: string[] = []
@@ -159,7 +178,7 @@ export function useCommunesOverpass() {
     try {
       for (const endpoint of OVERPASS_ENDPOINTS) {
         try {
-          const elements = await fetchFrom(endpoint, query)
+          const elements = await fetchFrom(endpoint, query, timeoutMs)
           // Une réponse non vide est la réponse utile : elle prime sur toute
           // réponse vide, même obtenue plus tôt.
           if (elements.length > 0) {

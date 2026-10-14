@@ -943,36 +943,42 @@ mod tests {
         flatten_settings(&table, "", &mut defs);
         let meta = extract_meta(&table);
 
-        // 1. Le groupe est rattaché à la vue `accueil`, et il a sa métadonnée.
+        // 1. Les deux groupes du module sont rattachés à la vue `accueil` — la
+        //    détection se déclenche depuis la carte d'un circuit, elle n'a pas
+        //    de vue dédiée — et chacun a sa métadonnée d'affichage.
         let accueil = meta.views.get("accueil").expect("vue `accueil` déclarée");
-        assert!(
-            accueil.groups.contains(&"Communes.Detection".to_string()),
-            "groupe `Communes.Detection` absent de la vue accueil : {:?}",
-            accueil.groups
-        );
-        let group = meta
-            .groups
-            .get("Communes.Detection")
-            .expect("groupe `Communes.Detection` affiché sans métadonnée");
-        assert!(group.label.is_some(), "groupe `Communes.Detection` sans libellé");
+        for group_id in ["Communes.Detection", "Communes.Overpass"] {
+            assert!(
+                accueil.groups.contains(&group_id.to_string()),
+                "groupe `{group_id}` absent de la vue accueil : {:?}",
+                accueil.groups
+            );
+            let group = meta
+                .groups
+                .get(group_id)
+                .unwrap_or_else(|| panic!("groupe `{group_id}` affiché sans métadonnée"));
+            assert!(group.label.is_some(), "groupe `{group_id}` sans libellé");
+        }
 
-        // 2. Les huit réglages de détection, tous dans ce groupe.
+        // 2. Les neuf réglages du module : huit seuils de détection, un délai
+        //    réseau — chacun rattaché à un groupe affiché par la vue.
         let communes_defs: Vec<_> = defs
             .iter()
             .filter(|d| d.path.starts_with("Communes."))
             .collect();
         assert_eq!(
             communes_defs.len(),
-            8,
-            "8 paramètres `Communes.*` attendus : {:?}",
+            9,
+            "9 paramètres `Communes.*` attendus : {:?}",
             communes_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
         );
         for def in &communes_defs {
             let group_path = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
-            assert_eq!(
-                group_path, "Communes.Detection",
-                "paramètre `{}` hors du groupe de détection",
-                def.path
+            assert!(
+                accueil.groups.contains(&group_path),
+                "paramètre `{}` rattaché au groupe `{}`, absent de la vue accueil",
+                def.path,
+                group_path
             );
         }
 
@@ -1029,5 +1035,17 @@ mod tests {
                 "défaut de `{name}` : {value} au lieu de {expected}"
             );
         }
+
+        // 5. Le délai réseau : bornes de la spécification (30 à 300 s, 60 s par
+        //    défaut). Ce n'est pas un seuil de détection, il vit donc dans son
+        //    propre groupe.
+        let delai = communes_defs
+            .iter()
+            .find(|d| d.path == "Communes.Overpass.delaiSec")
+            .expect("paramètre `Communes.Overpass.delaiSec` déclaré");
+        assert_eq!(delai.setting_type, "int");
+        assert_eq!(delai.default.as_i64(), Some(60), "délai par défaut");
+        assert_eq!(delai.min, Some(30.0), "borne basse du délai");
+        assert_eq!(delai.max, Some(300.0), "borne haute du délai");
     }
 }

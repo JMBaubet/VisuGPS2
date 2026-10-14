@@ -46,7 +46,7 @@ action = "openModes"
 [_meta.views.accueil]
 label = "Accueil"
 icon = "mdi-home"
-groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Communes.Detection", "Exemples"]
+groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Communes.Detection", "Communes.Overpass", "Exemples"]
 
 [_meta.views.editionCamera]
 label = "Édition"
@@ -81,6 +81,10 @@ icon = "mdi-map-legend"
 [_meta.groups."Communes.Detection"]
 label = "Communes — détection"
 icon = "mdi-home-city-outline"
+
+[_meta.groups."Communes.Overpass"]
+label = "Communes — Overpass"
+icon = "mdi-cloud-search-outline"
 
 [_meta.groups."Affichage.moniteurs"]
 label = "Configuration des fenêtres"
@@ -998,6 +1002,33 @@ max = 5.0
 step = 0.1
 unit = "km"
 icon = "mdi-call-merge"
+
+[Communes.Overpass.delaiSec]
+description = "Délai d'attente par miroir Overpass (s)"
+documentation = """
+Délai accordé à **chaque** miroir Overpass avant de passer au suivant :
+**60 s**.
+
+Les miroirs sont essayés en cascade : ce délai est donc le temps d'attente
+maximal par miroir, et une détection peut coûter jusqu'à quatre fois ce délai
+avant d'échouer. Un échec n'est pas silencieux — la trace reste à détecter et
+est reprise au lancement suivant.
+
+- **Trop court** (< 40 s) : un serveur chargé est abandonné alors qu'il allait
+  répondre. L'API publique rend régulièrement sa réponse en 30 à 90 s sur une
+  zone dense.
+- **Trop long** (> 180 s) : la tâche de fond s'enlise sur un miroir mort.
+
+Le client patiente 5 s de plus que ce délai, pour que ce soit l'erreur du
+serveur (plus informative) qui clôt la tentative.
+"""
+type = "int"
+default = 60
+min = 30
+max = 300
+step = 10
+unit = "s"
+icon = "mdi-timer-sand"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.
