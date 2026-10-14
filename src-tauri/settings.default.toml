@@ -46,7 +46,7 @@ action = "openModes"
 [_meta.views.accueil]
 label = "Accueil"
 icon = "mdi-home"
-groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Exemples"]
+groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Communes.Detection", "Exemples"]
 
 [_meta.views.editionCamera]
 label = "Édition"
@@ -77,6 +77,10 @@ icon = "mdi-key-chain"
 [_meta.groups.Accueil]
 label = "Accueil — Circuits"
 icon = "mdi-map-legend"
+
+[_meta.groups."Communes.Detection"]
+label = "Communes — détection"
+icon = "mdi-home-city-outline"
 
 [_meta.groups."Affichage.moniteurs"]
 label = "Configuration des fenêtres"
@@ -826,6 +830,173 @@ min = 0
 max = 500
 step = 5
 unit = "m"
+icon = "mdi-call-merge"
+
+# ---------------------------------------------------------------------------
+# Détection des communes traversées (module Communes).
+# Une trace nettoyée est croisée avec les limites administratives communales
+# d'OpenStreetMap ; le résultat est écrit dans `traces/{trace_id}/communes.json`
+# et l'état de la fonctionnalité dans `traces.json` (`communes_completed`).
+# Les réglages reprennent ceux du prototype validé (`features/communes/`).
+# ---------------------------------------------------------------------------
+
+[Communes.Detection.adminLevel]
+description = "Niveau administratif OSM visé"
+documentation = """
+Valeur du tag OSM `admin_level` retenue comme « commune » :
+
+- **8** en France, Espagne, Italie, Suisse (valeur par défaut) ;
+- 6 pour un découpage départemental, 4 pour un découpage régional.
+
+Les relations d'un autre niveau reçues dans la réponse sont ignorées : un
+niveau erroné donne une détection **vide**, silencieuse.
+"""
+type = "string"
+default = "8"
+icon = "mdi-sitemap-outline"
+
+[Communes.Detection.bboxBufferDeg]
+description = "Élargissement de la zone de recherche (°)"
+documentation = """
+Marge ajoutée autour de la boîte englobante de la trace avant d'interroger
+OpenStreetMap : **0.01°** ≈ 1 km.
+
+- **Trop petite** (< 0.002°) : une commune traversée en bordure de trace peut
+  manquer à l'appel, son polygone s'étendant au-delà de la zone interrogée.
+- **Trop grande** (> 0.05°) : la réponse d'OpenStreetMap grossit (agglomérations
+  denses), jusqu'au refus du serveur (HTTP 504).
+
+La marge n'a aucune influence sur les kilomètres calculés : elle ne sert qu'à
+la requête.
+"""
+type = "float"
+default = 0.01
+min = 0.001
+max = 0.1
+step = 0.001
+unit = "°"
+icon = "mdi-vector-square"
+
+[Communes.Detection.simplifyTolerance]
+description = "Tolérance de simplification de la trace (°)"
+documentation = """
+Tolérance du lissage Douglas-Peucker appliqué à la trace avant analyse :
+**0.00005°** ≈ 5 m.
+
+- **Plus fin** (< 0.00001°) : aucune précision gagnée, la frontière
+  communale OSM étant elle-même précise à quelques mètres.
+- **Plus grossier** (> 0.0002°) : la trace peut sortir d'une commune étroite
+  (rue limitrophe), et la commune est perdue.
+
+La simplification ne sert qu'aux calculs internes : les kilomètres sont
+ensuite raffinés par intersection avec les frontières réelles.
+"""
+type = "float"
+default = 0.00005
+min = 0.000001
+max = 0.001
+step = 0.000001
+unit = "°"
+icon = "mdi-vector-polyline"
+
+[Communes.Detection.targetSamples]
+description = "Nombre cible d'échantillons"
+documentation = """
+Nombre de points échantillonnés le long de la trace pour établir la commune
+traversée à chaque position : **2000** par défaut.
+
+Le pas effectif est `longueur / targetSamples`, jamais inférieur à
+`minSampleStepKm`. Sur les traces longues, c'est ce plafond qui évite que le
+nombre de tests d'appartenance explose.
+"""
+type = "int"
+default = 2000
+min = 100
+max = 20000
+step = 100
+icon = "mdi-dots-grid"
+
+[Communes.Detection.minSampleStepKm]
+description = "Pas minimal d'échantillonnage (km)"
+documentation = """
+Distance minimale entre deux échantillons : **0.1 km** (100 m).
+
+C'est le pas réel sur les traces courtes et moyennes. Un pas plus fin
+(< 0.05 km) n'améliore pas la précision des points d'entrée et de sortie —
+ceux-ci sont raffinés par intersection avec la frontière — mais multiplie les
+tests.
+"""
+type = "float"
+default = 0.1
+min = 0.01
+max = 2.0
+step = 0.01
+unit = "km"
+icon = "mdi-ruler"
+
+[Communes.Detection.maxAreaRatio]
+description = "Exclusion des polygones aberrants (× médiane)"
+documentation = """
+Un multipolygone OSM cassé a une surface démesurée qui englobe ses voisines et
+fausse la traversée : toute commune dont la surface dépasse ce facteur fois la
+**médiane** des candidates est écartée avant l'analyse fine.
+
+- **10** (défaut) : élimine les polygones manifestement cassés sans risquer
+  d'écarter une grande commune légitime (une agglomération est déjà ~10× sa
+  voisine rurale).
+- **Trop bas** (< 3) : une grande commune voisine de petites communes est
+  écartée à tort.
+
+Sécurité : si le filtre emportait **toutes** les candidates, il est annulé —
+mieux vaut une commune aberrante qu'une trace sans aucune commune.
+"""
+type = "float"
+default = 10.0
+min = 1.0
+max = 100.0
+step = 1.0
+unit = "×"
+icon = "mdi-arrow-expand-horizontal"
+
+[Communes.Detection.minSegmentKm]
+description = "Longueur minimale d'un passage (km)"
+documentation = """
+Tout passage plus court est ignoré : **0.015 km** (15 m). Ces micro-passages
+proviennent d'imprécisions de simplification ou de polygones OSM imparfaits, et
+non d'une traversée réelle.
+
+Valeur 0 : conserve tout, y compris les artefacts.
+"""
+type = "float"
+default = 0.015
+min = 0.0
+max = 0.5
+step = 0.005
+unit = "km"
+icon = "mdi-filter-remove-outline"
+
+[Communes.Detection.minKeepKm]
+description = "Absorption des passages courts (km)"
+documentation = """
+Un passage plus court est absorbé par son **voisin le plus long** — la surface
+absorbée lui est réattribuée, la couverture de la trace reste complète :
+**0.5 km** (500 m).
+
+- **0.5** (défaut) : un passage de quelques centaines de mètres ne correspond
+  qu'à un artefact (frontière OSM imprécise, micro-chevauchement) et brouille
+  la lecture.
+- **Trop haut** (> 2 km) : une commune légitimement traversée sur 1 km
+  disparaîtrait du résultat.
+
+Valeur 0 : aucune absorption. Ce seuil est plus permissif que `minSegmentKm` :
+il s'applique une fois les passages identifiés.
+"""
+type = "float"
+default = 0.5
+min = 0.0
+max = 5.0
+step = 0.1
+unit = "km"
 icon = "mdi-call-merge"
 
 # ---------------------------------------------------------------------------

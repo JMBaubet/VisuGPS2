@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (44 commandes)
+## Catalogue (45 commandes)
 
 ### Application
 
@@ -298,6 +298,47 @@ pub struct MultiridePassage {
 
 > **Invariant des gestes** : deux ordres, deux règles. Un **verdict** — approuvé, écarté — porte sur le segment dans son état courant, et les deux verdicts s'excluent : approuver ne conserve aucune donnée, si bien qu'écarter un segment approuvé **efface** l'approbation, et qu'un segment écarté ne s'approuve pas. Une **fusion**, elle, réorganise la détection sans la juger : refusée quand un des deux camps est écarté, elle laisse le segment fusionné approuvable, et le résultat — un segment **neuf** — perd les approbations de ses deux camps. L'annulation retire le verdict avant la fusion. Les fusions **s'enchaînent** : un segment peut absorber son précédent puis le suivant. L'enregistrement d'annulation d'une fusion contient les emprunts d'avant, lesquels gardent leur propre enregistrement et leur approbation : la chaîne s'annule de la plus récente à la plus ancienne, et restitue les approbations.
 
+### Communes (`gpx_communes/commands.rs`)
+
+> Le module Communes détecte les **communes traversées** par une trace nettoyée
+> (`audit_status = "clean"`) et calcule, pour chaque passage, les kilomètres
+> d'entrée et de sortie. Le croisement se fait avec les limites administratives
+> d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
+>
+> **Le réseau reste côté front** (WebView) : le front interroge l'API Overpass
+> (4 miroirs en cascade) et transmet à la commande la **réponse brute** ; le
+> backend se charge de la géométrie, de l'écriture et de l'état. Aucune
+> géométrie de trace ne franchit l'IPC : le backend relit la trace depuis son
+> propre stockage.
+>
+> **Un seul fichier est produit** : `traces/{trace_id}/communes.json` — tableau
+> racine d'objets à six clés, sans géométrie. L'état de la fonctionnalité vit
+> dans le registre (`communes_completed`), reposé à `false` par
+> `audit_validate` (le GPX réécrit change la géométrie de la trace). Un résultat
+> **vide** est un résultat — la trace ne traverse aucune commune connue — et non
+> une erreur. Voir
+> [DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idcommunesjson--communes-traversées).
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `communes_detect` | `async (app, trace_id: String, osm: String) -> Result<Vec<CommunePassage>, String>` | Lit la trace nettoyée (`trace.geojson`, régénéré depuis le GPX au besoin), assemble les polygones de la réponse Overpass, exécute la détection (simplification, échantillonnage au pas fixe, arbitrage par centroïde, raffinement des transitions), écrit `communes.json` (écriture atomique) et pose `communes_completed`. Retourne les passages écrits. |
+
+**Type `CommunePassage`** (format du fichier `communes.json`, miroir de l'interface TS) :
+```rust
+pub struct CommunePassage {
+    pub commune: String,           // nom de la relation OSM
+    pub passage: u32,              // numéro de ce passage dans la commune (1-based)
+    pub nb_passages_total: u32,    // passages de cette commune le long de la trace
+    pub km_entree: f64,            // kilomètre d'entrée, depuis le départ de la trace
+    pub km_sortie: f64,
+    pub longueur_km: f64,          // km_sortie − km_entree, bornes arrondies au mètre
+}
+```
+
+> **Paramètres** : `Communes.Detection.*` (8 réglages). Le groupe est rattaché à
+> la vue `accueil` : la détection se déclenche depuis la carte d'un circuit, elle
+> n'a pas de vue dédiée.
+
 ### Paramètres / Settings (`settings.rs`)
 
 **Types `TracePoint` et `TracePoints`** (miroir TS `TracePoint` dans `src/stores/traces.ts`) :
@@ -337,12 +378,16 @@ pub struct TraceMetadata {
     pub audit_archived: bool,             // un audit appliqué est archivé (consultable)
     #[serde(default)]
     pub multiride_status: Option<String>, // "none" | "pending" | "validated" | null
+    #[serde(default)]
+    pub communes_completed: bool,         // détection des communes réalisée (fichier écrit)
 }
 ```
 
-> `#[serde(default)]` sur `favorite`/`is_displayed`/`audit_archived`/`multiride_status` et `#[serde(default = "default_audit_status")]` sur `audit_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`false`/`null`/`"needs_review"`).
+> `#[serde(default)]` sur `favorite`/`is_displayed`/`audit_archived`/`multiride_status`/`communes_completed` et `#[serde(default = "default_audit_status")]` sur `audit_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`false`/`null`/`false`/`"needs_review"`).
 >
 > `multiride_status` vaut `null` pour une trace dont la détection des passages multiples n'a pas été jouée : la valeur est **permissive** — la barrière ne s'applique qu'aux traces détectées depuis l'introduction du module.
+>
+> `communes_completed` vaut `false` tant que la détection des communes n'a pas abouti : l'information **absente** vaut « non réalisée », ce qui permet la reprise des traces déjà nettoyées avant l'introduction du module.
 >
 > **Registres pré-audit (D1)** : `load_registry` détecte la présence de la clé `"cleaning_status"` (format des versions antérieures au module Audit) et retourne alors une liste **vide**, sans jamais réécrire le fichier. Les traces concernées disparaissent de l'interface, mais leurs fichiers GPX restent intacts sur disque — voir [DATA_STORAGE.md](./DATA_STORAGE.md). Le registre est réécrit au prochain import, au nouveau format.
 
@@ -375,4 +420,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-09-17
+**Dernière mise à jour** : 2026-10-14

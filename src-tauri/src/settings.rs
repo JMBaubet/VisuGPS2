@@ -924,4 +924,110 @@ mod tests {
             "0 doit être admis : il désactive les fusions automatiques"
         );
     }
+
+    /// Le namespace `Communes.*` est déclaré et cohérent avec `_meta`.
+    ///
+    /// La détection des communes n'a **pas de vue dédiée** : elle se déclenche
+    /// depuis la carte d'un circuit, sur l'accueil — c'est donc le groupe de la
+    /// vue `accueil` qui porte ses réglages. Chaque paramètre doit y être
+    /// rattaché, sans quoi il serait invisible dans le drawer.
+    #[test]
+    fn communes_namespace_is_declared_and_consistent() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        let meta = extract_meta(&table);
+
+        // 1. Le groupe est rattaché à la vue `accueil`, et il a sa métadonnée.
+        let accueil = meta.views.get("accueil").expect("vue `accueil` déclarée");
+        assert!(
+            accueil.groups.contains(&"Communes.Detection".to_string()),
+            "groupe `Communes.Detection` absent de la vue accueil : {:?}",
+            accueil.groups
+        );
+        let group = meta
+            .groups
+            .get("Communes.Detection")
+            .expect("groupe `Communes.Detection` affiché sans métadonnée");
+        assert!(group.label.is_some(), "groupe `Communes.Detection` sans libellé");
+
+        // 2. Les huit réglages de détection, tous dans ce groupe.
+        let communes_defs: Vec<_> = defs
+            .iter()
+            .filter(|d| d.path.starts_with("Communes."))
+            .collect();
+        assert_eq!(
+            communes_defs.len(),
+            8,
+            "8 paramètres `Communes.*` attendus : {:?}",
+            communes_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
+        );
+        for def in &communes_defs {
+            let group_path = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
+            assert_eq!(
+                group_path, "Communes.Detection",
+                "paramètre `{}` hors du groupe de détection",
+                def.path
+            );
+        }
+
+        // 3. Types : le niveau administratif est un tag OSM (chaîne), les sept
+        //    autres réglages sont numériques.
+        let admin = communes_defs
+            .iter()
+            .find(|d| d.path == "Communes.Detection.adminLevel")
+            .expect("paramètre `Communes.Detection.adminLevel` déclaré");
+        assert_eq!(admin.setting_type, "string");
+        assert_eq!(admin.default.as_str(), Some("8"));
+        for name in [
+            "bboxBufferDeg",
+            "simplifyTolerance",
+            "targetSamples",
+            "minSampleStepKm",
+            "maxAreaRatio",
+            "minSegmentKm",
+            "minKeepKm",
+        ] {
+            let def = communes_defs
+                .iter()
+                .find(|d| d.path.ends_with(name))
+                .unwrap_or_else(|| panic!("paramètre `Communes.Detection.{name}` absent"));
+            assert!(
+                matches!(def.setting_type.as_str(), "float" | "int"),
+                "`{name}` doit être numérique, vu `{}`",
+                def.setting_type
+            );
+        }
+
+        // 4. Valeurs par défaut du prototype validé.
+        let default_of = |name: &str| -> f64 {
+            let def = communes_defs
+                .iter()
+                .find(|d| d.path.ends_with(name))
+                .unwrap_or_else(|| panic!("paramètre `{name}` absent"));
+            def.default
+                .as_f64()
+                .unwrap_or_else(|| panic!("`{name}` n'a pas de défaut numérique"))
+        };
+        for (name, expected) in [
+            ("bboxBufferDeg", 0.01),
+            ("simplifyTolerance", 0.00005),
+            ("targetSamples", 2000.0),
+            ("minSampleStepKm", 0.1),
+            ("maxAreaRatio", 10.0),
+            ("minSegmentKm", 0.015),
+            ("minKeepKm", 0.5),
+        ] {
+            let value = default_of(name);
+            assert!(
+                (value - expected).abs() < 1e-12,
+                "défaut de `{name}` : {value} au lieu de {expected}"
+            );
+        }
+    }
 }

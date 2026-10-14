@@ -74,7 +74,8 @@ pub fn run() {
             gpx_multiride::commands::multiride_toggle_fp,
             gpx_multiride::commands::multiride_validate_segment,
             gpx_multiride::commands::multiride_undo_segment,
-            gpx_multiride::commands::multiride_reset
+            gpx_multiride::commands::multiride_reset,
+            gpx_communes::commands::communes_detect
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

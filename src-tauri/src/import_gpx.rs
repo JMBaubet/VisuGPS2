@@ -1095,9 +1095,10 @@ pub struct TraceGeometry {
 /// Régénère le fichier `geojson/{trace_id}.geojson` depuis le GPX original.
 ///
 /// Utilisé pour migrer les traces importées avant l'existence du dossier
-/// `geojson/` (le fichier LineString n'était pas créé à l'import à l'époque).
+/// `geojson/` (le fichier LineString n'était pas créé à l'import à l'époque),
+/// et comme repli du module Communes quand la géométrie d'une trace manque.
 /// Retourne la Feature GeoJSON fraîchement écrite. Écriture atomique.
-fn rebuild_geometry_from_gpx(
+pub(crate) fn rebuild_geometry_from_gpx(
     mode_dir: &Path,
     registry: &[TraceMetadata],
     trace_id: &str,

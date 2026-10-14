@@ -4,3 +4,5 @@
 //! de leurs **implémentations internes** et des fonctions pures du pipeline.
 
 mod file_test;
+mod osm_test;
+mod pipeline_test;
