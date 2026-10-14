@@ -113,6 +113,37 @@ export const useCommunesStore = defineStore('communes', () => {
   }
 
   /**
+   * Relit la description des communes d'une trace, pour la consultation.
+   *
+   * `null` quand il n'y a rien à restituer (fichier absent ou illisible) : un
+   * **tableau vide** est un résultat — la trace ne traverse aucune commune
+   * connue — et non une absence.
+   */
+  async function loadPassages(traceId: string): Promise<CommunePassage[] | null> {
+    try {
+      return await invoke<CommunePassage[] | null>('communes_load', { traceId })
+    } catch (error) {
+      console.error(`[communes] Description illisible pour ${traceId} :`, error)
+      return null
+    }
+  }
+
+  /**
+   * Réinitialise la détection d'une trace — outil de **diagnostic**, exposé en
+   * mode debug depuis la fenêtre de consultation.
+   *
+   * La description est supprimée et le drapeau reposé : la trace redevient « à
+   * détecter », reprise au prochain lancement ou immédiatement au clic sur sa
+   * carte.
+   */
+  async function resetDetection(traceId: string): Promise<void> {
+    await invoke('communes_reset', { traceId })
+    failed.delete(traceId)
+    useTracesStore().setCommunesCompleted(traceId, false)
+    ui.showInfo('Détection des communes réinitialisée : le circuit peut être relancé.')
+  }
+
+  /**
    * Tâche de fond : vide la file, une trace à la fois.
    *
    * L'éligibilité est revérifiée **avant chaque trace**, registre relu à la
@@ -141,7 +172,7 @@ export const useCommunesStore = defineStore('communes', () => {
           // doit le refléter sans relire le registre — la carte du circuit s'y
           // adosse, et un circuit détecté repasse au vert sans attendre la fin
           // du lot.
-          useTracesStore().markCommunesCompleted(traceId)
+          useTracesStore().setCommunesCompleted(traceId, true)
           console.log(`[communes] ${trace.name} : ${passages} passage(s).`)
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
@@ -216,7 +247,9 @@ export const useCommunesStore = defineStore('communes', () => {
     // Getters
     isPending,
     // Actions
+    loadPassages,
     request,
+    resetDetection,
     startCatchUp,
   }
 })

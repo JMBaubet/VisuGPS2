@@ -5,6 +5,7 @@ import { useSettingsStore } from '../stores/settings'
 import Map from '../components/Accueil/Map.vue'
 import AppBar from '../components/Accueil/AppBar.vue'
 import CircuitsDrawer from '../components/Accueil/CircuitsDrawer.vue'
+import CommunesDialog from '../components/Communes/CommunesDialog.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 import ModeExecutionCard from '../components/Accueil/ModeExecutionCard.vue'
 
@@ -42,6 +43,10 @@ onMounted(async () => {
       <v-dialog v-model="appStore.showModeDialog" max-width="600px" persistent>
         <ModeExecutionCard />
       </v-dialog>
+
+      <!-- Consultation des communes traversées (module Communes) : une seule
+           instance, ouverte depuis la carte d'un circuit, pilotée par le store. -->
+      <CommunesDialog />
     </v-layout>
   </v-app>
 </template>

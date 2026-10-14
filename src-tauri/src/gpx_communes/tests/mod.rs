@@ -3,6 +3,7 @@
 //! Les commandes Tauri exigent un `AppHandle` : elles sont testées au travers
 //! de leurs **implémentations internes** et des fonctions pures du pipeline.
 
+mod commands_test;
 mod file_test;
 mod osm_test;
 mod pipeline_test;

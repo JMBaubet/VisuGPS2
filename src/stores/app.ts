@@ -55,6 +55,8 @@ export const useAppStore = defineStore('app', () => {
   const isDebug = ref(false)
   const modes = ref<ModeInfo[]>([])
   const showModeDialog = ref(false)
+  /** Trace dont la fenêtre « Communes traversées » est ouverte, ou `null`. */
+  const communesTraceId = ref<string | null>(null)
 
   const theme = computed(() => isDarkMode.value ? 'dark' : 'light')
 
@@ -159,6 +161,16 @@ export const useAppStore = defineStore('app', () => {
     isDebug.value = !isDebug.value
   }
 
+  /** Ouvre la fenêtre de consultation des communes d'une trace. */
+  function openCommunes(traceId: string) {
+    communesTraceId.value = traceId
+  }
+
+  /** Ferme la fenêtre de consultation des communes. */
+  function closeCommunes() {
+    communesTraceId.value = null
+  }
+
   return {
     isDarkMode,
     theme,
@@ -175,6 +187,7 @@ export const useAppStore = defineStore('app', () => {
     isDebug,
     modes,
     showModeDialog,
+    communesTraceId,
     activeModeDescription,
     loadExecutionEnv,
     loadModes,
@@ -182,6 +195,8 @@ export const useAppStore = defineStore('app', () => {
     updateMode,
     deleteMode,
     selectMode,
-    toggleDebug
+    toggleDebug,
+    openCommunes,
+    closeCommunes
   }
 })

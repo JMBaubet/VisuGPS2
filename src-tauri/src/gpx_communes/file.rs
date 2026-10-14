@@ -37,7 +37,19 @@ pub fn save_file(
     }
     let content = serde_json::to_string_pretty(passages)
         .map_err(|e| format!("Sérialisation des communes : {}", e))?;
+
     write_atomic(&path, content.as_bytes())
+}
+
+/// Charge la description des communes d'une trace.
+///
+/// Tolérant : fichier absent, illisible ou de format inattendu → `None`. Ce
+/// n'est pas une erreur : il n'y a simplement rien à consulter pour cette trace.
+/// Un tableau **vide** est un résultat à part entière (« aucune commune
+/// traversée »), rendu tel quel.
+pub fn load_file(mode_dir: &Path, trace_id: &str) -> Option<Vec<CommunePassage>> {
+    let content = std::fs::read_to_string(file_path(mode_dir, trace_id)).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 /// Supprime le fichier `communes.json` d'une trace, s'il existe.

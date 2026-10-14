@@ -181,6 +181,59 @@ pub fn detect_impl(
     Ok(passages)
 }
 
+// ─── Consultation et réinitialisation ─────────────────────────────────
+
+/// Charge la description des communes d'une trace (consultation).
+///
+/// `None` si le fichier est absent ou illisible : la carte du circuit ne
+/// propose la consultation que pour une trace détectée, cet état ne devrait
+/// donc pas se produire — il n'est pas une erreur pour autant.
+#[tauri::command]
+pub async fn communes_load(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<Option<Vec<CommunePassage>>, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    Ok(file::load_file(&mode_dir, &trace_id))
+}
+
+/// Supprime la description des communes d'une trace et repose son drapeau à
+/// `false`.
+///
+/// Outil de **diagnostic**, exposé dans la fenêtre de consultation en mode
+/// debug : la trace redevient « à détecter », elle sera reprise au prochain
+/// lancement ou au clic sur la carte du circuit.
+#[tauri::command]
+pub async fn communes_reset(app: tauri::AppHandle, trace_id: String) -> Result<(), String> {
+    let mode_dir = get_mode_dir(&app)?;
+    reset_impl(&mode_dir, &trace_id)
+}
+
+/// Implémentation testable de `communes_reset`.
+///
+/// La trace est d'abord cherchée au registre — une trace inconnue ne change
+/// rien —, puis le fichier est supprimé et le drapeau reposé dans la même
+/// passe : l'ordre inverse laisserait une trace « détectée » sans description.
+pub fn reset_impl(mode_dir: &Path, trace_id: &str) -> Result<(), String> {
+    let traces_path = get_traces_path(mode_dir);
+    let mut registry = load_registry(&traces_path);
+    if !registry.iter().any(|t| t.id == trace_id) {
+        return Err(format!("Trace introuvable : {}.", trace_id));
+    }
+
+    file::remove_file(mode_dir, trace_id);
+
+    let entry = registry
+        .iter_mut()
+        .find(|t| t.id == trace_id)
+        .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
+    entry.communes_completed = false;
+    save_registry(&traces_path, &registry)?;
+
+    println!("[communes] {} : détection réinitialisée.", trace_id);
+    Ok(())
+}
+
 /// Coordonnées `[lon, lat]` de la trace persistée (`trace.geojson`).
 fn load_trace_coordinates(mode_dir: &Path, trace_id: &str) -> Result<Vec<[f64; 2]>, String> {
     let geojson_path = get_geojson_path(mode_dir, trace_id);

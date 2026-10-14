@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (45 commandes)
+## Catalogue (47 commandes)
 
 ### Application
 
@@ -322,6 +322,8 @@ pub struct MultiridePassage {
 | Commande | Signature Rust | Retour |
 |---|---|---|
 | `communes_detect` | `async (app, trace_id: String, osm: String) -> Result<Vec<CommunePassage>, String>` | Lit la trace nettoyée (`trace.geojson`, régénéré depuis le GPX au besoin), assemble les polygones de la réponse Overpass, exécute la détection (simplification, échantillonnage au pas fixe, arbitrage par centroïde, raffinement des transitions), écrit `communes.json` (écriture atomique) et pose `communes_completed`. Retourne les passages écrits. |
+| `communes_load` | `async (app, trace_id: String) -> Result<Option<Vec<CommunePassage>>, String>` | Relit la description d'une trace, pour la **consultation** ouverte depuis la carte du circuit. `null` si le fichier est absent ou illisible — ce n'est pas une erreur. Un tableau vide signifie « aucune commune traversée ». |
+| `communes_reset` | `async (app, trace_id: String) -> Result<(), String>` | **Diagnostic** (exposé en mode debug dans la fenêtre de consultation) : supprime `communes.json` et repose `communes_completed` — la trace redevient « à détecter ». Refusé pour une trace inconnue du registre, sans rien modifier. |
 
 **Type `CommunePassage`** (format du fichier `communes.json`, miroir de l'interface TS) :
 ```rust
@@ -335,9 +337,10 @@ pub struct CommunePassage {
 }
 ```
 
-> **Paramètres** : `Communes.Detection.*` (8 réglages). Le groupe est rattaché à
-> la vue `accueil` : la détection se déclenche depuis la carte d'un circuit, elle
-> n'a pas de vue dédiée.
+> **Paramètres** : `Communes.Detection.*` (8 seuils) et
+> `Communes.Overpass.delaiSec` (délai d'attente par miroir, 60 s par défaut). Les
+> deux groupes sont rattachés à la vue `accueil` : la détection se déclenche
+> depuis la carte d'un circuit, elle n'a pas de vue dédiée.
 
 ### Paramètres / Settings (`settings.rs`)
 

@@ -296,15 +296,14 @@ export const useTracesStore = defineStore('traces', () => {
   }
 
   /**
-   * Marque la détection des communes comme aboutie pour une trace, **sans relire
-   * le registre** : la commande `communes_detect` vient d'écrire le drapeau côté
-   * backend, l'entrée en mémoire doit simplement le refléter — les cartes de
-   * circuit s'y adossent pour afficher leur état, et un circuit détecté repasse
-   * au vert sans attendre la fin d'un lot.
+   * Reflète en mémoire l'état de détection des communes d'une trace, **sans
+   * relire le registre** : le backend vient d'écrire le drapeau (détection
+   * aboutie, ou réinitialisation de diagnostic), l'entrée en mémoire doit
+   * simplement le suivre — les cartes de circuit s'y adossent.
    */
-  function markCommunesCompleted(traceId: string): void {
+  function setCommunesCompleted(traceId: string, completed: boolean): void {
     const trace = traces.value.find(t => t.id === traceId)
-    if (trace) trace.communes_completed = true
+    if (trace) trace.communes_completed = completed
   }
 
   /**
@@ -345,7 +344,7 @@ export const useTracesStore = defineStore('traces', () => {
     getTraceGeometry,
     getTracePoints,
     invalidateGeometry,
-    markCommunesCompleted,
+    setCommunesCompleted,
     updateMapCenter,
     setVisibleTraceIds,
   }
