@@ -11,6 +11,9 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { haversineMeters } from '../utils/geo'
+// Import croisé avec `communes.ts` : chaque store n'appelle l'autre qu'à
+// l'intérieur de ses actions, jamais au chargement du module.
+import { useCommunesStore } from './communes'
 
 // --- Types (miroir exact des structs Rust import_gpx.rs, snake_case) ---
 
@@ -199,6 +202,12 @@ export const useTracesStore = defineStore('traces', () => {
       } catch (error) {
         console.error(`Impossible d'afficher/cadrer la trace ${result.id} :`, error)
       }
+      // Trace déjà propre : la détection de ses communes suit immédiatement
+      // l'import. Une trace à auditer suivra la validation de son audit
+      // (`auditStore.validateAndRewrite`).
+      if (result.audit_status === 'clean') {
+        useCommunesStore().request(result.id)
+      }
       return result
     } finally {
       loading.value = false
@@ -287,6 +296,18 @@ export const useTracesStore = defineStore('traces', () => {
   }
 
   /**
+   * Marque la détection des communes comme aboutie pour une trace, **sans relire
+   * le registre** : la commande `communes_detect` vient d'écrire le drapeau côté
+   * backend, l'entrée en mémoire doit simplement le refléter — les cartes de
+   * circuit s'y adossent pour afficher leur état, et un circuit détecté repasse
+   * au vert sans attendre la fin d'un lot.
+   */
+  function markCommunesCompleted(traceId: string): void {
+    const trace = traces.value.find(t => t.id === traceId)
+    if (trace) trace.communes_completed = true
+  }
+
+  /**
    * Met à jour le centre de la carte.
    * Appelé par Map.vue sur moveend pour synchroniser le tri par distance.
    */
@@ -324,6 +345,7 @@ export const useTracesStore = defineStore('traces', () => {
     getTraceGeometry,
     getTracePoints,
     invalidateGeometry,
+    markCommunesCompleted,
     updateMapCenter,
     setVisibleTraceIds,
   }

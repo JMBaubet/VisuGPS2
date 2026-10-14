@@ -19,6 +19,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useCommunesStore } from './communes'
 import { useUiStore } from './ui'
 
 // ─── Types primaires ──────────────────────────────────────────────────
@@ -519,12 +520,17 @@ export const useAuditStore = defineStore('audit', () => {
     if (!currentTraceId.value) {
       throw new Error("Aucune trace en cours d'audit.")
     }
+    const traceId = currentTraceId.value
     const result = await invoke('audit_validate', {
-      traceId: currentTraceId.value,
+      traceId,
       points: working.value,
       findings: findings.value,
     })
     await persistOrWarn(true)
+    // Le GPX vient d'être réécrit : sa géométrie a changé, la détection des
+    // communes doit être rejouée sur la trace nettoyée. La trace passe en tête
+    // de file — une tâche de fond en cours termine son analyse d'abord.
+    useCommunesStore().request(traceId)
     return result
   }
 

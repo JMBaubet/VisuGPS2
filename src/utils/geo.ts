@@ -84,3 +84,32 @@ export function bearingDelta(from: number, to: number): number {
   const diff = ((to - from + 540) % 360) - 180
   return diff
 }
+
+/**
+ * Boîte englobante d'une suite de coordonnées GeoJSON `[lon, lat]`.
+ *
+ * Utilisée pour délimiter la zone à interroger autour d'une trace (détection
+ * des communes) : la marge est ajoutée par l'appelant, pas ici.
+ *
+ * @param coordinates - Coordonnées `[lon, lat]` (ordre GeoJSON).
+ * @returns `[minLon, minLat, maxLon, maxLat]`, ou `null` si la suite est vide.
+ */
+export function bboxOfCoordinates(
+  coordinates: number[][],
+): [number, number, number, number] | null {
+  if (coordinates.length === 0) return null
+
+  let minLon = Infinity
+  let minLat = Infinity
+  let maxLon = -Infinity
+  let maxLat = -Infinity
+
+  for (const [lon, lat] of coordinates) {
+    if (lon < minLon) minLon = lon
+    if (lat < minLat) minLat = lat
+    if (lon > maxLon) maxLon = lon
+    if (lat > maxLat) maxLat = lat
+  }
+
+  return [minLon, minLat, maxLon, maxLat]
+}

@@ -25,9 +25,11 @@ import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAppStore } from './stores/app'
+import { useCommunesStore } from './stores/communes'
 import { useUiStore } from './stores/ui'
 
 const appStore = useAppStore()
+const communesStore = useCommunesStore()
 const ui = useUiStore()
 const router = useRouter()
 
@@ -42,5 +44,12 @@ onMounted(async () => {
 
   // Fenêtre principale : charger les displays sans ouvrir automatiquement la 2e fenêtre
   await appStore.loadDisplays()
+
+  // Tâche de fond de rattrapage : détecter les communes des traces déjà
+  // nettoyées dont la détection n'a pas encore abouti (traces antérieures à la
+  // fonctionnalité). Rien à faire → aucune tâche ne démarre. Lancée dans la
+  // **seule** fenêtre principale : la fenêtre secondaire monte aussi l'accueil
+  // le temps d'une frame, et deux tâches se disputeraient l'API Overpass.
+  void communesStore.startCatchUp()
 })
 </script>
