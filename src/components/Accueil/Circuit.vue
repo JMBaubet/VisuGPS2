@@ -173,20 +173,31 @@
           @click=""
         />
         <!--
-          Édition du domicile : icône mdi-home-edit, affichée sur la seconde rangée.
-          Fonction à câbler ultérieurement. Visible au survol uniquement,
-          en blanc (couleur neutre du thème).
+          Communes traversées (mdi-home-edit) : état de la détection, seconde
+          rangée.
+           - **gris** : circuit non nettoyé — la détection ne porte que sur une
+             trace propre, le bouton est inerte ;
+           - **orange** : circuit propre, détection non aboutie, qu'une tâche
+             traite ou va traiter — le bouton est inerte ;
+           - **vert** : communes détectées — le bouton est inerte (la
+             consultation viendra s'y brancher) ;
+           - **rouge** : circuit propre sans détection — le bouton **agit** et
+             reste **forcé visible** hors survol, puisqu'une action reste à
+             mener.
         -->
         <v-btn
           class="action-btn"
-          :class="{ 'action-btn--hidden': !isHovering }"
+          :class="{ 'action-btn--hidden': !(isCommunesForced || isHovering) }"
           icon="mdi-home-edit"
+          :color="communesColor"
           variant="text"
           density="comfortable"
           size="small"
-          title="Éditer le domicile"
-          @click=""
-        />        <!-- Supprimer : visible au survol uniquement -->
+          :disabled="isCommunesDisabled"
+          :title="communesTitle"
+          @click="lancerCommunes"
+        />
+        <!-- Supprimer : visible au survol uniquement -->
         <v-btn
           class="action-btn"
           :class="{ 'action-btn--hidden': !isHovering }"
@@ -271,8 +282,8 @@
  * Deux lignes d'icônes d'action (masquées par opacité hors survol) :
  *  - ligne de titre : Éditer, Gérer les groupes, Gérer la météo, Visualiser ;
  *  - ligne Distance / Dénivelé : Anomalies de la source (mdi-map-marker-path),
- *    Passages multiples (mdi-repeat), Supprimer, Exporter, Info, Affichage,
- *    Favoris.
+ *    Passages multiples (mdi-repeat), Terrain, Éditer le domicile
+ *    (mdi-home-edit), Supprimer, Exporter, Info, Affichage, Favoris.
  * La section info déroulante (ouverte via Info) ne contient plus que les
  * détails du circuit (date d'import, source, lien).
  *
@@ -292,6 +303,12 @@
  * (ambre), sinon visible au survol seulement. Elle est désactivée pour une
  * trace jamais détectée (aucune action à ouvrir). Elle mène à `/multiride`.
  *
+ * L'icône mdi-home-edit (seconde rangée) matérialise la **détection des communes
+ * traversées** (module Communes) : grise tant que la trace n'est pas nettoyée,
+ * orange pendant qu'une tâche la traite, verte une fois la détection aboutie —
+ * et **rouge, seule couleur active et seule couleur forcée visible, dans les
+ * autres cas** : un clic y lance alors la détection pour ce seul circuit.
+ *
  * Le bouton Info déploie une section (v-expand-transition) contenant les
  * détails du circuit (date d'import, source, lien) ; elle se réduit dès que le
  * curseur quitte la carte. Le clic Info déclenche en outre un focus carte
@@ -303,6 +320,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '../../stores/app'
 import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
+import { useCommunesStore } from '../../stores/communes'
 import { useEditionStore } from '../../stores/edition'
 import { useSettingsStore } from '../../stores/settings'
 import { useKeyframesStore } from '../../stores/keyframes'
@@ -328,6 +346,7 @@ const props = defineProps<{
 const appStore = useAppStore()
 const router = useRouter()
 const tracesStore = useTracesStore()
+const communesStore = useCommunesStore()
 const editionStore = useEditionStore()
 const settingsStore = useSettingsStore()
 const keyframesStore = useKeyframesStore()
@@ -463,6 +482,65 @@ const multirideTitle = computed(() => {
   if (props.trace.multiride_status === 'validated') return 'Voir les passages multiples (validés)'
   return 'Passages multiples (détection non jouée)'
 })
+
+// --- Icône Communes (seconde rangée) ---------------------------------
+
+/** État de la détection des communes, du point de vue de cette carte. */
+type CommunesState = 'grey' | 'orange' | 'green' | 'red'
+
+/**
+ * État de la détection des communes traversées (module Communes) pour cette
+ * trace.
+ *
+ * L'ordre d'évaluation compte : un circuit **déjà détecté reste vert** même
+ * pendant qu'une tâche de fond traite d'autres circuits — l'orange ne signale
+ * que ce qui reste à faire, jamais ce qui est fait.
+ */
+const communesState = computed<CommunesState>(() => {
+  if (needsAudit.value) return 'grey'        // trace non nettoyée : hors sujet
+  if (props.trace.communes_completed) return 'green'
+  if (communesStore.isRunning || communesStore.isPending(props.trace.id)) return 'orange'
+  return 'red'
+})
+
+/** Couleur de l'icône : rouge pour la seule situation où le bouton agit. */
+const communesColor = computed(() => {
+  const colors: Record<CommunesState, string> = {
+    grey: 'grey',
+    orange: 'orange',
+    green: 'green',
+    red: 'red',
+  }
+  return colors[communesState.value]
+})
+
+/** Seul l'état « à détecter » est actif : les trois autres n'ont rien à lancer. */
+const isCommunesDisabled = computed(() => communesState.value !== 'red')
+
+/** Le bouton est **forcé visible** quand une action reste à mener. */
+const isCommunesForced = computed(() => communesState.value === 'red')
+
+/** Tooltip de l'icône Communes : l'état réel de la fonctionnalité. */
+const communesTitle = computed(() => {
+  const titles: Record<CommunesState, string> = {
+    grey: 'Communes — circuit à nettoyer au préalable',
+    orange: 'Communes — détection en cours…',
+    green: 'Communes détectées',
+    red: 'Détecter les communes traversées',
+  }
+  return titles[communesState.value]
+})
+
+/**
+ * Demande la détection des communes pour ce circuit.
+ *
+ * Le store fait le travail en tâche de fond : la trace passe en tête de sa file
+ * (une analyse déjà en cours se termine d'abord), puis Overpass et le backend
+ * enchaînent. La couleur du bouton suit la progression.
+ */
+function lancerCommunes() {
+  communesStore.request(props.trace.id)
+}
 
 /**
  * Ouvre/ferme la section info et pilote le focus carte correspondant.
