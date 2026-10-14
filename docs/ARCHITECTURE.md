@@ -1264,27 +1264,43 @@ au lancement suivant ou au clic, jamais en boucle dans la même session.
   `false`, donc une trace nettoyée avant l'introduction du module est reprise au
   lancement. `audit_validate` le repose à `false` et supprime la description : le
   GPX réécrit a changé la géométrie de la trace.
-- L'icône `mdi-home-edit` de la carte du circuit matérialise cet état : **grise**
-  (trace non nettoyée — la détection ne porte que sur une trace propre),
-  **orange** (détection en cours de traitement ou en file), **verte** (détection
-  aboutie) et **rouge** dans les autres cas — seule couleur active, et **forcée
-  visible** hors survol, un clic lançant alors la détection pour ce seul circuit.
-  L'ordre d'évaluation fait qu'un circuit **déjà détecté reste vert** pendant
-  qu'une tâche de fond traite d'autres circuits.
-- La **restitution** des passages (vue dédiée, carte, tableau) n'est pas encore
-  branchée : `communes.json` est produit, et son état est exposé sur la carte.
+- L'icône `mdi-city` de la carte du circuit matérialise cet état par sa couleur :
+  **grise** (trace non nettoyée — la détection ne porte que sur une trace propre),
+  **jaune** (**ce circuit** est effectivement en cours de traitement, quelle que
+  soit l'origine de la demande : import, fin d'audit ou tâche de fond),
+  **orange** (détection en attente — circuit dans la file, ou tâche de fond
+  occupée ailleurs), **verte** (détection aboutie) et **rouge** dans les autres
+  cas — seule couleur **forcée visible** hors survol. L'ordre d'évaluation fait
+  qu'un circuit **déjà détecté reste vert** pendant qu'une tâche de fond traite
+  d'autres circuits.
+- **Deux** états sont actionnables, et deux seulement : le **rouge**, où le clic
+  lance la détection pour ce seul circuit, et le **vert**, où il ouvre la
+  **fenêtre de consultation** (`src/components/Communes/CommunesDialog.vue`,
+  montée une fois sur l'accueil et pilotée par `appStore.communesTraceId`). Elle
+  restitue `communes.json` : résumé (passages, communes distinctes, kilomètres
+  couverts) et tableau chronologique `km entrée / commune / km sortie / longueur`,
+  avec le badge de passage multiple. L'icône n'est **jamais `disabled`** — un
+  bouton désactivé masque son infobulle et éteint la couleur de l'état — c'est le
+  garde du clic qui rend gris, jaune et orange inertes.
+- En **mode debug** (`appStore.isDebug`), la fenêtre expose la **suppression de la
+  détection** (`communes_reset` : fichier supprimé, drapeau reposé) après
+  confirmation : l'outil de rejeu d'une détection.
 
 ### Paramètres (`Communes.*`)
 
-Le namespace expose une catégorie dans le drawer de la vue **Accueil** — la
+Le namespace expose deux catégories dans le drawer de la vue **Accueil** — la
 détection se déclenche depuis la carte d'un circuit, elle n'a pas de vue dédiée :
 
 | Catégorie | Paramètres |
 |---|---|
 | `Communes.Detection` | `adminLevel` (8), `bboxBufferDeg` (0.01°), `simplifyTolerance` (0.00005°), `targetSamples` (2000), `minSampleStepKm` (0.1 km), `maxAreaRatio` (10×), `minSegmentKm` (0.015 km), `minKeepKm` (0.5 km). |
+| `Communes.Overpass` | `delaiSec` (60 s, bornes 30 à 300). |
 
-Ces huit seuils reprennent ceux du prototype validé : la `documentation` de chaque
-paramètre décrit son effet et les faux positifs qu'il expose.
+Les huit seuils de détection reprennent ceux du prototype validé : la
+`documentation` de chaque paramètre décrit son effet et les faux positifs qu'il
+expose. `delaiSec` règle le **délai d'attente par miroir** — le client patiente
+5 s de plus, pour que ce soit l'erreur du serveur qui clôt la tentative — une
+détection pouvant donc coûter jusqu'à quatre fois ce délai.
 
 ## Vue d'édition caméra (`/edition-camera`)
 

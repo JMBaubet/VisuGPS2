@@ -392,9 +392,10 @@ administratives d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
   `rename`), et **suppression** par `audit_validate` — le GPX réécrit change la
   géométrie de la trace, la description ne décrit plus cette trace.
 
-> La **restitution** des passages (vue dédiée, carte, tableau) n'est pas encore
-> branchée : le fichier est produit et son état exposé sur la carte du circuit
-> (icône `mdi-home-edit`).
+> La **restitution** est branchée : la fenêtre ouverte depuis la carte du circuit
+> (icône `mdi-city` verte) relit ce fichier par la commande `communes_load` —
+> résumé et tableau chronologique des passages. En **mode debug**, la même
+> fenêtre peut le supprimer (`communes_reset`) : la détection est alors rejouée.
 
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
