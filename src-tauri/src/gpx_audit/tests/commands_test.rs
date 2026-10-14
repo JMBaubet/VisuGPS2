@@ -143,6 +143,7 @@ fn make_trace_metadata(id: &str, filename: &str) -> TraceMetadata {
         audit_status: "needs_review".to_string(),
         audit_archived: false,
         multiride_status: None,
+        communes_completed: false,
     }
 }
 
@@ -420,6 +421,14 @@ fn test_validate_updates_audit_status() {
     let mut findings = vec![make_finding("ar-1", FindingKind::Ar, 5, 10)];
     findings[0].status = FindingStatus::Fp;
 
+    // La trace porte une détection des communes déjà jouée : le nettoyage doit
+    // l'invalider, le GPX réécrit ayant changé sa géométrie.
+    let communes_path = crate::gpx_communes::file::file_path(&mode_dir, trace_id);
+    fs::write(&communes_path, "[]").expect("écriture de la description périmée");
+    let mut seeded = load_registry(&get_traces_path(&mode_dir));
+    seeded[0].communes_completed = true;
+    save_registry(&get_traces_path(&mode_dir), &seeded).expect("écriture du registre");
+
     let updated = validate_impl(
         &mode_dir,
         trace_id,
@@ -441,6 +450,17 @@ fn test_validate_updates_audit_status() {
     assert!(
         registry[0].audit_archived,
         "le drapeau d'archivage doit être persisté dans le registre"
+    );
+    // Le nettoyage invalide la détection des communes : le GPX réécrit a changé
+    // la géométrie de la trace. La description est supprimée et le drapeau
+    // reposé, pour que le front relance la détection sur la trace nettoyée.
+    assert!(
+        !registry[0].communes_completed,
+        "le nettoyage doit invalider la détection des communes"
+    );
+    assert!(
+        !communes_path.exists(),
+        "la description périmée des communes doit être supprimée"
     );
 
     // La détection des passages multiples a suivi l'audit, dans la même

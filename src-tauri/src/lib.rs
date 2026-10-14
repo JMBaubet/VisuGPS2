@@ -5,6 +5,7 @@ mod settings;
 mod import_gpx;
 mod gpx_audit;
 mod gpx_multiride;
+mod gpx_communes;
 
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;

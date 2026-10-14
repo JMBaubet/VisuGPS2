@@ -456,6 +456,15 @@ pub fn validate_impl(
         multiride_params,
     );
 
+    // 8ter. Invalidation de la détection des communes.
+    //
+    //        Le GPX vient d'être réécrit : la géométrie de la trace a changé,
+    //        la description des communes calculée précédemment ne décrit donc
+    //        plus cette trace. Elle est supprimée, et le drapeau du registre
+    //        reposé à `false` (étape 9) — le front relancera la détection sur la
+    //        trace nettoyée.
+    crate::gpx_communes::file::remove_file(mode_dir, trace_id);
+
     // 9. Registre : statut d'audit, stats et hash.
     let mut registry = load_registry(&traces_path);
     let updated = {
@@ -471,6 +480,8 @@ pub fn validate_impl(
         entry.audit_archived = true;
         // Le parcours se poursuit par la validation des passages multiples.
         entry.multiride_status = multiride_status;
+        // Le GPX réécrit a invalidé la description des communes (étape 8ter).
+        entry.communes_completed = false;
         entry.clone()
     };
     save_registry(&traces_path, &registry)?;

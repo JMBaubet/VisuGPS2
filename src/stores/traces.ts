@@ -91,6 +91,16 @@ export interface TraceMetadata {
    * suit l'audit, une trace jamais détectée ne doit pas être bloquée.
    */
   multiride_status: string | null
+  /**
+   * État de la détection des communes traversées (module Communes) : `true`
+   * quand le fichier `communes.json` de la trace est présent et à jour — la
+   * fonctionnalité a été menée à son terme pour cette trace.
+   *
+   * Absent des registres antérieurs → `false` : la détection n'a pas été
+   * réalisée, la tâche de fond la reprendra au lancement. Reposé à `false` par
+   * un nettoyage (le GPX réécrit change la géométrie de la trace).
+   */
+  communes_completed: boolean
 }
 
 // --- Store ---

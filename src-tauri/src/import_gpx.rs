@@ -115,6 +115,14 @@ pub struct TraceMetadata {
     /// détection a été jouée depuis.
     #[serde(default)]
     pub multiride_status: Option<String>,
+    /// État de la détection des communes traversées (module Communes) : `true`
+    /// quand le fichier `communes.json` de la trace est présent et à jour —
+    /// la fonctionnalité a été menée à son terme pour cette trace.
+    ///
+    /// Absent dans les registres antérieurs → `false` : la détection n'a pas
+    /// été réalisée, la tâche de fond la reprendra au lancement.
+    #[serde(default)]
+    pub communes_completed: bool,
 }
 
 /// Valeur par défaut du statut d'audit pour les registres antérieurs :
@@ -958,6 +966,10 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         // Renseigné ci-dessus pour une trace déjà valide ; `None` pour une trace
         // à auditer, dont la détection suivra la correction du GPX.
         multiride_status,
+        // Nouvelle trace : la détection des communes reste à faire. Le front la
+        // déclenchera aussitôt si la trace est déjà propre, à la validation de
+        // l'audit sinon.
+        communes_completed: false,
     };
 
     // 9. Ajouter au registre et sauvegarder (écriture atomique)
@@ -1324,6 +1336,7 @@ mod tests {
             audit_status: "needs_review".to_string(),
             audit_archived: false,
             multiride_status: None,
+            communes_completed: false,
         }
     }
 
@@ -1373,6 +1386,31 @@ mod tests {
         let loaded = load_registry(&traces_path);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].multiride_status, None);
+    }
+
+    /// Un registre antérieur à la détection des communes (sans
+    /// `communes_completed`) se charge sans erreur : le champ retombe à `false`
+    /// — l'information absente vaut « détection non réalisée » — la tâche de
+    /// fond rattrapera la trace au lancement.
+    #[test]
+    fn load_registry_defaults_communes_completed_to_false() {
+        let mode = test_mode_dir("communes_absent");
+        fs::create_dir_all(&mode).unwrap();
+        let traces_path = mode.join("traces.json");
+
+        // JSON d'un registre écrit avant l'apparition du champ.
+        let mut value = serde_json::to_value(vec![make_trace("id-1", "a.gpx")]).unwrap();
+        value[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("communes_completed");
+        let legacy = serde_json::to_string(&value).unwrap();
+        assert!(!legacy.contains("communes_completed"));
+        fs::write(&traces_path, &legacy).unwrap();
+
+        let loaded = load_registry(&traces_path);
+        assert_eq!(loaded.len(), 1);
+        assert!(!loaded[0].communes_completed);
     }
 
     /// La migration déplace chaque fichier de l'ancien agencement plat vers le
