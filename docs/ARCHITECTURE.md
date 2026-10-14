@@ -772,7 +772,7 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
    - Le sélecteur de fichier natif est ouvert via le plugin `tauri-plugin-dialog` (pas d'API Tauri 1.x).
    - Le parsing utilise le crate `gpx` (version 0.10) et les calculs géodésiques le crate `geo` (Haversine).
    - Les données sont stockées dans le **dossier du mode d'exécution actif** : **un dossier par trace** `{app_data_dir}/{active_mode}/traces/{trace_id}/` (GPX, GeoJSON, keyframes) + `traces.json` pour le registre. La migration depuis l'ancien agencement plat (`gpx/`, `geojson/`, `keyframes/`) est automatique au premier accès au mode (`migrate_mode_storage`) ; le dossier hérité `cleaning/` de l'ancien module est supprimé au passage, et les fichiers `cleaning.*.json` résiduels effacés par la purge D2c (cf. § « Audit GPX »).
-   - Le registre est sauvegardé avec une **écriture atomique** (fichier `.tmp` + `rename`).
+   - Le registre est sauvegardé avec une **écriture atomique** (fichier `.tmp` + `rename`), et **toutes ses mutations passent par `update_registry`** : chargement, modification et écriture forment une **section critique** protégée par un verrou. L'atomicité du fichier ne suffisait pas — deux commandes simultanées qui chargent le registre avant de l'écrire se perdent mutuellement leurs champs (un drapeau, un favori, un statut). Le défaut s'est manifesté le jour où la détection des communes a travaillé en tâche de fond pendant une validation d'audit. Seule la **mutation** est verrouillée : le calcul (analyse, réseau, réécriture du GPX) reste hors section critique, pour ne pas geler les gestes de l'interface.
    - Les doublons sont détectés par **empreinte SHA256** du contenu binaire.
 
 2. **Détection heuristique de l'éditeur** :

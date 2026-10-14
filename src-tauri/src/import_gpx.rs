@@ -798,6 +798,43 @@ pub(crate) fn save_registry(traces_path: &Path, registry: &[TraceMetadata]) -> R
     Ok(())
 }
 
+/// Verrou des mutations du registre : **un seul écrivain à la fois**.
+///
+/// `save_registry` est atomique au niveau du fichier (tmp + rename), mais la
+/// séquence `load → modifier → save` que fait chaque commande ne l'est pas :
+/// deux commandes qui se chevauchent produisent une **mise à jour perdue** (la
+/// dernière écriture écrase le champ modifié par l'autre). Le risque est réel
+/// depuis que la détection des communes travaille en tâche de fond, pendant que
+/// l'utilisateur agit.
+static REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Applique une mutation au registre des traces, **sous verrou** : le
+/// chargement, la mutation et l'écriture forment une seule section critique.
+///
+/// La mutation reçoit le registre relu à la source et retourne ce que l'appelant
+/// veut en tirer (l'entrée mise à jour, par exemple), ou une erreur qui annule
+/// l'écriture.
+///
+/// À n'utiliser que pour la **mutation** : le calcul (analyse, réseau, écriture
+/// du GPX) reste hors section critique, sans quoi une détection de plusieurs
+/// dizaines de secondes gèlerait les gestes de l'interface. Les accès disque ici
+/// sont synchrones, le verrou n'est donc jamais tenu à travers un `.await`.
+pub(crate) fn update_registry<T, F>(traces_path: &Path, mutate: F) -> Result<T, String>
+where
+    F: FnOnce(&mut Vec<TraceMetadata>) -> Result<T, String>,
+{
+    // Un écrivain qui panique pendant la mutation ne doit pas condamner les
+    // suivants : l'emprunt empoisonné est récupéré plutôt que propagé.
+    let _guard = REGISTRY_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let mut registry = load_registry(traces_path);
+    let outcome = mutate(&mut registry)?;
+    save_registry(traces_path, &registry)?;
+    Ok(outcome)
+}
+
 // ---------------------------------------------------------------------------
 // Commande Tauri : import_gpx_file
 // ---------------------------------------------------------------------------
@@ -852,7 +889,8 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     let hash = compute_file_hash(&file_path)?;
 
     // 4. Charger le registre et vérifier les doublons
-    let mut registry = load_registry(&traces_path);
+    //    (relecture de contrôle : la mutation, elle, passe par `update_registry`)
+    let registry = load_registry(&traces_path);
     if registry.iter().any(|t| t.hash == hash) {
         return Err("Cette trace a déjà été importée.".to_string());
     }
@@ -972,9 +1010,13 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         communes_completed: false,
     };
 
-    // 9. Ajouter au registre et sauvegarder (écriture atomique)
-    registry.push(metadata.clone());
-    save_registry(&traces_path, &registry)?;
+    // 9. Ajouter au registre et sauvegarder — registre relu sous le verrou :
+    //    l'analyse d'audit qui précède a pu durer, une autre commande a pu
+    //    écrire entre-temps.
+    update_registry(&traces_path, |registry| {
+        registry.push(metadata.clone());
+        Ok(())
+    })?;
 
     let elapsed = start_time.elapsed();
     println!(
@@ -1014,15 +1056,14 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
     let mode_dir = get_mode_dir(&app)?;
     let traces_path = get_traces_path(&mode_dir);
 
-    let mut registry = load_registry(&traces_path);
-
-    // Recherche par id (clé unique UUID v4, pas par filename)
-    let idx = registry
+    // La présence est vérifiée avant toute suppression : une trace inconnue ne
+    // doit rien détruire.
+    let registry = load_registry(&traces_path);
+    let trace_id_owned = registry
         .iter()
-        .position(|t| t.id == trace_id)
+        .find(|t| t.id == trace_id)
+        .map(|t| t.id.clone())
         .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
-
-    let trace_id_owned = registry[idx].id.clone();
 
     // 1) Supprimer le dossier de la trace (tolérant si absent) — contient le
     //    GPX, le backup `.orig`, le GeoJSON, les keyframes et les fichiers de
@@ -1033,11 +1074,11 @@ pub async fn delete_trace(app: tauri::AppHandle, trace_id: String) -> Result<(),
             .map_err(|e| format!("Suppression du dossier de la trace : {}", e))?;
     }
 
-    // 2) Retirer l'entrée du registre en mémoire
-    registry.remove(idx);
-
-    // 3) Sauvegarde atomique (tmp + rename via save_registry)
-    save_registry(&traces_path, &registry)?;
+    // 2) Retirer l'entrée du registre, sous le verrou (écriture atomique).
+    update_registry(&traces_path, |registry| {
+        registry.retain(|t| t.id != trace_id_owned);
+        Ok(())
+    })?;
 
     Ok(())
 }
@@ -1060,21 +1101,20 @@ pub async fn update_trace(
     let mode_dir = get_mode_dir(&app)?;
     let traces_path = get_traces_path(&mode_dir);
 
-    let mut registry = load_registry(&traces_path);
+    update_registry(&traces_path, |registry| {
+        let trace = registry
+            .iter_mut()
+            .find(|t| t.id == trace_id)
+            .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
 
-    let trace = registry
-        .iter_mut()
-        .find(|t| t.id == trace_id)
-        .ok_or_else(|| format!("Trace introuvable (id={})", trace_id))?;
-
-    if let Some(fav) = favorite {
-        trace.favorite = fav;
-    }
-    if let Some(disp) = is_displayed {
-        trace.is_displayed = disp;
-    }
-
-    save_registry(&traces_path, &registry)?;
+        if let Some(fav) = favorite {
+            trace.favorite = fav;
+        }
+        if let Some(disp) = is_displayed {
+            trace.is_displayed = disp;
+        }
+        Ok(())
+    })?;
 
     Ok(())
 }
@@ -1412,6 +1452,56 @@ mod tests {
         let loaded = load_registry(&traces_path);
         assert_eq!(loaded.len(), 1);
         assert!(!loaded[0].communes_completed);
+    }
+
+    /// Deux mutations concurrentes du registre ne se perdent plus : le verrou de
+    /// `update_registry` sérialise la séquence charger → modifier → écrire.
+    ///
+    /// Sans lui, la seconde écriture — chargée avant la première — écraserait le
+    /// champ modifié par la première : c'est le défaut constaté en production,
+    /// quand la détection des communes travaillait pendant une validation
+    /// d'audit.
+    #[test]
+    fn concurrent_registry_updates_do_not_lose_each_other() {
+        let mode = test_mode_dir("registry_lock");
+        fs::create_dir_all(&mode).unwrap();
+        let traces_path = mode.join("traces.json");
+        save_registry(
+            &traces_path,
+            &[make_trace("id-1", "a.gpx"), make_trace("id-2", "b.gpx")],
+        )
+        .unwrap();
+
+        // Le premier écrivain tient la section critique un instant (comme une
+        // écriture de fichier) ; le second survient pendant ce temps.
+        let writer_a = {
+            let path = traces_path.clone();
+            std::thread::spawn(move || {
+                update_registry(&path, |registry| {
+                    registry[0].favorite = true;
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                    Ok(())
+                })
+            })
+        };
+        let writer_b = {
+            let path = traces_path.clone();
+            std::thread::spawn(move || {
+                update_registry(&path, |registry| {
+                    registry[1].is_displayed = true;
+                    Ok(())
+                })
+            })
+        };
+
+        writer_a.join().unwrap().unwrap();
+        writer_b.join().unwrap().unwrap();
+
+        let registry = load_registry(&traces_path);
+        assert!(registry[0].favorite, "la modification du premier écrivain est conservée");
+        assert!(registry[1].is_displayed, "celle du second l'est aussi");
+
+        let _ = fs::remove_dir_all(&mode);
     }
 
     /// La migration déplace chaque fichier de l'ancien agencement plat vers le

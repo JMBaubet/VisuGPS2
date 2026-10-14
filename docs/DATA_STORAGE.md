@@ -102,6 +102,8 @@ révision = "2026-07-05"
 
 Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espaces). **Écriture atomique** via `save_registry` (fichier `.tmp` puis `rename`).
 
+**Mutations sérialisées** : toutes les écritures passent par `update_registry`, qui tient un verrou le temps de la séquence charger → modifier → écrire. L'atomicité du fichier ne suffit pas — deux commandes simultanées qui chargent le registre avant de l'écrire se perdent mutuellement leurs champs (mise à jour perdue : un drapeau, un favori, un statut). Le cas s'est produit en production le jour où la détection des communes a travaillé en tâche de fond pendant une validation d'audit. Seule la mutation est verrouillée : le calcul (analyse, réseau, réécriture du GPX) reste en dehors, pour ne pas geler les gestes de l'interface.
+
 ```json
 [
   {

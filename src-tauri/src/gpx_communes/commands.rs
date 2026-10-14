@@ -17,7 +17,7 @@ use tauri::Manager;
 
 use crate::import_gpx::{
     get_geojson_path, get_mode_dir, get_traces_path, load_registry, rebuild_geometry_from_gpx,
-    save_registry,
+    update_registry,
 };
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
@@ -127,7 +127,8 @@ pub async fn communes_detect(
 /// Le drapeau du registre est posé en **dernière** opération : un échec en amont
 /// (trace absente, réponse OSM illisible, écriture impossible) laisse la
 /// détection à faire pour cette trace — reprise au lancement suivant, ou au clic
-/// sur la carte du circuit.
+/// sur la carte du circuit. Une trace **réécrite pendant l'analyse** (audit
+/// appliqué) fait abandonner la détection : voir `commit_detection`.
 pub fn detect_impl(
     mode_dir: &Path,
     trace_id: &str,
@@ -135,8 +136,10 @@ pub fn detect_impl(
     params: &CommuneParams,
 ) -> Result<Vec<CommunePassage>, String> {
     // 1. Trace nettoyée : sa géométrie persistée, régénérée depuis le GPX si elle
-    //    manque (trace importée avant ce cache).
+    //    manque (trace importée avant ce cache), et l'empreinte qui servira de
+    //    témoin pour détecter une réécriture pendant l'analyse.
     let trace = load_trace_coordinates(mode_dir, trace_id)?;
+    let reference_hash = registry_hash(mode_dir, trace_id);
 
     // 2. Communes reçues d'Overpass.
     let (communes, stats) = osm::parse_communes(osm_json, &params.admin_level)?;
@@ -153,18 +156,15 @@ pub fn detect_impl(
     // 3. Détection.
     let passages = pipeline::detect_passages(&trace, &communes, params)?;
 
-    // 4. Fichier de description (écriture atomique).
-    file::save_file(mode_dir, trace_id, &passages)?;
-
-    // 5. Registre : la détection est réalisée pour cette trace.
-    let traces_path = get_traces_path(mode_dir);
-    let mut registry = load_registry(&traces_path);
-    let entry = registry
-        .iter_mut()
-        .find(|t| t.id == trace_id)
-        .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
-    entry.communes_completed = true;
-    save_registry(&traces_path, &registry)?;
+    // 4. Description et drapeau : l'ordre compte — une trace « détectée » sans
+    //    description serait un état mensonger, et une trace supprimée ou
+    //    réécrite pendant l'analyse ne doit rien recevoir.
+    if commit_detection(mode_dir, trace_id, &passages, reference_hash.as_deref())? {
+        return Err(
+            "Trace réécrite pendant la détection (audit appliqué) : la détection a été abandonnée et sera rejouée."
+                .to_string(),
+        );
+    }
 
     let distinct = passages
         .iter()
@@ -179,6 +179,48 @@ pub fn detect_impl(
     );
 
     Ok(passages)
+}
+
+/// Empreinte du GPX d'une trace telle que le registre la connaît (`None` si la
+/// trace n'y figure pas : l'appelant retombera sur « trace introuvable »).
+fn registry_hash(mode_dir: &Path, trace_id: &str) -> Option<String> {
+    load_registry(&get_traces_path(mode_dir))
+        .into_iter()
+        .find(|t| t.id == trace_id)
+        .map(|t| t.hash)
+}
+
+/// Écrit la description des communes puis pose le drapeau, **sous le verrou du
+/// registre** — le calcul, lui, est resté hors section critique.
+///
+/// Retourne `true` quand la détection est **abandonnée** : l'empreinte du GPX a
+/// changé depuis le début de l'analyse, donc un audit a réécrit la trace et la
+/// description qui vient d'être calculée décrit l'ancienne géométrie. Rien n'est
+/// écrit dans ce cas : la trace reste « à détecter » et sera rejouée.
+///
+/// La comparaison porte sur l'empreinte — et non sur `audit_status`, qui vaut
+/// `"clean"` **avant comme après** un audit appliqué, ou sur la date, qui ne dit
+/// rien de la géométrie.
+pub(crate) fn commit_detection(
+    mode_dir: &Path,
+    trace_id: &str,
+    passages: &[CommunePassage],
+    reference_hash: Option<&str>,
+) -> Result<bool, String> {
+    update_registry(&get_traces_path(mode_dir), |registry| {
+        let entry = registry
+            .iter_mut()
+            .find(|t| t.id == trace_id)
+            .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
+
+        if reference_hash != Some(entry.hash.as_str()) {
+            return Ok(true);
+        }
+
+        file::save_file(mode_dir, trace_id, passages)?;
+        entry.communes_completed = true;
+        Ok(false)
+    })
 }
 
 // ─── Consultation et réinitialisation ─────────────────────────────────
@@ -211,24 +253,21 @@ pub async fn communes_reset(app: tauri::AppHandle, trace_id: String) -> Result<(
 
 /// Implémentation testable de `communes_reset`.
 ///
-/// La trace est d'abord cherchée au registre — une trace inconnue ne change
-/// rien —, puis le fichier est supprimé et le drapeau reposé dans la même
-/// passe : l'ordre inverse laisserait une trace « détectée » sans description.
+/// Tout se joue sous le verrou du registre : une trace inconnue ne change rien
+/// (rien n'est supprimé), sinon la description est supprimée et le drapeau
+/// reposé dans la même section critique — l'ordre inverse laisserait une trace
+/// « détectée » sans description.
 pub fn reset_impl(mode_dir: &Path, trace_id: &str) -> Result<(), String> {
-    let traces_path = get_traces_path(mode_dir);
-    let mut registry = load_registry(&traces_path);
-    if !registry.iter().any(|t| t.id == trace_id) {
-        return Err(format!("Trace introuvable : {}.", trace_id));
-    }
+    update_registry(&get_traces_path(mode_dir), |registry| {
+        let entry = registry
+            .iter_mut()
+            .find(|t| t.id == trace_id)
+            .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
 
-    file::remove_file(mode_dir, trace_id);
-
-    let entry = registry
-        .iter_mut()
-        .find(|t| t.id == trace_id)
-        .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
-    entry.communes_completed = false;
-    save_registry(&traces_path, &registry)?;
+        file::remove_file(mode_dir, trace_id);
+        entry.communes_completed = false;
+        Ok(())
+    })?;
 
     println!("[communes] {} : détection réinitialisée.", trace_id);
     Ok(())

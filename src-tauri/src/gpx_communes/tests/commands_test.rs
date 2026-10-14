@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::gpx_communes::commands::{default_communes_params, detect_impl, reset_impl};
+use crate::gpx_communes::commands::{
+    commit_detection, default_communes_params, detect_impl, reset_impl,
+};
 use crate::gpx_communes::file::{file_path, load_file};
 use crate::import_gpx::{
     get_traces_path, load_registry, save_registry, Point3D, TraceMetadata, TraceStats,
@@ -182,5 +184,41 @@ fn reset_rejects_an_unknown_trace() {
     let err = reset_impl(&mode, "absent").expect_err("une trace absente doit être refusée");
 
     assert!(err.contains("introuvable"), "message inattendu : {err}");
+    let _ = fs::remove_dir_all(&mode);
+}
+
+// ─── Trace réécrite pendant l'analyse (volet de sûreté) ───────────────
+
+/// Une trace dont le GPX a changé pendant l'analyse — un audit appliqué a
+/// réécrit la géométrie — n'est **pas** marquée détectée : la description
+/// calculée décrit l'ancienne trace. Rien n'est écrit, la détection sera rejouée.
+#[test]
+fn detection_is_abandoned_when_the_trace_changed_during_the_analysis() {
+    let trace_id = "t-abandon";
+    let mode = setup("abandon", trace_id);
+
+    // Empreinte témoin différente de celle du registre : la trace a été réécrite.
+    let abandonne = commit_detection(&mode, trace_id, &[], Some("sha256:empreinte-precedente"))
+        .expect("l'appel doit aboutir");
+
+    assert!(abandonne, "l'empreinte ne correspond plus : détection abandonnée");
+    assert!(
+        !file_path(&mode, trace_id).exists(),
+        "aucune description ne doit être écrite"
+    );
+    assert!(
+        !load_registry(&get_traces_path(&mode))[0].communes_completed,
+        "le drapeau reste à false : la trace sera reprise"
+    );
+
+    // Empreinte conforme : la description est écrite et le drapeau posé.
+    let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
+    let abandonne = commit_detection(&mode, trace_id, &[], Some(&empreinte))
+        .expect("l'appel doit aboutir");
+
+    assert!(!abandonne);
+    assert!(file_path(&mode, trace_id).exists(), "la description est écrite");
+    assert!(load_registry(&get_traces_path(&mode))[0].communes_completed);
+
     let _ = fs::remove_dir_all(&mode);
 }

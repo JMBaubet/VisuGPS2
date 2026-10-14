@@ -17,7 +17,7 @@ use tauri::Manager;
 use crate::import_gpx::{
     build_geojson_feature, compute_file_hash, compute_stats, extract_line_coordinates,
     get_geojson_path, get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry,
-    save_registry, TraceMetadata,
+    update_registry, TraceMetadata,
 };
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
@@ -465,9 +465,10 @@ pub fn validate_impl(
     //        trace nettoyée.
     crate::gpx_communes::file::remove_file(mode_dir, trace_id);
 
-    // 9. Registre : statut d'audit, stats et hash.
-    let mut registry = load_registry(&traces_path);
-    let updated = {
+    // 9. Registre : statut d'audit, stats et hash — sous le verrou du registre,
+    //    car une autre commande peut écrire pendant que l'audit s'applique (la
+    //    détection des communes, en tâche de fond, notamment).
+    let updated = update_registry(&traces_path, |registry| {
         let entry = registry
             .iter_mut()
             .find(|t| t.id == trace_id)
@@ -482,9 +483,8 @@ pub fn validate_impl(
         entry.multiride_status = multiride_status;
         // Le GPX réécrit a invalidé la description des communes (étape 8ter).
         entry.communes_completed = false;
-        entry.clone()
-    };
-    save_registry(&traces_path, &registry)?;
+        Ok(entry.clone())
+    })?;
 
     Ok(updated)
 }

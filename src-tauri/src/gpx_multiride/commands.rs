@@ -33,7 +33,7 @@ use tauri::Manager;
 
 use crate::gpx_audit::export::iso_now;
 use crate::import_gpx::{
-    get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry, save_registry,
+    get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry, update_registry,
 };
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
@@ -498,18 +498,20 @@ pub fn validate_impl(
 // ─── Registre ─────────────────────────────────────────────────────────
 
 /// Pose `multiride_status` dans le registre des traces et retourne le statut
-/// écrit (registre réécrit de façon atomique, comme partout ailleurs).
+/// écrit.
 ///
+/// La mutation passe par `update_registry` : chargement, modification et
+/// écriture forment une section critique, sans quoi une écriture concurrente
+/// (détection des communes en tâche de fond) pourrait effacer ce statut.
 /// Une trace absente du registre est une incohérence d'appel, pas une panne :
 /// elle est remontée à l'appelant.
 fn set_status(mode_dir: &Path, trace_id: &str, status: &str) -> Result<String, String> {
-    let traces_path = get_traces_path(mode_dir);
-    let mut registry = load_registry(&traces_path);
-    let entry = registry
-        .iter_mut()
-        .find(|t| t.id == trace_id)
-        .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
-    entry.multiride_status = Some(status.to_string());
-    save_registry(&traces_path, &registry)?;
-    Ok(status.to_string())
+    update_registry(&get_traces_path(mode_dir), |registry| {
+        let entry = registry
+            .iter_mut()
+            .find(|t| t.id == trace_id)
+            .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
+        entry.multiride_status = Some(status.to_string());
+        Ok(status.to_string())
+    })
 }
