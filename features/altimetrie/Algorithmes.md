@@ -1,7 +1,7 @@
 # Document Algorithmes — GPX Climb Analyzer
 
-**Version** : 3.6
-**Date** : 2026-09-24
+**Version** : 3.9.2
+**Date** : 2026-10-17
 **Public** : développeur, mainteneur, auditeur technique
 **Portée** : description exhaustive de tous les algorithmes utilisés dans l'application
 
@@ -12,7 +12,7 @@
 1. [Distance cumulée (Haversine)](#1-distance-cumulée-haversine)
 2. [Rééchantillonnage par moyenne](#2-rééchantillonnage-par-moyenne)
 3. [Correction des plateaux GPS/MNT](#3-correction-des-plateaux-gpsmnt)
-4. [Anti-pic : fenêtre / Anti-pic : seuil](#4-anti-pic--fenêtre--anti-pic--seuil)
+4. [Anti-pic Hampel (fenêtre en mètres)](#4-anti-pic-hampel)
 5. [Statistiques de la trace brute](#5-statistiques-de-la-trace-brute)
 6. [Moyenne mobile](#6-moyenne-mobile)
 7. [Savitzky-Golay](#7-savitzky-golay)
@@ -28,30 +28,42 @@
 17. [Argmin / Argmax](#17-argmin--argmax)
 18. [Recherche binaire sur distance](#18-recherche-binaire-sur-distance)
 19. [Catégorisation par pente](#19-catégorisation-par-pente)
-20. [Longueur min. pente](#20-longueur-min-pente)
+20. [Longueur min. pente (fusion de segments)](#20-longueur-min-pente)
 21. [Segmentation par catégorie](#21-segmentation-par-catégorie)
 22. [Enrichissement des segments](#22-enrichissement-des-segments)
 23. [Contrainte anti-chevauchement](#23-contrainte-anti-chevauchement)
 24. [Recherche extrema](#24-recherche-extrema)
-25. [Écart min. entre montées](#25-écart-min-entre-montées)
-26. [Validation finale stricte (v3.1)](#26-validation-finale-stricte-v31)
-27. [Insertion contextuelle](#27-insertion-contextuelle)
-28. [Édition par drag & drop](#28-édition-par-drag--drop)
-29. [Diagnostic de configuration](#29-diagnostic-de-configuration)
-30. [Pipeline complet de détection](#30-pipeline-complet-de-détection)
-31. [Pipeline de reconstruction](#31-pipeline-de-reconstruction)
-32. [Tableau récapitulatif des complexités](#32-tableau-récapitulatif-des-complexités)
-33. [Choix de conception et alternatives écartées](#33-choix-de-conception-et-alternatives-écartées)
+25. [Fusion par `gapMinM`](#25-fusion-par-gapminm)
+26. [Validation finale stricte](#26-validation-finale-stricte)
+27. [Catégorisation non ancrée](#27-catégorisation-non-ancrée)
+28. [Construction de la trace carte](#28-construction-de-la-trace-carte)
+29. [Marqueurs vallée/sommet (mono et groupe)](#29-marqueurs-vallée-sommet)
+30. [Zoom carte sur montée / groupe](#30-zoom-carte)
+31. [Séparation d'un groupe](#31-séparation-dun-groupe)
+32. [Refusion d'un groupe](#32-refusion-dun-groupe)
+33. [Normalisation des groupes](#33-normalisation-des-groupes)
+34. [Suppression d'une montée](#34-suppression-dune-montée)
+35. [Création manuelle](#35-création-manuelle)
+36. [Diagnostic de configuration](#36-diagnostic-de-configuration)
+37. [Export JSON](#37-export-json)
+38. [Pipeline complet](#38-pipeline-complet)
+39. [Pipeline de reconstruction](#39-pipeline-de-reconstruction)
+40. [Tableau récapitulatif des complexités](#40-tableau-récapitulatif-des-complexités)
+41. [Choix de conception et alternatives écartées](#41-choix-de-conception)
 
 ---
 
 ## 1. Distance cumulée (Haversine)
 
-### Objet
+### 1.1 Objet
 
 Calculer la distance orthodromique (à la surface d'une sphère) entre deux points GPS successifs, puis la cumuler pour obtenir la distance totale parcourue à chaque point de la trace.
 
-### Formule
+### 1.2 Motivation
+
+Les points GPX sont fournis en coordonnées géographiques (latitude, longitude). Pour analyser une trace, il faut des distances en mètres. La formule de Haversine fournit une distance sphérique précise à 0.5 % près par rapport à l'ellipsoïde WGS84, ce qui est largement suffisant pour des traces de quelques centaines de kilomètres.
+
+### 1.3 Formule
 
 ```
 R  = 6 371 000 m (rayon terrestre moyen)
@@ -65,7 +77,7 @@ c = 2 × atan2(√a, √(1 − a))
 d = R × c
 ```
 
-### Pseudocode
+### 1.4 Pseudocode
 
 ```
 FONCTION haversine(lat1, lon1, lat2, lon2):
@@ -78,6 +90,7 @@ FONCTION haversine(lat1, lon1, lat2, lon2):
   RETOURNER 2 × R × atan2(√a, √(1 − a))
 
 FONCTION calculerDistances(points):
+  n ← longueur(points)
   dist[0] ← 0
   POUR i DE 1 À n−1:
     d ← haversine(points[i−1].lat, points[i−1].lon,
@@ -86,30 +99,39 @@ FONCTION calculerDistances(points):
   RETOURNER dist
 ```
 
-### Complexité
+### 1.5 Complexité
 
 - Temps : **O(n)** sur le nombre de points
 - Espace : **O(n)** pour stocker les distances cumulées
 
-### Notes
+### 1.6 Notes
 
-- L'utilisation de `atan2` plutôt que `asin` évite les erreurs numériques pour les faibles distances.
-- L'approximation sphérique est suffisante pour des traces de quelques centaines de km (erreur < 0.5 % vs ellipsoïde WGS84).
-- Alternative non retenue : formule de Vincenty (ellipsoïde), plus précise mais 10× plus lente sans bénéfice pratique.
+- L'utilisation de `atan2` plutôt que `asin` évite les erreurs numériques pour les faibles distances (quand `a` est proche de 0, `asin(√a)` perd de la précision).
+- L'approximation sphérique est suffisante pour des traces de quelques centaines de km.
+- Alternative non retenue : formule de Vincenty (ellipsoïde), plus précise (±0.001 %) mais 10× plus lente sans bénéfice pratique.
+
+### 1.7 Choix de conception
+
+| Critère | Haversine | Vincenty |
+|---|---|---|
+| Précision | ±0.5 % (sphérique) | ±0.001 % (ellipsoïdal) |
+| Vitesse | Très rapide | 10× plus lent |
+| Complexité | 5 lignes | 30+ lignes |
+| **Retenu** | ✅ | ❌ |
 
 ---
 
 ## 2. Rééchantillonnage par moyenne
 
-### Objet
+### 2.1 Objet
 
 Convertir une série de points irrégulièrement espacés en une série à **pas fixe** (en mètres), en **moyennant** les points bruts tombant dans une fenêtre centrée sur chaque point cible. Cette étape est **fondamentale** : elle garantit que tous les filtres index-based se comportent comme des filtres distance-based, et elle atténue le bruit haute fréquence avant les étapes suivantes.
 
-### Motivation
+### 2.2 Motivation
 
 Les traces GPX (terrain ou éditeur) ont une densité locale très variable :
-- Trace GPS : 3 m en montée raide, 20 m en descente rapide
-- Trace éditeur Openrunner : 5 m dans les lacets, 800 m en ligne droite
+- **Trace GPS** : 3 m en montée raide, 20 m en descente rapide
+- **Trace éditeur Openrunner** : 5 m dans les lacets, 800 m en ligne droite
 
 Un filtre `savitzkyGolay(ele, win=60)` appliqué directement :
 - En zone dense → couvre 300 m
@@ -119,7 +141,7 @@ Un filtre `savitzkyGolay(ele, win=60)` appliqué directement :
 
 De plus, avec l'interpolation linéaire (v3.4 et antérieur), le bruit haute fréquence était conservé tel quel quand le Pas était petit. La **moyenne** (v3.5+) agit comme un filtre passe-bas implicite, ce qui rend le comportement du pipeline **cohérent quelle que soit la valeur du Pas**.
 
-### Formule de la fenêtre
+### 2.3 Formule de la fenêtre
 
 ```
 avgWin = clamp(stepM, RESAMPLE_AVG_MIN_M, 3 × stepM)
@@ -129,13 +151,13 @@ avec `RESAMPLE_AVG_MIN_M = 75` m.
 
 | Pas | Fenêtre de moyennage | Points moyennés (typique) |
 |---|---|---|
-| 5 m | 15 m | ~3 |
+| 5 m | 15 m (75 plancher) | ~3 |
 | 25 m | 75 m | ~3–4 |
 | 50 m | 75 m | ~1.5–2 |
 | 100 m | 100 m | ~1 |
 | 200 m | 200 m | ~1 |
 
-### Pseudocode
+### 2.4 Pseudocode
 
 ```
 FONCTION resampleUniform(distRaw, eleRaw, stepM):
@@ -143,7 +165,7 @@ FONCTION resampleUniform(distRaw, eleRaw, stepM):
   totalM ← distRaw[n−1]
   m ← ⌊totalM / stepM⌋ + 1
 
-  avgWin ← clamp(stepM, RESAMPLE_AVG_MIN_M, 3 × stepM)
+  avgWin ← clamp(stepM, 75, 3 × stepM)
   halfW ← avgWin / 2
   startPtr ← 0
 
@@ -186,12 +208,14 @@ FONCTION resampleUniform(distRaw, eleRaw, stepM):
   RETOURNER { dist, ele, stepM, avgWinM: avgWin }
 ```
 
-### Complexité
+### 2.5 Complexité
 
-- Temps : **O(n + m)** où m = totalM / stepM
+- Temps : **O(n + m)** où m = `totalM / stepM`
 - Espace : **O(m)**
 
-### Choix du pas
+Le pointeur `startPtr` est monotone (jamais décrémenté), donc le coût est linéaire globalement.
+
+### 2.6 Choix du pas
 
 | Type de trace | Pas conseillé |
 |---|---|
@@ -199,33 +223,50 @@ FONCTION resampleUniform(distRaw, eleRaw, stepM):
 | Trace éditeur (MNT 30 m) | **50 m** |
 | Trace très longue (> 100 km) | 75–100 m |
 
-**Défaut v3.6** : **50 m**.
+**Défaut v3.9.2** : **50 m**.
 
-### Avantages par rapport à l'interpolation
+### 2.7 Notes importantes
 
-- Atténue le bruit haute fréquence dès le rééchantillonnage.
-- Rend le comportement du pipeline **cohérent quelle que soit la valeur du Pas**.
-- Améliore l'efficacité du filtre Hampel en aval (moins de points aberrants à corriger).
-- Simplifie la configuration : l'utilisateur n'a plus besoin de « compenser » un Pas fin par un filtre médian.
+- **`totalDistSampledM = dist[m−1]`** : longueur couverte par la grille
+- **`trailingGapM = totalDistRawM − totalDistSampledM`** : queue de trace ignorée (le dernier multiple de `stepM` peut être en deçà du dernier point)
+- **Depuis v3.9.2**, la trace affichée sur la carte utilise les **points bruts**, pas la grille. Le `trailingGapM` n'affecte donc plus la fidélité visuelle de la carte, seulement la longueur des analyses.
 
-### Inconvénients
+### 2.8 Avantages par rapport à l'interpolation
+
+- Atténue le bruit haute fréquence dès le rééchantillonnage
+- Rend le comportement du pipeline **cohérent quelle que soit la valeur du Pas**
+- Améliore l'efficacité du filtre Hampel en aval (moins de points aberrants à corriger)
+- Simplifie la configuration : l'utilisateur n'a plus besoin de « compenser » un Pas fin par un filtre médian
+
+### 2.9 Inconvénients
 
 - Légère perte de fidélité sur les très petites variations (< avgWin)
-- Sur-échantillonnage possible si stepM < pas médian de la trace
+- Sur-échantillonnage possible si `stepM` < pas médian de la trace
+
+### 2.10 Alternatives écartées
+
+| Critère | Interpolation | **Moyenne (retenu v3.5)** |
+|---|---|---|
+| Fidélité au détail brut | Élevée | Moyenne |
+| Atténuation bruit HF | Nulle | **Élevée** |
+| Efficacité Hampel en aval | Faible à petit Pas | **Élevée** |
+| Cohérence du pipeline selon Pas | Faible | **Élevée** |
+| Complexité | O(n + m) | O(n + m) |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
 ## 3. Correction des plateaux GPS/MNT
 
-### Objet
+### 3.1 Objet
 
 Détecter les séries d'altitudes quasi-identiques (typiques des marches d'escalier du MNT SRTM ou des capteurs GPS qui « gèlent ») et les remplacer par une interpolation linéaire.
 
-### Principe
+### 3.2 Motivation
 
-Sur une trace Openrunner/SRTM, les altitudes sont entières : `1211, 1211, 1211, 1210, 1208...`. Tant qu'on reste dans la même cellule MNT (~30 m × 30 m), l'altitude est constante. En sortant, elle saute d'un coup.
+Sur une trace Openrunner/SRTM, les altitudes sont entières : `1211, 1211, 1211, 1210, 1208...`. Tant qu'on reste dans la même cellule MNT (~30 m × 30 m), l'altitude est constante. En sortant, elle saute d'un coup. Ce comportement crée des « marches » artificielles qui perturbent la dérivée (pente) et donc la détection.
 
-### Pseudocode
+### 3.3 Pseudocode
 
 ```
 FONCTION plateauCorrect(ele, minRun, tolerance):
@@ -259,27 +300,37 @@ FONCTION plateauCorrect(ele, minRun, tolerance):
   RETOURNER { out, count }
 ```
 
-### Complexité
+### 3.4 Complexité
 
 - Temps : **O(n)**
 - Espace : **O(n)**
 
-### Notes
+### 3.5 Notes
 
 - **S'applique avant le rééchantillonnage** (sur les données brutes)
 - Optionnel, contrôlé par `plateauRun` (0 = désactivé)
-- **Défaut v3.6** : `plateauRun = 6`, `tolerance = 1.0 m`
+- **Défaut v3.9.2** : `plateauRun = 6`, `tolerance = 1.0 m`
 - Après rééchantillonnage à 50 m, les marches MNT de 30 m sont diluées → la correction devient souvent inutile
+- **Risque sur les vrais arrêts GPS** : si l'altitude reste constante pendant un arrêt, le filtre va créer à tort une pente artificielle
+
+### 3.6 Choix de conception
+
+| Critère | Correction plateaux | Pas de correction |
+|---|---|---|
+| Traces SRTM | ✅ Nettoie les marches | ❌ Marches visibles |
+| Traces GPS propre | ✅ | ✅ |
+| Vrais arrêts GPS | ❌ Crée pente artificielle | ✅ |
+| **Retenu** | ✅ (optionnel) | — |
 
 ---
 
-## 4. Anti-pic : fenêtre / Anti-pic : seuil
+## 4. Anti-pic Hampel
 
-### Objet
+### 4.1 Objet
 
 Éliminer les **glitchs d'altitude isolés** (capteur GPS ou artefact MNT) **sans altérer le relief normal**. Le filtre Hampel est un filtre médian **conditionnel** : il ne remplace un point que si son écart à la médiane locale dépasse un seuil.
 
-### Motivation
+### 4.2 Motivation
 
 Un glitch isolé (1–2 points déviant de 20–50 m) produit une pente instantanée aberrante (±25 %) qui déclenche une fausse détection de montée. Les filtres classiques :
 - **Médiane** : corrige mais lisse tout le relief
@@ -288,14 +339,14 @@ Un glitch isolé (1–2 points déviant de 20–50 m) produit une pente instanta
 
 Le filtre Hampel est **chirurgical** : il ne modifie que les points aberrants.
 
-### Principe
+### 4.3 Principe
 
 Pour chaque point `i` :
 1. Calculer la **médiane** d'une fenêtre glissante `[i − half, i + half]` où `half = (winPts − 1) / 2`
 2. Si `|ele[i] − median| > thresholdM` → remplacer par la médiane
 3. Sinon → laisser tel quel
 
-### Conversion mètres → points
+### 4.4 Conversion mètres → points (v3.6)
 
 La fenêtre est exprimée en **mètres** dans l'interface, mais le filtre Hampel opère en **points**. La conversion est effectuée en interne :
 
@@ -320,7 +371,7 @@ winPts = max(3, round(windowM / stepM) | 1)
 | 100 m | 200 m | 2 → 3 | ±100 m |
 | 100 m | 400 m | 4 → 5 | ±200 m |
 
-### Pseudocode
+### 4.5 Pseudocode
 
 ```
 FONCTION despikeAltitude(ele, winPts, thresholdM):
@@ -353,14 +404,14 @@ FONCTION applyDespike(ele, windowM, thresholdM, stepM):
   RETOURNER despikeAltitude(ele, winPts, thresholdM)
 ```
 
-### Complexité
+### 4.6 Complexité
 
 - Temps : **O(n × winPts × log winPts)** (dominé par le tri de la fenêtre à chaque point)
 - Espace : **O(winPts)** pour le buffer
 
-Pour winPts = 5, on trie 5 éléments par point → coût négligeable.
+Pour `winPts = 5`, on trie 5 éléments par point → coût négligeable.
 
-### Choix des paramètres
+### 4.7 Choix des paramètres
 
 | Paramètre | Défaut | Plage | Signification |
 |---|---|---|---|
@@ -369,7 +420,7 @@ Pour winPts = 5, on trie 5 éléments par point → coût négligeable.
 
 `thresholdM = 0` désactive complètement le filtre.
 
-### Table des fenêtres effectives
+### 4.8 Table des fenêtres effectives
 
 La fenêtre effective en mètres dépend de l'arrondi au multiple de Pas. Si `windowM / stepM < 3`, le plancher de 3 points élargit la fenêtre.
 
@@ -385,17 +436,7 @@ La fenêtre effective en mètres dépend de l'arrondi au multiple de Pas. Si `wi
 
 Un pic dont la largeur dépasse la fenêtre effective ne sera pas corrigé. C'est voulu : un pic large n'est probablement pas un glitch mais un vrai relief.
 
-### Pourquoi Hampel vs médian classique
-
-| Critère | Médian classique | Hampel |
-|---|---|---|
-| Modifie le relief normal | Oui (lissage global) | **Non** |
-| Élimine un pic isolé | Oui | Oui |
-| Préserve les extrema | Non | **Oui** |
-| Effet sur les vraies montées | Adoucit | **Aucun** |
-| Effet d'écrêtage des bosses | Marqué | **Sélectif** |
-
-### Exemples d'effet
+### 4.9 Exemples d'effet
 
 **Cas 1 — Glitch isolé (corrigé)**
 ```
@@ -417,30 +458,27 @@ Après :  [1180, 1182, 1183, 1190, 1198, 1205, 1210]
                           ^^^^^ inchangé
 ```
 
-**Cas 3 — Progression rapide (préserve la pente)**
+**Cas 3 — Progression régulière (préservée)**
 ```
 Fenêtre = 200 m, seuil = 15 m
 
 Avant :  [1000, 1010, 1020, 1030, 1040, 1050, 1060]
-                                ^^^^^ écart de 30 m à la médiane
-                                      (médiane = 1000) → correction ?
+                                ^^^^^ médiane fenêtre = 1020
+                                      |1030 − 1020| = 10 < 15 → inchangé
 Après :  [1000, 1010, 1020, 1030, 1040, 1050, 1060]
-                                ^^^^^ inchangé
 ```
 
-Attendez — dans ce cas 3, la médiane de la fenêtre `[1000, 1010, 1020, 1030, 1040]` est 1020, et `|1030 − 1020| = 10 < 15` → pas corrigé. ✅
-
-**Cas 4 — Vraie rupture (correctement traitée)**
+**Cas 4 — Chute majeure (corrigée)**
 ```
 Fenêtre = 200 m, seuil = 15 m
 
 Avant :  [500, 510, 520, 530, 2000, 540, 550]
-                          ^^^^^^^ chute de 1470 m (glitch majeur)
+                          ^^^^^^^ glitch majeur (écart = 1470 m)
 Après :  [500, 510, 520, 530, 530, 540, 550]
                                 ^^^^^ remplacé par la médiane
 ```
 
-### Notes
+### 4.10 Notes
 
 - Appliqué **après le rééchantillonnage**, **avant tout autre filtrage**
 - Les pics de nature large (> winPts) ne sont pas corrigés — c'est voulu
@@ -448,27 +486,77 @@ Après :  [500, 510, 520, 530, 530, 540, 550]
 - Une fenêtre < 2 × Pas rend l'arrondi trop grossier → diagnostic avertit
 - **Ordre important** : plateaux → resampling → anti-pic → médiane → SG. Un anti-pic appliqué trop tôt (avant resampling) serait moins efficace car la fenêtre en points varie avec la densité.
 
-### Interaction avec les autres filtres
+### 4.11 Interaction avec les autres filtres
 
 | Filtre | Interaction |
 |---|---|
-| Filtre médian | **Redondant** — si l'anti-pic est actif, désactiver le filtre médian (paramètre `medianWindowM = 0`) |
+| Filtre médian | **Redondant** — si anti-pic actif, désactiver le filtre médian |
 | Correction plateaux | Complémentaire — s'applique avant (données brutes) |
-| Savitzky-Golay | Complémentaire — SG traite le bruit diffus, l'anti-pic traite les glitchs ponctuels |
+| Savitzky-Golay | Complémentaire — SG traite le bruit diffus, anti-pic traite les glitchs ponctuels |
 | Gaussien | Complémentaire — adoucit après anti-pic |
+
+### 4.12 Choix de conception
+
+**Hampel vs médian classique** :
+
+| Critère | Médian classique | **Hampel (retenu)** |
+|---|---|---|
+| Modifie le relief normal | Oui (lissage global) | **Non** |
+| Élimine un pic isolé | Oui | Oui |
+| Préserve les extrema | Non | **Oui** |
+| Effet sur les vraies montées | Adoucit | **Aucun** |
+| Effet d'écrêtage des bosses | Marqué | **Sélectif** |
+| Complexité | O(n × win log win) | O(n × win log win) |
+| **Retenu** | ❌ | ✅ |
+
+**Seuil en mètres vs en %** :
+
+| Critère | **Seuil en mètres (retenu)** | Seuil en % |
+|---|---|---|
+| Prévisibilité | ✅ | ⚠️ |
+| Indépendance du relief | ✅ | ❌ |
+| **Retenu** | ✅ | ❌ |
+
+Un glitch de 20 m reste un glitch de 20 m, qu'il soit sur une plaine ou en montagne. Le seuil en mètres est donc plus prévisible.
+
+**Position dans le pipeline** :
+
+| Ordre | Efficacité |
+|---|---|
+| Avant resampling | ❌ Fenêtre en points varie avec la densité |
+| **Après resampling (retenu)** | ✅ Fenêtre constante après conversion |
+| Après SG | ❌ SG a déjà ancré le glitch dans la courbe |
+
+**Fenêtre en points vs en mètres** :
+
+| Critère | Fenêtre en points | **Fenêtre en mètres (retenu v3.6)** |
+|---|---|---|
+| Cohérence avec autres paramètres | ❌ | ✅ |
+| Comportement indépendant du Pas | ❌ | ✅ |
+| Prévisibilité utilisateur | ⚠️ (largeur physique variable) | ✅ |
+| Plage utile | 3–15 pts (≈ 75–1500 m selon Pas) | **50–500 m** |
+| **Retenu** | ❌ | ✅ |
+
+La fenêtre Hampel était le seul paramètre à ne pas être exprimé en mètres. Cela rendait son comportement imprévisible — sa largeur physique variait d'un facteur 40 entre Pas = 5 m et Pas = 200 m. En l'exprimant en mètres, on garantit un comportement identique quelle que soit la trace.
 
 ---
 
 ## 5. Statistiques de la trace brute
 
-### Objet
+### 5.1 Objet
 
 Calculer les statistiques globales **sur les données GPX d'origine**, en ignorant les doublons GPS.
 
-### Pseudocode
+### 5.2 Motivation
+
+Les cartes de statistiques doivent refléter la **vraie** trace GPX, indépendamment du resampling et de tous les filtres. Un utilisateur qui compare avec Strava ou Garmin veut retrouver les mêmes valeurs.
+
+### 5.3 Pseudocode
 
 ```
 FONCTION computeRawStats(distRaw, eleRawOrig):
+  n ← longueur(distRaw)
+
   // D+ / D− en ignorant les doublons (< 1 m)
   dPlus ← 0, dMoins ← 0
   POUR i DE 1 À n−1:
@@ -494,26 +582,27 @@ FONCTION computeRawStats(distRaw, eleRawOrig):
               eleMin, eleMax, doublons: n − length(gaps) }
 ```
 
-### Complexité
+### 5.4 Complexité
 
 - Temps : **O(n log n)** (dominé par le tri des gaps)
 - Espace : **O(n)**
 
-### Notes
+### 5.5 Notes
 
 - Les statistiques sont **calculées une seule fois au chargement**
 - Elles sont indépendantes du resampling et des paramètres
 - Elles alimentent les cartes statistiques (D+ brut, altitudes min/max)
+- Les **doublons GPS** (< 1 m) sont exclus du D+ pour éviter de gonfler artificiellement le dénivelé (certains appareils enregistrent 2–3 points identiques en cas d'arrêt)
 
 ---
 
 ## 6. Moyenne mobile
 
-### Objet
+### 6.1 Objet
 
 Lisser une série par moyenne glissante centrée. Utilisée pour la pente.
 
-### Pseudocode
+### 6.2 Pseudocode
 
 ```
 FONCTION movingAverage(arr, win):
@@ -533,33 +622,52 @@ FONCTION movingAverage(arr, win):
   RETOURNER res
 ```
 
-### Complexité
+### 6.3 Complexité
 
-- Temps : **O(n)**
+- Temps : **O(n)** (grâce au tableau de préfixes)
 - Espace : **O(n)**
 
-### Notes
+### 6.4 Notes
 
 - Conversion mètres → points : `winPts = round(winM / stepM)`, forcée impaire
 - Après resampling uniforme, une fenêtre de N points couvre **exactement** N × stepM mètres partout
+- **Sans le préfix-sum**, on serait en O(n × win). Le préfix-sum ramène à O(n).
+
+### 6.5 Choix de conception
+
+| Critère | Moyenne mobile | Savitzky-Golay |
+|---|---|---|
+| Lissage | Oui | Oui |
+| Préservation des extrema | Non | Oui |
+| Vitesse | O(n) | O(n × win) |
+| **Usage** | Pente | Altitude |
+
+La moyenne mobile est utilisée pour la pente car on veut un lissage plus agressif, moins soucieux de préserver les extrema (les extrema de la pente sont moins critiques que ceux de l'altitude).
 
 ---
 
 ## 7. Savitzky-Golay
 
-### Objet
+### 7.1 Objet
 
 Lisser en ajustant localement un polynôme d'ordre 2 sur une fenêtre glissante. **Préserve mieux les extrema** qu'une moyenne mobile de même largeur.
 
-### Formule (ordre 2)
+### 7.2 Motivation
+
+Un lissage par moyenne mobile « écrase » les sommets des bosses (les extrema sont arrondis). Un lissage polynomial d'ordre 2 peut reproduire une parabole locale, ce qui préserve la courbure des extrema. C'est crucial pour la détection des sommets.
+
+### 7.3 Formule (ordre 2)
 
 Pour chaque point i, on calcule une combinaison linéaire pondérée des voisins :
+
 ```
 coefs[k] = 3m² + 3m − 1 − 5k²   pour k ∈ [−m, +m]
 ```
 où `m = (win − 1) / 2`.
 
-### Pseudocode
+Les coefficients sont normalisés en divisant par `Σ coefs`.
+
+### 7.4 Pseudocode
 
 ```
 FONCTION savitzkyGolay(arr, win, order=2):
@@ -569,7 +677,8 @@ FONCTION savitzkyGolay(arr, win, order=2):
 
   half ← ⌊win / 2⌋
   m ← half
-  coefs[k+half] ← 3m² + 3m − 1 − 5k²   pour k ∈ [−half, +half]
+  POUR k ∈ [−half, +half]:
+    coefs[k+half] ← 3m² + 3m − 1 − 5k²
 
   out ← nouveau tableau(n)
   POUR i DE 0 À n−1:
@@ -580,32 +689,49 @@ FONCTION savitzkyGolay(arr, win, order=2):
       c ← coefs[j + half]
       sum  ← sum  + c × arr[idx]
       wsum ← wsum + c
-    out[i] ← sum / wsum
+    out[i] ← wsum > 0 ? sum / wsum : arr[i]
 
   RETOURNER out
 ```
 
-### Complexité
+### 7.5 Complexité
 
 - Temps : **O(n × win)**
 - Espace : **O(n)**
 
-### Notes
+### 7.6 Notes
 
-- Utilisé comme **lisseur principal** de l'altitude (remplace la moyenne mobile en v2.8+)
+- Utilisé comme **lisseur principal** de l'altitude
 - Ordre 2 = préservation des courbures locales, idéal pour les extrema
 - Sur données resamplées, `win` en points ≈ `fenetreAffichageM / stepM`
 - **Inopérant si `fenetreAffichageM / stepM < 5`** — d'où l'importance du diagnostic de cohérence
+- **Recommandé : fenêtre ≥ 10 pts** pour un lissage efficace
+
+### 7.7 Choix de conception
+
+| Critère | Ordre 1 | Ordre 2 | Ordre 3 |
+|---|---|---|---|
+| Lissage | Oui | Oui | Oui |
+| Préservation extrema | Faible | **Forte** | Forte |
+| Complexité | O(n × win) | O(n × win) | O(n × win) |
+| Stabilité | ✅ | ✅ | ⚠️ (oscillations) |
+| **Retenu** | ❌ | ✅ | ❌ |
+
+L'ordre 2 est le meilleur compromis entre lissage et préservation des extrema.
 
 ---
 
 ## 8. Lissage gaussien
 
-### Objet
+### 8.1 Objet
 
 Convolution avec un noyau gaussien tronqué à ±3σ. Lisse fortement les transitions.
 
-### Pseudocode
+### 8.2 Motivation
+
+Après le SG, le profil peut encore avoir des transitions anguleuses. Le gaussien adoucit ces transitions de manière symétrique et isotrope (contrairement à un SG qui est polynomial).
+
+### 8.3 Pseudocode
 
 ```
 FONCTION gaussianFilter(arr, sigma):
@@ -625,32 +751,44 @@ FONCTION gaussianFilter(arr, sigma):
       w ← kernel[j + half]
       sum  ← sum  + w × arr[idx]
       wsum ← wsum + w
-    out[i] ← sum / wsum
+    out[i] ← wsum > 0 ? sum / wsum : arr[i]
 
   RETOURNER out
 ```
 
-### Complexité
+### 8.4 Complexité
 
 - Temps : **O(n × σ)**
 - Espace : **O(n)**
 
-### Notes
+### 8.5 Notes
 
 - Appliqué **après le Savitzky-Golay, avant l'ancrage**
 - σ en mètres converti en σ en points : `sigmaPts = sigmaM / stepM`
-- Défaut v3.6 : σ = 75 m (≈ 1.5 point à stepM=50)
+- Défaut v3.9.2 : σ = 75 m (≈ 1.5 point à stepM=50)
 - **Inopérant si σM / stepM < 0.5** — d'où le warning diagnostic
+
+### 8.6 Choix de conception
+
+| Critère | Gaussien | SG | Moyenne mobile |
+|---|---|---|---|
+| Symétrie | ✅ | ✅ | ✅ |
+| Effet passe-bas | Fort | Moyen | Moyen |
+| Coût | O(n × σ) | O(n × win) | O(n) |
+| Effet sur les extrema | Écrase | Préserve | Écrase |
+| **Usage** | Lissage final | Altitude principale | Pente |
+
+Le gaussien est complémentaire du SG : SG traite le relief principal, gaussien adoucit les transitions.
 
 ---
 
 ## 9. Filtre médian
 
-### Objet
+### 9.1 Objet
 
 Remplacer chaque valeur par la médiane de son voisinage. Élimine les pics isolés.
 
-### Pseudocode
+### 9.2 Pseudocode
 
 ```
 FONCTION medianFilter(arr, win):
@@ -668,32 +806,44 @@ FONCTION medianFilter(arr, win):
   RETOURNER out
 ```
 
-### Complexité
+### 9.3 Complexité
 
-- Temps : **O(n × win log win)** (à cause du tri par point)
+- Temps : **O(n × win log win)**
 - Espace : **O(win)**
 
-### Notes
+### 9.4 Notes
 
 - **Première étape** du pipeline de filtrage (avant SG)
-- Défaut v3.6 : `medianWindowM = 0` (désactivé)
-- **Depuis v3.3, l'anti-pic Hampel rend le filtre médian largement redondant**. Recommandation : le désactiver si anti-pic actif
+- Défaut v3.9.2 : `medianWindowM = 0` (désactivé)
+- **Depuis v3.3, l'anti-pic Hampel rend le filtre médian largement redondant**. Recommandation : le désactiver si anti-pic actif.
+
+### 9.5 Choix de conception
+
+| Critère | Médian | Hampel |
+|---|---|---|
+| Corrige pics | Oui | Oui |
+| Préserve relief normal | Non | **Oui** |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
 ## 10. Lissage ancré
 
-### Objet
+### 10.1 Objet
 
 Lisser en forçant la courbe à passer **exactement** par certains points (les extrema détectés). Résout le problème du décalage du sommet vers la descente.
 
-### Principe
+### 10.2 Motivation
+
+Un lissage SG normal « écrase » les sommets et déplace le maximum détecté vers la droite (dans le sens de la descente). Cela crée un décalage visuel entre la position du marqueur « sommet » et le pic visuel de la courbe. Le lissage ancré force la courbe à passer exactement par les bornes calculées.
+
+### 10.3 Principe
 
 1. Calculer un lissage de base (SG + gaussien)
 2. Pour chaque ancre `a`, calculer `corr[a] = raw[a] − base[a]`
 3. Appliquer une correction linéaire par morceaux entre ancres
 
-### Pseudocode
+### 10.4 Pseudocode
 
 ```
 FONCTION anchoredMovingAverage(raw, anchorIdxs, stepM,
@@ -733,31 +883,41 @@ FONCTION anchoredMovingAverage(raw, anchorIdxs, stepM,
   RETOURNER result
 ```
 
-### Complexité
+### 10.5 Complexité
 
 - Temps : **O(n + m × winDouble)** où m = nb d'ancres
 - Espace : **O(n)**
 
-### Propriétés mathématiques
+### 10.6 Propriétés mathématiques
 
 - **Exactitude aux ancres** : `result[a] = base[a] + corrA = raw[a]` par construction
 - **Continuité** : entre deux ancres, la correction est une interpolation linéaire, donc continue
 - **Lissage préservé** : la courbe reste lisse à l'intérieur de chaque intervalle (la correction est linéaire, donc n'introduit pas d'oscillation)
 
-### Notes
+### 10.7 Notes
 
 - **Effet visuel** : la pente devient exactement nulle au sommet d'une ancre, ce qui résout le problème « la pente continue de monter après le sommet »
 - Le choix des ancres est crucial. Si elles sont placées à chaque changement de catégorie, la courbe est très contrainte
+- **v3.8.1** : la courbe ancrée (`eleDisplay`) est utilisée pour l'**affichage** mais **pas** pour la catégorisation (voir §27)
+
+### 10.8 Choix de conception
+
+| Critère | SG simple | **Ancrage (retenu)** |
+|---|---|---|
+| Extrema bien placés | Non | **Oui** |
+| Courbe lisse | Oui | Oui (par morceaux) |
+| Complexité | O(n × win) | O(n + m) |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
 ## 11. Pente instantanée
 
-### Objet
+### 11.1 Objet
 
 Calculer la pente locale à chaque point, en % (variation d'altitude / distance).
 
-### Formule
+### 11.2 Formule
 
 Pour le point `i`, on utilise les points voisins `i−1` et `i+1` :
 
@@ -765,7 +925,7 @@ Pour le point `i`, on utilise les points voisins `i−1` et `i+1` :
 pente[i] = (ele[i+1] − ele[i−1]) / (dist[i+1] − dist[i−1]) × 100
 ```
 
-### Pseudocode
+### 11.3 Pseudocode
 
 ```
 FONCTION computeSlope(ele, dist, minD=0.05):
@@ -781,28 +941,34 @@ FONCTION computeSlope(ele, dist, minD=0.05):
   RETOURNER s
 ```
 
-### Complexité
+### 11.4 Complexité
 
 - Temps : **O(n)**
 - Espace : **O(n)**
 
-### Notes
+### 11.5 Notes
 
 - `minD = 0.05 m` évite les divisions par zéro quand deux points sont trop proches
 - **Différence centrée** plutôt que différence avant : réduit le décalage de phase
 - Très sensible au bruit GPS — d'où l'importance de l'anti-pic en amont
 
+### 11.6 Choix de conception
+
+| Critère | Différence centrée | Différence avant |
+|---|---|---|
+| Décalage de phase | Aucun | +1 point |
+| Lissage naturel | Oui (3 pts) | Non |
+| **Retenu** | ✅ | ❌ |
+
 ---
 
 ## 12. Fenêtre de calcul pente
 
-**Nom UI** : Fenêtre de calcul pente · **Clé technique** : `fenetreCatM` · **Défaut v3.6** : 100 m
-
-### Objet
+### 12.1 Objet
 
 Calculer la pente **moyenne sur une portion de N mètres** centrée sur chaque point. Utilisée pour la catégorisation par couleur.
 
-### Pseudocode
+### 12.2 Pseudocode
 
 ```
 FONCTION computeSlopeWindow(ele, dist, winM):
@@ -825,25 +991,35 @@ FONCTION computeSlopeWindow(ele, dist, winM):
   RETOURNER s
 ```
 
-### Complexité
+### 12.3 Complexité
 
 - Temps : **O(n × w)** où w = nombre moyen de points dans la fenêtre
 - Espace : **O(n)**
 
-### Notes
+### 12.4 Notes
 
-- **Fenêtre effective** entre winM et 2×winM selon l'alignement
+- **Fenêtre effective** entre `winM` et `2 × winM` selon l'alignement
 - Après resampling à 50 m, w ≈ 2 pour winM=100 m
+- **v3.8.1** : la pente fenêtrée est calculée sur `eleBaseCat` (altitude **non ancrée**), pas sur `eleDisplay` (voir §27)
+
+### 12.5 Choix de conception
+
+| Critère | **Fenêtrée (retenu)** | Instantanée |
+|---|---|---|
+| Stabilité visuelle | Élevée | Faible (patchwork) |
+| Fidélité locale | Moyenne | Haute |
+| Coût | O(n × w) | O(n) |
+| **Retenu couleur** | ✅ | ❌ |
 
 ---
 
 ## 13. Écrêtage des pentes
 
-### Objet
+### 13.1 Objet
 
 Limiter les pentes affichées à ±25 % pour éviter les pics verticaux dus au bruit.
 
-### Pseudocode
+### 13.2 Pseudocode
 
 ```
 FONCTION clipSlope(slope, maxPct=25):
@@ -854,12 +1030,12 @@ FONCTION clipSlope(slope, maxPct=25):
   RETOURNER out
 ```
 
-### Complexité
+### 13.3 Complexité
 
 - Temps : **O(n)**
 - Espace : **O(n)**
 
-### Notes
+### 13.4 Notes
 
 - Constante `SLOPE_DISPLAY_MAX_PCT = 25`
 - Utilisé pour : `slopeBase`, `slopeRaw`, `slopeDisplay`
@@ -870,11 +1046,15 @@ FONCTION clipSlope(slope, maxPct=25):
 
 ## 14. Détection par hystérésis
 
-### Objet
+### 14.1 Objet
 
 Détecter les portions de montée avec **hystérésis** (seuil d'entrée positif, seuil de sortie négatif).
 
-### Pseudocode
+### 14.2 Motivation
+
+Sans hystérésis, si la pente oscille autour de 0 %, on aurait des micro-événements en continu. L'hystérésis utilise deux seuils distincts pour éviter ces oscillations.
+
+### 14.3 Pseudocode
 
 ```
 FONCTION detectEvents(slope, seuil):
@@ -896,26 +1076,34 @@ FONCTION detectEvents(slope, seuil):
   RETOURNER events
 ```
 
-### Complexité
+### 14.4 Complexité
 
 - Temps : **O(n)**
 - Espace : **O(k)** (k = nb d'événements)
 
-### Notes
+### 14.5 Notes
 
 - Seuil par défaut : 0.5 %
 - Hystérésis (+0.5 / −0.5) évite les oscillations autour du seuil
 - **Peut fragmenter une montée** si un faux-plat descend temporairement sous −0.5 % → d'où la fusion (§25)
 
+### 14.6 Choix de conception
+
+| Critère | Hystérésis | Seuil unique |
+|---|---|---|
+| Oscillations autour de 0 | Évitées | Fréquentes |
+| Fragmentation | Possible | Plus fréquente |
+| **Retenu** | ✅ | ❌ |
+
 ---
 
 ## 15. Construction des candidats
 
-### Objet
+### 15.1 Objet
 
 Transformer la liste d'événements `{start, summit}` en une liste de segments candidats (type `climb` ou `non-climb`).
 
-### Pseudocode
+### 15.2 Pseudocode
 
 ```
 FONCTION buildClimbCandidates(events, n):
@@ -940,20 +1128,29 @@ FONCTION buildClimbCandidates(events, n):
   RETOURNER filtrer(segs, s → s.key = 'climb')
 ```
 
-### Complexité
+### 15.3 Complexité
 
 - Temps : **O(k)**
 - Espace : **O(k)**
+
+### 15.4 Notes
+
+- Le premier événement peut être un `summit` (trace qui commence en montée)
+- Le dernier événement peut être un `start` non fermé (trace qui finit en montée) — traité par le `if (inC)` de `detectEvents`
 
 ---
 
 ## 16. Sous-segment optimal
 
-### Objet
+### 16.1 Objet
 
 Dans un candidat `[startIdx, endIdx]`, trouver le **plus long sous-segment** qui satisfait les critères (longueur, pente moyenne). C'est l'algorithme de validation.
 
-### Critères de validation
+### 16.2 Motivation
+
+Un candidat brut peut inclure des portions plates en début/fin. La validation stricte (§26) exige que la pente moyenne sur l'ensemble du segment soit ≥ seuil. Or cette contrainte peut être violée si on inclut des zones plates. On cherche donc le **plus long** sous-segment qui passe.
+
+### 16.3 Critères de validation
 
 ```
 seuil(L) = 3 % si L ≥ 1000 m
@@ -964,7 +1161,7 @@ seuil(L) = 3 % si L ≥ 1000 m
          = ∞   sinon (rejeté)
 ```
 
-### Pseudocode
+### 16.4 Pseudocode
 
 ```
 FONCTION findBestSubClimb(dist, ele, startIdx, endIdx):
@@ -998,27 +1195,37 @@ FONCTION findBestSubClimb(dist, ele, startIdx, endIdx):
   RETOURNER best
 ```
 
-### Complexité
+### 16.5 Complexité
 
 - Sans sous-échantillonnage : **O(n²)**
 - Avec sous-échantillonnage (step adaptatif) : **O(800²) ≈ 640 000** opérations max par candidat
 - Espace : **O(n)**
 
-### Notes
+### 16.6 Notes
 
 - La stratégie privilégie le **plus long** sous-segment valide
 - Cette fonction est appelée **deux fois** par candidat : sur `eleBase` (validation intermédiaire) et sur `eleDisplay` (validation finale)
 - Si aucun sous-segment valide n'existe, la fonction retourne `null` et la montée est rejetée
+- **Le sous-échantillonnage à 800** limite la complexité à ~640k opérations, acceptable en JavaScript (< 1 ms par appel sur navigateur moderne)
+
+### 16.7 Choix de conception
+
+| Critère | Recherche exhaustive | **Sous-échantillonnage (retenu)** |
+|---|---|---|
+| Précision | Parfaite | ~99 % |
+| Complexité | O(n²) | O(800²) |
+| Cas n=10000 | 100M ops (~500 ms) | 640k ops (~2 ms) |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
 ## 17. Argmin / Argmax
 
-### Objet
+### 17.1 Objet
 
 Trouver l'indice du **minimum** (resp. maximum) d'un tableau numérique dans un intervalle `[lo, hi]`.
 
-### Pseudocode
+### 17.2 Pseudocode
 
 ```
 FONCTION argminRange(arr, lo, hi):
@@ -1040,20 +1247,33 @@ FONCTION argmaxRange(arr, lo, hi):
   RETOURNER best
 ```
 
-### Complexité
+### 17.3 Complexité
 
 - Temps : **O(hi − lo + 1)**
 - Espace : **O(1)**
+
+### 17.4 Notes
+
+- Utilisé pour le raffinement (§24) et la fusion (§25)
+- Robuste au bruit comparé à une marche avec tolérance (qui dépend d'un seuil)
+
+### 17.5 Choix de conception
+
+| Critère | **Argmin/argmax (retenu)** | Marche tolérance |
+|---|---|---|
+| Robustesse au bruit | Élevée | Faible |
+| Déterminisme | Toujours | Dépend de la tolérance |
+| **Retenu** | ✅ | ❌ |
 
 ---
 
 ## 18. Recherche binaire sur distance
 
-### Objet
+### 18.1 Objet
 
 Trouver l'indice du **premier point** dont la distance cumulée est ≥ une valeur cible.
 
-### Pseudocode
+### 18.2 Pseudocode
 
 ```
 FONCTION findIdxAtDist(dist, targetM):
@@ -1068,25 +1288,31 @@ FONCTION findIdxAtDist(dist, targetM):
   RETOURNER lo
 ```
 
-### Complexité
+### 18.3 Complexité
 
 - Temps : **O(log n)**
 - Espace : **O(1)**
+
+### 18.4 Notes
+
+- Appelé massivement dans `computeAuto` (raffinement, fusion) et `rebuild`
+- Sur n=10000, log₂(10000) ≈ 14 comparaisons par appel
+- **Pas d'interpolation**, on retourne toujours un indice valide
 
 ---
 
 ## 19. Catégorisation par pente
 
-### Objet
+### 19.1 Objet
 
 Associer une **catégorie de pente** à une valeur de pente en %.
 
-### Grille (8 catégories)
+### 19.2 Grille (8 catégories)
 
 | ID | Libellé | Plage |
 |---|---|---|
-| dh3 | Descente raide | p < −8 |
-| dh2 | Descente | −8 ≤ p < −3 |
+| dh3 | Descente raide | p < −7 |
+| dh2 | Descente | −7 ≤ p < −3 |
 | dh1 | Faux plat descendant | −3 ≤ p < −1 |
 | pl | Plat | −1 ≤ p < +1 |
 | up1 | Faux plat montant | +1 ≤ p < +3 |
@@ -1094,7 +1320,7 @@ Associer une **catégorie de pente** à une valeur de pente en %.
 | up3 | Montée raide | +7 ≤ p < +10 |
 | up4 | Montée très raide | p ≥ +10 |
 
-### Pseudocode
+### 19.3 Pseudocode
 
 ```
 FONCTION categorize(slope):
@@ -1103,32 +1329,47 @@ FONCTION categorize(slope):
   RETOURNER 'pl'
 ```
 
-### Complexité
+### 19.4 Complexité
 
-- Temps : **O(c)** où c = nombre de catégories (8). En pratique constant → **O(1)**
+- Temps : **O(c)** où c = 8 catégories. En pratique constant → **O(1)**
 - Espace : **O(1)**
 
-### Notes
+### 19.5 Notes
 
 - Les bornes utilisent `<` en borne haute : une pente de +3 % exactement tombe dans `up1`, pas dans `up2`
-- La symétrie descente/montée n'est pas parfaite
+- La symétrie descente/montée n'est pas parfaite (les seuils sont −7/−3/−1 vs +1/+3/+7/+10)
+
+### 19.6 Évolution V4 — rendre éditables
+
+```typescript
+export interface EditableSlopeThresholds {
+  descenteRaide: number;       // défaut 7
+  descente: number;            // défaut 3
+  fauxPlat: number;            // défaut 1
+  montee: number;              // défaut 3
+  monteeRaide: number;         // défaut 7
+  monteeTresRaide: number;     // défaut 10
+}
+```
 
 ---
 
 ## 20. Longueur min. pente
 
-**Nom UI** : Longueur min. pente · **Clé technique** : `longueurMin` · **Défaut v3.6** : 200 m
-
-### Objet
+### 20.1 Objet
 
 Supprimer les segments dont la longueur est inférieure à un seuil (par défaut 200 m) en les absorbant dans leur **voisin le plus long**.
 
-### Algorithme (2 passes)
+### 20.2 Motivation
+
+Sans cette étape, la bande de segmentation serait un patchwork illisible (des micro-taches de 10 m de large). L'utilisateur veut voir les grandes tendances, pas chaque fluctuation.
+
+### 20.3 Algorithme (2 passes)
 
 1. **Fusion itérative** : tant qu'il existe un segment trop court, l'absorber dans son voisin le plus long.
 2. **Combinaison** : recoller les segments adjacents de même catégorie.
 
-### Pseudocode
+### 20.4 Pseudocode
 
 ```
 FONCTION mergeShortSegments(raw, dist, minLen):
@@ -1167,24 +1408,30 @@ FONCTION mergeShortSegments(raw, dist, minLen):
   RETOURNER raw
 ```
 
-### Complexité
+### 20.5 Complexité
 
-- Temps : **O(s²)** dans le pire cas, **O(s)** en pratique
+- Temps : **O(s²)** dans le pire cas, **O(s)** en pratique (s = nombre de segments bruts)
 - Espace : **O(s)**
+
+### 20.6 Notes
+
+- La fusion « vers le voisin le plus long » évite de créer des déséquilibres (un segment de 10 m absorbé par un de 50 m plutôt que par un de 3000 m)
+- **Le point frontière** (là où la catégorie change) appartient aux deux segments adjacents — voir §21
+- **Défaut v3.9.2** : `longueurMin = 200 m`
 
 ---
 
 ## 21. Segmentation par catégorie
 
-### Objet
+### 21.1 Objet
 
 Découper la trace en segments contigus selon la catégorie de pente de chaque point, **sans laisser de zone blanche**.
 
-### Principe clé
+### 21.2 Principe clé
 
-Le **point frontière** (là où la catégorie change) appartient à la fois au segment précédent et au segment suivant.
+Le **point frontière** (là où la catégorie change) appartient à la fois au segment précédent et au segment suivant. Cela garantit qu'il n'y a jamais de « trou » entre deux segments de couleur différente sur la carte.
 
-### Pseudocode
+### 21.3 Pseudocode
 
 ```
 FONCTION segmentByCategory(slopeForCat, dist, ele, minLen):
@@ -1206,20 +1453,34 @@ FONCTION segmentByCategory(slopeForCat, dist, ele, minLen):
     .map(s → enrichSegment(s, dist, ele, slopeForCat))
 ```
 
-### Complexité
+### 21.4 Complexité
 
 - Temps : **O(n)** pour la catégorisation + **O(s²)** pour la fusion
 - Espace : **O(n)**
 
-### Notes
+### 21.5 Notes
 
 - La somme des longueurs des segments après fusion **égale exactement la distance totale**
+- C'est cette liste (`catSegments`) qui est utilisée à la fois par la carte et par le widget profil, garantissant leur **cohérence visuelle**
+
+### 21.6 Choix de conception
+
+| Critère | Zones blanches | **Point frontière partagé (retenu)** |
+|---|---|---|
+| Cohérence visuelle | Mauvaise | **Bonne** |
+| Somme des longueurs | < total | **= total** |
+| Complexité | O(n) | O(n) |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
 ## 22. Enrichissement des segments
 
-### Pseudocode
+### 22.1 Objet
+
+Calculer les métriques de chaque segment (D+, pente moyenne, altitudes).
+
+### 22.2 Pseudocode
 
 ```
 FONCTION enrichSegment(s, dist, ele, slope):
@@ -1244,24 +1505,24 @@ FONCTION enrichSegment(s, dist, ele, slope):
               altStart: ele[s.startIdx], altEnd: ele[s.endIdx]}
 ```
 
-### Complexité
+### 22.3 Complexité
 
 - Temps : **O(len)**
 - Espace : **O(1)**
 
-### Notes
+### 22.4 Notes
 
-- La **pente moyenne** est pondérée par la distance, pas par le nombre de points
+- La **pente moyenne** est pondérée par la distance, pas par le nombre de points (les points sont déjà à pas fixe après resampling, donc c'est équivalent — mais la pondération par la distance reste plus précise en cas d'irrégularité résiduelle)
 
 ---
 
 ## 23. Contrainte anti-chevauchement
 
-### Objet
+### 23.1 Objet
 
 Garantir que les montées éditées manuellement ne se chevauchent jamais.
 
-### Pseudocode (édition numérique)
+### 23.2 Pseudocode (édition numérique)
 
 ```
 FONCTION appliquerContraintes(userClimbs):
@@ -1288,12 +1549,12 @@ FONCTION appliquerContraintes(userClimbs):
   RETOURNER sorted
 ```
 
-### Complexité
+### 23.3 Complexité
 
 - Temps : **O(m log m)** pour le tri + **O(m)** pour la contrainte
 - Espace : **O(m)**
 
-### Application temps réel pendant le drag
+### 23.4 Application temps réel pendant le drag
 
 ```
 FONCTION applyDragConstraint(handle, km, climb):
@@ -1315,17 +1576,25 @@ FONCTION applyDragConstraint(handle, km, climb):
     RETOURNER clamp(km, climb.startKm + minLen, hi)
 ```
 
+### 23.5 Notes
+
+- Les indicateurs `_constrainedStart` et `_constrainedEnd` sont affichés avec `⚠` orange dans la liste
+- La contrainte est **appliquée à chaque rebuild**, garantissant la cohérence même après édition numérique des champs
+- Pendant le drag, la contrainte est appliquée **en temps réel** par `applyDragConstraint`
+
 ---
 
 ## 24. Recherche extrema
 
-**Nom UI** : Recherche extrema · **Clé technique** : `refinePct` · **Défaut v3.6** : 60 %
-
-### Objet
+### 24.1 Objet
 
 Limiter la distance maximale de recherche de la vraie vallée / du vrai sommet lors de l'étape de raffinement.
 
-### Formule
+### 24.2 Motivation
+
+Après le sous-segment optimal, on a une bonne estimation des bornes. Mais le vrai creux/sommet peut être légèrement décalé. On cherche dans une fenêtre autour des bornes estimées, avec un rayon proportionnel à la longueur (les longues montées ont plus de latitude).
+
+### 24.3 Formule
 
 ```
 effectiveRefine = clamp(
@@ -1340,7 +1609,7 @@ avec :
 - `REFINE_MIN_M = 1500` m
 - `REFINE_MAX_M = 8000` m
 
-### Table d'exemples
+### 24.4 Table d'exemples
 
 | Longueur candidat | refinePct=60% | Après clamp |
 |---|---|---|
@@ -1351,7 +1620,7 @@ avec :
 | 10 km | 6000 m | **6000 m** |
 | 20 km | 12000 m | **8000 m** |
 
-### Application
+### 24.5 Application
 
 ```
 hiIdx ← findIdxAtDist(dist, min(dist[n−1], dist[c.endIdx] + effectiveRefine))
@@ -1362,34 +1631,49 @@ loIdx ← max(lastEnd + 1, safetyLow)
 newStart ← argminRange(eleBase, loIdx, c.startIdx)
 ```
 
-### Complexité
+### 24.6 Complexité
 
 - Temps : **O(1)** pour le clamp + **O(range)** pour l'argmin/argmax
+- Espace : **O(1)**
 
-### Notes
+### 24.7 Notes
 
 - **Adaptatif** : les longues montées ont plus de latitude pour chercher leur vrai sommet/creux
 - **Borné** : les montées courtes ne partent pas chercher un sommet à 10 km
 - La valeur effective est affichée par montée dans la colonne Extrema
+- **`lastEnd + 1`** : garantit qu'une montée ne peut pas empiéter sur la précédente
+
+### 24.8 Choix de conception
+
+| Critère | **Hybride (retenu)** | Absolu | % pur |
+|---|---|---|---|
+| Simplicité | ⚠️ | ✅✅ | ✅ |
+| Adaptabilité à l'échelle | ✅✅ | ❌ | ✅ |
+| Prévisibilité | ✅ | ✅✅ | ⚠️ |
+| Robustesse cas extrêmes | ✅✅ | ✅ | ❌ |
+| **Retenu** | ✅ | ❌ | ❌ |
 
 ---
 
-## 25. Écart min. entre montées
+## 25. Fusion par `gapMinM`
 
-**Nom UI** : Écart min. entre montées · **Clé technique** : `gapMinM` · **Défaut v3.6** : 250 m
-
-### Objet
+### 25.1 Objet
 
 Fusionner deux montées détectées séparées de moins de `gapMinM`. Corrige la fragmentation due aux faux-plats dans une montée continue.
 
-### Principe
+### 25.2 Motivation
+
+L'hystérésis (§14) ferme une montée dès que la pente descend sous −seuil. Si un faux-plat traverse une longue montée, on obtient 2 montées artificielles. La fusion recolle ces fragments.
+
+### 25.3 Principe
 
 Après le raffinement de chaque candidat, on compare avec la montée précédente :
 - Si `dist[newStart] − dist[prev.endIdx] < gapMinM` → fusion
 - Le nouveau sommet = **le plus haut** des deux
 - Le nouveau creux = **le plus bas** entre les deux (si plus bas que le creux actuel)
+- **v3.9.0** : les bornes des sous-montées sont conservées dans `_mergedParts`
 
-### Pseudocode
+### 25.4 Pseudocode
 
 ```
 // Dans la boucle de raffinement
@@ -1398,18 +1682,29 @@ SI refined.length > 0 ET gapMinM > 0:
   gapM ← dist[newStart] − dist[prev.endIdx]
 
   SI gapM < gapMinM:
-    // Fusion : étendre prev
+    // ─── Conservation des bornes de la sous-montée initiale ───
+    SI !prev._mergedParts:
+      prev._mergedParts ← [{
+        startKm: dist[prev.startIdx] / 1000,
+        endKm: dist[prev.endIdx] / 1000
+      }]
+
+    // ─── Calcul des nouvelles bornes ───
     combinedEnd ← argmaxRange(eleBase, prev.endIdx, newEnd)
 
-    // Vérifier si le creux intermédiaire est plus bas
     midValley ← argminRange(eleBase, prev.endIdx, newStart)
     newPrevStart ← prev.startIdx
     SI eleBase[midValley] < eleBase[prev.startIdx]:
       newPrevStart ← midValley
       anchors[dernier − 1] ← midValley    // maj ancre vallée
 
-    dbgMerge(`Montée #${refined.length} étendue : écart ${gapM} m < ${gapMinM} m`)
+    // ─── Ajout de la nouvelle sous-montée ───
+    prev._mergedParts.push({
+      startKm: dist[newStart] / 1000,
+      endKm: dist[newEnd] / 1000
+    })
 
+    // ─── Mise à jour de la montée fusionnée ───
     prev.startIdx    ← newPrevStart
     prev.endIdx      ← combinedEnd
     prev.candidateLen ← prev.candidateLen + candidateLen
@@ -1422,33 +1717,43 @@ SI refined.length > 0 ET gapMinM > 0:
 
 // Sinon : ajout normal
 anchors.push(newStart, newEnd)
-refined.push({ startIdx: newStart, endIdx: newEnd, ..., _merged: 0 })
+refined.push({ startIdx: newStart, endIdx: newEnd, ..., _merged: 0, _mergedParts: null })
 lastEnd ← newEnd
 ```
 
-### Complexité
+### 25.5 Complexité
 
 - Temps : **O(m)** pour l'ensemble des fusions
-- Espace : **O(1)** par fusion
+- Espace : **O(k)** pour les `_mergedParts` (k = nombre de sous-montées dans une fusion)
 
-### Notes
+### 25.6 Notes
 
 - `gapMinM = 0` → désactive complètement
-- **Défaut v3.6** : 250 m
+- **Défaut v3.9.2** : 250 m
 - Le compteur `mergedCount` est affiché avec l'indicateur `⊕`
 - **Conséquence** : les bornes finales peuvent avoir une pente moyenne plus faible que la montée initiale → d'où la validation stricte (§26)
+- **`_mergedParts`** : le **mécanisme clé de la séparation** ultérieure (§31). Les bornes conservées sont celles **avant** extension par `argminRange`/`argmaxRange`, ce qui permet de retrouver les segments réels
+
+### 25.7 Choix de conception
+
+| Critère | **gapMinM (retenu)** | Seuil élevé |
+|---|---|---|
+| Ratage des vraies montées douces | ✅ Évité | ❌ Possible |
+| Prévisibilité | ✅ | ⚠️ Dépend de la trace |
+| **Retenu** | ✅ | ❌ |
 
 ---
 
-## 26. Validation finale stricte (v3.1)
+## 26. Validation finale stricte
 
-### Objet
+### 26.1 Objet
 
 Garantir qu'**aucune montée affichée n'est sous son seuil de pente**, même après fusion et raffinement.
 
-### Le bug corrigé
+### 26.2 Le bug corrigé (v3.1)
 
 **Avant v3.1** :
+
 ```javascript
 const sub = findBestSubClimb(dist, eleDisplay, c.startIdx, c.endIdx);
 if (!sub) continue;
@@ -1462,11 +1767,11 @@ autoClimbs.push({
 
 Résultat : un segment raffiné de 7300 m contenant un sous-segment valide de 2000 m à 3.5 % passait la validation, puis affichait **2.8 % sur ses propres 7300 m**.
 
-### Le correctif
+### 26.3 Le correctif
 
 Validation **sur les bornes finales** d'abord, puis repli sur sous-segment si échec.
 
-### Pseudocode
+### 26.4 Pseudocode
 
 ```
 FONCTION validerEtReplier(refined, dist, eleDisplay):
@@ -1504,266 +1809,739 @@ FONCTION validerEtReplier(refined, dist, eleDisplay):
       refineM: c.refineM,
       candidateLen: c.candidateLen,
       mergedCount: c._merged || 0,
+      mergedParts: c._mergedParts || null,      // ← v3.9.0 : préservation
       fallback: (finalStart ≠ c.startIdx) OU (finalEnd ≠ c.endIdx)
     })
 
   RETOURNER autoClimbs
 ```
 
-### Complexité
+### 26.5 Complexité
 
-- Temps : **O(m × 800²)** (dominé par les appels à findBestSubClimb sur échec)
+- Temps : **O(m × 800²)** (dominé par les appels à `findBestSubClimb` sur échec)
 - Espace : **O(m)**
 
-### Notes
+### 26.6 Notes
 
 - L'indicateur `⤺` signale une montée dont les bornes ont été repliées
 - Le log debug trace chaque repli en détail
 - Garantit l'invariant : **pour toute montée affichée, `avgSlope ≥ seuil(length)`**
+- **v3.9.0** : `_mergedParts` est préservé à travers la validation, pour permettre la séparation ultérieure
 
----
+### 26.7 Choix de conception
 
-## 27. Insertion contextuelle
-
-### Règles d'affichage
-
-| Position | Condition | Constante |
+| Critère | Rejet sec | **Repli (retenu)** |
 |---|---|---|
-| Avant #1 | `climbs[0].startDist ≥ 1 km` | `INSERT_EDGE_MIN_KM = 1.0` |
-| Entre #i et #i+1 | `gap ≥ 200 m` | `INSERT_BETWEEN_MIN_KM = 0.2` |
-| Après #N | `totalDist − lastEnd ≥ 1 km` | `INSERT_EDGE_MIN_KM` |
-| Aucune montée | Toujours affiché | — |
-
-### Algorithme d'insertion
-
-```
-FONCTION insertInGap(gapStartKm, gapEndKm):
-  gapLen ← gapEndKm − gapStartKm
-  SI gapLen < INSERT_BETWEEN_MIN_KM: REJETER
-
-  targetLen ← max(0.1, min(INSERT_DEFAULT_LEN_KM, gapLen × 0.8))
-  center ← (gapStartKm + gapEndKm) / 2
-  start  ← max(gapStartKm + 0.01, center − targetLen / 2)
-  end    ← min(gapEndKm − 0.01, center + targetLen / 2)
-
-  SI end ≤ start: REJETER
-
-  userClimbs.push({
-    startKm: start, endKm: end,
-    autoStartKm: null, autoEndKm: null,
-    refineM: null, candidateLen: null,
-    mergedCount: 0, fallback: false
-  })
-```
-
-### Complexité
-
-- Temps : **O(m)** pour le calcul du gap et l'insertion
-- Espace : **O(1)** par insertion
-
-### Notes
-
-- La montée insérée **n'a pas de `refineM`** → colonne Extrema affiche `—` en gris italique
-- Les boutons d'insertion apparaissent **entre les lignes** du tableau
-- Un clic sur un bouton d'insertion **ne déclenche pas** la sélection de la ligne
+| Perte d'information | Complète | **Partielle** |
+| Cohérence avec l'utilisateur | Difficile à expliquer | **Log détaillé** |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
-## 28. Édition par drag & drop
+## 27. Catégorisation non ancrée
 
-### Architecture de l'interception
+### 27.1 Objet
 
-`chartjs-plugin-zoom` attache ses listeners sur le `canvas` en phase **cible**. Pour intercepter avant, on écoute au **window en phase capture** :
+Résoudre deux bugs visuels majeurs de la v3.8 :
+1. Les couleurs du profil ne correspondaient pas à celles de la carte
+2. Les couleurs changeaient pendant le drag des poignées
 
-```
-Phase capture  : window → ... → canvas   ← notre listener
-Phase cible    : canvas                   ← Chart.js + plugin-zoom
-Phase bullage  : canvas → ... → window
-```
+### 27.2 Diagnostic
 
-Si l'événement touche une poignée :
-- `e.stopImmediatePropagation()` empêche Chart.js de le voir
-- `e.preventDefault()` évite la sélection de texte
+**Bug 1 : couleurs profil ≠ couleurs carte**
+- La carte utilisait `catSegments` (segments **fusionnés** par `longueurMin`)
+- Le profil coloriait point par point avec `categorize(slopeForCat[i])` — la catégorie **brute**, sans fusion
+- Un mini-segment de 100 m de up1 entre deux up2 était fondu en up2 sur la carte, mais restait up1 sur le profil
 
-### Détection de poignée
+**Bug 2 : couleurs qui changent au drag**
+- `slopeForCat` était calculée sur `eleDisplay` (courbe **ancrée**)
+- Déplacer une poignée modifiait `eleDisplay` sur toute la zone de lissage
+- Les pentes changeaient → les catégories basculaient sur des tronçons entiers → clignotement colorimétrique
 
-```
-FONCTION findHandleAt(chart, px, py, climb):
-  // Bande horizontale au-dessus du chartArea (là où sont dessinés les triangles)
-  SI py < chartArea.top − 12 OU py > chartArea.top + 34: RETOURNER null
-
-  xV ← scales.x.getPixelForValue(climb.startKm)
-  xS ← scales.x.getPixelForValue(climb.endKm)
-  threshold ← 14 px
-
-  dV ← |px − xV|
-  dS ← |px − xS|
-
-  SI dV < threshold ET dV ≤ dS: RETOURNER 'valley'
-  SI dS < threshold: RETOURNER 'summit'
-  RETOURNER null
-```
-
-### Cycle de drag
+### 27.3 Solution
 
 ```
-FONCTION startHandleDrag(chart, handle, climb):
-  draggingHandle ← handle
-  dragPreview ← { handle, km: (handle='valley') ? climb.startKm : climb.endKm }
+// Dans rebuild() :
+eleDisplay ← anchoredMovingAverage(...)   // courbe affichée (ancrée)
 
-  // Désactivation explicite du pan et du tooltip
-  panOriginalState ← { elev: ..., slope: ... }
-  elevChart.pan.enabled ← FAUX
-  slopeChart.pan.enabled ← FAUX
-  elevChart.tooltip.enabled ← FAUX
-  slopeChart.tooltip.enabled ← FAUX
-
-  SUR pointermove (capture) :
-    cx, cy ← coordonnées souris/tactile
-    px ← cx − rect.left
-    km ← scales.x.getValueForPixel(px)
-
-    constrainedKm ← applyDragConstraint(handle, km, climb)   // §23
-    SI constrainedKm = lastKm: IGNORER (dedup)
-
-    dragPreview ← { handle, km: constrainedKm }
-    updatePreviewMetrics(handle, constrainedKm, climb)   // maj tableau
-    chart.draw()   // redessine le canvas (bande jaune + poignée)
-
-  SUR pointerup :
-    commitDrag(handle, dragPreview.km, climb)   // écrit la valeur finale
-    renderAll()                                  // rebuild complet
-
-    // Restauration
-    pan.enabled ← panOriginalState.*
-    tooltip.enabled ← VRAI
-    cursor ← 'default'
+// Au lieu d'utiliser eleDisplay pour la catégorisation :
+eleBaseCat ← savitzkyGolay(eleRaw, winSGCatPts, 2)   // NON ancrée
+slopeForCat ← computeSlopeWindow(eleBaseCat, dist, fenetreCatM)
+catSegments ← segmentByCategory(slopeForCat, dist, eleDisplay, longueurMin)
 ```
 
-### Complexité par frame
+### 27.4 Propriétés
 
-- Position : **O(1)**
-- `findHandleAt` : **O(1)**
-- `updatePreviewMetrics` : **O(range)** (borné par la longueur de la montée en cours)
-- `chart.draw()` : **O(points affichés)** ≈ 4000
+- **Indépendance au drag** : les ancres (positions des poignées) n'entrent pas dans `eleBaseCat` → la catégorisation ne change pas quand on déplace une poignée
+- **Cohérence carte/profil** : les deux utilisent `catSegments` (le même tableau)
+- **Courbe affichée inchangée** : on continue d'afficher `eleDisplay` (ancrée, jolie)
 
-En pratique : ~5–10 ms par frame, largement sous les 16 ms d'une frame à 60 fps
+### 27.5 Coût
 
-### Notes
+Un Savitzky-Golay supplémentaire (`savitzkyGolay(eleRaw, winSGCatPts, 2)`) à chaque `rebuild()`.
 
-- **Aucun rebuild complet** pendant le drag : seuls le canvas et la ligne du tableau sont mis à jour
-- **Rebuild complet** uniquement au `mouseup` (via `commitDrag`)
-- Le tooltip est **désactivé pendant le drag** (v2.1) pour ne pas masquer les courbes significatives
+- Complexité : **O(n × winSGCat)**
+- Impact pratique : ~5 ms sur une trace de 10 000 points
 
----
+### 27.6 Deux usages de `fenetreAffichageM`
 
-## 29. Diagnostic de configuration
-
-### Objet
-
-Afficher en temps réel l'état de cohérence des paramètres et les **valeurs effectives** en points.
-
-### Principe
-
-Pour chaque paramètre en mètres, la valeur effective en points = `paramètre / stepM`. Le diagnostic vérifie que cette valeur reste dans une plage optimale.
-
-### Fonction `computeDiagnostics`
-
-```javascript
-function computeDiagnostics(params) {
-  const {
-    stepM, despikeWindowM, despikeThresholdM,
-    fenetreAffichageM, fenetrePenteM, fenetreCatM,
-    seuilMontee, longueurMin, gapMinM, refinePct,
-    medianWindowM, gaussianSigmaM, plateauRun
-  } = params;
-
-  // Valeurs effectives en points
-  const lissageAltPts   = Math.max(1, Math.round(fenetreAffichageM / stepM));
-  const lissagePentePts = Math.max(1, Math.round(fenetrePenteM / stepM));
-  const couleurPts      = Math.max(1, Math.round(fenetreCatM / stepM));
-  const medianPts       = medianWindowM > 0
-                          ? Math.max(1, Math.round(medianWindowM / stepM))
-                          : 0;
-  const gaussianPts     = gaussianSigmaM > 0 ? gaussianSigmaM / stepM : 0;
-
-  // [v3.6] Anti-pic : fenêtre effective en points
-  const despikeActive = despikeThresholdM > 0;
-  const despikeWinPtsEffective = despikeActive
-    ? Math.max(3, Math.round(despikeWindowM / stepM) | 1)
-    : 0;
-  const despikeCovM = despikeWinPtsEffective * stepM;
-  const despikeExpandRatio = despikeActive && despikeWindowM > 0
-    ? despikeCovM / despikeWindowM
-    : 1;
-
-  // Ratios et dérivés
-  const ratioAltPente = fenetrePenteM > 0
-                        ? fenetreAffichageM / fenetrePenteM
-                        : 0;
-
-  const diag = {};
-
-  // ... pour chaque paramètre :
-  //   { label, effective, optimal, target, status, msg }
-  // status ∈ { green, orange, red, grey }
-
-  // Règles de cohérence
-  const warnings = [];
-  if (lissageAltPts < 5) {
-    warnings.push({ level: 'red',
-      msg: `Lissage altitude : fenêtre de ${lissageAltPts} pts (min 5).` });
-  }
-  if (lissagePentePts < 3) {
-    warnings.push({ level: 'red',
-      msg: `Lissage pente : fenêtre de ${lissagePentePts} pts (min 3).` });
-  }
-  if (ratioAltPente < 1.5) {
-    warnings.push({ level: 'red',
-      msg: `Ratio altitude/pente = ${ratioAltPente.toFixed(1)}× (recommandé ≥ 2).` });
-  }
-  if (medianWindowM > 0 && medianPts < 3) {
-    warnings.push({ level: 'orange',
-      msg: `Filtre médian : fenêtre de ${medianPts} pt(s).` });
-  }
-  // [v3.6] Warnings spécifiques anti-pic (fenêtre en mètres)
-  if (despikeActive && despikeWindowM < 2 * stepM) {
-    warnings.push({ level: 'orange',
-      msg: `Anti-pic : fenêtre < 2 × Pas, la fenêtre effective sera élargie.` });
-  } else if (despikeActive && despikeExpandRatio > 1.5) {
-    warnings.push({ level: 'orange',
-      msg: `L'arrondi gonfle l'anti-pic : fenêtre de ${despikeWindowM} m à ${despikeCovM} m.` });
-  }
-  if (despikeActive && despikeThresholdM < 5) {
-    warnings.push({ level: 'orange',
-      msg: `Anti-pic : seuil ${despikeThresholdM} m très bas.` });
-  }
-
-  return { diag, warnings };
-}
-```
-
-### Statuts
-
-| Statut | Signification | Exemple |
+| Usage | Altitude utilisée | Pourquoi |
 |---|---|---|
-| 🟢 green | Optimal | Fenêtre SG ≥ 10 pts |
-| 🟠 orange | Limite / avertissement | Fenêtre SG entre 5 et 10 pts |
-| 🔴 red | Incohérence critique | Fenêtre SG < 5 pts |
-| ⚪ grey | Désactivé / non applicable | Filtre médian = 0 |
+| Courbe affichée | `eleDisplay` (ancrée) | Extrema bien placés |
+| Catégorisation | `eleBaseCat` (non ancrée) | Stabilité au drag |
 
-### Complexité
+Le paramètre `fenetreAffichageM` pilote les **deux** (même fenêtre de lissage), mais appliqué à deux altitudes distinctes.
 
-- Temps : **O(1)** (calculs sur 14 paramètres)
+### 27.7 Choix de conception
+
+| Critère | Ancré | **Non ancré (retenu v3.8.1)** |
+|---|---|---|
+| Cohérence carte/profil | ❌ Divergence | ✅ Identique |
+| Stabilité au drag | ❌ Couleurs changent | ✅ Stables |
+| Coût | ✅ | ⚠️ +1 SG |
+| **Retenu** | ❌ | ✅ |
+
+---
+
+## 28. Construction de la trace carte
+
+### 28.1 Objet
+
+Créer une `FeatureCollection` GeoJSON pour Mapbox, avec **une `LineString` par segment de catégorie**, en utilisant les **points bruts du GPX** (v3.9.2).
+
+### 28.2 Le bug corrigé (v3.9.2)
+
+**Avant v3.9.2** : `latLonAtDist(STATE.dist[i])` interpolait sur la **grille resamplée** (tous les 50 m). La trace affichée était une version lissée du tracé, avec les petits lacets gommés.
+
+**Après v3.9.2** : itération sur `STATE.rawPoints`, ce qui préserve toute la fidélité du fichier GPX.
+
+### 28.3 Algorithme
+
+```
+FONCTION buildTraceFeatures():
+  SI !data OU !rawPoints OU !distRaw: RETOURNER vide
+
+  catSegments ← data.catSegments
+  n ← rawPoints.length
+
+  // ─── Étape 1 : catégoriser chaque point brut ───
+  catOf ← new Array(n)
+  segIdx ← 0
+  POUR i DE 0 À n−1:
+    d ← distRaw[i]
+    // Avancer/reculer dans catSegments (monotone)
+    TANT QUE segIdx < |catSegments|−1 ET d > catSegments[segIdx].endDist:
+      segIdx ← segIdx + 1
+    TANT QUE segIdx > 0 ET d < catSegments[segIdx].startDist:
+      segIdx ← segIdx − 1
+    catOf[i] ← catSegments[segIdx].key
+
+  // ─── Étape 2 : grouper les points consécutifs de même catégorie ───
+  features ← []
+  startIdx ← 0
+  POUR i DE 1 À n:
+    SI i = n OU catOf[i] ≠ catOf[startIdx]:
+      endInc ← (i < n) ? i : n−1   // inclure le point de transition
+      coords ← [[lon, lat] pour chaque point de startIdx à endInc]
+      SI |coords| ≥ 2:
+        features.push({LineString, color: CAT_BY_ID[key].color})
+      startIdx ← i
+
+  RETOURNER {FeatureCollection, features}
+```
+
+### 28.4 Complexité
+
+- Temps : **O(n)** (deux passes linéaires)
+- Espace : **O(n)** pour `catOf` et les coordonnées
+
+### 28.5 Points clés
+
+- **Utilise `rawPoints`** (pas la grille resamplée) → la trace suit exactement le GPX
+- **Continuité visuelle** : le point frontière entre deux segments est inclus dans les deux `LineString`
+- **`distRaw[i]`** : distance cumulée de chaque point brut, calculée au chargement
+- **Parcours monotone de `catSegments`** : `segIdx` ne recule que si nécessaire (traces strictement croissantes en distance)
+
+### 28.6 Historique
+
+- **v3.8 → v3.9.1** : la fonction utilisait `latLonAtDist(STATE.dist[i])` → interpolait sur la grille resamplée (perte de fidélité)
+- **v3.9.2** : utilisation directe de `rawPoints` + catégorisation par distance cumulée
+
+### 28.7 Choix de conception
+
+| Critère | **Points bruts (retenu v3.9.2)** | Grille resamplée |
+|---|---|---|
+| Fidélité au GPX | ✅ | ❌ |
+| Indépendance au Pas | ✅ | ❌ |
+| Détail des lacets | ✅ | ⚠️ Gomme les petits |
+| Coût | O(n) | O(m) (m < n) |
+| **Retenu** | ✅ | ❌ |
+
+---
+
+## 29. Marqueurs vallée/sommet
+
+### 29.1 Objet
+
+Afficher sur la carte les points remarquables (vallée et sommet) de la montée sélectionnée.
+
+### 29.2 Comportement
+
+**Si la montée sélectionnée n'appartient pas à un groupe** :
+- 2 marqueurs (un vert `valley`, un rouge `summit`)
+
+**Si la montée appartient à un groupe** (v3.9.2) :
+- **Tous** les points vallée/sommet de **tous** les membres du groupe sont affichés
+- Le membre actif a `role: 'selected'` (rayon 10, contour 4)
+- Les autres ont `role: 'member'` (rayon 8, contour 2.5)
+
+### 29.3 Pseudocode
+
+```
+FONCTION updateMapMarkers():
+  idx ← STATE.selectedClimbIdx
+  SI idx = null: setData(vide); RETOURNER
+
+  selected ← userClimbs[idx]
+  gid ← selected.groupId
+
+  SI gid != null:
+    members ← userClimbs.filter(c → c.groupId = gid)
+    POUR chaque m DANS members:
+      isSelf ← (m === selected)
+      ajouter valley (startKm), role = isSelf ? 'selected' : 'member'
+      ajouter summit (endKm),   role = isSelf ? 'selected' : 'member'
+  SINON:
+    ajouter valley (selected.startKm), role='selected'
+    ajouter summit (selected.endKm),   role='selected'
+```
+
+### 29.4 Style Mapbox
+
+```json
+"circle-radius": ["match", ["get", "role"], "selected", 10, 8],
+"circle-color": ["match", ["get", "kind"], "valley", "#16a34a", "summit", "#dc2626", "#888"],
+"circle-stroke-width": ["match", ["get", "role"], "selected", 4, 2.5]
+```
+
+### 29.5 Position des marqueurs
+
+Via `latLonAtDist(km × 1000)`, qui interpole sur `distRaw`/`rawPoints`. Les marqueurs peuvent donc être positionnés **n'importe où** entre deux points bruts — nécessaire pendant le drag (la poignée peut être à 0.001 km près).
+
+### 29.6 Complexité
+
+- Temps : **O(m_groupe)** où m_groupe = nombre de membres du groupe
+- Espace : **O(m_groupe)**
+
+### 29.7 Notes
+
+- **Le marqueur du membre actif est visuellement distinct** (plus grand, contour plus épais), pour que l'utilisateur sache quel segment il édite
+- **Les autres membres du groupe** permettent de visualiser les frontières entre segments (où finit le segment #N.1, où commence le #N.2)
+- **Avant v3.9.2** : seuls les 2 marqueurs de la montée sélectionnée étaient affichés, ce qui rendait la frontière invisible quand on éditait un membre de groupe
+
+### 29.8 Choix de conception
+
+| Critère | Mono-marqueur | **Multi-marqueurs (retenu v3.9.2)** |
+|---|---|---|
+| Visualisation frontières | ❌ | ✅ |
+| Clarté pour groupe | ❌ | ✅ |
+| Charge visuelle | Faible | ⚠️ Plus élevée |
+| **Retenu** | ❌ | ✅ (pour groupes) |
+
+---
+
+## 30. Zoom carte
+
+### 30.1 Objet
+
+Recentrer la caméra Mapbox sur une montée ou un groupe.
+
+### 30.2 Fonction `zoomMapToClimb`
+
+```
+FONCTION zoomMapToClimb(climb, duration):
+  SI climb.groupId != null:
+    RETOURNER zoomMapToGroup(climb.groupId, duration)
+
+  startM ← (climb.startKm != null) ? climb.startKm × 1000 : climb.startDist
+  endM   ← (climb.endKm   != null) ? climb.endKm   × 1000 : climb.endDist
+  SI !isFinite(startM) OU !isFinite(endM) OU endM ≤ startM: RETOURNER
+
+  bounds ← _computeBounds(startM, endM)
+  map.fitBounds(bounds, {padding: 40, duration, pitch: 60})
+```
+
+### 30.3 Fonction `zoomMapToGroup`
+
+```
+FONCTION zoomMapToGroup(gid, duration):
+  members ← userClimbs.filter(c → c.groupId = gid)
+  minKm ← min(members.startKm)
+  maxKm ← max(members.endKm)
+  bounds ← _computeBounds(minKm × 1000, maxKm × 1000)
+  map.fitBounds(bounds, {padding: 40, duration, pitch: 60})
+```
+
+### 30.4 `_computeBounds`
+
+```
+FONCTION _computeBounds(startM, endM):
+  startLL ← latLonAtDist(startM)
+  endLL ← latLonAtDist(endM)
+
+  min/max sur lng et lat
+  // Garantir un span minimal (~150 m)
+  SI span < MAP_MIN_SPAN_DEG: élargir autour du centre
+
+  // Marge 20 % (MAP_CLIMB_MARGIN)
+  return [[minLng − padLng, minLat − padLat],
+          [maxLng + padLng, maxLat + padLat]]
+```
+
+### 30.5 Complexité
+
+- Temps : **O(k)** où k = nombre de membres du groupe
 - Espace : **O(1)**
 
-### Notes
+### 30.6 Notes
 
-- Le diagnostic est recalculé à chaque `input` sur un champ (debounce 250 ms)
-- Les warnings sont affichés dans un panneau dédié
-- Le statut global (🟢/🟠/🔴) résume l'état : vert si aucun warning, orange si au moins un orange, rouge si au moins un rouge
+- **v3.8.2** : `zoomMapToClimb` accepte désormais `{startKm, endKm}` **et** `{startDist, endDist}` — corrige un bug où le clic sur une montée ne zoomait pas (car `data.climbs[i].startKm` était `undefined`)
+- **v3.9.2** : dispatch automatique sur `zoomMapToGroup` si `groupId != null`
+- **`MAP_MIN_SPAN_DEG = 0.0014`** : évite qu'une montée ultra-courte produise un `fitBounds` dégénéré (zoom à l'infini)
 
-### Valeurs optimales (v3.6)
+### 30.7 Choix de conception
+
+| Critère | Zoom serré | **Marge 20 % (retenu)** |
+|---|---|---|
+| Contexte visible | ❌ | ✅ |
+| Montée isolée | ✅ | ✅ |
+| Zoom groupe vs montée | ❌ | ✅ (dispatch) |
+
+---
+
+## 31. Séparation d'un groupe
+
+### 31.1 Objet
+
+Découper une montée fusionnée en ses sous-montées d'origine, avec persistance du lien via `groupId`.
+
+### 31.2 Motivation
+
+Une montée fusionnée (via `gapMinM`) est **un agrégat**. L'utilisateur peut vouloir :
+- Voir les segments d'origine individuellement
+- Éditer une sous-montée sans impacter les autres
+- Comparer les pentes moyennes par sous-montée
+
+La séparation est donc une opération de **désagrégation**.
+
+### 31.3 Pseudocode
+
+```
+FONCTION splitMergedClimb(mergedIdx):
+  merged ← userClimbs[mergedIdx]
+  SI !merged.mergedParts OU |merged.mergedParts| < 2: RETOURNER
+
+  gid ← STATE.nextGroupId++
+  userClimbs.splice(mergedIdx, 1)
+
+  newClimbs ← merged.mergedParts.map((part, k) → {
+    startKm: part.startKm,
+    endKm: part.endKm,
+    autoStartKm: null, autoEndKm: null,
+    refineM: null, candidateLen: null,
+    mergedCount: 0, mergedParts: null,
+    fallback: false,
+    groupId: gid,
+    subIndex: k + 1
+  })
+
+  POUR chaque nc: userClimbs.push(nc)
+  userClimbs.sort(par startKm)
+
+  selectedClimbIdx ← index de newClimbs[0]
+  profileMode ← 'climb'
+
+  renderAll()
+  SI MAP_STATE.ready: zoomMapToGroup(gid)
+```
+
+### 31.4 Complexité
+
+- Temps : **O(m log m)** (dominé par le tri)
+- Espace : **O(m)** pour les nouvelles montées
+
+### 31.5 Notes
+
+- **`groupId`** : identifiant entier incrémental depuis `STATE.nextGroupId`
+- **`subIndex`** : 1, 2, 3… dans le groupe
+- **Numérotation affichée** : `#N.M` (ex. `#3.1`, `#3.2`)
+- **La sélection** passe au premier membre du groupe
+- **Le zoom carte** couvre **l'ensemble du groupe** (pas seulement le premier membre)
+- **v3.9.0** : la séparation était locale (pas de groupe persistant)
+- **v3.9.1** : ajout de `groupId` + `subIndex` pour permettre la refusion
+
+### 31.6 Choix de conception
+
+| Critère | Séparation destructive | **Séparation avec groupe (retenu v3.9.1)** |
+|---|---|---|
+| Perte d'information | ✅ Définitive | ❌ Réversible |
+| Refusion possible | ❌ | ✅ |
+| Complexité de l'état | ✅ Simple | ⚠️ Groupe à gérer |
+| **Retenu** | ❌ | ✅ |
+
+---
+
+## 32. Refusion d'un groupe
+
+### 32.1 Objet
+
+Reconstituer une montée fusionnée à partir de tous les membres d'un groupe, en préservant les **bornes actuelles** (après éventuelles éditions).
+
+### 32.2 Motivation
+
+Après avoir séparé une montée puis éventuellement édité les bornes des sous-montées, l'utilisateur peut vouloir revenir à une vue d'ensemble. La refusion doit **conserver les éditions** (contrairement à un simple undo).
+
+### 32.3 Pseudocode
+
+```
+FONCTION refuseGroup(gid):
+  members ← userClimbs.filter(c → c.groupId = gid).sort(par startKm)
+  SI |members| < 2: RETOURNER
+
+  startKm ← members[0].startKm
+  endKm ← members[|members|−1].endKm
+  mergedParts ← members.map(m → {startKm: m.startKm, endKm: m.endKm})
+
+  // Retirer tous les membres
+  userClimbs ← userClimbs.filter(c → c.groupId ≠ gid)
+
+  // Créer la montée fusionnée
+  merged ← {
+    startKm, endKm,
+    autoStartKm: null, autoEndKm: null,
+    refineM: null, candidateLen: null,
+    mergedCount: members.length − 1,
+    mergedParts,
+    fallback: false,
+    groupId: null, subIndex: null
+  }
+
+  userClimbs.push(merged)
+  userClimbs.sort(par startKm)
+
+  selectedClimbIdx ← index de merged
+  profileMode ← 'climb'
+  renderAll()
+```
+
+### 32.4 Complexité
+
+- Temps : **O(m log m)** (dominé par le tri)
+- Espace : **O(m)**
+
+### 32.5 Notes
+
+- Les `mergedParts` reflètent les bornes **actuelles** (potentiellement éditées par drag)
+- Le nouveau `mergedCount` = nombre de fusions = nombre de membres − 1
+- La montée redevient **séparable** avec ✂
+- **Le groupe `gid` est libéré** (pas réutilisable mais ne crée pas de conflit car `nextGroupId` est monotone)
+
+### 32.6 Scénario complet
+
+```
+1. Détection → montée #3 fusionnée (mergedCount=2, mergedParts conservés)
+2. Utilisateur clique ✂ Séparer → groupe #5 créé, #5.1 et #5.2
+3. Utilisateur édite les bornes de #5.2 (drag)
+4. Utilisateur clique 🔗 Refusionner → #3 reconstituée
+   mergedParts = [
+     { startKm: #5.1.startKm, endKm: #5.1.endKm },
+     { startKm: #5.2.startKm_edité, endKm: #5.2.endKm_edité }
+   ]
+   mergedCount = 1
+```
+
+L'édition du point 3 est **conservée** dans la refusion.
+
+### 32.7 Choix de conception
+
+| Critère | Refusion avec bornes d'origine | **Refusion avec bornes éditées (retenu)** |
+|---|---|---|
+| Respect de l'édition utilisateur | ❌ Perdue | ✅ Conservée |
+| Simplicité | ✅ | ⚠️ |
+| **Retenu** | ❌ | ✅ |
+
+---
+
+## 33. Normalisation des groupes
+
+### 33.1 Objet
+
+Nettoyer les groupes orphelins (moins de 2 membres) après suppression ou édition.
+
+### 33.2 Motivation
+
+Un groupe à 1 membre n'a pas de sens : la numérotation `#N.1` sans `#N.2` est confuse, et le bouton 🔗 Refusionner n'aurait qu'un seul membre à fusionner (comportement dégénéré).
+
+### 33.3 Pseudocode
+
+```
+FONCTION normalizeGroups():
+  counts ← compter les occurrences de chaque groupId
+  POUR chaque c DANS userClimbs:
+    SI c.groupId ≠ null ET counts[c.groupId] < 2:
+      c.groupId ← null
+      c.subIndex ← null
+```
+
+### 33.4 Complexité
+
+- Temps : **O(m)**
+- Espace : **O(m)** (tableau `counts`)
+
+### 33.5 Appelée
+
+- À la fin de chaque drag de poignée (dans `onUp`)
+- Après `recomputeAuto()` (changement de paramètres)
+- Après `deleteClimb()` (suppression)
+
+### 33.6 Notes
+
+- **Ne supprime jamais de montée** — elle retire juste le marqueur de groupe
+- La montée redevient **autonome** : numérotation `#N` normale, plus de bouton 🔗 Refusionner
+- Silencieux (pas de log debug sauf en cas de groupe effectivement dissous)
+
+---
+
+## 34. Suppression d'une montée
+
+### 34.1 Objet
+
+Retirer une montée de la liste, en gérant proprement les groupes et la sélection.
+
+### 34.2 Motivation
+
+Un utilisateur peut vouloir supprimer une montée qui n'aurait pas dû être détectée (faux positif), ou qu'il a créée par erreur.
+
+### 34.3 Pseudocode
+
+```
+FONCTION deleteClimb(idx):
+  SI idx hors bornes: RETOURNER
+  removed ← userClimbs[idx]
+
+  userClimbs.splice(idx, 1)
+
+  // ─── Renuméroter les subIndex du groupe affecté ───
+  SI removed.groupId ≠ null:
+    siblings ← userClimbs.filter(c → c.groupId = removed.groupId)
+    siblings.sort(par startKm)
+    POUR k DE 0 À |siblings|−1:
+      siblings[k].subIndex ← k + 1
+    SI |siblings| < 2:
+      POUR chaque c DANS siblings:
+        c.groupId ← null
+        c.subIndex ← null
+
+  // ─── Ajuster la sélection ───
+  SI selectedClimbIdx === idx:
+    selectedClimbIdx ← null
+    profileMode ← 'full'
+    __climbView ← null
+  SINON SI selectedClimbIdx > idx:
+    selectedClimbIdx ← selectedClimbIdx − 1
+
+  renderAll()
+```
+
+### 34.4 Complexité
+
+- Temps : **O(m log m)** (tri des siblings)
+- Espace : **O(1)** (hors tri)
+
+### 34.5 Notes
+
+- **Renumérotation** : si on supprime #3.2 d'un groupe de 3 (#3.1, #3.2, #3.3), les restants deviennent #3.1, #3.2
+- **Dissolution** : si on supprime #3.2 d'un groupe de 2 (#3.1, #3.2), #3.1 redevient #N (autonome)
+- **Ajustement sélection** :
+  - Si c'est la montée supprimée qui était sélectionnée → désélection
+  - Si l'index sélectionné était **après** la montée supprimée → décrémente
+  - Si l'index sélectionné était **avant** → inchangé
+
+### 34.6 Cas d'usage
+
+| Cas | Avant | Après suppression |
+|---|---|---|
+| Groupe à 3 membres, supprimer #3.2 | #3.1, #3.2, #3.3 | #3.1, #3.2 (renumérotés) |
+| Groupe à 2 membres, supprimer #5.1 | #5.1, #5.2 | #N (dissolution) |
+| Montée autonome, supprimer #2 | #1, #2, #3 | #1, #2 (ex-#3, renuméroté) |
+| Supprimer la montée sélectionnée | selected = idx | selected = null |
+
+### 34.7 Choix de conception
+
+| Critère | Suppression simple | **Avec renumérotation (retenu)** |
+|---|---|---|
+| Cohérence de numérotation | ❌ Trous | ✅ Continue |
+| Complexité | ✅ | ⚠️ |
+| **Retenu** | ❌ | ✅ |
+
+---
+
+## 35. Création manuelle
+
+### 35.1 Objet
+
+Créer une nouvelle montée par double-clic + drag sur le widget profil en mode full.
+
+### 35.2 Motivation
+
+La détection automatique peut manquer certaines bosses (seuil trop haut, anti-pic trop agressif, etc.). L'utilisateur doit pouvoir **ajouter** une montée manuellement.
+
+### 35.3 Contraintes
+
+- ❌ **Chevauchement** avec une montée existante interdit
+- ❌ **Longueur minimale** : 50 m (`MANUAL_MIN_LEN_KM = 0.05`)
+- ❌ **Vallée dans une montée existante** refusée
+- ✅ Double-clic sur le profil pour poser la vallée
+- ✅ Clic-glisser pour définir le sommet
+- ✅ Relâchement pour valider
+- ✅ Échap pour annuler
+
+### 35.4 Machine à états
+
+```
+État "idle" (défaut)
+  → dblclick sur canvas (mode full, position libre)
+  → état "pending" (valleyKm posée, summitKm = valleyKm)
+
+État "pending"
+  → mousedown + drag
+  → état "dragging" (summitKm mis à jour à chaque mousemove)
+
+État "dragging"
+  → mouseup
+  → validation :
+    - summitKm > valleyKm + 50 m ?
+    - isFreeRange(valleyKm, summitKm) ?
+    → si OUI : addManualClimb()
+    → si NON : annulation
+
+État "pending" ou "dragging"
+  → Échap
+  → annulation (retour à idle)
+```
+
+### 35.5 Validation `isFreeRange`
+
+```
+FONCTION isFreeRange(aKm, bKm):
+  lo ← min(aKm, bKm)
+  hi ← max(aKm, bKm)
+  POUR chaque c DANS userClimbs:
+    SI lo < c.endKm ET hi > c.startKm: RETOURNER FAUX
+  RETOURNER VRAI
+```
+
+### 35.6 Ajout
+
+```
+FONCTION addManualClimb(valleyKm, summitKm):
+  SI summitKm ≤ valleyKm + 50 m: RETOURNER
+  SI !isFreeRange(valleyKm, summitKm): RETOURNER
+
+  newClimb ← {startKm: valleyKm, endKm: summitKm,
+              autoStartKm: null, autoEndKm: null,
+              refineM: null, candidateLen: null,
+              mergedCount: 0, mergedParts: null,
+              fallback: false, groupId: null, subIndex: null}
+
+  userClimbs.push(newClimb)
+  userClimbs.sort(par startKm)
+  selectedClimbIdx ← index de newClimb
+  profileMode ← 'climb'
+  renderAll()
+```
+
+### 35.7 Complexité
+
+- Temps : **O(m log m)** (tri après ajout)
+- Espace : **O(1)**
+
+### 35.8 Indicateurs visuels
+
+- **Hint** dans le header du profil :
+  - Mode attente : `💡 Double-cliquez sur le profil pour créer une montée`
+  - Vallée posée : `🎯 Cliquez-glissez pour définir le sommet · Échap pour annuler` (vert pulsant)
+  - Drag en cours : `🎯 Relâchez pour valider le sommet` (rouge)
+- **Zone colorée** : verte si plage valide, rouge si chevauchement
+- **Lignes verticales** : vallée (verte continue), sommet (rouge pointillé, ou rouge vif si invalide)
+- **Curseur** : `crosshair` sur le canvas en mode création
+- **Flash rouge** au double-clic si la vallée est dans une montée existante
+
+### 35.9 Notes
+
+- **`autoStartKm` et `autoEndKm` à `null`** : la montée n'est pas liée à une détection auto
+- **`refineM` à `null`** : la colonne Extrema affiche `—` en gris italique
+- **La nouvelle montée est sélectionnée** automatiquement et la carte zoomée dessus
+- **`groupId` à `null`** : montée autonome (pas de groupe)
+
+### 35.10 Choix de conception
+
+| Critère | Insertion par bouton `+` | **Double-clic + drag (retenu)** |
+|---|---|---|
+| Précision | ⚠️ Par défaut 1 km | ✅ Contrôle total |
+| Naturel | ⚠️ | ✅ |
+| Découverte | ✅ | ⚠️ Hint nécessaire |
+| **Retenu** | ❌ | ✅ |
+
+---
+
+## 36. Diagnostic de configuration
+
+### 36.1 Objet
+
+Afficher en temps réel l'état de cohérence des paramètres et les **valeurs effectives en points**.
+
+### 36.2 Pseudocode (extrait)
+
+```
+FONCTION computeDiagnostics(params):
+  // ─── Valeurs effectives en points ───
+  lissageAltPts   ← max(1, round(fenetreAffichageM / stepM))
+  lissagePentePts ← max(1, round(fenetrePenteM / stepM))
+  couleurPts      ← max(1, round(fenetreCatM / stepM))
+  medianPts       ← medianWindowM > 0 ? max(1, round(medianWindowM / stepM)) : 0
+  gaussianPts     ← gaussianSigmaM > 0 ? gaussianSigmaM / stepM : 0
+
+  despikeActive ← despikeThresholdM > 0
+  despikeWinPtsEffective ← despikeActive ? max(3, round(despikeWindowM / stepM) | 1) : 0
+  despikeCovM ← despikeWinPtsEffective × stepM
+  despikeExpandRatio ← despikeActive ? despikeCovM / despikeWindowM : 1
+
+  // ─── Ratios et dérivés ───
+  ratioAltPente ← fenetreAffichageM / fenetrePenteM
+  retardM ← fenetrePenteM / 2
+
+  // ─── Pour chaque paramètre : { label, effective, optimal, target, status, msg } ───
+  diag ← { ... }
+
+  // ─── Règles de cohérence ───
+  warnings ← []
+  SI lissageAltPts < 5: warnings.push({level: 'red', msg: '...'})
+  SI lissageAltPts < 10: warnings.push({level: 'orange', msg: '...'})
+  SI lissagePentePts < 3: warnings.push({level: 'red', msg: '...'})
+  SI ratioAltPente < 1.5: warnings.push({level: 'red', msg: '...'})
+  SI ratioAltPente < 2: warnings.push({level: 'orange', msg: '...'})
+  SI medianWindowM > 0 ET medianPts < 3: warnings.push({level: 'orange', msg: '...'})
+  SI longueurMin > 0 ET longueurMin < stepM: warnings.push({level: 'orange', msg: '...'})
+  SI gapMinM > 0 ET gapMinM < stepM: warnings.push({level: 'orange', msg: '...'})
+  SI despikeActive ET despikeWindowM < 2 × stepM: warnings.push({level: 'orange', msg: '...'})
+  SI despikeActive ET despikeThresholdM < 5: warnings.push({level: 'orange', msg: '...'})
+  SI exportProfileStepM > longueurMin: warnings.push({level: 'orange', msg: '...'})
+
+  RETOURNER { diag, warnings }
+```
+
+### 36.3 Valeurs optimales
 
 | Paramètre | Optimal (pts) | Optimal (m, Pas=50) |
 |---|---|---|
@@ -1775,161 +2553,180 @@ function computeDiagnostics(params) {
 | Anti-pic : fenêtre | — | 150–300 m |
 | Anti-pic : seuil | — | 15–25 m |
 
+### 36.4 Statuts
+
+| Statut | Signification | Couleur |
+|---|---|---|
+| 🟢 green | Optimal | `#16a34a` |
+| 🟠 orange | Limite / avertissement | `#f59e0b` |
+| 🔴 red | Incohérence critique | `#dc2626` |
+| ⚪ grey | Désactivé / non applicable | `#94a3b8` |
+
+### 36.5 Complexité
+
+- Temps : **O(1)** (calculs sur 15 paramètres)
+- Espace : **O(1)**
+
+### 36.6 Notes
+
+- Le diagnostic est recalculé à chaque `input` sur un champ (debounce 250 ms)
+- Les warnings sont affichés dans un panneau dédié
+- Le statut global (🟢/🟠/🔴) résume l'état : rouge si au moins un rouge, orange si au moins un orange, vert sinon
+
+### 36.7 Choix de conception
+
+| Critère | **Diagnostic (retenu v3.2)** | Paramètres seuls |
+|---|---|---|
+| Compréhension utilisateur | ✅ Élevée | ❌ Faible |
+| Complexité UI | ⚠️ Ajout panneau | ✅ Simple |
+| Coût calcul | ✅ O(1) | — |
+| **Retenu** | ✅ | ❌ |
+
 ---
 
-## 30. Pipeline complet de détection
+## 37. Export JSON
 
-### Pseudocode
+### 37.1 Objet
 
-```
-FONCTION computeAuto(dist, eleRaw, params):
-  n ← longueur(eleRaw)
+Produire un fichier JSON contenant les segments de catégorie et les montées, pour consommation externe (affichage cartographique Mapbox, visuels de montée, etc.).
 
-  // === ÉTAPE 1 : filtre médian (optionnel) ===
-  SI medianWindowM > 0:
-    winPts ← round(medianWindowM / stepM) | 1
-    eleMedian ← medianFilter(eleRaw, winPts)
-  SINON:
-    eleMedian ← eleRaw
+### 37.2 Structure
 
-  // === ÉTAPE 2 : Savitzky-Golay ===
-  winSGPts ← round(fenetreAffichageM / stepM) | 1
-  eleBase ← savitzkyGolay(eleMedian, winSGPts, 2)
-
-  // === ÉTAPE 3 : pente lissée ===
-  winSlopePts ← round(fenetrePenteM / stepM)
-  slopeBase ← clipSlope(
-    movingAverage(computeSlope(eleBase, dist), winSlopePts),
-    25
-  )
-
-  // === ÉTAPE 4 : hystérésis ===
-  events ← detectEvents(slopeBase, seuilMontee)
-  candidates ← buildClimbCandidates(events, n)
-
-  // === ÉTAPE 5 : sous-segment optimal ===
-  candidatesWithSub ← []
-  POUR chaque c DANS candidates:
-    sub ← findBestSubClimb(dist, eleBase, c.startIdx, c.endIdx)
-    SI sub ≠ null: candidatesWithSub.push(sub)
-
-  // === ÉTAPE 6 : raffinement + FUSION ===
-  anchors ← [], refined ← [], lastEnd ← −1, mergeCount ← 0
-
-  POUR chaque c DANS candidatesWithSub:
-    candidateLen ← c.length
-    effectiveRefine ← clamp(refinePct × candidateLen / 100, 1500, 8000)
-
-    // Sommet
-    hiIdx ← findIdxAtDist(dist, dist[c.endIdx] + effectiveRefine)
-    newEnd ← argmaxRange(eleBase, c.endIdx, hiIdx)
-    SI newEnd ≤ c.startIdx OU newEnd ≤ lastEnd: CONTINUER
-
-    // Creux
-    safetyLow ← findIdxAtDist(dist, dist[c.startIdx] − effectiveRefine)
-    loIdx ← max(lastEnd + 1, safetyLow)
-    newStart ← argminRange(eleBase, loIdx, c.startIdx)
-    SI newStart ≥ newEnd: CONTINUER
-
-    // Fusion (v3.0)
-    SI refined.length > 0 ET gapMinM > 0:
-      prev ← refined[dernier]
-      gapM ← dist[newStart] − dist[prev.endIdx]
-      SI gapM < gapMinM:
-        combinedEnd ← argmaxRange(eleBase, prev.endIdx, newEnd)
-        midValley ← argminRange(eleBase, prev.endIdx, newStart)
-        newPrevStart ← (eleBase[midValley] < eleBase[prev.startIdx])
-                       ? midValley : prev.startIdx
-        SI newPrevStart ≠ prev.startIdx:
-          anchors[dernier−1] ← midValley
-
-        prev.startIdx = newPrevStart
-        prev.endIdx = combinedEnd
-        prev._merged += 1
-        anchors[dernier] = combinedEnd
-        lastEnd = combinedEnd
-        mergeCount++
-        CONTINUER
-
-    anchors.push(newStart, newEnd)
-    refined.push({ startIdx: newStart, endIdx: newEnd,
-                   refineM: effectiveRefine, candidateLen,
-                   _merged: 0 })
-    lastEnd ← newEnd
-
-  // === ÉTAPE 7 : lissage ancré final ===
-  eleDisplay ← anchoredMovingAverage(eleRaw, anchors, stepM,
-                                     fenetreAffichageM, gaussianSigmaM,
-                                     smoothExtra)
-
-  // === ÉTAPE 8 : VALIDATION STRICTE (v3.1) ===
-  autoClimbs ← []
-  POUR chaque c DANS refined:
-    finalStart ← c.startIdx, finalEnd ← c.endIdx
-    length ← dist[finalEnd] − dist[finalStart]
-    dPlus ← Σ max(0, Δele) sur [finalStart, finalEnd]
-    avgSlope ← dPlus / length × 100
-    minSlope ← minSlopeForLength(length)
-
-    SI length < 300 OU avgSlope < minSlope:
-      sub ← findBestSubClimb(dist, eleDisplay, c.startIdx, c.endIdx)
-      SI sub === null:
-        rejeter
-      finalStart ← sub.startIdx
-      finalEnd ← sub.endIdx
-      fallback ← true
-
-    autoClimbs.push({
-      startKm: dist[finalStart] / 1000,
-      endKm: dist[finalEnd] / 1000,
-      refineM: c.refineM,
-      candidateLen: c.candidateLen,
-      mergedCount: c._merged || 0,
-      fallback: (finalStart ≠ c.startIdx) OU (finalEnd ≠ c.endIdx)
-    })
-
-  RETOURNER { autoClimbs }
+```json
+{
+  "metadata": {
+    "file": "trace.gpx",
+    "exportedAt": "ISO8601",
+    "version": "3.9.2",
+    "totalDistanceKm": 4.28,
+    "totalDistanceSampledKm": 4.25,
+    "trailingGapM": 30,
+    "stepM": 50,
+    "totalPoints": 86,
+    "segmentsCount": 4,
+    "climbsCount": 1,
+    "profileStepM": 50
+  },
+  "legend": {
+    "note": "...",
+    "fenetreCatM": 100,
+    "longueurMin": 200,
+    "categories": [...]
+  },
+  "segments": [...],
+  "climbs": [...]
+}
 ```
 
-### Pipeline complet depuis le chargement
+### 37.3 Nouveautés v3.9.1
+
+Ajout des champs `groupId` et `subIndex` dans chaque `climb`.
+
+### 37.4 Découpage `slopeProfile`
+
+Pour chaque montée :
+
+1. Identifier les segments globaux intersectant la montée
+2. Pour chaque segment intersectant :
+   - `segStart = max(seg.startDist, climbStartDist)`
+   - `segEnd = min(seg.endDist, climbEndDist)`
+   - `nChunks = max(1, ceil(segLen / profileStepM))`
+   - `chunkLen = segLen / nChunks`
+3. Pour chaque tranche :
+   - `kmStart`/`kmEnd` = bornes réelles
+   - `eleStartM`/`eleEndM` = altitudes lissées ancrées
+   - `avgSlopePct` = pente physique D+/longueur
+   - `categoryId` = **hérité du segment parent**
+
+**Propriété garantie** : aucune tranche ne traverse une frontière de segment.
+
+### 37.5 Contrat d'utilisation des progressions
+
+`startProgress` et `endProgress` sont des fractions 0–1 de la **longueur réelle** de la trace (`metadata.totalDistanceKm`), directement utilisables pour construire un `line-gradient` Mapbox :
+
+```javascript
+map.addLayer({
+  id: 'trace-colored',
+  type: 'line',
+  source: 'trace',
+  paint: {
+    'line-width': 5,
+    'line-gradient': ['interpolate', ['linear'], ['line-progress'], ...stops]
+  }
+});
+```
+
+Pour éviter les dégradés progressifs entre deux stops, répéter la même couleur au début et à la fin de chaque segment.
+
+### 37.6 Complexité
+
+- Temps : **O(m)** pour les segments + **O(m × k)** pour les profils (k = tranches par montée)
+- Espace : **O(m × k)**
+
+### 37.7 Choix de conception
+
+| Critère | Format plat | FeatureCollection |
+|---|---|---|
+| Taille | ✅ Compact | ❌ Verbeux |
+| Intégration Mapbox directe | ✅ | ⚠️ Nécessite transformation |
+| Lisibilité | ✅ | ⚠️ Imbriqué |
+| **Retenu (v3.7.2)** | ✅ | ❌ |
+
+---
+
+## 38. Pipeline complet
+
+### 38.1 Pseudocode
 
 ```
-FONCTION analyze(content, parameters):
-  track ← parseGpx(content)
-  n ← length(track.points)
+FONCTION analyze(content, params):
+  track ← parseGPX(content)
+  n ← longueur(track.points)
 
   distRaw ← cumsum(haversine)                        // §1
   eleRawOrig ← track.points.map(p → p.ele)
 
   rawStats ← computeRawStats(distRaw, eleRawOrig)   // §5
 
-  SI parameters.plateauRun > 0:
-    eleForResample ← plateauCorrect(eleRawOrig,      // §3
-                                    plateauRun,
-                                    tolerance)
+  // ─── Correction plateaux (optionnelle) ───
+  SI params.plateauRun > 0:
+    eleForResample ← plateauCorrect(eleRawOrig, ...)  // §3
   SINON:
     eleForResample ← eleRawOrig
 
-  // [v3.5] Rééchantillonnage par moyenne
-  { dist, ele, avgWinM } ← resampleUniform(distRaw,  // §2
-                                           eleForResample,
-                                           stepM)
+  // ─── Rééchantillonnage par moyenne ───
+  { dist, ele, avgWinM } ← resampleUniform(distRaw,   // §2
+                                            eleForResample,
+                                            params.stepM)
 
-  // [v3.6] Anti-pic : conversion m → pts
+  // ─── Anti-pic Hampel ───
   eleFinal ← ele
-  SI parameters.despikeThresholdM > 0:
-    winPts ← max(3, round(despikeWindowM / stepM) | 1)
-    { out, count } ← despikeAltitude(ele, winPts,   // §4
-                                     despikeThresholdM)
+  SI params.despikeThresholdM > 0:
+    winPts ← max(3, round(params.despikeWindowM / stepM) | 1)
+    { out, count } ← despikeAltitude(ele, winPts,     // §4
+                                     params.despikeThresholdM)
     eleFinal ← out
 
-  { autoClimbs } ← computeAuto(dist, eleFinal, params)  // pipeline ci-dessus
+  // ─── Détection ───
+  { autoClimbs } ← computeAuto(dist, eleFinal, params)  // §14-26
 
   RETOURNER { track, distRaw, eleRawOrig, dist, eleFinal,
-              stepM, avgWinM, rawStats, autoClimbs, despikeCount }
+              stepM, avgWinM, rawStats, autoClimbs, ... }
 ```
 
-### Complexité globale
+### 38.2 Ordre des étapes dans `computeAuto`
+
+1. Filtre médian (optionnel) — §9
+2. Savitzky-Golay (altitude de base) — §7
+3. Pente lissée + clip — §6, §11, §13
+4. Hystérésis — §14
+5. Candidats — §15
+6. Sous-segment optimal — §16
+7. **Raffinement + Fusion** — §24, §25 (avec `mergedParts`)
+8. Lissage ancré final — §10
+9. **Validation stricte + repli** — §26 (avec préservation de `mergedParts`)
+
+### 38.3 Complexité globale
 
 Soit n = nombre de points, m = nombre de candidats.
 
@@ -1950,13 +2747,13 @@ En pratique, m ≈ 10 et 800² ≈ 640 000, donc ~6 millions d'opérations. Sur 
 
 ---
 
-## 31. Pipeline de reconstruction
+## 39. Pipeline de reconstruction
 
-### Objet
+### 39.1 Objet
 
 Recalculer entièrement l'état affiché à partir de `STATE.userClimbs` (état éditable par l'utilisateur). Appelé après chaque édition, insertion, suppression, ou changement de paramètre.
 
-### Pseudocode
+### 39.2 Pseudocode
 
 ```
 FONCTION rebuild():
@@ -1965,7 +2762,7 @@ FONCTION rebuild():
   params ← getParams()
 
   // === ÉTAPE 1 : Contraintes anti-chevauchement ===
-  sorted ← appliquerContraintes(STATE.userClimbs)
+  sorted ← appliquerContraintes(STATE.userClimbs)   // §23
 
   // === ÉTAPE 2 : Ancrage ===
   anchors ← []
@@ -1982,16 +2779,21 @@ FONCTION rebuild():
     anchors.push(startIdx, endIdx)
     resolved.push({ ..., invalid: false })
 
-  // === ÉTAPE 3 : Lissages ===
+  // === ÉTAPE 3 : Courbe affichée (ancrée) ===
   eleDisplay ← anchoredMovingAverage(eleRaw, anchors, stepM,
                                      fenetreAffichageM, gaussianSigmaM,
-                                     smoothExtra)
+                                     smoothExtra)          // §10
+
+  // === ÉTAPE 4 : Pentes pour l'affichage ===
   slopeRaw   ← clipSlope(computeSlope(MA(eleRaw, 5), dist), 25)
   slopeSemi  ← computeSlope(eleDisplay, dist)
   slopeDisplay ← clipSlope(MA(slopeSemi, winSlopePts), 25)
-  slopeForCat  ← computeSlopeWindow(eleDisplay, dist, fenetreCatM)
 
-  // === ÉTAPE 4 : Métriques par montée ===
+  // === ÉTAPE 5 : Catégorisation NON ancrée (v3.8.1) ===
+  eleBaseCat ← savitzkyGolay(eleRaw, winSGCatPts, 2)   // §27
+  slopeForCat ← computeSlopeWindow(eleBaseCat, dist, fenetreCatM)
+
+  // === ÉTAPE 6 : Métriques par montée ===
   climbs ← []
   POUR chaque { startIdx, endIdx, ref, invalid } DANS resolved:
     SI invalid: climbs.push({ invalid, length: 0, ... })
@@ -2001,22 +2803,17 @@ FONCTION rebuild():
       avgSlope ← dPlus / length × 100
       climbs.push({ ..., length, dPlus, avgSlope,
                     mergedCount: ref.mergedCount || 0,
-                    fallback: ref.fallback || false })
+                    fallback: ref.fallback || false,
+                    groupId: ref.groupId, subIndex: ref.subIndex })
 
-  // === ÉTAPE 5 : Segmentation ===
-  catSegments ← segmentByCategory(slopeForCat, dist, eleDisplay, longueurMin)
-
-  // === ÉTAPE 6 : Marqueurs ===
-  markers ← []
-  POUR chaque c DANS climbs (non invalid):
-    markers.push({ dist: c.startDist, type: 'valley', climbIdx })
-    markers.push({ dist: c.endDist,   type: 'summit', climbIdx })
+  // === ÉTAPE 7 : Segmentation ===
+  catSegments ← segmentByCategory(slopeForCat, dist, eleDisplay, longueurMin)  // §21
 
   RETOURNER { dist, eleRaw, eleDisplay, slopeRaw, slopeDisplay,
-              slopeForCat, catSegments, climbs, markers }
+              slopeForCat, catSegments, climbs }
 ```
 
-### Complexité
+### 39.3 Complexité
 
 | Étape | Complexité |
 |---|---|
@@ -2024,25 +2821,25 @@ FONCTION rebuild():
 | Ancrage | O(m) + O(m log n) |
 | Lissage ancré | O(n + m × winDouble) |
 | Pente fenêtrée | O(n × w) |
+| SG non ancré | O(n × winSGCat) |
 | Métriques | O(n) |
 | Segmentation | O(n + s²) |
 | **Total** | **O(n × w)** dominé par la pente fenêtrée |
 
-Avec n = 5 000 et w = 100, ~500 000 opérations → **< 100 ms**.
+Avec n=5 000 et w=100, ~500 000 opérations → **< 100 ms**.
 
 ---
 
-## 32. Tableau récapitulatif des complexités
+## 40. Tableau récapitulatif des complexités
 
 | Algorithme | Temps | Espace | Fréquence d'appel |
 |---|---|---|---|
 | Haversine (par paire) | O(1) | O(1) | n−1 fois |
 | Distance cumulée | O(n) | O(n) | 1 fois |
 | **resampleUniform (moyenne)** | **O(n + m)** | **O(m)** | **1 fois** |
-| **plateauCorrect** | **O(n)** | **O(n)** | **1 fois (optionnel)** |
+| plateauCorrect | O(n) | O(n) | 1 fois (optionnel) |
 | **despikeAltitude** | **O(n × w × log w)** | **O(w)** | **1 fois** |
-| **despikeWindowMToPts** | **O(1)** | **O(1)** | **1 fois par recalcul** |
-| **computeRawStats** | **O(n log n)** | **O(n)** | **1 fois** |
+| computeRawStats | O(n log n) | O(n) | 1 fois |
 | Moving Average | O(n) | O(n) | 5–6 fois |
 | Anchored Moving Average | O(n + m) | O(n) | 2 fois |
 | Pente instantanée | O(n) | O(n) | 3 fois |
@@ -2056,63 +2853,80 @@ Avec n = 5 000 et w = 100, ~500 000 opérations → **< 100 ms**.
 | Fusion segments courts | O(s²) | O(s) | 1–2 fois |
 | Segmentation contiguë | O(n) | O(s) | 1 fois |
 | Enrichissement segment | O(len) | O(1) | s fois |
-| **Fusion montées** | **O(m)** | **O(1)** | **m fois** |
+| **Fusion montées** | **O(m)** | **O(m)** (mergedParts) | **m fois** |
 | **Validation stricte** | **O(m × 800²)** | **O(m)** | **1 fois** |
-| **Diagnostic** | **O(1)** | **O(1)** | **à chaque input** |
-| **Insertion contextuelle** | **O(m)** | **O(1)** | **à la demande** |
-| **Drag & drop** | **O(points affichés)** | **O(1)** | **par frame** |
-| Anti-chevauchement | O(m log m) | O(m) | 1 fois |
-| Sous-échantillonnage | O(n) | O(4000) | 1 fois |
+| **buildTraceFeatures** | **O(n)** | **O(n)** | **à chaque rendu** |
+| **updateMapMarkers** | **O(m_groupe)** | **O(m_groupe)** | **à chaque sélection** |
+| **zoomMapToGroup** | **O(m_groupe)** | **O(1)** | **à la sélection** |
+| **splitMergedClimb** | **O(m log m)** | **O(m)** | **au clic ✂** |
+| **refuseGroup** | **O(m log m)** | **O(m)** | **au clic 🔗** |
+| **deleteClimb** | **O(m log m)** | **O(1)** | **au clic ✕** |
+| **addManualClimb** | **O(m log m)** | **O(1)** | **à la création** |
+| **normalizeGroups** | **O(m)** | **O(m)** | **fin de drag** |
+| Diagnostic | O(1) | O(1) | à chaque input |
+| rebuild | O(n × w) | O(n) | après chaque édition |
 
 Légende :
 - n : nombre de points bruts
-- m : nombre de points après resampling (≈ n × pas moyen / stepM)
+- m : nombre de points après resampling
 - s : nombre de segments de catégorie
-- w : nombre moyen de points dans une fenêtre glissante ou fenêtre anti-pic
-- k : nombre d'événements (transitions pente)
+- w : taille moyenne d'une fenêtre glissante
+- k : nombre d'événements
+- m_groupe : nombre de membres d'un groupe
 
 ---
 
-## 33. Choix de conception et alternatives écartées
+## 41. Choix de conception et alternatives écartées
 
-### 33.1 Haversine vs Vincenty
+### 41.1 Haversine vs Vincenty
 
 | Critère | Haversine | Vincenty |
 |---|---|---|
-| Précision | ±0.5 % (sphérique) | ±0.001 % (ellipsoïdal) |
+| Précision | ±0.5 % | ±0.001 % |
 | Vitesse | Très rapide | 10× plus lent |
 | Complexité | 5 lignes | 30+ lignes |
 | **Retenu** | ✅ | ❌ |
 
-### 33.2 Différence centrée vs différence avant
+### 41.2 Interpolation vs moyenne au resampling
 
-| Critère | Centrée | Avant |
+| Critère | Interpolation | **Moyenne (v3.5)** |
+|---|---|---|
+| Fidélité au détail brut | Élevée | Moyenne |
+| Atténuation bruit HF | Nulle | **Élevée** |
+| Efficacité Hampel en aval | Faible à petit Pas | **Élevée** |
+| Cohérence du pipeline selon Pas | Faible | **Élevée** |
+| Complexité | O(n + m) | O(n + m) |
+| **Retenu** | ❌ | ✅ |
+
+### 41.3 Différence centrée vs différence avant
+
+| Critère | **Centrée (retenu)** | Avant |
 |---|---|---|
 | Décalage de phase | Aucun | +1 point |
 | Lissage naturel | Oui (3 pts) | Non |
 | **Retenu** | ✅ | ❌ |
 
-### 33.3 Pente instantanée vs pente fenêtrée pour la catégorisation
+### 41.4 Pente instantanée vs pente fenêtrée pour la catégorisation
 
-| Critère | Instantanée | Fenêtrée |
+| Critère | Instantanée | **Fenêtrée (retenu)** |
 |---|---|---|
 | Stabilité visuelle | Faible (taches) | Élevée |
 | Fidélité locale | Haute | Moyenne |
 | Coût calcul | O(n) | O(n × w) |
-| **Retenu courbe** | ✅ | ❌ |
 | **Retenu couleur** | ❌ | ✅ |
+| **Retenu courbe** | ✅ | ❌ |
 
-### 33.4 Argmin/argmax vs marche avec tolérance
+### 41.5 Argmin/argmax vs marche avec tolérance
 
-| Critère | Argmin/argmax | Marche tolérance |
+| Critère | **Argmin/argmax (retenu)** | Marche tolérance |
 |---|---|---|
 | Robustesse au bruit | Élevée | Faible |
 | Déterminisme | Toujours | Dépend de la tolérance |
 | **Retenu** | ✅ | ❌ |
 
-### 33.5 Garde-fou absolu vs pourcentage vs hybride
+### 41.6 Garde-fou absolu vs pourcentage vs hybride
 
-| Critère | Absolu (V1) | % pur | **Hybride (v2)** |
+| Critère | Absolu | % pur | **Hybride (v2)** |
 |---|---|---|---|
 | Simplicité | ✅✅ | ✅ | ⚠️ |
 | Adaptabilité à l'échelle | ❌ | ✅ | ✅✅ |
@@ -2120,9 +2934,71 @@ Légende :
 | Robustesse cas extrêmes | ✅ | ❌ | ✅✅ |
 | **Retenu** | ❌ | ❌ | ✅ |
 
-### 33.6 Édition numérique vs édition graphique (drag & drop)
+### 41.7 Fusion par distance vs augmentation du seuil
 
-| Critère | Champs km | Drag & drop |
+| Critère | **gapMinM (retenu)** | Seuil élevé |
+|---|---|---|
+| Ratage des vraies montées douces | ✅ Évité | ❌ Possible |
+| Prévisibilité | ✅ | ⚠️ Dépend de la trace |
+| **Retenu** | ✅ | ❌ |
+
+### 41.8 Validation finale : rejet vs repli
+
+| Critère | Rejet sec | **Repli ⤺ (retenu)** |
+|---|---|---|
+| Perte d'information | ❌ Complète | ✅ Partielle |
+| Cohérence avec l'utilisateur | ⚠️ Difficile | ✅ Log détaillé |
+| **Retenu** | ❌ | ✅ |
+
+### 41.9 Anti-pic Hampel vs médian classique
+
+| Critère | Médian | **Hampel (retenu)** |
+|---|---|---|
+| Modifie le relief normal | Oui | **Non** |
+| Élimine un pic isolé | Oui | Oui |
+| Préserve les extrema | Non | **Oui** |
+| Effet sur les vraies montées | Adoucit | **Aucun** |
+| Effet d'écrêtage des bosses | Marqué | **Sélectif** |
+| **Retenu** | ❌ | ✅ |
+
+### 41.10 Anti-pic : seuil en mètres vs en %
+
+| Critère | **Seuil en mètres (retenu)** | Seuil en % |
+|---|---|---|
+| Prévisibilité | ✅ | ⚠️ |
+| Indépendance du relief | ✅ | ❌ |
+| **Retenu** | ✅ | ❌ |
+
+### 41.11 Anti-pic : position dans le pipeline
+
+| Ordre | Efficacité |
+|---|---|
+| Avant resampling | ❌ Fenêtre en points varie avec densité |
+| **Après resampling (retenu)** | ✅ Fenêtre constante après conversion |
+| Après SG | ❌ SG a déjà ancré le glitch dans la courbe |
+
+### 41.12 Anti-pic : fenêtre en points vs en mètres
+
+| Critère | Points | **Mètres (v3.6)** |
+|---|---|---|
+| Cohérence avec autres paramètres | ❌ | ✅ |
+| Comportement indépendant du Pas | ❌ | ✅ |
+| Prévisibilité utilisateur | ⚠️ | ✅ |
+| Plage utile | 3–15 pts | **50–500 m** |
+| **Retenu** | ❌ | ✅ |
+
+### 41.13 Diagnostic visuel vs paramètres seuls
+
+| Critère | **Diagnostic (v3.2)** | Paramètres seuls |
+|---|---|---|
+| Compréhension utilisateur | ✅ Élevée | ❌ Faible |
+| Complexité UI | ⚠️ Ajout panneau | ✅ Simple |
+| Coût calcul | ✅ O(1) | — |
+| **Retenu** | ✅ | ❌ |
+
+### 41.14 Édition numérique vs drag & drop
+
+| Critère | Champs km | **Drag & drop** |
 |---|---|---|
 | Précision | ✅✅ | ⚠️ |
 | Naturalité | ❌ | ✅✅ |
@@ -2132,122 +3008,139 @@ Légende :
 
 Les deux modes coexistent.
 
-### 33.7 Interception DOM vs hooks Chart.js pour le drag
+### 41.15 Interception DOM vs hooks Chart.js
 
-| Critère | beforeEvent (Chart.js) | **Capture window (v0.5)** |
+| Critère | beforeEvent | **Capture window** |
 |---|---|---|
-| Fonctionne avec plugin-zoom | ❌ (conflit) | ✅ |
+| Fonctionne avec plugin-zoom | ❌ | ✅ |
 | Ordre garanti | ❌ | ✅ |
 | Complexité | ✅ | ⚠️ |
 | **Retenu** | ❌ | ✅ |
 
-### 33.8 Filtres index-based vs distance-based
+### 41.16 Chart.js vs canvas 2D natif
 
-| Critère | Index-based | **Distance-based (retenu)** |
+| Critère | Chart.js | **Canvas 2D (v3.8)** |
 |---|---|---|
-| Simplicité | ✅ | ⚠️ (nécessite resampling) |
-| Cohérence sur trace irrégulière | ❌ | ✅ |
-| Paramètres en mètres | ❌ | ✅ |
-| Prévisibilité | ❌ | ✅ |
+| Contrôle du rendu | ⚠️ | ✅ Total |
+| Perf sur grandes traces | ⚠️ | ✅ |
+| Écosystème | ✅ | ⚠️ |
+| Échelles strictement fixes | ⚠️ | ✅ |
 | **Retenu** | ❌ | ✅ |
 
-### 33.9 Resampling vs filtres pondérés par distance
+### 41.17 Catégorisation sur altitude ancrée vs non ancrée
 
-| Critère | **Resampling (retenu)** | Filtres pondérés |
+| Critère | Ancré | **Non ancré (v3.8.1)** |
 |---|---|---|
-| Coût | ✅ O(n) une fois | ❌ O(n × w) à chaque filtre |
-| Compatibilité avec filtres existants | ✅ Directe | ❌ Réécriture |
-| SG compatible | ✅ | ❌ (nécessite LWPR) |
-| Doublons GPS | ✅ Absorbés | ⚠️ Pondération à gérer |
-| **Retenu** | ✅ | ❌ |
-
-### 33.10 Fusion par distance vs augmentation du seuil
-
-| Critère | **gapMinM (retenu)** | seuilMontee élevé |
-|---|---|---|
-| Ratage des vraies montées douces | ✅ Évité | ❌ Possible |
-| Prévisibilité | ✅ | ⚠️ Dépend de la trace |
-| **Retenu** | ✅ | ❌ |
-
-### 33.11 Validation finale : rejet vs repli
-
-| Critère | Rejet sec | **Repli ⤺ (retenu)** |
-|---|---|---|
-| Perte d'information | ❌ Complète | ✅ Partielle |
-| Cohérence avec l'utilisateur | ⚠️ Difficile à expliquer | ✅ Log détaillé |
+| Cohérence carte/profil | ❌ | ✅ |
+| Stabilité au drag | ❌ | ✅ |
+| Coût | ✅ | ⚠️ (+1 SG) |
 | **Retenu** | ❌ | ✅ |
 
-### 33.12 Anti-pic Hampel vs médian classique (v3.3)
+### 41.18 Filtrage des couleurs profil : point par point vs par `catSegments`
 
-| Critère | Médian classique | **Hampel (retenu)** |
+| Critère | Point par point | **Par `catSegments`** |
 |---|---|---|
-| Modifie le relief normal | Oui | **Non** |
-| Élimine un pic isolé | Oui | Oui |
-| Préserve les extrema | Non | **Oui** |
-| Effet sur les vraies montées | Adoucit | **Aucun** |
-| Effet d'écrêtage des bosses | Marqué | **Sélectif** |
-| Complexité | O(n × win log win) | O(n × win log win) |
+| Identité avec la carte | ❌ | ✅ |
+| Perf | ✅ | ✅ |
 | **Retenu** | ❌ | ✅ |
 
-**Raison** : le filtre Hampel est **sélectif** — il ne remplace que les points qui dévient fortement. Il s'insère dans le pipeline sans affecter les autres étapes.
+### 41.19 Échelle X du profil : fixe vs adaptative au conteneur
 
-### 33.13 Anti-pic : seuil en mètres vs en %
-
-| Critère | **Seuil en mètres (retenu)** | Seuil en % |
+| Critère | **Fixe (v3.8.3)** | Adaptative |
 |---|---|---|
-| Prévisibilité | ✅ | ⚠️ |
-| Indépendance du relief | ✅ | ❌ |
+| Respect strict de l'échelle | ✅ | ❌ |
+| Esthétique (canvas plein) | ❌ Vide à droite | ✅ |
 | **Retenu** | ✅ | ❌ |
 
-**Raison** : un glitch de 20 m reste un glitch de 20 m, qu'il soit sur une plaine ou en montagne.
+### 41.20 Trace carte : grille resamplée vs points bruts
 
-### 33.14 Anti-pic : position dans le pipeline
-
-| Ordre | Efficacité |
-|---|---|
-| Avant resampling | ❌ Fenêtre en points varie avec densité |
-| **Après resampling (retenu)** | ✅ Fenêtre constante après conversion |
-| Après SG | ❌ SG a déjà ancré le glitch dans la courbe |
-
-### 33.15 Diagnostic visuel vs paramètres seuls
-
-| Critère | **Diagnostic (v3.2)** | Paramètres seuls |
+| Critère | **Points bruts (v3.9.2)** | Grille resamplée |
 |---|---|---|
-| Compréhension utilisateur | ✅ Élevée | ❌ Faible |
-| Complexité UI | ⚠️ Ajout panneau | ✅ Simple |
-| Coût calcul | ✅ O(1) par paramètre | — |
+| Fidélité au GPX | ✅ | ❌ |
+| Indépendance au Pas | ✅ | ❌ |
+| Détail des lacets | ✅ | ⚠️ Gomme les petits |
+| Coût | O(n) | O(m) |
 | **Retenu** | ✅ | ❌ |
 
-### 33.16 Rééchantillonnage : interpolation vs moyenne (v3.5)
+### 41.21 Groupes : fusion destructive vs préservation des `mergedParts`
 
-| Critère | Interpolation | **Moyenne (retenu v3.5)** |
+| Critère | Fusion destructive | **Préservation (v3.9.0+)** |
 |---|---|---|
-| Fidélité au détail brut | Élevée | Moyenne |
-| Atténuation bruit haute fréquence | Nulle | **Élevée** |
-| Efficacité Hampel en aval | Faible à petit Pas | **Élevée** |
-| Cohérence du pipeline selon Pas | Faible | **Élevée** |
-| Complexité | O(n + m) | O(n + m) |
+| Séparation ultérieure | ❌ | ✅ |
+| Refusion | ❌ | ✅ |
+| Mémoire | ✅ Faible | ⚠️ +tab par fusion |
 | **Retenu** | ❌ | ✅ |
 
-**Raison** : avec l'interpolation linéaire (avant v3.5), plus le Pas est petit, plus on capture de bruit brut haute fréquence. La moyenne agit comme un filtre passe-bas implicite (fenêtre `clamp(stepM, 75, 3 × stepM)`), ce qui rend le comportement du pipeline **cohérent quelle que soit la valeur du Pas**.
+### 41.22 Groupes : séparation sans persistance vs avec `groupId`/`subIndex`
 
-### 33.17 Anti-pic : fenêtre en points vs en mètres (v3.6)
-
-| Critère | Fenêtre en points | **Fenêtre en mètres (retenu v3.6)** |
+| Critère | Sans persistance (v3.9.0) | **Avec (v3.9.1)** |
 |---|---|---|
-| Cohérence avec les autres paramètres | ❌ | ✅ |
-| Comportement indépendant du Pas | ❌ | ✅ |
-| Prévisibilité pour l'utilisateur | ⚠️ (largeur physique variable) | ✅ |
-| Plage utile | 3–15 pts (≈ 75–1500 m selon Pas) | **50–500 m** |
-| Conversion nécessaire | Non | Oui (m → points) |
-| Complexité | O(1) | O(1) (conversion) |
+| Refusion possible | ❌ | ✅ |
+| Numérotation `#N.M` | ❌ | ✅ |
+| Coloration stable | ❌ | ✅ |
+| **Retenu** | ❌ | ✅ |
 
-**Retenu** : fenêtre en mètres, avec conversion interne `winPts = max(3, round(windowM / stepM) | 1)`.
+### 41.23 Suppression : renumérotation vs laisser des trous
 
-**Raison** : la fenêtre Hampel était le seul paramètre à ne pas être exprimé en mètres. Cela rendait son comportement imprévisible — sa largeur physique variait d'un facteur 40 entre Pas = 5 m et Pas = 200 m. En l'exprimant en mètres, on garantit un comportement identique quelle que soit la trace.
+| Critère | **Renumérotation (v3.9.2)** | Trous |
+|---|---|---|
+| Cohérence numérotation | ✅ | ❌ |
+| Complexité | ⚠️ | ✅ |
+| **Retenu** | ✅ | ❌ |
 
-**Exemple concret** : avec l'ancien système à 15 pts (maximum), un utilisateur à Pas = 25 m ne pouvait couvrir que 375 m, alors qu'à Pas = 100 m il pouvait couvrir 1500 m. Cette asymétrie empêchait le réglage intuitif de l'anti-pic.
+### 41.24 Création manuelle : bouton `+` vs double-clic + drag
+
+| Critère | Bouton `+` | **Double-clic + drag** |
+|---|---|---|
+| Précision | ⚠️ Par défaut 1 km | ✅ Contrôle total |
+| Naturel | ⚠️ | ✅ |
+| Découverte | ✅ | ⚠️ Hint nécessaire |
+| **Retenu** | ❌ | ✅ |
+
+### 41.25 Auto-load carte : sur présence de token en localStorage
+
+| Critère | **Auto (v3.9.2)** | Manuel |
+|---|---|---|
+| UX immédiate | ✅ | ❌ |
+| Contrôle | ⚠️ | ✅ |
+| **Retenu** | ✅ | ❌ |
+
+### 41.26 Marqueurs : mono vs multi sur groupe
+
+| Critère | Mono | **Multi (v3.9.2)** |
+|---|---|---|
+| Visualisation frontières | ❌ | ✅ |
+| Clarté pour groupe | ❌ | ✅ |
+| Charge visuelle | ✅ Faible | ⚠️ Plus élevée |
+| **Retenu** | ❌ | ✅ (pour groupes) |
+
+### 41.27 Zoom : montée vs groupe
+
+| Critère | **Dispatch (v3.9.2)** | Montée uniquement |
+|---|---|---|
+| Cohérence avec la sélection | ✅ | ❌ |
+| Contexte du groupe | ✅ | ❌ |
+| **Retenu** | ✅ | ❌ |
+
+### 41.28 Profil montée : vue zoomée vs vue complète + scroll centré
+
+| Critère | Vue zoomée | **Complète + scroll (v3.9.2)** |
+|---|---|---|
+| Contexte visible | ❌ | ✅ |
+| Centrage automatique | ⚠️ | ✅ |
+| Navigation manuelle | ❌ | ✅ |
+| **Retenu** | ❌ | ✅ |
+
+### 41.29 Échelle widget montée : 5 vs 10 m/px
+
+| Critère | 5 m/px (v3.8) | **10 m/px (v3.9.2)** |
+|---|---|---|
+| Détail local | ✅ Élevé | ⚠️ Moyen |
+| Vue d'ensemble | ❌ Étroite | ✅ Plus large |
+| **Retenu** | ❌ | ✅ |
+
+Le 10 m/px permet de voir la montée et son contexte immédiat (montées voisines) dans une largeur d'écran normale.
 
 ---
 
-**Fin du document Algorithmes v3.6**
+**Fin du document Algorithmes v3.9.2**

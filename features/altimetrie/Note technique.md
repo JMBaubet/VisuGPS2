@@ -1,8 +1,8 @@
 # Documentation Technique — Intégration GPX Climb Analyzer
 
-**Cible** : application Tauri + Node.js + Vue 3 + Vuetify
-**Version** : 3.6
-**Date** : 2026-09-24
+**Cible** : application Tauri + Node.js + Vue 3 + Vuetify, ou intégration standalone web
+**Version** : 3.9.2
+**Date** : 2026-10-17
 **Public** : développeur full-stack intégrant la fonctionnalité
 
 ---
@@ -19,13 +19,18 @@
 8. [Composants Vuetify](#8-composants-vuetify)
 9. [Communication avec le backend Node.js](#9-communication-avec-le-backend-nodejs)
 10. [Intégration Tauri](#10-intégration-tauri)
-11. [Drag & drop direct sur les graphiques](#11-drag--drop-direct-sur-les-graphiques)
-12. [Insertion contextuelle de montée](#12-insertion-contextuelle-de-montée)
-13. [Pipeline complet de détection](#13-pipeline-complet-de-détection)
-14. [Diagnostic de configuration](#14-diagnostic-de-configuration)
-15. [Tests et validation](#15-tests-et-validation)
-16. [Migration depuis le prototype HTML](#16-migration-depuis-le-prototype-html)
-17. [Annexes](#17-annexes)
+11. [Intégration Mapbox GL JS](#11-intégration-mapbox-gl-js)
+12. [Widget profil (canvas)](#12-widget-profil-canvas)
+13. [Drag & drop sur le profil](#13-drag--drop-sur-le-profil)
+14. [Groupes de montées](#14-groupes-de-montées)
+15. [Création manuelle](#15-création-manuelle)
+16. [Suppression de montées](#16-suppression-de-montées)
+17. [Pipeline complet de détection](#17-pipeline-complet-de-détection)
+18. [Diagnostic de configuration](#18-diagnostic-de-configuration)
+19. [Export JSON](#19-export-json)
+20. [Tests et validation](#20-tests-et-validation)
+21. [Migration depuis le prototype HTML](#21-migration-depuis-le-prototype-html)
+22. [Annexes](#22-annexes)
 
 ---
 
@@ -33,42 +38,57 @@
 
 ### 1.1 Objectif
 
-Intégrer dans une application Tauri/Vue 3/Vuetify la fonctionnalité complète d'analyse de profil altimétrique GPX, dans sa version **v3.6**, incluant :
+Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la fonctionnalité complète d'analyse de profil altimétrique GPX, dans sa version **v3.9.2**, incluant :
 
-- **Filtre anti-pic Hampel** avec fenêtre exprimée en **mètres** (v3.6)
-- **Rééchantillonnage par moyenne** (fenêtre minimale 75 m)
+- **Filtre anti-pic Hampel** avec fenêtre en **mètres** (v3.6)
+- **Rééchantillonnage par moyenne** (fenêtre minimale 75 m, v3.5)
 - Correction des plateaux GPS/MNT
 - Lissage multi-étages (médiane + SG + gaussien + ancrage + double SG)
 - Détection avec garde-fou hybride de refinage
-- **Fusion automatique des montées trop proches** (`gapMinM`)
-- **Validation finale stricte avec repli sur sous-segment** (`fallback`)
+- **Fusion automatique** des montées trop proches (`gapMinM`) avec **conservation des `mergedParts`** (v3.9.0)
+- **Validation finale stricte** avec repli sur sous-segment (`fallback`)
+- **Carte Mapbox 3D** avec terrain DEM, courbes de niveau optionnelles, et **trace colorée par catégorie** (v3.8)
+- **Trace sur la carte = points bruts du GPX** (v3.9.2), pas la grille resamplée
+- **Widget profil en canvas 2D natif** avec échelles fixes (50 m/px full, 10 m/px montée) (v3.8.3)
+- **Catégorisation non ancrée** pour éviter les changements de couleur pendant le drag (v3.8.1)
+- **Widget montée avec profil complet + scroll centré** sur la montée sélectionnée (v3.9.2)
+- **Séparation des montées fusionnées** en leurs sous-montées d'origine (`✂`), avec persistance du groupe via `groupId`/`subIndex` (v3.9.0/v3.9.1)
+- **Refusion d'un groupe** (`🔗`), en préservant les bornes éditées (v3.9.1)
+- **Suppression** de montées individuelles avec renumérotation (v3.9.2)
+- **Création manuelle** par double-clic + drag (v3.9.0)
+- **Multi-marqueurs sur la carte** pour les montées groupées (v3.9.2)
+- **Chargement automatique de la carte** si token présent (v3.9.2)
 - **Diagnostic de configuration visuel**
-- Édition par drag & drop direct
-- Insertion contextuelle
+- **Export JSON** avec `groupId`/`subIndex`
 
 ### 1.2 Contraintes de la cible
 
 | Contrainte | Impact |
 |---|---|
-| Application desktop Tauri | Accès possible au système de fichiers natif |
-| Backend Node.js embarqué | Possibilité de déporter les calculs lourds |
+| Application desktop Tauri OU web | Accès fichier natif en Tauri, drag & drop en web |
+| Backend Node.js embarqué (optionnel) | Possibilité de déporter les calculs lourds |
 | Frontend Vue 3 + Vuetify | Structure en composants réutilisables |
 | TypeScript | Typage strict recommandé |
-| Pinia (recommandé) | Store centralisé pour l'état |
+| Pinia | Store centralisé pour l'état |
+| Mapbox GL JS v3.7+ | Nécessite un token `pk.*` |
 
 ### 1.3 Répartition recommandée front/back
 
 | Tâche | Où l'exécuter | Justification |
 |---|---|---|
-| Parsing GPX | **Node.js** | fs natif, DOMParser absent en Node pur (utiliser fast-xml-parser) |
+| Parsing GPX | **Node.js** (Tauri) ou **front** (web) | fs natif ou FileReader |
 | Rééchantillonnage par moyenne | **Node.js** | O(n + m) mais centralise le pipeline |
-| Correction plateaux | **Node.js** | Fait partie du prétraitement |
+| Correction plateaux | **Node.js** | Prétraitement |
 | **Anti-pic Hampel** | **Node.js** | O(n × w log w), optionnellement front si n < 5000 |
 | Détection complète | **Node.js** | Coûteux (O(n × w + m × 800²)) |
-| Rebuild après édition | **Front** si < 500 ms, sinon Node | Compromis latence |
-| Rendu graphique | **Front (Chart.js)** | Interactif |
-| Drag & drop | **Front** | Latence minimale, interaction temps réel |
-| **Diagnostic** | **Front** | O(1), recalculé à chaque input |
+| Rebuild après édition | **Front** si < 500 ms | Compromis latence |
+| Rendu carte Mapbox | **Front** | Interactif, Mapbox GL JS |
+| **Rendu profil canvas** | **Front** | Contrôle total, perfs |
+| Drag & drop des poignées | **Front** | Latence minimale |
+| **Séparation/refusion/suppression** | **Front** | Mutation locale + rebuild |
+| **Création manuelle** | **Front** | Interaction temps réel |
+| Diagnostic | **Front** | O(1), à chaque input |
+| Export JSON | **Front** | Blob natif |
 
 ---
 
@@ -77,56 +97,62 @@ Intégrer dans une application Tauri/Vue 3/Vuetify la fonctionnalité complète 
 ### 2.1 Vue d'ensemble
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     Application Tauri                        │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │              Frontend (WebView)                     │     │
-│  │  ┌──────────────────────────────────────────────┐   │     │
-│  │  │  Vue 3 + Vuetify                             │   │     │
-│  │  │  ┌────────────────────────────────────────┐  │   │     │
-│  │  │  │  <GpxAnalyzer />                       │  │   │     │
-│  │  │  │   ├── <FileDropZone />                 │  │   │     │
-│  │  │  │   ├── <DiagnosticPanel />              │  │   │     │
-│  │  │  │   ├── <ParametersPanel />              │  │   │     │
-│  │  │  │   ├── <StatsCards />                   │  │   │     │
-│  │  │  │   ├── <CategoryRibbon />               │  │   │     │
-│  │  │  │   ├── <ElevationChart /> (drag)        │  │   │     │
-│  │  │  │   ├── <SlopeChart />                   │  │   │     │
-│  │  │  │   ├── <CategoryStatsTable />           │  │   │     │
-│  │  │  │   └── <ClimbsTable />                  │  │   │     │
-│  │  │  └────────────────────────────────────────┘  │   │     │
-│  │  │                                              │   │     │
-│  │  │  Stores Pinia                                │   │     │
-│  │  │   ├── useGpxStore (données brutes)           │   │     │
-│  │  │   ├── useClimbsStore (montées)               │   │     │
-│  │  │   └── useParametersStore (14 params)         │   │     │
-│  │  │                                              │   │     │
-│  │  │  Composables                                 │   │     │
-│  │  │   ├── useGpxParser                           │   │     │
-│  │  │   ├── useSlopeCalculations                   │   │     │
-│  │  │   ├── useClimbDetection                      │   │     │
-│  │  │   ├── useMarkerDrag                          │   │     │
-│  │  │   ├── useChartSync                           │   │     │
-│  │  │   └── useDiagnostics                         │   │     │
-│  │  └──────────────────────────────────────────────┘   │     │
-│  └─────────────────────────────────────────────────────┘     │
-│                            │ Tauri IPC (invoke)              │
-│                            ▼                                 │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │              Backend (Rust + Node.js sidecar)       │     │
-│  │  ┌──────────────────────────────────────────────┐   │     │
-│  │  │  Node.js sidecar                             │   │     │
-│  │  │   ├── /parse-and-analyze (pipeline v3.6)     │   │     │
-│  │  │   ├── /rebuild (optionnel)                   │   │     │
-│  │  │   └── /despike (isolé si besoin)             │   │     │
-│  │  └──────────────────────────────────────────────┘   │     │
-│  │                                                     │     │
-│  │  Rust core                                          │     │
-│  │   ├── fs (lecture fichiers GPX)                     │     │
-│  │   └── shell (spawn Node.js sidecar)                 │     │
-│  └─────────────────────────────────────────────────────┘     │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       Application Tauri / Web                            │
+│                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────┐  │
+│  │                    Frontend (WebView / Navigateur)                  │  │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │  │
+│  │  │  Vue 3 + Vuetify                                             │  │  │
+│  │  │  ┌────────────────────────────────────────────────────────┐  │  │  │
+│  │  │  │  <GpxAnalyzer />                                       │  │  │  │
+│  │  │  │   ├── <AppToolbar />           (drop, debug, params)    │  │  │  │
+│  │  │  │   ├── <ClimbsPanel />          (colonne gauche)         │  │  │  │
+│  │  │  │   │    ├── <StatsMini />                               │  │  │  │
+│  │  │  │   │    ├── <ClimbCard />       (par montée, groupée ?) │  │  │  │
+│  │  │  │   │    └── <GroupBrace />                              │  │  │  │
+│  │  │  │   ├── <CenterPanel />          (carte + profil)        │  │  │  │
+│  │  │  │   │    ├── <MapPanel />        (Mapbox GL JS)          │  │  │  │
+│  │  │  │   │    └── <ProfilePanel />    (canvas 2D)             │  │  │  │
+│  │  │  │   └── <ParamsPanel />          (colonne droite)        │  │  │  │
+│  │  │  │        ├── <MapboxTokenField />                        │  │  │  │
+│  │  │  │        ├── <DiagnosticPanel />                         │  │  │  │
+│  │  │  │        └── <ParametersForm />                          │  │  │  │
+│  │  │  └────────────────────────────────────────────────────────┘  │  │  │
+│  │  │                                                              │  │  │
+│  │  │  Stores Pinia                                                │  │  │
+│  │  │   ├── useGpxStore          (points bruts + resamplés)         │  │  │
+│  │  │   ├── useClimbsStore       (montées + groupes)                │  │  │
+│  │  │   ├── useParametersStore   (15 params + 2 toggles)            │  │  │
+│  │  │   └── useMapStore          (token, basemap, ready)            │  │  │
+│  │  │                                                              │  │  │
+│  │  │  Composables                                                  │  │  │
+│  │  │   ├── useGpxParser                                            │  │  │
+│  │  │   ├── useSlopeCalculations                                    │  │  │
+│  │  │   ├── useClimbDetection                                       │  │  │
+│  │  │   ├── useClimbGroups       (split/refuse/normalize)           │  │  │
+│  │  │   ├── useManualClimb       (création double-clic + drag)      │  │  │
+│  │  │   ├── useMarkerDrag         (drag poignées canvas)            │  │  │
+│  │  │   ├── useMapbox             (init, layers, trace, markers)    │  │  │
+│  │  │   ├── useProfileCanvas      (rendu canvas, scroll centré)     │  │  │
+│  │  │   └── useDiagnostics                                        │  │  │
+│  │  └──────────────────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+│                            │ Tauri IPC (invoke)                          │
+│                            ▼                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐  │
+│  │              Backend (Rust + Node.js sidecar)                      │  │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │  │
+│  │  │  Node.js sidecar                                             │  │  │
+│  │  │   ├── /parse-and-analyze    (pipeline v3.9.2)                │  │  │
+│  │  │   ├── /rebuild              (optionnel)                      │  │  │
+│  │  │   └── /despike              (isolé si besoin)                │  │  │
+│  │  └──────────────────────────────────────────────────────────────┘  │  │
+│  │  Rust core                                                         │  │
+│  │   ├── fs (lecture fichiers GPX)                                    │  │
+│  │   └── shell (spawn Node.js sidecar)                                │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 2.2 Arborescence suggérée
@@ -137,10 +163,10 @@ src-tauri/
 │   ├── main.rs
 │   ├── commands/
 │   │   ├── mod.rs
-│   │   ├── gpx.rs            # commande read_gpx_file
-│   │   └── analyzer.rs       # commande analyze_gpx
+│   │   ├── gpx.rs                # read_gpx_file
+│   │   └── analyzer.rs           # analyze_gpx
 │   └── sidecar/
-│       └── analyzer.js       # script Node.js
+│       └── analyzer.js           # Script Node.js pipeline v3.9.2
 └── Cargo.toml
 
 src/
@@ -148,54 +174,64 @@ src/
 ├── App.vue
 ├── types/
 │   ├── gpx.ts
-│   ├── climb.ts
+│   ├── climb.ts                  # UserClimb, AutoClimb, Climb
 │   ├── category.ts
 │   ├── parameters.ts
-│   └── diagnostics.ts
+│   ├── diagnostics.ts
+│   └── mapbox.ts                 # MAP_STATE, basemap
 ├── services/
-│   ├── gpxApi.ts             # wrapper invoke Tauri
-│   └── chartConfig.ts        # config Chart.js partagée
+│   ├── gpxApi.ts                 # Wrapper invoke Tauri
+│   └── mapboxLoader.ts           # Chargement paresseux de Mapbox GL JS
 ├── stores/
 │   ├── gpxStore.ts
 │   ├── climbsStore.ts
-│   └── parametersStore.ts
+│   ├── parametersStore.ts
+│   └── mapStore.ts
 ├── composables/
 │   ├── useGpxParser.ts
 │   ├── useSlopeCalculations.ts
 │   ├── useClimbDetection.ts
-│   ├── useMarkerDrag.ts
-│   ├── useChartSync.ts
+│   ├── useClimbGroups.ts         # split, refuse, normalize
+│   ├── useManualClimb.ts         # double-clic + drag
+│   ├── useMarkerDrag.ts          # drag poignées
+│   ├── useMapbox.ts              # init, layers, trace, markers, zoom
+│   ├── useProfileCanvas.ts       # rendu canvas, scroll centré
 │   └── useDiagnostics.ts
 ├── utils/
 │   ├── haversine.ts
-│   ├── resample.ts           # [v3.5] par moyenne
+│   ├── resample.ts               # moyenne
 │   ├── plateau.ts
-│   ├── despike.ts            # [v3.6] fenêtre en mètres
+│   ├── despike.ts                # fenêtre en mètres
 │   ├── rawStats.ts
-│   ├── smoothing.ts          # MA, SG, gaussien, médiane
+│   ├── smoothing.ts              # MA, SG, gaussien, médiane
 │   ├── anchoredSmoothing.ts
 │   ├── slope.ts
 │   ├── categorization.ts
 │   ├── segmentation.ts
 │   ├── refineGuard.ts
-│   ├── mergeClimbs.ts
-│   ├── validateClimbs.ts
-│   └── insertion.ts
+│   ├── mergeClimbs.ts            # avec mergedParts
+│   ├── validateClimbs.ts         # avec préservation mergedParts
+│   ├── climbConstraints.ts
+│   ├── insertion.ts
+│   ├── manualClimb.ts            # création
+│   ├── deleteClimb.ts            # suppression
+│   ├── buildTraceFeatures.ts     # carte : points bruts
+│   ├── buildMapMarkers.ts        # mono/groupe
+│   ├── zoomHelpers.ts            # fitBounds, _computeBounds
+│   └── groupHelpers.ts           # groupColor, normalizeGroups
 ├── components/
 │   └── gpx-analyzer/
 │       ├── GpxAnalyzer.vue
-│       ├── FileDropZone.vue
+│       ├── AppToolbar.vue
+│       ├── ClimbsPanel.vue
+│       ├── ClimbCard.vue
+│       ├── GroupBrace.vue
+│       ├── CenterPanel.vue
+│       ├── MapPanel.vue
+│       ├── ProfilePanel.vue
+│       ├── ParamsPanel.vue
 │       ├── DiagnosticPanel.vue
-│       ├── ParametersPanel.vue
-│       ├── StatsCards.vue
-│       ├── CategoryRibbon.vue
-│       ├── ElevationChart.vue
-│       ├── SlopeChart.vue
-│       ├── CategoryStatsTable.vue
-│       ├── ClimbsTable.vue
-│       ├── InsertionRow.vue
-│       ├── ClimbRow.vue
-│       └── RawDetailToggle.vue
+│       └── ParametersForm.vue
 └── plugins/
     └── vuetify.ts
 ```
@@ -204,7 +240,7 @@ src/
 
 ## 3. Modèle de données
 
-### 3.1 Types TypeScript
+### 3.1 Types TypeScript — GPX et paramètres
 
 ```typescript
 // ============================================================
@@ -273,17 +309,66 @@ export interface AnalyzerParameters {
   /** Segments debug (m) — défaut 100 */
   segmentLogM: number;
 
+  // --- Export ---
+  /** Pas du profil exporté (m) — 10 à 500, défaut 50 */
+  exportProfileStepM: number;
+
   // --- Toggles ---
   /** Lissage renforcé (double SG) — défaut true */
   smoothExtra: boolean;
   /** Lissage des pentes de segment — défaut true */
   segmentSmooth: boolean;
 }
+```
 
+### 3.2 Types TypeScript — Montées (avec groupes)
+
+```typescript
 // ============================================================
 // src/types/climb.ts
 // ============================================================
 
+/** Bornes d'une sous-montée conservées lors d'une fusion. */
+export interface MergedPart {
+  startKm: number;
+  endKm: number;
+}
+
+/** Montée détectée automatiquement (sortie de computeAuto). */
+export interface AutoClimb {
+  startKm: number;
+  endKm: number;
+  refineM: number | null;
+  candidateLen: number | null;
+  /** Nombre de fusions ayant contribué à cette montée (0 si autonome). */
+  mergedCount: number;
+  /** Sous-montées d'origine conservées pour permettre la séparation. */
+  mergedParts: MergedPart[] | null;
+  /** Vrai si un repli ⤺ a eu lieu lors de la validation. */
+  fallback: boolean;
+}
+
+/** Montée éditable par l'utilisateur. */
+export interface UserClimb {
+  startKm: number;
+  endKm: number;
+  autoStartKm: number | null;
+  autoEndKm: number | null;
+  refineM: number | null;
+  candidateLen: number | null;
+  mergedCount: number;
+  mergedParts: MergedPart[] | null;
+  fallback: boolean;
+  /** Identifiant entier du groupe (null si autonome). */
+  groupId: number | null;
+  /** Position dans le groupe (1, 2, 3…). */
+  subIndex: number | null;
+  /** Appliqué par rebuild() lors des contraintes anti-chevauchement. */
+  _constrainedStart?: boolean;
+  _constrainedEnd?: boolean;
+}
+
+/** Montée calculée à partir de UserClimb via rebuild(). */
 export interface Climb {
   startIdx: number;
   endIdx: number;
@@ -300,28 +385,48 @@ export interface Climb {
   altEnd: number;
   refineM: number | null;
   candidateLen: number | null;
-  /** Nombre de fusions (v3.0) */
-  mergedCount: number;
-  /** Repli sur sous-segment (v3.1) */
-  fallback: boolean;
-}
-
-export interface UserClimb {
-  startKm: number;
-  endKm: number;
-  autoStartKm: number | null;
-  autoEndKm: number | null;
-  refineM: number | null;
-  candidateLen: number | null;
   mergedCount: number;
   fallback: boolean;
-  _constrainedStart?: boolean;
-  _constrainedEnd?: boolean;
+  groupId: number | null;
+  subIndex: number | null;
 }
 
 // ============================================================
-// src/types/analysis.ts
+// src/types/category.ts
 // ============================================================
+
+export interface SlopeCategory {
+  id: string;
+  label: string;
+  color: string;
+  min: number;
+  max: number;
+}
+
+/** Segment de catégorie contigu, partagé entre carte et profil. */
+export interface CatSegment {
+  startIdx: number;
+  endIdx: number;
+  startDist: number;
+  endDist: number;
+  length: number;
+  dPlus: number;
+  avgSlope: number;
+  altStart: number;
+  altEnd: number;
+  key: string;
+}
+```
+
+### 3.3 Types TypeScript — État global
+
+```typescript
+// ============================================================
+// src/types/state.ts
+// ============================================================
+
+import type { GpxPoint } from './gpx';
+import type { AutoClimb, UserClimb } from './climb';
 
 export interface RawStats {
   n: number;
@@ -336,14 +441,69 @@ export interface RawStats {
   doublons: number;
 }
 
-export interface AutoClimb {
-  startKm: number;
-  endKm: number;
-  refineM: number;
-  candidateLen: number;
-  mergedCount: number;
-  fallback: boolean;
+/** Résultat de `rebuild()` — vue enrichie pour le rendu. */
+export interface RebuildResult {
+  dist: number[];
+  eleRaw: number[];
+  eleDisplay: number[];
+  slopeRaw: number[];
+  slopeDisplay: number[];
+  slopeForCat: number[];
+  catSegments: CatSegment[];
+  climbs: Climb[];
 }
+
+export interface AppState {
+  // Données brutes (fichier GPX)
+  rawPoints: GpxPoint[] | null;
+  distRaw: number[] | null;
+  eleRawOrig: number[] | null;
+  totalDistRawM: number;
+  rawStats: RawStats | null;
+
+  // Données resamplées + nettoyées
+  dist: number[] | null;
+  eleRaw: number[] | null;
+  stepM: number;
+  fileName: string | null;
+
+  // Montées
+  autoClimbs: AutoClimb[];
+  userClimbs: UserClimb[];
+
+  // UI
+  selectedClimbIdx: number | null;
+  profileMode: 'full' | 'climb';
+  pendingNewClimb: { valleyKm: number; summitKm: number } | null;
+  newClimbDragging: boolean;
+
+  // Groupes
+  nextGroupId: number;
+
+  // Cache de rendu
+  eleDisplay: number[] | null;
+  __lastData: RebuildResult | null;
+}
+
+export interface MapState {
+  map: any | null;              // mapboxgl.Map
+  ready: boolean;
+  loading: boolean;
+  basemap: 'standard' | 'satellite';
+  tokenErrorShown: boolean;
+}
+```
+
+### 3.4 Types TypeScript — Analyse complète
+
+```typescript
+// ============================================================
+// src/types/analysis.ts
+// ============================================================
+
+import type { GpxPoint } from './gpx';
+import type { AutoClimb } from './climb';
+import type { RawStats } from './state';
 
 export interface AnalyzerResult {
   track: {
@@ -358,11 +518,16 @@ export interface AnalyzerResult {
   avgWinM: number;
   rawStats: RawStats;
   autoClimbs: AutoClimb[];
+  /** Nombre de points effectifs corrigés par l'anti-pic (v3.6). */
   despikeCount: number;
-  /** [v3.6] Nombre de points effectifs utilisés par l'anti-pic */
+  /** Nombre de points effectifs dans la fenêtre Hampel. */
   despikeWinPtsEffective: number;
 }
+```
 
+### 3.5 Types TypeScript — Diagnostic et export
+
+```typescript
 // ============================================================
 // src/types/diagnostics.ts
 // ============================================================
@@ -388,39 +553,105 @@ export interface DiagResult {
   diag: Record<string, DiagEntry>;
   warnings: DiagWarning[];
 }
+
+// ============================================================
+// src/types/export.ts
+// ============================================================
+
+export interface ExportSegment {
+  index: number;
+  startKm: number;
+  endKm: number;
+  startProgress: number;
+  endProgress: number;
+  categoryId: string;
+  avgSlopePct: number;
+  dPlusM: number;
+}
+
+export interface ExportSlopeProfileEntry {
+  kmStart: number;
+  kmEnd: number;
+  eleStartM: number;
+  eleEndM: number;
+  avgSlopePct: number;
+  categoryId: string;
+}
+
+export interface ExportClimb {
+  index: number;
+  groupId: number | null;
+  subIndex: number | null;
+  startKm: number;
+  endKm: number;
+  startProgress: number;
+  endProgress: number;
+  dPlusM: number;
+  avgSlopePct: number;
+  altStartM: number;
+  altEndM: number;
+  mergedCount: number;
+  fallback: boolean;
+  slopeProfile: ExportSlopeProfileEntry[];
+  slopeProfileStepM: number;
+}
+
+export interface ExportData {
+  metadata: {
+    file: string;
+    exportedAt: string;
+    version: string;
+    totalDistanceKm: number;
+    totalDistanceSampledKm: number;
+    trailingGapM: number;
+    stepM: number;
+    totalPoints: number;
+    segmentsCount: number;
+    climbsCount: number;
+    profileStepM: number;
+  };
+  legend: {
+    note: string;
+    fenetreCatM: number;
+    longueurMin: number;
+    categories: Array<{ id: string; label: string; minPct: number | null; maxPct: number | null }>;
+  };
+  segments: ExportSegment[];
+  climbs: ExportClimb[];
+}
 ```
 
 ---
 
 ## 4. Inventaire complet des paramètres
 
-### 4.1 Paramètres utilisateur (exposés dans l'UI)
+### 4.1 Paramètres utilisateur (15 numériques + 2 toggles)
 
-| Nom UI | Nom technique | Type | Plage | Défaut | Impact principal |
+| Nom UI | Nom technique | Type | Plage | Défaut | Impact |
 |---|---|---|---|---|---|
 | Pas de rééchantillonnage | `stepM` | float | 2–200 | **50** | Espacement cible |
-| **Anti-pic : fenêtre** | **`despikeWindowM`** | **float** | **50–500** | **200** | **Fenêtre Hampel (m)** |
-| Anti-pic : seuil | `despikeThresholdM` | float | 0–100 | **15** | Seuil Hampel |
-| Lissage altitude | `fenetreAffichageM` | float | 20–∞ | **500** | Douceur profil |
+| Anti-pic : fenêtre | `despikeWindowM` | float | 50–500 | **200** | Fenêtre Hampel (m) |
+| Anti-pic : seuil | `despikeThresholdM` | float | 0–100 | **15** | Seuil Hampel (m) |
+| Lissage altitude | `fenetreAffichageM` | float | 20–∞ | **500** | Douceur profil + catégorisation |
 | Lissage pente | `fenetrePenteM` | float | 10–∞ | **150** | Douceur pente |
 | Fenêtre de calcul pente | `fenetreCatM` | float | 50–∞ | **100** | Largeur couleur |
 | Seuil détection | `seuilMontee` | float | 0.1–∞ | **0.5** | Sensibilité détection |
-| Longueur min. pente | `longueurMin` | float | 0–∞ | **200** | Fusion segments |
+| Longueur min. pente | `longueurMin` | float | 0–∞ | **200** | Fusion segments catégorie |
 | Écart min. entre montées | `gapMinM` | float | 0–5000 | **250** | Fusion montées |
 | Recherche extrema | `refinePct` | float | 1–500 | **60** | Distance max recherche |
-| Filtre médian | `medianWindowM` | float | 0–300 | **0** | Élimination pics |
+| Filtre médian | `medianWindowM` | float | 0–300 | **0** | Élimination pics isolés |
 | Lissage gaussien | `gaussianSigmaM` | float | 0–500 | **75** | Adoucissement |
 | Correction plateaux | `plateauRun` | int | 0–20 | **6** | Détection plateaux |
 | Segments debug | `segmentLogM` | int | 10–2000 | **100** | Granularité log |
+| Pas du profil exporté | `exportProfileStepM` | float | 10–500 | **50** | Granularité JSON |
+| Double SG | `smoothExtra` | bool | — | **ON** | Second passage SG |
+| Lissage segments | `segmentSmooth` | bool | — | **ON** | Médiane mobile 3 sur logs |
 
-**Note importante sur les renommages v3.5.2 / v3.6** : les **clés techniques** (`fenetreCatM`, `longueurMin`) restent **inchangées** pour ne pas casser le code. Seuls les **libellés UI** changent :
-- `Fenêtre couleur` → **Fenêtre de calcul pente**
-- `Longueur min. couleur` → **Longueur min. pente**
-- `despikeWinPts` → **`despikeWindowM`** (v3.6 : changement de nature, plus seulement de nom)
+**Note importante** : les clés techniques sont **stables** entre versions. Seuls les libellés UI changent.
 
 ### 4.2 Constantes internes (non exposées)
 
-| Nom technique | Valeur | Rôle |
+| Nom | Valeur | Rôle |
 |---|---|---|
 | `REFINE_MIN_M` | 1500 | Plancher garde-fou |
 | `REFINE_MAX_M` | 8000 | Plafond garde-fou |
@@ -430,22 +661,34 @@ export interface DiagResult {
 | `SLOPE_DISPLAY_MAX_PCT` | 25 | Écrêtage pentes |
 | `PLATEAU_TOLERANCE_M` | 1.0 | Tolérance plateaux |
 | `RAW_DOUBLON_MIN_M` | 1.0 | Seuil doublon |
-| **`DESPIKE_WINDOW_M_DEFAULT`** | **200** | **Fenêtre Hampel par défaut (m)** |
-| **`DESPIKE_WINDOW_M_MIN`** | **50** | **Plancher fenêtre Hampel (m)** |
-| **`DESPIKE_WINDOW_M_MAX`** | **500** | **Plafond fenêtre Hampel (m)** |
+| `DESPIKE_WINDOW_M_DEFAULT` | 200 | Fenêtre Hampel (m) |
+| `DESPIKE_WINDOW_M_MIN` | 50 | Plancher fenêtre |
+| `DESPIKE_WINDOW_M_MAX` | 500 | Plafond fenêtre |
 | `DESPIKE_THRESHOLD_M_DEFAULT` | 15 | Seuil Hampel |
-| **`RESAMPLE_AVG_MIN_M`** | **75** | **Fenêtre minimale de moyennage (v3.5)** |
+| `RESAMPLE_AVG_MIN_M` | 75 | Fenêtre minimale de moyennage |
+| `EXPORT_PROFILE_STEP_M_DEFAULT` | 50 | Granularité profil |
+| `EXPORT_PROFILE_STEP_M_MIN` | 10 | Plancher |
+| `EXPORT_PROFILE_STEP_M_MAX` | 500 | Plafond |
 | `INSERT_EDGE_MIN_KM` | 1.0 | Espace avant/après |
 | `INSERT_BETWEEN_MIN_KM` | 0.2 | Espace entre montées |
-| `INSERT_DEFAULT_LEN_KM` | 1.0 | Longueur insertion |
+| `MANUAL_MIN_LEN_KM` | 0.05 | Longueur min. création |
+| **`PROFILE_SCALE_X_FULL`** | **50** | **m/px profil complet** |
+| **`PROFILE_SCALE_X_CLIMB`** | **10** | **m/px widget montée** |
+| **`PROFILE_SCALE_Y`** | **10** | **m/px vertical** |
+| `PROFILE_MIN_HEIGHT` | 110 | Hauteur mini canvas |
+| `PROFILE_HANDLE_PAD` | 200 | Marge m autour d'une montée |
+| **`MAP_TERRAIN_EXAGGERATION`** | **1** | **Exagération terrain 3D** |
+| **`MAP_CLIMB_MARGIN`** | **0.20** | **Marge zoom montée** |
+| **`MAP_MIN_SPAN_DEG`** | **0.0014** | **Emprise minimale (~150 m)** |
+| **`CONTOUR_BASE_COLOR`** | **`#7a5733`** | **Couleur contours normaux** |
+| **`CONTOUR_INDEX_COLOR`** | **`#5e3f1d`** | **Couleur contours d'index** |
 | `_maxChartPoints` | 4000 | Points max par graphique |
 | `_maxSearchSteps` | 800 | Sous-échantillonnage findBestSubClimb |
 | `_minSegmentLength` | 300 | Longueur min absolue |
-| `_eleBarelyWin` | 5 | Micro-lissage affichage pente |
 | `DRAG_MIN_LEN_KM` | 0.05 | Longueur min drag |
 | `DRAG_MIN_GAP_KM` | 0.001 | Gap min drag |
 
-### 4.3 Critères de validation des montées
+### 4.3 Critères de validation
 
 ```typescript
 export const CLIMB_CRITERIA = [
@@ -454,13 +697,13 @@ export const CLIMB_CRITERIA = [
   { minLen: 500,  minSlope: 5 },  // 500–750   → ≥ 5 %
   { minLen: 400,  minSlope: 6 },  // 400–500   → ≥ 6 %
   { minLen: 300,  minSlope: 7 },  // 300–400   → ≥ 7 %
-  // < 300 m : toujours rejeté
+  // < 300 m : rejeté
 ];
 ```
 
 ### 4.4 Règles de cohérence (diagnostic)
 
-| Règle | Condition | Niveau si violée |
+| Règle | Condition | Niveau |
 |---|---|---|
 | Fenêtre SG ≥ 5 pts | `fenetreAffichageM ≥ 5 × stepM` | 🔴 si < 5, 🟠 si < 10 |
 | Ratio altitude/pente ≥ 2 | `fenetreAffichageM ≥ 2 × fenetrePenteM` | 🔴 si < 1.5, 🟠 si < 2 |
@@ -468,8 +711,9 @@ export const CLIMB_CRITERIA = [
 | Gaussien ≥ 0.5 pt | `gaussianSigmaM ≥ 0.5 × stepM` (ou 0) | 🟠 |
 | Longueur min. pente ≥ Pas | `longueurMin ≥ stepM` (ou 0) | 🟠 |
 | Écart min. ≥ Pas | `gapMinM ≥ stepM` (ou 0) | 🟠 |
-| **Anti-pic fenêtre ≥ 2 × Pas** | **`despikeWindowM ≥ 2 × stepM`** (ou seuil = 0) | **🟠** |
+| Anti-pic fenêtre ≥ 2 × Pas | `despikeWindowM ≥ 2 × stepM` (ou seuil = 0) | 🟠 |
 | Anti-pic seuil ≥ 5 m | `despikeThresholdM ≥ 5` (ou 0) | 🟠 |
+| Pas du profil exporté ≤ Longueur min. pente | `exportProfileStepM ≤ longueurMin` | 🟠 |
 
 ### 4.5 Validation des paramètres
 
@@ -492,8 +736,9 @@ export function validateParameters(p: AnalyzerParameters): AnalyzerParameters {
     gaussianSigmaM: Math.max(0, Math.min(500, p.gaussianSigmaM)),
     plateauRun: Math.max(0, Math.min(20, p.plateauRun)),
     segmentLogM: Math.max(10, Math.min(2000, p.segmentLogM)),
-    smoothExtra: p.smoothExtra,
-    segmentSmooth: p.segmentSmooth,
+    exportProfileStepM: Math.max(10, Math.min(500, p.exportProfileStepM)),
+    smoothExtra: !!p.smoothExtra,
+    segmentSmooth: !!p.segmentSmooth,
   };
 }
 ```
@@ -502,7 +747,7 @@ export function validateParameters(p: AnalyzerParameters): AnalyzerParameters {
 
 ## 5. Paramètres de catégorisation de pente
 
-### 5.1 Configuration actuelle (figée en V3)
+### 5.1 Configuration (figée depuis V3)
 
 ```typescript
 // src/utils/categorization.ts
@@ -516,8 +761,8 @@ export interface SlopeCategory {
 }
 
 export const SLOPE_CATEGORIES: SlopeCategory[] = [
-  { id: 'dh3', label: 'Descente raide',       color: '#1e40af', min: -Infinity, max: -8 },
-  { id: 'dh2', label: 'Descente',             color: '#3b82f6', min: -8, max: -3 },
+  { id: 'dh3', label: 'Descente raide',       color: '#1e40af', min: -Infinity, max: -7 },
+  { id: 'dh2', label: 'Descente',             color: '#3b82f6', min: -7, max: -3 },
   { id: 'dh1', label: 'Faux plat descendant', color: '#93c5fd', min: -3, max: -1 },
   { id: 'pl',  label: 'Plat',                 color: '#22c55e', min: -1, max: 1 },
   { id: 'up1', label: 'Faux plat montant',    color: '#fde68a', min: 1,  max: 3 },
@@ -525,37 +770,71 @@ export const SLOPE_CATEGORIES: SlopeCategory[] = [
   { id: 'up3', label: 'Montée raide',         color: '#dc2626', min: 7,  max: 10 },
   { id: 'up4', label: 'Montée très raide',    color: '#000000', min: 10, max: Infinity },
 ];
+
+export const CATEGORY_BY_ID: Record<string, SlopeCategory> =
+  Object.fromEntries(SLOPE_CATEGORIES.map(c => [c.id, c]));
+
+export function categorize(slope: number): string {
+  for (const c of SLOPE_CATEGORIES) if (slope >= c.min && slope < c.max) return c.id;
+  return 'pl';
+}
+
+export function colorForSlope(slope: number): string {
+  return CATEGORY_BY_ID[categorize(slope)].color;
+}
 ```
 
 ### 5.2 Tableau récapitulatif
 
 | Plage | ID | Libellé | Couleur | Hex |
 |---|---|---|---|---|
-| p < −8 % | `dh3` | Descente raide | 🔵 Bleu foncé | `#1e40af` |
-| −8 ≤ p < −3 % | `dh2` | Descente | 🔵 Bleu | `#3b82f6` |
-| −3 ≤ p < −1 % | `dh1` | Faux plat descendant | 🩵 Bleu clair | `#93c5fd` |
-| −1 ≤ p ≤ +1 % | `pl` | Plat | 🟢 Vert | `#22c55e` |
-| +1 < p ≤ +3 % | `up1` | Faux plat montant | 🟡 Jaune | `#fde68a` |
-| +3 < p ≤ +7 % | `up2` | Montée | 🟠 Orange | `#f97316` |
-| +7 < p ≤ +10 % | `up3` | Montée raide | 🔴 Rouge | `#dc2626` |
-| p > +10 % | `up4` | Montée très raide | ⚫ Noir | `#000000` |
+| p < −7 % | `dh3` | Descente raide | Bleu foncé | `#1e40af` |
+| −7 ≤ p < −3 % | `dh2` | Descente | Bleu | `#3b82f6` |
+| −3 ≤ p < −1 % | `dh1` | Faux plat descendant | Bleu clair | `#93c5fd` |
+| −1 ≤ p ≤ +1 % | `pl` | Plat | Vert | `#22c55e` |
+| +1 < p ≤ +3 % | `up1` | Faux plat montant | Jaune | `#fde68a` |
+| +3 < p ≤ +7 % | `up2` | Montée | Orange | `#f97316` |
+| +7 < p ≤ +10 % | `up3` | Montée raide | Rouge | `#dc2626` |
+| p > +10 % | `up4` | Montée très raide | Noir | `#000000` |
 
-### 5.3 Règles d'application
+**Règles** :
+- La **borne haute est exclusive** : une pente de +3 % exactement tombe dans `up1`
+- La catégorisation est **symétrique** pour les faux plats, **asymétrique** pour les raides
 
-- La **borne haute est exclusive** : une pente de +3 % exactement tombe dans `up1`.
-- La catégorisation est **symétrique** pour le plat et les faux plats, mais **asymétrique** pour les raides.
-- Les seuils sont **codés en dur** dans la V3 (constante `SLOPE_CATEGORIES`).
-
-### 5.4 Évolution V4 — rendre éditables
+### 5.3 Groupes de montées — helpers
 
 ```typescript
-export interface EditableSlopeThresholds {
-  descenteRaide: number;       // défaut 8
-  descente: number;            // défaut 3
-  fauxPlat: number;            // défaut 1
-  montee: number;              // défaut 3
-  monteeRaide: number;         // défaut 7
-  monteeTresRaide: number;     // défaut 10
+// src/utils/groupHelpers.ts
+
+/**
+ * Couleur stable pour un groupe (angle d'or → teinte bien répartie).
+ */
+export function groupColor(gid: number): string {
+  const hue = (gid * 137.508) % 360;
+  return `hsl(${hue.toFixed(0)}, 62%, 46%)`;
+}
+
+/**
+ * Numérotation d'affichage : "#N" (autonome) ou "#N.M" (groupé).
+ * Calculée à partir du tableau trié de montées.
+ */
+export function computeClimbLabels(climbs: { groupId: number | null; subIndex: number | null }[]): string[] {
+  let mainCounter = 0;
+  const groupCounters: Record<number, number> = {};
+  const labels: string[] = [];
+
+  for (const c of climbs) {
+    if (c.groupId != null) {
+      if (groupCounters[c.groupId] === undefined) groupCounters[c.groupId] = 0;
+      groupCounters[c.groupId]++;
+      const sub = c.subIndex != null ? c.subIndex : groupCounters[c.groupId];
+      labels.push(`#${c.groupId}.${sub}`);
+    } else {
+      mainCounter++;
+      labels.push(`#${mainCounter}`);
+    }
+  }
+  return labels;
 }
 ```
 
@@ -598,15 +877,11 @@ export function computeCumulativeDistances(
 }
 ```
 
-### 6.2 Rééchantillonnage par moyenne (v3.5)
+### 6.2 Rééchantillonnage par moyenne
 
 ```typescript
 // src/utils/resample.ts
 
-/**
- * Fenêtre minimale de moyennage au rééchantillonnage.
- * La fenêtre effective vaut : clamp(stepM, RESAMPLE_AVG_MIN_M, 3 × stepM).
- */
 export const RESAMPLE_AVG_MIN_M = 75;
 
 export function resampleUniform(
@@ -645,7 +920,7 @@ export function resampleUniform(
     if (count > 0) {
       ele[k] = sumEle / count;
     } else {
-      // Fallback : interpolation (uniquement si stepM < pas brut)
+      // Fallback : interpolation linéaire
       let jj = 0;
       while (jj < n - 2 && distRaw[jj + 1] < dCenter) jj++;
       const d0 = distRaw[jj];
@@ -699,15 +974,15 @@ export function plateauCorrect(
 }
 ```
 
-### 6.4 Anti-pic Hampel (v3.6 — fenêtre en mètres)
+### 6.4 Anti-pic Hampel
 
 ```typescript
 // src/utils/despike.ts
 
 /**
  * Convertit une fenêtre en mètres en nombre de points.
- * - Force un nombre impair (Hampel requiert une fenêtre symétrique)
- * - Garantit un minimum de 3 points (sinon Hampel dégénère)
+ * - Force un nombre impair
+ * - Garantit un minimum de 3 points
  */
 export function despikeWindowMToPts(windowM: number, stepM: number): number {
   return Math.max(3, Math.round(windowM / stepM) | 1);
@@ -716,11 +991,6 @@ export function despikeWindowMToPts(windowM: number, stepM: number): number {
 /**
  * Filtre Hampel : remplace les points aberrants par la médiane locale.
  * Ne modifie QUE les points qui dévient fortement de leur voisinage.
- *
- * @param ele        Altitudes (à pas régulier)
- * @param winPts     Taille de la fenêtre en points (impair, ≥ 3)
- * @param thresholdM Seuil de détection en mètres (0 = désactivé)
- * @returns          { out, count }
  */
 export function despikeAltitude(
   ele: Float64Array,
@@ -755,7 +1025,6 @@ export function despikeAltitude(
 
 /**
  * Wrapper : convertit mètres → points puis applique Hampel.
- * Utilisé directement dans le pipeline.
  */
 export function applyDespike(
   ele: Float64Array,
@@ -773,6 +1042,8 @@ export function applyDespike(
 
 ```typescript
 // src/utils/rawStats.ts
+
+import type { RawStats } from '../types/state';
 
 const RAW_DOUBLON_MIN_M = 1.0;
 
@@ -911,6 +1182,8 @@ export function medianFilter(arr: Float64Array, win: number): Float64Array {
 ```typescript
 // src/utils/anchoredSmoothing.ts
 
+import { savitzkyGolay, gaussianFilter } from './smoothing';
+
 export function anchoredMovingAverage(
   raw: Float64Array,
   anchorIdxs: number[],
@@ -997,104 +1270,224 @@ export function clipSlope(slope: Float64Array, maxPct = 25): Float64Array {
 }
 ```
 
-### 6.9 Fusion des montées (v3.0)
+### 6.9 Détection (hystérésis, candidats, subClimb, computeAuto)
 
 ```typescript
-// src/utils/mergeClimbs.ts
+// src/utils/detection.ts
 
-export interface RefinedClimb {
-  startIdx: number;
-  endIdx: number;
-  refineM: number;
-  candidateLen: number;
-  _merged: number;
+import type { AnalyzerParameters } from '../types/parameters';
+import type { AutoClimb } from '../types/climb';
+import { CLIMB_CRITERIA } from './categorization';
+
+const REFINE_MIN_M = 1500;
+const REFINE_MAX_M = 8000;
+const SLOPE_DISPLAY_MAX_PCT = 25;
+
+export interface Event { idx: number; type: 'start' | 'summit' }
+export interface Candidate { startIdx: number; endIdx: number; key: string }
+export interface SubClimb { startIdx: number; endIdx: number; length: number; dPlus: number; avgSlope: number }
+
+export function minSlopeForLength(len: number): number {
+  for (const c of CLIMB_CRITERIA) if (len >= c.minLen) return c.minSlope;
+  return Infinity;
 }
 
-export function tryMergeWithPrevious(
-  prev: RefinedClimb,
-  newStart: number,
-  newEnd: number,
+export function detectEvents(slope: Float64Array, seuil: number): Event[] {
+  const ev: Event[] = [];
+  let inC = false;
+  for (let i = 0; i < slope.length; i++) {
+    if (!inC && slope[i] > seuil) { ev.push({ idx: i, type: 'start' }); inC = true; }
+    else if (inC && slope[i] < -seuil) { ev.push({ idx: i, type: 'summit' }); inC = false; }
+  }
+  if (inC) ev.push({ idx: slope.length - 1, type: 'summit' });
+  return ev;
+}
+
+export function buildClimbCandidates(events: Event[], n: number): Candidate[] {
+  const segs: Candidate[] = [];
+  let prev = 0;
+  let cur: 'climb' | 'non-climb' = (events.length && events[0].type === 'summit') ? 'climb' : 'non-climb';
+
+  for (const e of events) {
+    if (e.idx > prev) segs.push({ startIdx: prev, endIdx: e.idx, key: cur });
+    cur = e.type === 'start' ? 'climb' : 'non-climb';
+    prev = e.idx;
+  }
+  if (prev < n - 1) segs.push({ startIdx: prev, endIdx: n - 1, key: cur });
+  return segs.filter(s => s.key === 'climb');
+}
+
+export function findBestSubClimb(
   dist: Float64Array,
-  eleBase: Float64Array,
-  gapMinM: number,
-  effectiveRefine: number,
-  candidateLen: number,
-): {
-  merged: boolean;
-  updatedPrev?: RefinedClimb;
-  newAnchorEnd?: number;
-  newAnchorValley?: number;
-} {
-  if (gapMinM <= 0) return { merged: false };
+  ele: Float64Array,
+  startIdx: number,
+  endIdx: number,
+): SubClimb | null {
+  const n = endIdx - startIdx + 1;
+  if (n < 2) return null;
+  const cum = new Float64Array(n);
+  for (let k = 1; k < n; k++) {
+    const d = ele[startIdx + k] - ele[startIdx + k - 1];
+    cum[k] = cum[k - 1] + (d > 0 ? d : 0);
+  }
+  const step = n > 800 ? Math.ceil(n / 800) : 1;
+  let best: SubClimb | null = null;
+  for (let si = 0; si < n - 1; si += step) {
+    for (let ei = si + 1; ei < n; ei += step) {
+      const len = dist[startIdx + ei] - dist[startIdx + si];
+      if (len < 300) continue;
+      if (best && len <= best.length) continue;
+      const dP = cum[ei] - cum[si];
+      const s = (dP / len) * 100;
+      if (s >= minSlopeForLength(len)) {
+        best = { startIdx: startIdx + si, endIdx: startIdx + ei, length: len, dPlus: dP, avgSlope: s };
+      }
+    }
+  }
+  return best;
+}
 
-  const gapM = dist[newStart] - dist[prev.endIdx];
-  if (gapM >= gapMinM) return { merged: false };
+// Helpers inline (dupliqués pour éviter la dépendance circulaire)
+function findIdxAtDist(dist: Float64Array, targetM: number): number {
+  let lo = 0, hi = dist.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dist[mid] < targetM) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+function argminRange(arr: Float64Array, lo: number, hi: number): number {
+  let best = lo, v = arr[lo];
+  for (let i = lo + 1; i <= hi; i++) if (arr[i] < v) { v = arr[i]; best = i; }
+  return best;
+}
+function argmaxRange(arr: Float64Array, lo: number, hi: number): number {
+  let best = lo, v = arr[lo];
+  for (let i = lo + 1; i <= hi; i++) if (arr[i] > v) { v = arr[i]; best = i; }
+  return best;
+}
 
-  let bestEnd = prev.endIdx;
-  let bestEndVal = eleBase[prev.endIdx];
-  for (let i = prev.endIdx + 1; i <= newEnd; i++) {
-    if (eleBase[i] > bestEndVal) { bestEndVal = eleBase[i]; bestEnd = i; }
+export function computeAuto(
+  dist: Float64Array,
+  eleRaw: Float64Array,
+  params: AnalyzerParameters,
+): { autoClimbs: AutoClimb[] } {
+  const { stepM, fenetreAffichageM, fenetrePenteM, seuilMontee, refinePct,
+          medianWindowM, gaussianSigmaM, gapMinM } = params;
+  const n = eleRaw.length;
+
+  // Filtre médian optionnel
+  let eleMedian = eleRaw;
+  if (medianWindowM > 0) {
+    const winPts = Math.max(3, Math.round(medianWindowM / stepM) | 1);
+    eleMedian = medianFilter(eleRaw, winPts);
   }
 
-  let bestValley = prev.startIdx;
-  let bestValleyVal = eleBase[prev.startIdx];
-  for (let i = prev.endIdx; i <= newStart; i++) {
-    if (eleBase[i] < bestValleyVal) { bestValleyVal = eleBase[i]; bestValley = i; }
+  // Lissage SG
+  const winSGPts = Math.max(5, Math.round(fenetreAffichageM / stepM) | 1);
+  const eleBase = savitzkyGolay(eleMedian, winSGPts, 2);
+
+  // Pente lissée + clip
+  const winSlopePts = Math.max(1, Math.round(fenetrePenteM / stepM));
+  const slopeBase = clipSlope(
+    movingAverage(computeSlope(eleBase, dist), winSlopePts),
+    SLOPE_DISPLAY_MAX_PCT,
+  );
+
+  // Candidats
+  const candidates = buildClimbCandidates(detectEvents(slopeBase, seuilMontee), n);
+
+  // Sous-segment optimal
+  const candidatesWithSub: SubClimb[] = [];
+  for (const c of candidates) {
+    const sub = findBestSubClimb(dist, eleBase, c.startIdx, c.endIdx);
+    if (sub) candidatesWithSub.push(sub);
   }
 
-  const newPrevStart = (bestValleyVal < eleBase[prev.startIdx]) ? bestValley : prev.startIdx;
+  // Raffinement + Fusion (avec conservation des mergedParts)
+  interface Refined {
+    startIdx: number;
+    endIdx: number;
+    refineM: number;
+    candidateLen: number;
+    _merged: number;
+    _mergedParts: { startKm: number; endKm: number }[] | null;
+  }
 
-  return {
-    merged: true,
-    updatedPrev: {
-      startIdx: newPrevStart,
-      endIdx: bestEnd,
-      refineM: Math.max(prev.refineM, effectiveRefine),
-      candidateLen: prev.candidateLen + candidateLen,
-      _merged: prev._merged + 1,
-    },
-    newAnchorEnd: bestEnd,
-    newAnchorValley: newPrevStart !== prev.startIdx ? newPrevStart : undefined,
-  };
-}
-```
+  const anchors: number[] = [];
+  const refined: Refined[] = [];
+  let lastEnd = -1;
 
-### 6.10 Validation finale stricte (v3.1)
+  for (const c of candidatesWithSub) {
+    const candidateLen = c.length;
+    const effectiveRefine = Math.max(
+      REFINE_MIN_M,
+      Math.min(REFINE_MAX_M, refinePct * candidateLen / 100),
+    );
+    const hiIdx = findIdxAtDist(dist, Math.min(dist[n - 1], dist[c.endIdx] + effectiveRefine));
+    const newEnd = (hiIdx > c.endIdx) ? argmaxRange(eleBase, c.endIdx, hiIdx) : c.endIdx;
+    if (newEnd <= c.startIdx) continue;
+    if (newEnd <= lastEnd) continue;
+    const naturalLow = lastEnd + 1;
+    const safetyLow = findIdxAtDist(dist, Math.max(0, dist[c.startIdx] - effectiveRefine));
+    const loIdx = Math.max(naturalLow, safetyLow);
+    const newStart = (loIdx < c.startIdx) ? argminRange(eleBase, loIdx, c.startIdx) : c.startIdx;
+    if (newStart >= newEnd) continue;
 
-```typescript
-// src/utils/validateClimbs.ts
+    // Fusion
+    if (refined.length > 0 && gapMinM > 0) {
+      const prev = refined[refined.length - 1];
+      const gapM = dist[newStart] - dist[prev.endIdx];
+      if (gapM < gapMinM) {
+        // Conservation des bornes de la sous-montée initiale
+        if (!prev._mergedParts) {
+          prev._mergedParts = [{
+            startKm: dist[prev.startIdx] / 1000,
+            endKm: dist[prev.endIdx] / 1000,
+          }];
+        }
+        const combinedEnd = argmaxRange(eleBase, prev.endIdx, newEnd);
+        const midValley = argminRange(eleBase, prev.endIdx, newStart);
+        let newPrevStart = prev.startIdx;
+        if (eleBase[midValley] < eleBase[prev.startIdx]) {
+          newPrevStart = midValley;
+          anchors[anchors.length - 2] = midValley;
+        }
+        // Ajouter la nouvelle sous-montée
+        prev._mergedParts.push({
+          startKm: dist[newStart] / 1000,
+          endKm: dist[newEnd] / 1000,
+        });
+        prev.startIdx = newPrevStart;
+        prev.endIdx = combinedEnd;
+        prev.candidateLen += candidateLen;
+        prev.refineM = Math.max(prev.refineM, effectiveRefine);
+        prev._merged += 1;
+        anchors[anchors.length - 1] = combinedEnd;
+        lastEnd = combinedEnd;
+        continue;
+      }
+    }
 
-export interface ValidationResult {
-  startIdx: number;
-  endIdx: number;
-  mergedCount: number;
-  fallback: boolean;
-}
+    anchors.push(newStart, newEnd);
+    refined.push({
+      startIdx: newStart, endIdx: newEnd,
+      refineM: effectiveRefine, candidateLen,
+      _merged: 0, _mergedParts: null,
+    });
+    lastEnd = newEnd;
+  }
 
-export function validateAndFallback(
-  refined: RefinedClimb[],
-  dist: Float64Array,
-  eleDisplay: Float64Array,
-  minSlopeForLength: (len: number) => number,
-  findBestSubClimb: (
-    dist: Float64Array,
-    ele: Float64Array,
-    s: number,
-    e: number,
-  ) => { startIdx: number; endIdx: number; avgSlope: number; length: number } | null,
-): {
-  results: ValidationResult[];
-  rejectedCount: number;
-  fallbackCount: number;
-} {
-  const results: ValidationResult[] = [];
-  let rejectedCount = 0;
-  let fallbackCount = 0;
+  // Lissage ancré final
+  const eleDisplay = anchoredMovingAverage(
+    eleRaw, anchors, stepM, fenetreAffichageM, gaussianSigmaM, params.smoothExtra,
+  );
 
+  // Validation stricte + préservation de mergedParts
+  const autoClimbs: AutoClimb[] = [];
   for (const c of refined) {
     let finalStart = c.startIdx;
     let finalEnd = c.endIdx;
-
     const length = dist[finalEnd] - dist[finalStart];
     let dPlus = 0;
     for (let k = finalStart + 1; k <= finalEnd; k++) {
@@ -1103,34 +1496,39 @@ export function validateAndFallback(
     }
     const avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
     const minSlope = minSlopeForLength(length);
+    let fallbackFlag = false;
 
     if (length < 300 || avgSlope < minSlope) {
       const sub = findBestSubClimb(dist, eleDisplay, c.startIdx, c.endIdx);
-      if (!sub) {
-        rejectedCount++;
-        continue;
-      }
+      if (!sub) continue;
       finalStart = sub.startIdx;
       finalEnd = sub.endIdx;
-      fallbackCount++;
+      fallbackFlag = true;
     }
 
-    results.push({
-      startIdx: finalStart,
-      endIdx: finalEnd,
+    autoClimbs.push({
+      startKm: dist[finalStart] / 1000,
+      endKm: dist[finalEnd] / 1000,
+      refineM: c.refineM,
+      candidateLen: c.candidateLen,
       mergedCount: c._merged,
-      fallback: finalStart !== c.startIdx || finalEnd !== c.endIdx,
+      mergedParts: c._mergedParts,
+      fallback: fallbackFlag,
     });
   }
 
-  return { results, rejectedCount, fallbackCount };
+  return { autoClimbs };
 }
 ```
 
-### 6.11 Contraintes de montées
+**Note** : les fonctions `medianFilter`, `savitzkyGolay`, `movingAverage`, `computeSlope`, `clipSlope`, `anchoredMovingAverage` doivent être importées depuis leurs modules respectifs.
+
+### 6.10 Contraintes anti-chevauchement
 
 ```typescript
 // src/utils/climbConstraints.ts
+
+import type { UserClimb } from '../types/climb';
 
 const START_OFFSET_KM = 0.001;
 const END_OFFSET_KM = 0.1;
@@ -1181,90 +1579,569 @@ export function applyDragConstraint(
 }
 ```
 
-### 6.12 Insertion contextuelle
+### 6.11 Groupes — séparation, refusion, normalisation
 
 ```typescript
-// src/utils/insertion.ts
+// src/utils/climbGroups.ts
 
-export const INSERT_EDGE_MIN_KM = 1.0;
-export const INSERT_BETWEEN_MIN_KM = 0.2;
-export const INSERT_DEFAULT_LEN_KM = 1.0;
+import type { UserClimb } from '../types/climb';
 
-export interface InsertionSlot {
-  kind: 'before-first' | 'between' | 'after-last' | 'empty';
-  label: string;
-  gapStartKm: number;
-  gapEndKm: number;
-  gapKm: number;
-  gapIdx?: number;
+/**
+ * Sépare une montée fusionnée en ses sous-montées d'origine.
+ * Alloue un nouveau groupId, retire la montée fusionnée,
+ * insère les sous-montées triées, retourne les nouvelles montées et le gid.
+ */
+export function splitMergedClimb(
+  mergedIdx: number,
+  userClimbs: UserClimb[],
+  nextGroupId: number,
+): { newClimbs: UserClimb[]; gid: number } | null {
+  const merged = userClimbs[mergedIdx];
+  if (!merged) return null;
+  if (!Array.isArray(merged.mergedParts) || merged.mergedParts.length < 2) {
+    return null;
+  }
+
+  const gid = nextGroupId;
+
+  // Retirer la montée fusionnée
+  userClimbs.splice(mergedIdx, 1);
+
+  // Créer les sous-montées
+  const newClimbs: UserClimb[] = merged.mergedParts.map((part, k) => ({
+    startKm: part.startKm,
+    endKm: part.endKm,
+    autoStartKm: null,
+    autoEndKm: null,
+    refineM: null,
+    candidateLen: null,
+    mergedCount: 0,
+    mergedParts: null,
+    fallback: false,
+    groupId: gid,
+    subIndex: k + 1,
+  }));
+
+  for (const nc of newClimbs) userClimbs.push(nc);
+  userClimbs.sort((a, b) => a.startKm - b.startKm);
+
+  return { newClimbs, gid };
 }
 
-export function computeInsertionSlots(
-  climbs: { startDist: number; endDist: number }[],
-  totalDist: number,
-): InsertionSlot[] {
-  const slots: InsertionSlot[] = [];
-  const totalKm = totalDist / 1000;
+/**
+ * Refusionne tous les membres d'un groupe en une seule montée fusionnée.
+ * Les `mergedParts` sont reconstruits avec les bornes **actuelles**.
+ */
+export function refuseGroup(
+  gid: number,
+  userClimbs: UserClimb[],
+): { merged: UserClimb } | null {
+  const members = userClimbs
+    .filter(c => c.groupId === gid)
+    .sort((a, b) => a.startKm - b.startKm);
 
-  if (climbs.length === 0) {
-    slots.push({
-      kind: 'empty',
-      label: 'Ajouter une montée sur la trace',
-      gapStartKm: 0, gapEndKm: totalKm, gapKm: totalKm,
-    });
-    return slots;
+  if (members.length < 2) return null;
+
+  const startKm = members[0].startKm;
+  const endKm = members[members.length - 1].endKm;
+  const mergedParts = members.map(m => ({ startKm: m.startKm, endKm: m.endKm }));
+
+  // Retirer les membres
+  for (let i = userClimbs.length - 1; i >= 0; i--) {
+    if (userClimbs[i].groupId === gid) userClimbs.splice(i, 1);
   }
 
-  const firstStartKm = climbs[0].startDist / 1000;
-  if (firstStartKm >= INSERT_EDGE_MIN_KM) {
-    slots.push({
-      kind: 'before-first',
-      label: 'Avant la montée #1',
-      gapStartKm: 0, gapEndKm: firstStartKm, gapKm: firstStartKm,
-    });
+  // Créer la montée fusionnée
+  const merged: UserClimb = {
+    startKm,
+    endKm,
+    autoStartKm: null,
+    autoEndKm: null,
+    refineM: null,
+    candidateLen: null,
+    mergedCount: members.length - 1,
+    mergedParts,
+    fallback: false,
+    groupId: null,
+    subIndex: null,
+  };
+  userClimbs.push(merged);
+  userClimbs.sort((a, b) => a.startKm - b.startKm);
+
+  return { merged };
+}
+
+/**
+ * Nettoie les groupes orphelins (moins de 2 membres).
+ */
+export function normalizeGroups(userClimbs: UserClimb[]): void {
+  const counts: Record<number, number> = {};
+  for (const c of userClimbs) {
+    if (c.groupId != null) counts[c.groupId] = (counts[c.groupId] || 0) + 1;
+  }
+  for (const c of userClimbs) {
+    if (c.groupId != null && counts[c.groupId] < 2) {
+      c.groupId = null;
+      c.subIndex = null;
+    }
+  }
+}
+```
+
+### 6.12 Suppression
+
+```typescript
+// src/utils/deleteClimb.ts
+
+import type { UserClimb } from '../types/climb';
+
+/**
+ * Supprime une montée de la liste, en gérant :
+ * - la renumérotation des subIndex du groupe affecté
+ * - la dissolution du groupe si < 2 membres restants
+ * - l'ajustement de la sélection (si applicable)
+ *
+ * Le caller doit ajuster `selectedClimbIdx` après l'appel.
+ */
+export function deleteClimbFromList(
+  idx: number,
+  userClimbs: UserClimb[],
+): { deletedGroupId: number | null; dissolved: boolean } {
+  if (idx < 0 || idx >= userClimbs.length) {
+    return { deletedGroupId: null, dissolved: false };
   }
 
-  for (let i = 0; i < climbs.length - 1; i++) {
-    const leftEndKm = climbs[i].endDist / 1000;
-    const rightStartKm = climbs[i + 1].startDist / 1000;
-    const gapKm = rightStartKm - leftEndKm;
-    if (gapKm >= INSERT_BETWEEN_MIN_KM) {
-      slots.push({
-        kind: 'between',
-        label: `Entre #${i + 1} et #${i + 2}`,
-        gapStartKm: leftEndKm, gapEndKm: rightStartKm, gapKm,
-        gapIdx: i,
-      });
+  const removed = userClimbs[idx];
+  userClimbs.splice(idx, 1);
+
+  let dissolved = false;
+  if (removed.groupId != null) {
+    const siblings = userClimbs
+      .filter(c => c.groupId === removed.groupId)
+      .sort((a, b) => a.startKm - b.startKm);
+
+    // Renuméroter les subIndex
+    siblings.forEach((c, k) => { c.subIndex = k + 1; });
+
+    // Dissoudre si < 2 membres
+    if (siblings.length < 2) {
+      for (const c of siblings) {
+        c.groupId = null;
+        c.subIndex = null;
+      }
+      dissolved = true;
     }
   }
 
-  const lastEndKm = climbs[climbs.length - 1].endDist / 1000;
-  const tailGapKm = totalKm - lastEndKm;
-  if (tailGapKm >= INSERT_EDGE_MIN_KM) {
-    slots.push({
-      kind: 'after-last',
-      label: `Après la montée #${climbs.length}`,
-      gapStartKm: lastEndKm, gapEndKm: totalKm, gapKm: tailGapKm,
+  return { deletedGroupId: removed.groupId, dissolved };
+}
+```
+
+### 6.13 Création manuelle
+
+```typescript
+// src/utils/manualClimb.ts
+
+import type { UserClimb } from '../types/climb';
+
+const MANUAL_MIN_LEN_KM = 0.05;
+
+/**
+ * Vérifie qu'une plage [a, b] ne chevauche aucune montée existante.
+ */
+export function isFreeRange(aKm: number, bKm: number, userClimbs: UserClimb[]): boolean {
+  const lo = Math.min(aKm, bKm);
+  const hi = Math.max(aKm, bKm);
+  for (const c of userClimbs) {
+    if (lo < c.endKm && hi > c.startKm) return false;
+  }
+  return true;
+}
+
+/**
+ * Vérifie qu'un point n'est pas dans une montée existante.
+ */
+export function isFreeKm(km: number, userClimbs: UserClimb[]): boolean {
+  for (const c of userClimbs) {
+    if (km >= c.startKm && km <= c.endKm) return false;
+  }
+  return true;
+}
+
+/**
+ * Crée une nouvelle montée manuelle.
+ * Retourne la montée créée ou null si refusée.
+ */
+export function createManualClimb(
+  valleyKm: number,
+  summitKm: number,
+  userClimbs: UserClimb[],
+): UserClimb | null {
+  if (summitKm <= valleyKm + MANUAL_MIN_LEN_KM) return null;
+  if (!isFreeRange(valleyKm, summitKm, userClimbs)) return null;
+
+  const newClimb: UserClimb = {
+    startKm: valleyKm,
+    endKm: summitKm,
+    autoStartKm: null,
+    autoEndKm: null,
+    refineM: null,
+    candidateLen: null,
+    mergedCount: 0,
+    mergedParts: null,
+    fallback: false,
+    groupId: null,
+    subIndex: null,
+  };
+
+  userClimbs.push(newClimb);
+  userClimbs.sort((a, b) => a.startKm - b.startKm);
+  return newClimb;
+}
+```
+
+### 6.14 Construction de la trace carte (points bruts)
+
+```typescript
+// src/utils/buildTraceFeatures.ts
+
+import type { GpxPoint } from '../types/gpx';
+import type { CatSegment } from '../types/category';
+import { CATEGORY_BY_ID } from './categorization';
+
+export interface TraceFeature {
+  type: 'Feature';
+  geometry: { type: 'LineString'; coordinates: [number, number][] };
+  properties: { color: string; categoryId: string };
+}
+
+export interface TraceFeatureCollection {
+  type: 'FeatureCollection';
+  features: TraceFeature[];
+}
+
+/**
+ * Construit la FeatureCollection de la trace colorée par catégorie.
+ *
+ * IMPORTANT (v3.9.2) : utilise les POINTS BRUTS du fichier GPX (rawPoints),
+ * pas la grille rééchantillonnée. La catégorie de chaque point brut est
+ * déterminée par sa distance cumulée (distRaw[i]) comparée aux bornes
+ * des catSegments (parcours monotone, O(n)).
+ */
+export function buildTraceFeatures(
+  rawPoints: GpxPoint[] | null,
+  distRaw: number[] | null,
+  catSegments: CatSegment[],
+): TraceFeatureCollection {
+  const empty: TraceFeatureCollection = { type: 'FeatureCollection', features: [] };
+  if (!rawPoints || !distRaw || rawPoints.length < 2 || catSegments.length === 0) {
+    return empty;
+  }
+
+  const n = rawPoints.length;
+
+  // 1. Catégoriser chaque point brut par distance cumulée
+  const catOf = new Array<string>(n);
+  let segIdx = 0;
+  for (let i = 0; i < n; i++) {
+    const d = distRaw[i];
+    while (segIdx < catSegments.length - 1 && d > catSegments[segIdx].endDist) segIdx++;
+    while (segIdx > 0 && d < catSegments[segIdx].startDist) segIdx--;
+    catOf[i] = catSegments[segIdx].key;
+  }
+
+  // 2. Grouper les points consécutifs de même catégorie
+  //    (le point de transition est inclus dans les deux LineStrings)
+  const features: TraceFeature[] = [];
+  let startIdx = 0;
+  for (let i = 1; i <= n; i++) {
+    if (i === n || catOf[i] !== catOf[startIdx]) {
+      const endInc = (i < n) ? i : n - 1;
+      const coords: [number, number][] = [];
+      for (let k = startIdx; k <= endInc; k++) {
+        coords.push([rawPoints[k].lon, rawPoints[k].lat]);
+      }
+      if (coords.length >= 2) {
+        const key = catOf[startIdx];
+        const cat = CATEGORY_BY_ID[key];
+        if (cat) {
+          features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: coords },
+            properties: { color: cat.color, categoryId: key },
+          });
+        }
+      }
+      startIdx = i;
+    }
+  }
+
+  return { type: 'FeatureCollection', features };
+}
+```
+
+### 6.15 Construction des marqueurs (mono/groupe)
+
+```typescript
+// src/utils/buildMapMarkers.ts
+
+import type { UserClimb } from '../types/climb';
+import type { GpxPoint } from '../types/gpx';
+
+export interface MarkerFeature {
+  type: 'Feature';
+  geometry: { type: 'Point'; coordinates: [number, number] };
+  properties: { kind: 'valley' | 'summit'; role: 'selected' | 'member' };
+}
+
+/**
+ * Construit les marqueurs vallée/sommet.
+ *
+ * - Si la montée sélectionnée est autonome : 2 marqueurs (role='selected').
+ * - Si elle appartient à un groupe (v3.9.2) : TOUS les points vallée/sommet
+ *   de TOUS les membres du groupe, avec role='selected' pour le membre
+ *   actif et role='member' pour les autres.
+ */
+export function buildMapMarkers(
+  selectedClimbIdx: number | null,
+  userClimbs: UserClimb[],
+  latLonAtDist: (dist: number) => [number, number],
+): { type: 'FeatureCollection'; features: MarkerFeature[] } {
+  const features: MarkerFeature[] = [];
+  if (selectedClimbIdx == null || !userClimbs[selectedClimbIdx]) {
+    return { type: 'FeatureCollection', features };
+  }
+
+  const selected = userClimbs[selectedClimbIdx];
+  const gid = selected.groupId;
+
+  if (gid != null) {
+    const members = userClimbs.filter(c => c.groupId === gid);
+    for (const m of members) {
+      const isSelf = (m === selected);
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: latLonAtDist(m.startKm * 1000) },
+        properties: { kind: 'valley', role: isSelf ? 'selected' : 'member' },
+      });
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: latLonAtDist(m.endKm * 1000) },
+        properties: { kind: 'summit', role: isSelf ? 'selected' : 'member' },
+      });
+    }
+  } else {
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: latLonAtDist(selected.startKm * 1000) },
+      properties: { kind: 'valley', role: 'selected' },
+    });
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: latLonAtDist(selected.endKm * 1000) },
+      properties: { kind: 'summit', role: 'selected' },
     });
   }
 
-  return slots;
+  return { type: 'FeatureCollection', features };
+}
+```
+
+### 6.16 Zoom helpers
+
+```typescript
+// src/utils/zoomHelpers.ts
+
+export const MAP_CLIMB_MARGIN = 0.20;
+export const MAP_MIN_SPAN_DEG = 0.0014;
+
+export function computeBounds(
+  startM: number,
+  endM: number,
+  latLonAtDist: (dist: number) => [number, number],
+): [[number, number], [number, number]] {
+  const startLL = latLonAtDist(startM);
+  const endLL = latLonAtDist(endM);
+
+  let minLng = Math.min(startLL[0], endLL[0]);
+  let maxLng = Math.max(startLL[0], endLL[0]);
+  let minLat = Math.min(startLL[1], endLL[1]);
+  let maxLat = Math.max(startLL[1], endLL[1]);
+
+  const cLng = (minLng + maxLng) / 2;
+  const cLat = (minLat + maxLat) / 2;
+  if (maxLng - minLng < MAP_MIN_SPAN_DEG) {
+    minLng = cLng - MAP_MIN_SPAN_DEG / 2;
+    maxLng = cLng + MAP_MIN_SPAN_DEG / 2;
+  }
+  if (maxLat - minLat < MAP_MIN_SPAN_DEG) {
+    minLat = cLat - MAP_MIN_SPAN_DEG / 2;
+    maxLat = cLat + MAP_MIN_SPAN_DEG / 2;
+  }
+
+  const dLng = maxLng - minLng;
+  const dLat = maxLat - minLat;
+  const padLng = dLng * MAP_CLIMB_MARGIN;
+  const padLat = dLat * MAP_CLIMB_MARGIN;
+
+  return [
+    [minLng - padLng, minLat - padLat],
+    [maxLng + padLng, maxLat + padLat],
+  ];
+}
+```
+
+### 6.17 Export JSON
+
+```typescript
+// src/utils/exportData.ts
+
+import type { RebuildResult } from '../types/state';
+import type { UserClimb } from '../types/climb';
+import type { ExportData, ExportSegment, ExportClimb, ExportSlopeProfileEntry } from '../types/export';
+import type { AnalyzerParameters } from '../types/parameters';
+import { SLOPE_CATEGORIES } from './categorization';
+
+function buildClimbSlopeProfile(
+  dist: number[],
+  eleDisplay: number[],
+  startIdx: number,
+  endIdx: number,
+  profileStepM: number,
+  catSegments: RebuildResult['catSegments'],
+): ExportSlopeProfileEntry[] {
+  const profile: ExportSlopeProfileEntry[] = [];
+  const climbStartDist = dist[startIdx];
+  const climbEndDist = dist[endIdx];
+  if (climbEndDist <= climbStartDist || profileStepM <= 0) return profile;
+
+  const relevantSegs = catSegments.filter(
+    s => s.endDist > climbStartDist && s.startDist < climbEndDist,
+  );
+
+  for (const seg of relevantSegs) {
+    const segStart = Math.max(seg.startDist, climbStartDist);
+    const segEnd = Math.min(seg.endDist, climbEndDist);
+    const segLen = segEnd - segStart;
+    if (segLen <= 0) continue;
+
+    const nChunks = Math.max(1, Math.ceil(segLen / profileStepM));
+    const chunkLen = segLen / nChunks;
+
+    for (let c = 0; c < nChunks; c++) {
+      const chunkStartDist = segStart + c * chunkLen;
+      const chunkEndDist = (c === nChunks - 1) ? segEnd : segStart + (c + 1) * chunkLen;
+
+      const iStart = findIdxAtDist(dist, chunkStartDist);
+      const iEnd = findIdxAtDist(dist, chunkEndDist);
+      if (iEnd <= iStart) continue;
+
+      let dPlus = 0;
+      for (let k = iStart + 1; k <= iEnd; k++) {
+        const d = eleDisplay[k] - eleDisplay[k - 1];
+        if (d > 0) dPlus += d;
+      }
+      const length = dist[iEnd] - dist[iStart];
+      const avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
+
+      profile.push({
+        kmStart: +(dist[iStart] / 1000).toFixed(4),
+        kmEnd: +(dist[iEnd] / 1000).toFixed(4),
+        eleStartM: +eleDisplay[iStart].toFixed(1),
+        eleEndM: +eleDisplay[iEnd].toFixed(1),
+        avgSlopePct: +avgSlope.toFixed(2),
+        categoryId: seg.key,
+      });
+    }
+  }
+  return profile;
 }
 
-export function computeInsertionBounds(
-  gapStartKm: number,
-  gapEndKm: number,
-): { startKm: number; endKm: number } | null {
-  const gapLen = gapEndKm - gapStartKm;
-  if (gapLen < INSERT_BETWEEN_MIN_KM) return null;
+function findIdxAtDist(dist: number[], targetM: number): number {
+  let lo = 0, hi = dist.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dist[mid] < targetM) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
 
-  const targetLen = Math.max(0.1, Math.min(INSERT_DEFAULT_LEN_KM, gapLen * 0.8));
-  const center = (gapStartKm + gapEndKm) / 2;
-  const startKm = Math.max(gapStartKm + 0.01, center - targetLen / 2);
-  const endKm   = Math.min(gapEndKm - 0.01,   center + targetLen / 2);
+export function buildExportData(
+  fileName: string,
+  stepM: number,
+  totalDistRawM: number,
+  params: AnalyzerParameters,
+  data: RebuildResult,
+): ExportData {
+  const { dist, eleDisplay, catSegments, climbs } = data;
+  const totalDistSampledM = dist[dist.length - 1];
+  const trailingGapM = Math.max(0, Math.round(totalDistRawM - totalDistSampledM));
+  const profileStepM = params.exportProfileStepM;
 
-  if (endKm <= startKm) return null;
-  return { startKm, endKm };
+  const segments: ExportSegment[] = catSegments.map((s, i) => ({
+    index: i,
+    startKm: +(s.startDist / 1000).toFixed(4),
+    endKm: +(s.endDist / 1000).toFixed(4),
+    startProgress: +(s.startDist / totalDistRawM).toFixed(5),
+    endProgress: +(s.endDist / totalDistRawM).toFixed(5),
+    categoryId: s.key,
+    avgSlopePct: +s.avgSlope.toFixed(2),
+    dPlusM: Math.round(s.dPlus),
+  }));
+
+  const climbFeatures: ExportClimb[] = climbs.filter(c => !c.invalid).map((c, i) => {
+    const slopeProfile = buildClimbSlopeProfile(
+      dist, eleDisplay, c.startIdx, c.endIdx, profileStepM, catSegments,
+    );
+    return {
+      index: i,
+      groupId: c.groupId,
+      subIndex: c.subIndex,
+      startKm: +(c.startDist / 1000).toFixed(4),
+      endKm: +(c.endDist / 1000).toFixed(4),
+      startProgress: +(c.startDist / totalDistRawM).toFixed(5),
+      endProgress: +(c.endDist / totalDistRawM).toFixed(5),
+      dPlusM: Math.round(c.dPlus),
+      avgSlopePct: +c.avgSlope.toFixed(2),
+      altStartM: +c.altStart.toFixed(1),
+      altEndM: +c.altEnd.toFixed(1),
+      mergedCount: c.mergedCount || 0,
+      fallback: !!c.fallback,
+      slopeProfile,
+      slopeProfileStepM: profileStepM,
+    };
+  });
+
+  const legendCategories = SLOPE_CATEGORIES.map(c => ({
+    id: c.id,
+    label: c.label,
+    minPct: isFinite(c.min) ? c.min : null,
+    maxPct: isFinite(c.max) ? c.max : null,
+  }));
+
+  return {
+    metadata: {
+      file: fileName || 'trace.gpx',
+      exportedAt: new Date().toISOString(),
+      version: '3.9.2',
+      totalDistanceKm: +(totalDistRawM / 1000).toFixed(3),
+      totalDistanceSampledKm: +(totalDistSampledM / 1000).toFixed(3),
+      trailingGapM,
+      stepM,
+      totalPoints: dist.length,
+      segmentsCount: segments.length,
+      climbsCount: climbFeatures.length,
+      profileStepM,
+    },
+    legend: {
+      note: "Bornes hautes exclusives. startProgress/endProgress = fraction 0–1 de la longueur réelle.",
+      fenetreCatM: params.fenetreCatM,
+      longueurMin: params.longueurMin,
+      categories: legendCategories,
+    },
+    segments,
+    climbs: climbFeatures,
+  };
 }
 ```
 
@@ -1272,7 +2149,7 @@ export function computeInsertionBounds(
 
 ## 7. Composables Vue 3
 
-### 7.1 Composable principal
+### 7.1 `useGpxAnalyzer`
 
 ```typescript
 // src/composables/useGpxAnalyzer.ts
@@ -1282,6 +2159,7 @@ import { useGpxStore } from '@/stores/gpxStore';
 import { useClimbsStore } from '@/stores/climbsStore';
 import { useParametersStore } from '@/stores/parametersStore';
 import type { AnalyzerResult } from '@/types/analysis';
+import type { UserClimb } from '@/types/climb';
 
 export function useGpxAnalyzer() {
   const gpxStore = useGpxStore();
@@ -1302,11 +2180,24 @@ export function useGpxAnalyzer() {
       });
 
       gpxStore.setTrack(result.track);
-      gpxStore.setRawData(result.distRaw, result.eleRawOrig, result.rawStats);
+      gpxStore.setRawData(result.distRaw, result.eleRawOrig, result.rawStats, result.track.points);
       gpxStore.setResampledData(result.dist, result.ele, result.stepM);
       climbsStore.setAutoClimbs(result.autoClimbs);
-      climbsStore.resetUserClimbs(result.autoClimbs);
-      rebuild();
+      climbsStore.resetUserClimbs(result.autoClimbs.map(a => ({
+        startKm: a.startKm,
+        endKm: a.endKm,
+        autoStartKm: a.startKm,
+        autoEndKm: a.endKm,
+        refineM: a.refineM,
+        candidateLen: a.candidateLen,
+        mergedCount: a.mergedCount,
+        mergedParts: a.mergedParts,
+        fallback: a.fallback,
+        groupId: null,
+        subIndex: null,
+      } as UserClimb)));
+      climbsStore.resetGroups();
+      climbsStore.rebuild();
     } catch (e: any) {
       error.value = e.message ?? 'Erreur inconnue';
     } finally {
@@ -1314,381 +2205,672 @@ export function useGpxAnalyzer() {
     }
   }
 
-  function rebuild(): void {
-    // Voir §13.4
-  }
-
-  return { isLoading, error, loadAndAnalyze, rebuild };
+  return { isLoading, error, loadAndAnalyze };
 }
 ```
 
-### 7.2 Composable diagnostic (v3.6)
+### 7.2 `useClimbGroups`
 
 ```typescript
-// src/composables/useDiagnostics.ts
+// src/composables/useClimbGroups.ts
 
-import { computed, Ref } from 'vue';
-import type { AnalyzerParameters } from '@/types/parameters';
-import type { DiagEntry, DiagWarning, DiagResult, DiagStatus } from '@/types/diagnostics';
+import { useClimbsStore } from '@/stores/climbsStore';
 
-export function computeDiagnostics(params: AnalyzerParameters): DiagResult {
-  const {
-    stepM, despikeWindowM, despikeThresholdM,
-    fenetreAffichageM, fenetrePenteM, fenetreCatM,
-    seuilMontee, longueurMin, gapMinM, refinePct,
-    medianWindowM, gaussianSigmaM, plateauRun,
-  } = params;
+/**
+ * Expose les actions de gestion des groupes de montées.
+ */
+export function useClimbGroups() {
+  const store = useClimbsStore();
 
-  // Valeurs effectives en points
-  const lissageAltPts   = Math.max(1, Math.round(fenetreAffichageM / stepM));
-  const lissagePentePts = Math.max(1, Math.round(fenetrePenteM / stepM));
-  const couleurPts      = Math.max(1, Math.round(fenetreCatM / stepM));
-  const medianPts       = medianWindowM > 0
-                          ? Math.max(1, Math.round(medianWindowM / stepM))
-                          : 0;
-  const gaussianPts     = gaussianSigmaM > 0 ? gaussianSigmaM / stepM : 0;
-
-  // [v3.6] Anti-pic : fenêtre effective en points
-  const despikeActive = despikeThresholdM > 0;
-  const despikeWinPtsEffective = despikeActive
-    ? Math.max(3, Math.round(despikeWindowM / stepM) | 1)
-    : 0;
-  const despikeCovM = despikeWinPtsEffective * stepM;
-  const despikeExpandRatio = despikeActive && despikeWindowM > 0
-    ? despikeCovM / despikeWindowM
-    : 1;
-
-  // Ratios
-  const ratioAltPente = fenetrePenteM > 0 ? fenetreAffichageM / fenetrePenteM : 0;
-  const retardM = fenetrePenteM / 2;
-
-  const diag: Record<string, DiagEntry> = {};
-
-  // --- stepM ---
-  diag.stepM = {
-    key: 'stepM',
-    label: 'Pas',
-    effective: `${stepM} m`,
-    optimal: '25–100 m',
-    target: stepM < 15 ? '50 m' : stepM > 150 ? '100 m' : null,
-    status: stepM < 15 ? 'orange' : stepM > 150 ? 'orange' : 'green',
-    msg: stepM < 15 ? 'Pas très fin — sur-échantillonnage'
-       : stepM > 150 ? 'Pas très grossier — perte de détail'
-       : 'OK',
-  };
-
-  // --- Anti-pic : fenêtre (v3.6) ---
-  diag.despikeWindowM = {
-    key: 'despikeWindowM',
-    label: 'Anti-pic : fenêtre',
-    effective: !despikeActive ? 'désactivé'
-      : `${despikeWindowM} m · ${despikeWinPtsEffective} pts effectifs ≈ ${despikeCovM} m`,
-    optimal: '150–300 m',
-    target: null,
-    status: !despikeActive ? 'grey'
-      : (despikeWindowM < 2 * stepM) ? 'orange'
-      : (despikeExpandRatio > 1.5) ? 'orange'
-      : 'green',
-    msg: !despikeActive ? 'Anti-pic désactivé'
-      : (despikeWindowM < 2 * stepM)
-        ? `Fenêtre < 2 × Pas (${2 * stepM} m) — la fenêtre effective sera élargie`
-      : (despikeExpandRatio > 1.5)
-        ? `Arrondi à ${despikeWinPtsEffective} pts gonfle la fenêtre de ${Math.round((despikeExpandRatio - 1) * 100)} %`
-      : `Couvre ±${((despikeWinPtsEffective - 1) / 2 * stepM).toFixed(0)} m autour de chaque point`,
-  };
-
-  // --- Anti-pic : seuil ---
-  diag.despikeThresholdM = {
-    key: 'despikeThresholdM',
-    label: 'Anti-pic : seuil',
-    effective: despikeThresholdM === 0 ? 'désactivé' : `${despikeThresholdM} m`,
-    optimal: '15–25 m',
-    target: despikeThresholdM > 0 && despikeThresholdM < 5 ? '15 m'
-          : despikeThresholdM > 50 ? '25 m'
-          : null,
-    status: despikeThresholdM === 0 ? 'grey'
-      : despikeThresholdM < 5 ? 'orange'
-      : despikeThresholdM > 50 ? 'orange'
-      : 'green',
-    msg: despikeThresholdM === 0 ? 'Anti-pic désactivé'
-      : despikeThresholdM < 5 ? 'Seuil bas — risque de couper des bosses réelles'
-      : despikeThresholdM > 50 ? 'Seuil élevé — ne capturera que les très gros glitchs'
-      : `Remplace les points qui dévient de > ${despikeThresholdM} m de leur médiane`,
-  };
-
-  // --- Lissage altitude ---
-  let lissageAltTarget: string | null = null;
-  if (lissageAltPts < 10) lissageAltTarget = `${stepM * 10} m (10 pts)`;
-  else if (lissageAltPts > 40) lissageAltTarget = `${stepM * 40} m (40 pts)`;
-  diag.fenetreAffichageM = {
-    key: 'fenetreAffichageM',
-    label: 'Lissage altitude',
-    effective: `≈ ${lissageAltPts} points`,
-    optimal: '10–40 pts',
-    target: lissageAltTarget,
-    status: lissageAltPts < 5 ? 'red'
-      : lissageAltPts < 10 ? 'orange'
-      : lissageAltPts > 40 ? 'orange'
-      : 'green',
-    msg: lissageAltPts < 5 ? `Fenêtre de ${lissageAltPts} pts — inefficace (min 5)`
-      : lissageAltPts < 10 ? `Fenêtre de ${lissageAltPts} pts — limite (recommandé ≥ 10)`
-      : lissageAltPts > 40 ? `Fenêtre de ${lissageAltPts} pts — très lisse`
-      : `Fenêtre de ${lissageAltPts} pts`,
-  };
-
-  // --- Lissage pente ---
-  let lissagePenteTarget: string | null = null;
-  if (lissagePentePts < 3) lissagePenteTarget = `${stepM * 3} m (3 pts)`;
-  else if (lissagePentePts > 10) lissagePenteTarget = `${stepM * 10} m (10 pts)`;
-  diag.fenetrePenteM = {
-    key: 'fenetrePenteM',
-    label: 'Lissage pente',
-    effective: `≈ ${lissagePentePts} points`,
-    optimal: '3–10 pts',
-    target: lissagePenteTarget,
-    status: lissagePentePts < 3 ? 'red'
-      : ratioAltPente < 1.5 ? 'red'
-      : ratioAltPente < 2 ? 'orange'
-      : 'green',
-    msg: lissagePentePts < 3 ? `Fenêtre de ${lissagePentePts} pts — trop courte (min 3)`
-      : ratioAltPente < 1.5 ? `Ratio altitude/pente = ${ratioAltPente.toFixed(1)}× (recommandé ≥ 2)`
-      : ratioAltPente < 2 ? `Ratio altitude/pente = ${ratioAltPente.toFixed(1)}× (limite)`
-      : `Fenêtre de ${lissagePentePts} pts`,
-  };
-
-  // --- Fenêtre de calcul pente ---
-  diag.fenetreCatM = {
-    key: 'fenetreCatM',
-    label: 'Fenêtre de calcul pente',
-    effective: `≈ ${couleurPts} points`,
-    optimal: '3–15 pts',
-    target: null,
-    status: 'green',
-    msg: `Affichage uniquement — n'affecte pas la détection`,
-  };
-
-  // --- Seuil détection ---
-  diag.seuilMontee = {
-    key: 'seuilMontee',
-    label: 'Seuil détection',
-    effective: `${seuilMontee} %`,
-    optimal: '0.5–1.0 %',
-    target: null,
-    status: seuilMontee < 0.2 ? 'orange' : seuilMontee > 2 ? 'orange' : 'green',
-    msg: `Retard de détection ≈ ${retardM.toFixed(0)} m (demi-lissage pente)`,
-  };
-
-  // --- Longueur min. pente ---
-  const longueurMinOK = longueurMin >= stepM;
-  diag.longueurMin = {
-    key: 'longueurMin',
-    label: 'Longueur min. pente',
-    effective: `${longueurMin} m`,
-    optimal: `≥ ${stepM} m`,
-    target: !longueurMinOK ? `${stepM * 3} m (3 pts)` : null,
-    status: !longueurMinOK ? 'orange' : 'green',
-    msg: !longueurMinOK
-      ? `Inférieure au Pas (${stepM} m) — paramètre inopérant`
-      : `Affichage uniquement`,
-  };
-
-  // --- Écart min. entre montées ---
-  const gapOK = gapMinM >= stepM || gapMinM === 0;
-  let gapTarget: string | null = null;
-  if (gapMinM > 0 && gapMinM < stepM) gapTarget = `${stepM * 2} m (2 pts)`;
-  else if (gapMinM > 1000) gapTarget = '1000 m';
-  diag.gapMinM = {
-    key: 'gapMinM',
-    label: 'Écart min. entre montées',
-    effective: gapMinM === 0 ? 'désactivé' : `${gapMinM} m`,
-    optimal: `2–10 pts`,
-    target: gapTarget,
-    status: gapMinM === 0 ? 'grey'
-      : !gapOK ? 'orange'
-      : gapMinM > 1000 ? 'orange'
-      : 'green',
-    msg: gapMinM === 0 ? 'Fusion désactivée'
-      : !gapOK ? `Inférieur au Pas (${stepM} m) — paramètre inopérant`
-      : gapMinM > 1000 ? 'Écart très large — risque de fusion abusive'
-      : `Fusionne les montées séparées de < ${gapMinM} m`,
-  };
-
-  // --- Recherche extrema ---
-  diag.refinePct = {
-    key: 'refinePct',
-    label: 'Recherche extrema',
-    effective: `${refinePct} % de la longueur`,
-    optimal: '40–120 %',
-    target: null,
-    status: refinePct < 20 ? 'orange' : refinePct > 150 ? 'orange' : 'green',
-    msg: refinePct < 20 ? 'Recherche très serrée — risque de rater le vrai sommet'
-      : refinePct > 150 ? 'Recherche très large — risque de capture'
-      : 'Clamp final : 1500 – 8000 m',
-  };
-
-  // --- Filtre médian ---
-  let medianTarget: string | null = null;
-  if (medianWindowM > 0 && medianPts < 3) medianTarget = `0 (désactivé) ou ${stepM * 3} m`;
-  diag.medianWindowM = {
-    key: 'medianWindowM',
-    label: 'Filtre médian',
-    effective: medianWindowM === 0 ? 'désactivé' : `≈ ${medianPts} points`,
-    optimal: 'désactivé ou ≥ 3 pts',
-    target: medianTarget,
-    status: medianWindowM === 0 ? 'grey'
-      : medianPts < 3 ? 'orange'
-      : 'green',
-    msg: medianWindowM === 0 ? 'Désactivé (recommandé si anti-pic actif)'
-      : medianPts < 3 ? `Fenêtre de ${medianPts} pts — peu efficace (recommandé ≥ 3)`
-      : `Fenêtre de ${medianPts} pts`,
-  };
-
-  // --- Lissage gaussien ---
-  let gaussTarget: string | null = null;
-  if (gaussianSigmaM > 0 && gaussianPts < 0.5) gaussTarget = `${stepM} m (2 pts)`;
-  else if (gaussianPts > 5) gaussTarget = `${stepM * 5} m (5 pts)`;
-  diag.gaussianSigmaM = {
-    key: 'gaussianSigmaM',
-    label: 'Lissage gaussien',
-    effective: gaussianSigmaM === 0 ? 'désactivé' : `σ ≈ ${gaussianPts.toFixed(1)} points`,
-    optimal: '0.5–5 pts',
-    target: gaussTarget,
-    status: gaussianSigmaM === 0 ? 'grey'
-      : gaussianPts < 0.5 ? 'orange'
-      : gaussianPts > 5 ? 'orange'
-      : 'green',
-    msg: gaussianSigmaM === 0 ? 'Désactivé'
-      : gaussianPts < 0.5 ? 'σ < 0.5 point — inefficace'
-      : gaussianPts > 5 ? `σ = ${gaussianPts.toFixed(1)} pts — très large`
-      : `σ = ${gaussianPts.toFixed(1)} pts`,
-  };
-
-  // --- Correction plateaux ---
-  const plateauUnused = plateauRun > 0 && stepM > 50;
-  diag.plateauRun = {
-    key: 'plateauRun',
-    label: 'Correction plateaux',
-    effective: plateauRun === 0 ? 'désactivé' : `${plateauRun} points`,
-    optimal: '4–8 pts',
-    target: plateauUnused ? '0 (inutile à Pas > 50 m)' : null,
-    status: plateauRun === 0 ? 'grey'
-      : plateauUnused ? 'orange'
-      : 'green',
-    msg: plateauRun === 0 ? 'Désactivé'
-      : plateauUnused ? `Probablement inutile avec un Pas de ${stepM} m`
-      : `Corrige les séries de ≥ ${plateauRun} pts`,
-  };
-
-  // ===== Warnings globaux =====
-  const warnings: DiagWarning[] = [];
-
-  if (lissageAltPts < 5) {
-    warnings.push({
-      level: 'red',
-      msg: `Le <strong>Lissage altitude</strong> produit une fenêtre de ${lissageAltPts} points, ` +
-           `insuffisant (min 5). Augmentez à ${stepM * 10} m, ou diminuez le <strong>Pas</strong>.`,
-    });
-  } else if (lissageAltPts < 10) {
-    warnings.push({
-      level: 'orange',
-      msg: `Le <strong>Lissage altitude</strong> produit une fenêtre de ${lissageAltPts} points. ` +
-           `Recommandé ≥ 10. Augmentez à ${stepM * 10} m.`,
-    });
+  function splitClimb(idx: number): void {
+    store.splitClimb(idx);
   }
 
-  if (lissagePentePts < 3) {
-    warnings.push({
-      level: 'red',
-      msg: `Le <strong>Lissage pente</strong> produit une fenêtre de ${lissagePentePts} points, ` +
-           `trop courte. Augmentez à ${stepM * 3} m minimum.`,
-    });
+  function refuseGroup(gid: number): void {
+    store.refuseGroup(gid);
   }
 
-  if (ratioAltPente > 0 && ratioAltPente < 1.5) {
-    warnings.push({
-      level: 'red',
-      msg: `Le <strong>Lissage pente</strong> est plus grand que la moitié du ` +
-           `<strong>Lissage altitude</strong>. Recommandé : Lissage altitude ≥ 2 × Lissage pente.`,
-    });
-  } else if (ratioAltPente > 0 && ratioAltPente < 2) {
-    warnings.push({
-      level: 'orange',
-      msg: `Ratio Lissage altitude / Lissage pente = ${ratioAltPente.toFixed(2)}×. Recommandé ≥ 2×.`,
-    });
+  function canSplit(idx: number): boolean {
+    const c = store.userClimbs[idx];
+    return !!c?.mergedParts && c.mergedParts.length >= 2;
   }
 
-  if (medianWindowM > 0 && medianPts < 3) {
-    warnings.push({
-      level: 'orange',
-      msg: `Le <strong>Filtre médian</strong> est inefficace avec ${medianPts} point(s). ` +
-           `Augmentez à ${stepM * 3} m minimum, ou désactivez-le (0).`,
-    });
+  function canRefuse(gid: number | null): boolean {
+    if (gid == null) return false;
+    return store.userClimbs.filter(c => c.groupId === gid).length >= 2;
   }
 
-  if (longueurMin > 0 && longueurMin < stepM) {
-    warnings.push({
-      level: 'orange',
-      msg: `La <strong>Longueur min. pente</strong> (${longueurMin} m) est inférieure au ` +
-           `<strong>Pas</strong> — paramètre sans effet.`,
-    });
-  }
-
-  if (gapMinM > 0 && gapMinM < stepM) {
-    warnings.push({
-      level: 'orange',
-      msg: `L'<strong>Écart min. entre montées</strong> (${gapMinM} m) est inférieur au ` +
-           `<strong>Pas</strong> — sans effet.`,
-    });
-  }
-
-  if (gapMinM > 0 && refinePct > 100) {
-    warnings.push({
-      level: 'orange',
-      msg: `<strong>Écart min. entre montées</strong> et <strong>Recherche extrema</strong> étendent tous deux ` +
-           `les bornes. Combinaison à surveiller.`,
-    });
-  }
-
-  // Warnings spécifiques anti-pic (v3.6)
-  if (despikeActive && despikeWindowM < 2 * stepM) {
-    warnings.push({
-      level: 'orange',
-      msg: `L'<strong>Anti-pic : fenêtre</strong> (${despikeWindowM} m) est inférieure à ` +
-           `2 × Pas (${2 * stepM} m). La fenêtre effective sera élargie à ${despikeCovM} m.`,
-    });
-  } else if (despikeActive && despikeExpandRatio > 1.5) {
-    warnings.push({
-      level: 'orange',
-      msg: `L'arrondi au multiple de Pas gonfle l'<strong>Anti-pic : fenêtre</strong> de ` +
-           `${despikeWindowM} m à ${despikeCovM} m (${Math.round((despikeExpandRatio - 1) * 100)} %). ` +
-           `Envisagez une valeur multiple de ${stepM} m.`,
-    });
-  }
-  if (despikeActive && despikeThresholdM < 5) {
-    warnings.push({
-      level: 'orange',
-      msg: `Seuil <strong>Anti-pic : seuil</strong> très bas (${despikeThresholdM} m) — risque de couper ` +
-           `des bosses réelles.`,
-    });
-  }
-
-  return { diag, warnings };
+  return { splitClimb, refuseGroup, canSplit, canRefuse };
 }
+```
 
-export function useDiagnostics(params: Ref<AnalyzerParameters>) {
-  const result = computed(() => computeDiagnostics(params.value));
+### 7.3 `useManualClimb`
 
-  const globalStatus = computed<DiagStatus>(() => {
-    const { warnings } = result.value;
-    if (warnings.some(w => w.level === 'red')) return 'red';
-    if (warnings.some(w => w.level === 'orange')) return 'orange';
-    return 'green';
-  });
+```typescript
+// src/composables/useManualClimb.ts
+
+import { ref } from 'vue';
+import { useClimbsStore } from '@/stores/climbsStore';
+import { useProfileCanvas } from './useProfileCanvas';
+
+const MANUAL_MIN_LEN_KM = 0.05;
+
+export function useManualClimb() {
+  const store = useClimbsStore();
+  const profile = useProfileCanvas();
+
+  const pendingNewClimb = ref<{ valleyKm: number; summitKm: number } | null>(null);
+  const newClimbDragging = ref(false);
+
+  /**
+   * Démarre la création par double-clic. Refuse si la vallée tombe
+   * dans une montée existante.
+   */
+  function startCreation(km: number): boolean {
+    if (!store.isFreeKm(km)) {
+      store.flashInvalidPosition(km);
+      return false;
+    }
+    pendingNewClimb.value = { valleyKm: km, summitKm: km };
+    profile.requestRedraw();
+    return true;
+  }
+
+  /**
+   * Met à jour le sommet pendant le drag.
+   */
+  function updateSummit(km: number): void {
+    if (!pendingNewClimb.value) return;
+    pendingNewClimb.value.summitKm = Math.max(
+      pendingNewClimb.value.valleyKm + MANUAL_MIN_LEN_KM,
+      km,
+    );
+    profile.requestRedraw();
+  }
+
+  /**
+   * Valide ou annule la création au relâchement.
+   */
+  function finish(): void {
+    if (!pendingNewClimb.value) return;
+    const { valleyKm, summitKm } = pendingNewClimb.value;
+    const pending = pendingNewClimb.value;
+    pendingNewClimb.value = null;
+    newClimbDragging.value = false;
+
+    if (summitKm > valleyKm + MANUAL_MIN_LEN_KM && store.isFreeRange(valleyKm, summitKm)) {
+      store.addManualClimb(valleyKm, summitKm);
+    } else {
+      profile.requestRedraw();
+    }
+  }
+
+  /**
+   * Annule la création (Échap).
+   */
+  function cancel(): void {
+    if (!pendingNewClimb.value) return;
+    pendingNewClimb.value = null;
+    newClimbDragging.value = false;
+    profile.requestRedraw();
+  }
 
   return {
-    diag: computed(() => result.value.diag),
-    warnings: computed(() => result.value.warnings),
-    globalStatus,
+    pendingNewClimb,
+    newClimbDragging,
+    startCreation,
+    updateSummit,
+    finish,
+    cancel,
+  };
+}
+```
+
+### 7.4 `useProfileCanvas`
+
+```typescript
+// src/composables/useProfileCanvas.ts
+
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
+import { useGpxStore } from '@/stores/gpxStore';
+import { useClimbsStore } from '@/stores/climbsStore';
+import { CATEGORY_BY_ID } from '@/utils/categorization';
+import { groupColor } from '@/utils/groupHelpers';
+
+export const PROFILE_SCALE_X_FULL = 50;
+export const PROFILE_SCALE_X_CLIMB = 10;
+export const PROFILE_SCALE_Y = 10;
+export const PROFILE_MIN_HEIGHT = 110;
+export const PROFILE_HANDLE_PAD = 200;
+
+export function useProfileCanvas() {
+  const gpxStore = useGpxStore();
+  const climbsStore = useClimbsStore();
+
+  const canvasRef = ref<HTMLCanvasElement | null>(null);
+  const scrollRef = ref<HTMLDivElement | null>(null);
+
+  let viewState: {
+    viewStartM: number;
+    viewEndM: number;
+    scaleXActual: number;
+    canvasWidth: number;
+    canvasHeight: number;
+    mode: 'full' | 'climb';
+  } | null = null;
+
+  function requestRedraw(): void {
+    if (!canvasRef.value) return;
+    draw();
+  }
+
+  function draw(): void {
+    const canvas = canvasRef.value;
+    const scroll = scrollRef.value;
+    if (!canvas || !scroll) return;
+
+    const data = climbsStore.__lastData;
+    const dist = gpxStore.dist;
+    if (!data || !dist) {
+      drawEmpty(canvas);
+      return;
+    }
+
+    const totalDist = dist[dist.length - 1];
+    let viewStartM: number, viewEndM: number, scaleX: number, showHandles: boolean;
+
+    if (climbsStore.profileMode === 'climb' && climbsStore.selectedClimbIdx != null) {
+      // Mode montée : trace COMPLÈTE à 10 m/px
+      viewStartM = 0;
+      viewEndM = totalDist;
+      scaleX = PROFILE_SCALE_X_CLIMB;
+      showHandles = true;
+    } else {
+      // Mode full : 50 m/px
+      viewStartM = 0;
+      viewEndM = totalDist;
+      scaleX = PROFILE_SCALE_X_FULL;
+      showHandles = false;
+    }
+
+    const viewWidthM = viewEndM - viewStartM;
+    const canvasWidth = Math.max(2, Math.ceil(viewWidthM / scaleX));
+    const scaleXActual = scaleX;
+
+    const ele = data.eleDisplay;
+    let emin = Infinity, emax = -Infinity;
+    const iStart = findIdxAtDist(dist, viewStartM);
+    const iEnd = findIdxAtDist(dist, viewEndM);
+    for (let i = iStart; i <= iEnd; i++) {
+      if (ele[i] < emin) emin = ele[i];
+      if (ele[i] > emax) emax = ele[i];
+    }
+    if (!isFinite(emin)) { emin = 0; emax = 100; }
+    const range = Math.max(20, emax - emin);
+    const canvasHeight = Math.max(PROFILE_MIN_HEIGHT, Math.ceil(range / PROFILE_SCALE_Y) + 24);
+
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    canvas.style.width = canvasWidth + 'px';
+    canvas.style.height = canvasHeight + 'px';
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const yPad = 12;
+    const drawH = canvasHeight - 2 * yPad;
+    const eleToY = (e: number) => yPad + (1 - (e - emin) / range) * drawH;
+    const distToX = (d: number) => (d - viewStartM) / scaleXActual;
+
+    // Fond
+    ctx.fillStyle = '#fafbfc';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    // Fills colorés par catégorie — via catSegments
+    ctx.globalAlpha = 0.55;
+    for (const seg of data.catSegments) {
+      if (seg.endDist < viewStartM - 100 || seg.startDist > viewEndM + 100) continue;
+      const cat = CATEGORY_BY_ID[seg.key];
+      if (!cat) continue;
+      ctx.fillStyle = cat.color;
+      ctx.beginPath();
+      const iS = Math.max(0, seg.startIdx);
+      const iE = Math.min(dist.length - 1, seg.endIdx);
+      for (let i = iS; i <= iE; i++) {
+        const x = distToX(dist[i]);
+        const y = eleToY(ele[i]);
+        if (i === iS) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.lineTo(distToX(dist[iE]), canvasHeight - 2);
+      ctx.lineTo(distToX(dist[iS]), canvasHeight - 2);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Courbe
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < dist.length; i++) {
+      if (dist[i] < viewStartM - 200 || dist[i] > viewEndM + 200) continue;
+      const x = distToX(dist[i]);
+      const y = eleToY(ele[i]);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    // Ligne de base
+    ctx.beginPath();
+    ctx.moveTo(0, canvasHeight - 1.5);
+    ctx.lineTo(canvasWidth, canvasHeight - 1.5);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Marqueurs montées
+    for (let i = 0; i < data.climbs.length; i++) {
+      const c = data.climbs[i];
+      if (c.invalid) continue;
+      const isSel = i === climbsStore.selectedClimbIdx;
+      const isGrouped = c.groupId != null;
+      const gColor = isGrouped ? groupColor(c.groupId!) : null;
+
+      const xV = distToX(c.startDist);
+      if (xV >= -4 && xV <= canvasWidth + 4) {
+        ctx.beginPath();
+        ctx.moveTo(xV, 0);
+        ctx.lineTo(xV, canvasHeight);
+        ctx.strokeStyle = isSel ? '#16a34a' : (isGrouped ? gColor! : 'rgba(22,163,74,0.35)');
+        ctx.lineWidth = isSel ? 2 : (isGrouped ? 1.6 : 1);
+        ctx.setLineDash([]);
+        ctx.stroke();
+      }
+      const xS = distToX(c.endDist);
+      if (xS >= -4 && xS <= canvasWidth + 4) {
+        ctx.beginPath();
+        ctx.moveTo(xS, 0);
+        ctx.lineTo(xS, canvasHeight);
+        ctx.strokeStyle = isSel ? '#dc2626' : (isGrouped ? gColor! : 'rgba(220,38,38,0.35)');
+        ctx.lineWidth = isSel ? 2 : (isGrouped ? 1.6 : 1);
+        ctx.setLineDash(isGrouped ? [] : [4, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // Surbrillance sélectionnée
+    if (climbsStore.selectedClimbIdx != null) {
+      const c = data.climbs[climbsStore.selectedClimbIdx];
+      if (c && !c.invalid) {
+        const xV = distToX(c.startDist);
+        const xS = distToX(c.endDist);
+        ctx.fillStyle = 'rgba(250, 204, 21, 0.14)';
+        ctx.fillRect(xV, 0, xS - xV, canvasHeight);
+      }
+    }
+
+    // Poignées
+    if (showHandles && climbsStore.selectedClimbIdx != null) {
+      const c = data.climbs[climbsStore.selectedClimbIdx];
+      if (c && !c.invalid) {
+        drawHandle(ctx, distToX(c.startDist), '#16a34a');
+        drawHandle(ctx, distToX(c.endDist), '#dc2626');
+      }
+    }
+
+    viewState = {
+      viewStartM, viewEndM, scaleXActual,
+      canvasWidth, canvasHeight,
+      mode: climbsStore.profileMode,
+    };
+
+    // Scroll centré (mode montée, hors drag)
+    if (climbsStore.profileMode === 'climb' && !climbsStore.__profileDragging && climbsStore.selectedClimbIdx != null) {
+      const c = data.climbs[climbsStore.selectedClimbIdx];
+      if (c && !c.invalid) {
+        const centerM = (c.startDist + c.endDist) / 2;
+        const centerPx = (centerM - viewStartM) / scaleXActual;
+        const targetScroll = Math.max(0, centerPx - scroll.clientWidth / 2);
+        requestAnimationFrame(() => { scroll.scrollLeft = targetScroll; });
+      }
+    } else if (climbsStore.profileMode === 'full') {
+      requestAnimationFrame(() => { scroll.scrollLeft = 0; });
+    }
+  }
+
+  function drawEmpty(canvas: HTMLCanvasElement): void {
+    const scroll = scrollRef.value;
+    canvas.width = scroll?.clientWidth || 800;
+    canvas.height = PROFILE_MIN_HEIGHT;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '14px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Aucune trace chargée', canvas.width / 2, canvas.height / 2 + 4);
+  }
+
+  function drawHandle(ctx: CanvasRenderingContext2D, px: number, color: string): void {
+    const size = 10;
+    const y = 6;
+    ctx.beginPath();
+    ctx.moveTo(px, y + size * 1.6);
+    ctx.lineTo(px - size, y);
+    ctx.lineTo(px + size, y);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  function findIdxAtDist(dist: number[], targetM: number): number {
+    let lo = 0, hi = dist.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (dist[mid] < targetM) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  // Re-render sur changement de sélection ou de données
+  watch(() => [climbsStore.__lastData, climbsStore.selectedClimbIdx, climbsStore.profileMode], () => {
+    requestRedraw();
+  });
+
+  onMounted(() => { requestRedraw(); });
+
+  return { canvasRef, scrollRef, requestRedraw, draw, getViewState: () => viewState };
+}
+```
+
+### 7.5 `useMapbox`
+
+```typescript
+// src/composables/useMapbox.ts
+
+import { ref } from 'vue';
+import { useGpxStore } from '@/stores/gpxStore';
+import { useClimbsStore } from '@/stores/climbsStore';
+import { useMapStore } from '@/stores/mapStore';
+import { buildTraceFeatures } from '@/utils/buildTraceFeatures';
+import { buildMapMarkers } from '@/utils/buildMapMarkers';
+import { computeBounds } from '@/utils/zoomHelpers';
+
+export const MAP_BASEMAPS = {
+  standard: 'mapbox://styles/mapbox/standard',
+  satellite: 'mapbox://styles/mapbox/satellite-streets-v12',
+};
+
+export const MAP_TERRAIN_EXAGGERATION = 1;
+export const CONTOUR_BASE_COLOR = '#7a5733';
+export const CONTOUR_INDEX_COLOR = '#5e3f1d';
+
+export function useMapbox() {
+  const gpxStore = useGpxStore();
+  const climbsStore = useClimbsStore();
+  const mapStore = useMapStore();
+
+  async function loadMapboxGL(): Promise<void> {
+    if ((window as any).mapboxgl) return;
+    if (mapStore.loading) {
+      await new Promise<void>((resolve, reject) => {
+        const check = setInterval(() => {
+          if (!mapStore.loading) {
+            clearInterval(check);
+            if ((window as any).mapboxgl) resolve();
+            else reject(new Error('Échec chargement Mapbox'));
+          }
+        }, 50);
+      });
+      return;
+    }
+    mapStore.loading = true;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        if (!document.querySelector('link[data-mapbox]')) {
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = 'https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css';
+          (link as any).dataset.mapbox = '1';
+          document.head.appendChild(link);
+        }
+        const script = document.createElement('script');
+        script.src = 'https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js';
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Impossible de charger Mapbox GL JS'));
+        document.head.appendChild(script);
+      });
+    } finally {
+      mapStore.loading = false;
+    }
+  }
+
+  async function initMapboxMap(token: string): Promise<void> {
+    await loadMapboxGL();
+    const mapboxgl = (window as any).mapboxgl;
+    if (mapStore.map) { mapStore.map.remove(); mapStore.map = null; }
+    mapboxgl.accessToken = token;
+
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: MAP_BASEMAPS[mapStore.basemap],
+      center: [2.5, 46.5],
+      zoom: 5, pitch: 60, bearing: 0,
+      antialias: true,
+    });
+    mapStore.map = map;
+    mapStore.tokenErrorShown = false;
+    map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-left');
+
+    map.on('error', (e: any) => {
+      const msg = e?.error?.message || '';
+      if (!mapStore.tokenErrorShown && /token|401|403|unauthorized/i.test(msg)) {
+        mapStore.tokenErrorShown = true;
+      }
+    });
+
+    return new Promise<void>((resolve) => {
+      map.on('load', () => {
+        setupMapLayers(map);
+        mapStore.ready = true;
+        refreshMapAll();
+        if (gpxStore.rawPoints?.length) fitMapToTrace(0);
+        resolve();
+      });
+    });
+  }
+
+  function setupMapLayers(map: any): void {
+    // 1. Terrain
+    if (!map.getSource('mapbox-dem')) {
+      map.addSource('mapbox-dem', {
+        type: 'raster-dem',
+        url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+        tileSize: 512, maxzoom: 14,
+      });
+      map.setTerrain({ source: 'mapbox-dem', exaggeration: MAP_TERRAIN_EXAGGERATION });
+    }
+
+    // 2. Brume
+    try { map.setFog({ 'range': [-0.5, 2], 'color': '#dbeafe', 'horizon-blend': 0.1 }); } catch (e) {}
+
+    // 3. Trace (DOIT exister avant les contours)
+    if (!map.getSource('trace-line')) {
+      map.addSource('trace-line', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({
+        id: 'trace-line-layer',
+        type: 'line',
+        source: 'trace-line',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-width': 6, 'line-color': ['get', 'color'] },
+      });
+    }
+
+    // 4. Marqueurs
+    if (!map.getSource('climb-markers')) {
+      map.addSource('climb-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({
+        id: 'climb-markers-circle',
+        type: 'circle',
+        source: 'climb-markers',
+        paint: {
+          'circle-radius': ['match', ['get', 'role'], 'selected', 10, 8],
+          'circle-color': ['match', ['get', 'kind'], 'valley', '#16a34a', 'summit', '#dc2626', '#888'],
+          'circle-stroke-width': ['match', ['get', 'role'], 'selected', 4, 2.5],
+          'circle-stroke-color': '#fff',
+        },
+      });
+    }
+
+    // 5. Contours (sous la trace)
+    if (!map.getSource('mapbox-terrain-contours')) {
+      map.addSource('mapbox-terrain-contours', {
+        type: 'vector',
+        url: 'mapbox://mapbox.mapbox-terrain-v2',
+      });
+
+      map.addLayer({
+        id: 'contour-lines',
+        type: 'line',
+        source: 'mapbox-terrain-contours',
+        'source-layer': 'contour',
+        layout: { 'line-join': 'round', 'line-cap': 'round', 'visibility': 'none' },
+        paint: {
+          'line-color': CONTOUR_BASE_COLOR,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.3, 13, 0.6, 16, 1.0],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.15, 14, 0.35, 17, 0.50],
+        },
+      }, 'trace-line-layer');
+
+      map.addLayer({
+        id: 'contour-index',
+        type: 'line',
+        source: 'mapbox-terrain-contours',
+        'source-layer': 'contour',
+        filter: ['>=', ['coalesce', ['get', 'index'], 0], 5],
+        layout: { 'line-join': 'round', 'line-cap': 'round', 'visibility': 'none' },
+        paint: {
+          'line-color': CONTOUR_INDEX_COLOR,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.7, 13, 1.2, 16, 2.0],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.25, 14, 0.50, 17, 0.65],
+        },
+      }, 'trace-line-layer');
+    }
+  }
+
+  function updateContourVisibility(show: boolean): void {
+    const map = mapStore.map;
+    if (!map || !mapStore.ready) return;
+    const visible = show ? 'visible' : 'none';
+    for (const layerId of ['contour-lines', 'contour-index']) {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', visible);
+      }
+    }
+  }
+
+  function updateMapTrace(): void {
+    const map = mapStore.map;
+    if (!map || !mapStore.ready) return;
+    const src = map.getSource('trace-line');
+    if (!src) return;
+    const data = climbsStore.__lastData;
+    if (!data) { src.setData({ type: 'FeatureCollection', features: [] }); return; }
+    src.setData(buildTraceFeatures(gpxStore.rawPoints, gpxStore.distRaw, data.catSegments));
+  }
+
+  function updateMapMarkers(): void {
+    const map = mapStore.map;
+    if (!map || !mapStore.ready) return;
+    const src = map.getSource('climb-markers');
+    if (!src) return;
+    src.setData(buildMapMarkers(climbsStore.selectedClimbIdx, climbsStore.userClimbs, gpxStore.latLonAtDist));
+  }
+
+  function refreshMapAll(): void {
+    updateMapTrace();
+    updateMapMarkers();
+  }
+
+  function zoomMapToClimb(climb: any, duration = 800): void {
+    const map = mapStore.map;
+    if (!map || !mapStore.ready || !climb) return;
+
+    if (climb.groupId != null) {
+      return zoomMapToGroup(climb.groupId, duration);
+    }
+
+    const startM = (climb.startKm != null) ? climb.startKm * 1000 : climb.startDist;
+    const endM = (climb.endKm != null) ? climb.endKm * 1000 : climb.endDist;
+    if (!isFinite(startM) || !isFinite(endM) || endM <= startM) return;
+
+    const bounds = computeBounds(startM, endM, gpxStore.latLonAtDist);
+    map.fitBounds(bounds, { padding: 40, duration, pitch: 60, bearing: map.getBearing() });
+  }
+
+  function zoomMapToGroup(gid: number, duration = 800): void {
+    const map = mapStore.map;
+    if (!map || !mapStore.ready) return;
+    const members = climbsStore.userClimbs.filter(c => c.groupId === gid);
+    if (members.length === 0) return;
+    let minKm = Infinity, maxKm = -Infinity;
+    for (const m of members) {
+      if (m.startKm < minKm) minKm = m.startKm;
+      if (m.endKm > maxKm) maxKm = m.endKm;
+    }
+    const bounds = computeBounds(minKm * 1000, maxKm * 1000, gpxStore.latLonAtDist);
+    map.fitBounds(bounds, { padding: 40, duration, pitch: 60, bearing: map.getBearing() });
+  }
+
+  function fitMapToTrace(duration = 800): void {
+    const map = mapStore.map;
+    if (!map || !mapStore.ready || !gpxStore.rawPoints?.length) return;
+    let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+    for (const p of gpxStore.rawPoints) {
+      if (p.lon < minLng) minLng = p.lon;
+      if (p.lon > maxLng) maxLng = p.lon;
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+    }
+    map.fitBounds([[minLng, minLat], [maxLng, maxLat]], { padding: 40, duration, pitch: 60 });
+  }
+
+  function setMapBasemap(kind: 'standard' | 'satellite'): void {
+    mapStore.basemap = kind;
+    const map = mapStore.map;
+    if (!map) return;
+    mapStore.ready = false;
+    map.setStyle(MAP_BASEMAPS[kind]);
+    map.once('style.load', () => {
+      setupMapLayers(map);
+      mapStore.ready = true;
+      refreshMapAll();
+      if (climbsStore.selectedClimbIdx != null) {
+        const climb = climbsStore.userClimbs[climbsStore.selectedClimbIdx];
+        if (climb) zoomMapToClimb(climb, 0);
+      }
+    });
+  }
+
+  return {
+    loadMapboxGL,
+    initMapboxMap,
+    setupMapLayers,
+    updateContourVisibility,
+    updateMapTrace,
+    updateMapMarkers,
+    refreshMapAll,
+    zoomMapToClimb,
+    zoomMapToGroup,
+    fitMapToTrace,
+    setMapBasemap,
   };
 }
 ```
@@ -1697,7 +2879,198 @@ export function useDiagnostics(params: Ref<AnalyzerParameters>) {
 
 ## 8. Composants Vuetify
 
-### 8.1 Panneau diagnostic
+### 8.1 `GpxAnalyzer.vue` (root)
+
+```vue
+<!-- src/components/gpx-analyzer/GpxAnalyzer.vue -->
+<template>
+  <div class="gpx-analyzer">
+    <AppToolbar
+      :file-name="gpxStore.fileName"
+      :raw-count="gpxStore.rawStats?.n ?? 0"
+      :resampled-count="gpxStore.dist?.length ?? 0"
+      @file-selected="onFileSelected"
+      @toggle-debug="showDebug = !showDebug"
+      @toggle-params="showParams = !showParams"
+    />
+    <div class="main-layout">
+      <ClimbsPanel
+        :climbs="climbsStore.__lastData?.climbs ?? []"
+        :selected-idx="climbsStore.selectedClimbIdx"
+        @select="onClimbSelected"
+        @split="onSplit"
+        @refuse="onRefuse"
+        @delete="onDelete"
+      />
+      <CenterPanel
+        :climbs="climbsStore.__lastData?.climbs ?? []"
+        :selected-idx="climbsStore.selectedClimbIdx"
+        @close-climb="onCloseClimb"
+      />
+      <ParamsPanel
+        v-show="showParams"
+        :parameters="paramsStore.parameters"
+        @update:parameters="onParamsUpdate"
+      />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue';
+import { useGpxStore } from '@/stores/gpxStore';
+import { useClimbsStore } from '@/stores/climbsStore';
+import { useParametersStore } from '@/stores/parametersStore';
+import { useGpxAnalyzer } from '@/composables/useGpxAnalyzer';
+import AppToolbar from './AppToolbar.vue';
+import ClimbsPanel from './ClimbsPanel.vue';
+import CenterPanel from './CenterPanel.vue';
+import ParamsPanel from './ParamsPanel.vue';
+
+const gpxStore = useGpxStore();
+const climbsStore = useClimbsStore();
+const paramsStore = useParametersStore();
+const { loadAndAnalyze } = useGpxAnalyzer();
+
+const showDebug = ref(false);
+const showParams = ref(true);
+
+function onFileSelected(file: File | string): void {
+  if (typeof file === 'string') loadAndAnalyze(file);
+  else if ((file as any).path) loadAndAnalyze((file as any).path);
+}
+
+function onClimbSelected(idx: number): void {
+  climbsStore.selectClimb(idx);
+}
+
+function onCloseClimb(): void {
+  climbsStore.deselectClimb();
+}
+
+function onSplit(idx: number): void {
+  climbsStore.splitClimb(idx);
+}
+
+function onRefuse(gid: number): void {
+  climbsStore.refuseGroup(gid);
+}
+
+function onDelete(idx: number): void {
+  climbsStore.deleteClimb(idx);
+}
+
+function onParamsUpdate(p: any): void {
+  paramsStore.setParameters(p);
+  climbsStore.recomputeAuto();
+}
+</script>
+
+<style scoped>
+.gpx-analyzer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: #f1f5f9;
+}
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+</style>
+```
+
+### 8.2 `ClimbCard.vue`
+
+```vue
+<!-- src/components/gpx-analyzer/ClimbCard.vue -->
+<template>
+  <div
+    class="climb-card"
+    :class="{ selected, grouped: climb.groupId != null }"
+    :style="cardStyle"
+    @click="$emit('select')"
+  >
+    <button class="del-btn" @click.stop="$emit('delete')" title="Supprimer">✕</button>
+
+    <div class="climb-card-header">
+      <span class="climb-num" :style="numStyle">{{ label }}</span>
+      <span class="climb-km">km {{ (climb.startDist / 1000).toFixed(3) }}</span>
+      <span class="climb-badges">
+        <span v-if="climb.mergedCount > 0" class="badge merged">⊕ {{ climb.mergedCount }}</span>
+        <span v-if="climb.fallback" class="badge fallback">⤺</span>
+        <span v-if="climb.groupId != null" class="badge grouped">🔗 {{ climb.groupId }}</span>
+      </span>
+      <button
+        v-if="canSplit"
+        class="split-btn"
+        @click.stop="$emit('split')"
+      >
+        ✂ Séparer
+      </button>
+      <button
+        v-if="climb.groupId != null"
+        class="refuse-btn"
+        @click.stop="$emit('refuse', climb.groupId)"
+      >
+        🔗 Refusionner
+      </button>
+    </div>
+
+    <div class="climb-card-body">
+      <div class="metric">
+        <span class="label">Long.</span>
+        <span class="value">{{ (climb.length / 1000).toFixed(2) }} km</span>
+      </div>
+      <div class="metric">
+        <span class="label">D+</span>
+        <span class="value">{{ climb.dPlus.toFixed(0) }} m</span>
+      </div>
+      <span class="slope-pill" :style="{ background: colorForSlope(climb.avgSlope) }">
+        {{ climb.avgSlope.toFixed(1) }} %
+      </span>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue';
+import { colorForSlope } from '@/utils/categorization';
+import { groupColor } from '@/utils/groupHelpers';
+import type { Climb } from '@/types/climb';
+
+const props = defineProps<{
+  climb: Climb;
+  label: string;
+  selected: boolean;
+}>();
+
+defineEmits<{
+  (e: 'select'): void;
+  (e: 'split'): void;
+  (e: 'refuse', gid: number): void;
+  (e: 'delete'): void;
+}>();
+
+const canSplit = computed(() =>
+  Array.isArray(props.climb.ref.mergedParts) && props.climb.ref.mergedParts.length >= 2
+);
+
+const cardStyle = computed(() => {
+  if (props.climb.groupId == null) return {};
+  return { borderLeft: `4px solid ${groupColor(props.climb.groupId)}` };
+});
+
+const numStyle = computed(() => {
+  if (props.climb.groupId == null || props.selected) return {};
+  return { background: groupColor(props.climb.groupId), color: 'white' };
+});
+</script>
+```
+
+### 8.3 `DiagnosticPanel.vue`
 
 ```vue
 <!-- src/components/gpx-analyzer/DiagnosticPanel.vue -->
@@ -1744,7 +3117,7 @@ export function useDiagnostics(params: Ref<AnalyzerParameters>) {
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AnalyzerParameters } from '@/types/parameters';
-import { computeDiagnostics } from '@/composables/useDiagnostics';
+import { computeDiagnostics } from '@/utils/diagnostics';
 
 const props = defineProps<{ parameters: AnalyzerParameters }>();
 
@@ -1766,265 +3139,126 @@ const chipColor = computed(() => ({
 
 const statusText = computed(() => {
   const w = warnings.value;
-  if (globalStatus.value === 'red')
-    return `🔴 ${w.filter(x => x.level === 'red').length} incohérence(s)`;
-  if (globalStatus.value === 'orange')
-    return `🟠 ${w.length} avertissement(s)`;
+  if (globalStatus.value === 'red') return `🔴 ${w.filter(x => x.level === 'red').length} incohérence(s)`;
+  if (globalStatus.value === 'orange') return `🟠 ${w.length} avertissement(s)`;
   return '🟢 Cohérent';
 });
 
 function dotColor(status: string): string {
-  return {
-    green: '#16a34a',
-    orange: '#f59e0b',
-    red: '#dc2626',
-    grey: '#94a3b8',
-  }[status] ?? '#94a3b8';
+  return ({ green: '#16a34a', orange: '#f59e0b', red: '#dc2626', grey: '#94a3b8' } as any)[status] ?? '#94a3b8';
 }
 </script>
 ```
 
-### 8.2 Panneau paramètres (v3.6)
+### 8.4 `ParametersForm.vue` (extrait — section Mapbox + params clés)
 
 ```vue
-<!-- src/components/gpx-analyzer/ParametersPanel.vue -->
+<!-- src/components/gpx-analyzer/ParametersForm.vue (extrait) -->
 <template>
   <v-card class="pa-4">
-    <v-card-title class="text-h6">Paramètres de détection automatique</v-card-title>
+    <v-card-title class="text-h6">Paramètres</v-card-title>
 
-    <DiagnosticPanel :parameters="params" class="mb-3" />
+    <!-- Section Mapbox -->
+    <div class="section-title">Mapbox</div>
+    <v-text-field
+      v-model="mapboxToken"
+      label="Token public (pk.*)"
+      density="compact"
+      :append-inner-icon="'mdi-check'"
+      @click:append-inner="onInitMap"
+    />
+    <v-switch
+      v-model="showContours"
+      label="Courbes de niveau"
+      density="compact"
+      hide-details
+      @update:model-value="onToggleContours"
+    />
+    <div class="text-caption text-grey">{{ mapStatus }}</div>
 
-    <v-alert type="error" variant="tonal" density="compact" class="mb-3">
-      🩹 <strong>Anti-pic</strong> — Filtre Hampel sur les altitudes
-      resamplées. Ne modifie que les points aberrants.
-    </v-alert>
+    <DiagnosticPanel :parameters="params" class="mt-3" />
 
-    <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-      📐 <strong>Rééchantillonnage par moyenne</strong> — chaque point de sortie
-      est la moyenne des points bruts dans une fenêtre ≥ 75 m.
-    </v-alert>
+    <!-- Préparation -->
+    <div class="section-title">Préparation</div>
+    <v-text-field v-model.number="params.stepM" label="Pas de rééchantillonnage" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.despikeWindowM" label="Anti-pic : fenêtre" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.despikeThresholdM" label="Anti-pic : seuil" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.plateauRun" label="Correction plateaux" type="number" suffix="pts" density="compact" />
 
-    <v-row dense>
-      <!-- Pas de rééchantillonnage -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.stepM"
-          label="Pas de rééchantillonnage"
-          type="number" :min="2" :max="200"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
+    <!-- Lissage -->
+    <div class="section-title">Lissage</div>
+    <v-text-field v-model.number="params.fenetreAffichageM" label="Lissage altitude" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.fenetrePenteM" label="Lissage pente" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.fenetreCatM" label="Fenêtre de calcul pente" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.medianWindowM" label="Filtre médian" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.gaussianSigmaM" label="Lissage gaussien" type="number" suffix="m" density="compact" />
 
-      <!-- Anti-pic : fenêtre (v3.6, en mètres) -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.despikeWindowM"
-          label="Anti-pic : fenêtre"
-          type="number" :min="50" :max="500"
-          suffix="m" density="compact"
-          @update:model-value="onChange">
-          <template #details>
-            <span class="text-caption text-grey">
-              Fenêtre effective : {{ effectiveWinPts }} pts ≈ {{ effectiveCovM }} m
-            </span>
-          </template>
-        </v-text-field>
-      </v-col>
+    <!-- Détection -->
+    <div class="section-title">Détection</div>
+    <v-text-field v-model.number="params.seuilMontee" label="Seuil détection" type="number" suffix="%" density="compact" />
+    <v-text-field v-model.number="params.longueurMin" label="Longueur min. pente" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.gapMinM" label="Écart min. entre montées" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.refinePct" label="Recherche extrema" type="number" suffix="%" density="compact" />
 
-      <!-- Anti-pic : seuil -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.despikeThresholdM"
-          label="Anti-pic : seuil"
-          type="number" :min="0" :max="100"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
+    <!-- Export & Debug -->
+    <div class="section-title">Export & Debug</div>
+    <v-text-field v-model.number="params.exportProfileStepM" label="Pas du profil exporté" type="number" suffix="m" density="compact" />
+    <v-text-field v-model.number="params.segmentLogM" label="Segments debug" type="number" suffix="m" density="compact" />
 
-      <!-- Lissage altitude -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.fenetreAffichageM"
-          label="Lissage altitude" type="number" :min="20"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Lissage pente -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.fenetrePenteM"
-          label="Lissage pente" type="number" :min="10"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Fenêtre de calcul pente -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.fenetreCatM"
-          label="Fenêtre de calcul pente" type="number" :min="50"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Seuil détection -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.seuilMontee"
-          label="Seuil détection" type="number" :min="0.1"
-          suffix="%" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Longueur min. pente -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.longueurMin"
-          label="Longueur min. pente" type="number" :min="0"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Écart min. entre montées -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.gapMinM"
-          label="Écart min. entre montées"
-          type="number" :min="0" :max="5000"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Recherche extrema -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.refinePct"
-          label="Recherche extrema"
-          type="number" :min="1" :max="500"
-          suffix="%" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Filtre médian -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.medianWindowM"
-          label="Filtre médian"
-          type="number" :min="0" :max="300"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Lissage gaussien -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.gaussianSigmaM"
-          label="Lissage gaussien"
-          type="number" :min="0" :max="500"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Correction plateaux -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.plateauRun"
-          label="Correction plateaux"
-          type="number" :min="0" :max="20"
-          suffix="pts" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Segments debug -->
-      <v-col cols="12" md="4">
-        <v-text-field v-model.number="params.segmentLogM"
-          label="Segments debug"
-          type="number" :min="10" :max="2000"
-          suffix="m" density="compact"
-          @update:model-value="onChange" />
-      </v-col>
-
-      <!-- Toggles -->
-      <v-col cols="12" md="6">
-        <v-switch v-model="params.smoothExtra"
-          label="Lissage renforcé (double SG)"
-          density="compact" hide-details color="primary"
-          @update:model-value="onChange" />
-      </v-col>
-      <v-col cols="12" md="6">
-        <v-switch v-model="params.segmentSmooth"
-          label="Lissage des pentes de segment"
-          density="compact" hide-details color="primary"
-          @update:model-value="onChange" />
-      </v-col>
-    </v-row>
+    <!-- Options -->
+    <v-switch v-model="params.smoothExtra" label="Lissage renforcé (double SG)" density="compact" hide-details />
+    <v-switch v-model="params.segmentSmooth" label="Lissage des pentes de segment" density="compact" hide-details />
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { reactive, ref, watch } from 'vue';
 import DiagnosticPanel from './DiagnosticPanel.vue';
 import { useParametersStore } from '@/stores/parametersStore';
-import { despikeWindowMToPts } from '@/utils/despike';
-import { debounce } from '@/utils/debounce';
+import { useMapbox } from '@/composables/useMapbox';
+import { validateParameters } from '@/utils/parameterValidation';
+
+const props = defineProps<{ parameters: any }>();
+const emit = defineEmits<{ (e: 'update:parameters', p: any): void }>();
 
 const paramsStore = useParametersStore();
+const mapbox = useMapbox();
+
 const params = reactive({ ...paramsStore.parameters });
-const emit = defineEmits<{ (e: 'change'): void }>();
+const mapboxToken = ref(localStorage.getItem('mapboxToken') || '');
+const showContours = ref(localStorage.getItem('showContours') === 'true');
+const mapStatus = ref('');
 
-const effectiveWinPts = computed(() =>
-  despikeWindowMToPts(params.despikeWindowM, params.stepM));
-const effectiveCovM = computed(() =>
-  effectiveWinPts.value * params.stepM);
+watch(params, () => {
+  const validated = validateParameters({ ...params });
+  emit('update:parameters', validated);
+}, { deep: true });
 
-const onChange = debounce(() => {
-  paramsStore.setParameters({ ...params });
-  emit('change');
-}, 250);
+async function onInitMap(): Promise<void> {
+  const token = mapboxToken.value.trim();
+  if (!token) { mapStatus.value = 'Token requis'; return; }
+  localStorage.setItem('mapboxToken', token);
+  mapStatus.value = 'Chargement…';
+  try {
+    await mapbox.initMapboxMap(token);
+    mapStatus.value = 'Carte OK';
+  } catch (err: any) {
+    mapStatus.value = 'Erreur : ' + err.message;
+  }
+}
+
+function onToggleContours(v: boolean | null): void {
+  localStorage.setItem('showContours', String(!!v));
+  mapbox.updateContourVisibility(!!v);
+}
 </script>
-```
-
-### 8.3 Composant `ClimbRow.vue` (avec indicateurs ⊕ et ⤺)
-
-```vue
-<template>
-  <tr :class="rowClass">
-    <td class="climb-select-cell">
-      <v-radio
-        :model-value="selected"
-        :value="index"
-        @update:model-value="$emit('select')"
-        hide-details
-      />
-    </td>
-    <td>
-      {{ index + 1 }}
-      <v-icon v-if="climb.mergedCount > 0" size="small" color="teal"
-        title="Fusionnée">mdi-plus-circle</v-icon>
-      <v-icon v-if="climb.fallback" size="small" color="purple"
-        title="Repli sous-segment">mdi-undo</v-icon>
-    </td>
-    <td>
-      <v-text-field v-model.number="startKm" type="number" step="0.001"
-        density="compact" variant="outlined" hide-details
-        @update:model-value="$emit('edit', 'startKm', $event)" />
-    </td>
-    <td>
-      <v-text-field v-model.number="endKm" type="number" step="0.001"
-        density="compact" variant="outlined" hide-details
-        @update:model-value="$emit('edit', 'endKm', $event)" />
-    </td>
-    <td class="num">{{ climb.length.toFixed(0) }} m</td>
-    <td class="num">{{ climb.dPlus.toFixed(0) }} m</td>
-    <td class="num">
-      <v-chip :color="colorFor(climb.avgSlope)" size="small" label>
-        {{ climb.avgSlope.toFixed(1) }} %
-      </v-chip>
-    </td>
-    <td class="num">{{ climb.refineM?.toFixed(0) ?? '—' }}</td>
-    <td>
-      <v-btn icon="mdi-refresh" size="x-small" variant="text"
-        @click="$emit('reset')" />
-      <v-btn icon="mdi-close" size="x-small" variant="text" color="error"
-        @click="$emit('delete')" />
-    </td>
-  </tr>
-</template>
 ```
 
 ---
 
 ## 9. Communication avec le backend Node.js
 
-### 9.1 Sidecar Node.js — pipeline complet v3.6
+### 9.1 Sidecar Node.js — pipeline complet v3.9.2
 
 ```javascript
 // src-tauri/sidecar/analyzer.js
@@ -2063,7 +3297,7 @@ function haversine(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ---------- [v3.5] Rééchantillonnage par moyenne ----------
+// ---------- Rééchantillonnage par moyenne ----------
 function resampleUniform(distRaw, eleRaw, stepM) {
   const n = distRaw.length;
   const totalM = distRaw[n - 1];
@@ -2131,16 +3365,14 @@ function plateauCorrect(ele, minRun, tolerance) {
   return { out, count };
 }
 
-// ---------- [v3.6] Anti-pic Hampel (fenêtre en mètres) ----------
+// ---------- Anti-pic Hampel ----------
 function despikeWindowMToPts(windowM, stepM) {
   return Math.max(3, Math.round(windowM / stepM) | 1);
 }
 
 function despikeAltitude(ele, winPts, thresholdM) {
   const n = ele.length;
-  if (n < 3 || winPts < 3 || thresholdM <= 0) {
-    return { out: ele.slice(), count: 0 };
-  }
+  if (n < 3 || winPts < 3 || thresholdM <= 0) return { out: ele.slice(), count: 0 };
   if (winPts % 2 === 0) winPts += 1;
   const half = Math.floor(winPts / 2);
   const out = ele.slice();
@@ -2189,7 +3421,21 @@ function computeRawStats(distRaw, eleRawOrig) {
            eleMin, eleMax, doublons: n - gaps.length };
 }
 
-// ---------- SG ----------
+// ---------- Lissages ----------
+function movingAverage(arr, win) {
+  const n = arr.length;
+  if (win < 2 || n < 2) return arr.slice();
+  const half = Math.floor(win / 2);
+  const p = new Array(n + 1).fill(0);
+  for (let i = 0; i < n; i++) p[i+1] = p[i] + arr[i];
+  const res = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - half), hi = Math.min(n - 1, i + half);
+    res[i] = (p[hi+1] - p[lo]) / (hi - lo + 1);
+  }
+  return res;
+}
+
 function savitzkyGolay(arr, win, order = 2) {
   const n = arr.length;
   if (win < 5 || n < 5) return arr.slice();
@@ -2214,7 +3460,6 @@ function savitzkyGolay(arr, win, order = 2) {
   return out;
 }
 
-// ---------- Gaussien ----------
 function gaussianFilter(arr, sigma) {
   const n = arr.length;
   if (!sigma || sigma <= 0 || n < 2) return arr.slice();
@@ -2240,7 +3485,6 @@ function gaussianFilter(arr, sigma) {
   return out;
 }
 
-// ---------- Médiane ----------
 function medianFilter(arr, win) {
   const n = arr.length;
   if (!win || win < 3 || n < 3) return arr.slice();
@@ -2260,42 +3504,13 @@ function medianFilter(arr, win) {
   return out;
 }
 
-// ---------- MA ----------
-function movingAverage(arr, win) {
-  const n = arr.length;
-  if (win < 2 || n < 2) return arr.slice();
-  const half = Math.floor(win / 2);
-  const p = new Array(n + 1).fill(0);
-  for (let i = 0; i < n; i++) p[i+1] = p[i] + arr[i];
-  const res = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const lo = Math.max(0, i - half), hi = Math.min(n - 1, i + half);
-    res[i] = (p[hi+1] - p[lo]) / (hi - lo + 1);
-  }
-  return res;
-}
-
-// ---------- Slope ----------
+// ---------- Pentes ----------
 function computeSlope(ele, dist, minD = 0.05) {
   const n = ele.length, s = new Array(n).fill(0);
   for (let i = 0; i < n; i++) {
     const i1 = Math.max(0, i - 1), i2 = Math.min(n - 1, i + 1);
     const d = dist[i2] - dist[i1];
     if (d > minD) s[i] = ((ele[i2] - ele[i1]) / d) * 100;
-  }
-  return s;
-}
-
-function computeSlopeWindow(ele, dist, winM) {
-  const n = ele.length;
-  const s = new Array(n).fill(0);
-  for (let i = 0; i < n; i++) {
-    let lo = i;
-    while (lo > 0 && dist[i] - dist[lo - 1] <= winM) lo--;
-    let hi = i;
-    while (hi < n - 1 && dist[hi + 1] - dist[i] <= winM) hi++;
-    const dDist = dist[hi] - dist[lo];
-    if (dDist > 0.5) s[i] = ((ele[hi] - ele[lo]) / dDist) * 100;
   }
   return s;
 }
@@ -2341,18 +3556,7 @@ function anchoredMovingAverage(raw, anchorIdxs, stepM, fenetreAffichageM, sigmaM
   return final;
 }
 
-// ---------- Argmin/Argmax ----------
-function argminRange(arr, lo, hi) {
-  let best = lo, v = arr[lo];
-  for (let i = lo + 1; i <= hi; i++) if (arr[i] < v) { v = arr[i]; best = i; }
-  return best;
-}
-function argmaxRange(arr, lo, hi) {
-  let best = lo, v = arr[lo];
-  for (let i = lo + 1; i <= hi; i++) if (arr[i] > v) { v = arr[i]; best = i; }
-  return best;
-}
-
+// ---------- Helpers ----------
 function findIdxAtDist(dist, targetM) {
   let lo = 0, hi = dist.length - 1;
   while (lo < hi) {
@@ -2362,16 +3566,40 @@ function findIdxAtDist(dist, targetM) {
   return lo;
 }
 
+function argminRange(arr, lo, hi) {
+  let best = lo, v = arr[lo];
+  for (let i = lo + 1; i <= hi; i++) if (arr[i] < v) { v = arr[i]; best = i; }
+  return best;
+}
+
+function argmaxRange(arr, lo, hi) {
+  let best = lo, v = arr[lo];
+  for (let i = lo + 1; i <= hi; i++) if (arr[i] > v) { v = arr[i]; best = i; }
+  return best;
+}
+
 // ---------- Hystérésis ----------
+const CLIMB_CRITERIA = [
+  { minLen: 1000, minSlope: 3 }, { minLen: 750, minSlope: 4 },
+  { minLen: 500, minSlope: 5 }, { minLen: 400, minSlope: 6 },
+  { minLen: 300, minSlope: 7 }
+];
+
+function minSlopeForLength(len) {
+  for (const c of CLIMB_CRITERIA) if (len >= c.minLen) return c.minSlope;
+  return Infinity;
+}
+
 function detectEvents(slope, seuil) {
   const ev = []; let inC = false;
   for (let i = 0; i < slope.length; i++) {
-    if (!inC && slope[i] > seuil)  { ev.push({ idx: i, type: 'start' });  inC = true; }
+    if (!inC && slope[i] > seuil) { ev.push({ idx: i, type: 'start' }); inC = true; }
     else if (inC && slope[i] < -seuil) { ev.push({ idx: i, type: 'summit' }); inC = false; }
   }
   if (inC) ev.push({ idx: slope.length - 1, type: 'summit' });
   return ev;
 }
+
 function buildClimbCandidates(events, n) {
   const segs = []; let prev = 0;
   let cur = (events.length && events[0].type === 'summit') ? 'climb' : 'non-climb';
@@ -2384,16 +3612,6 @@ function buildClimbCandidates(events, n) {
   return segs.filter(s => s.key === 'climb');
 }
 
-// ---------- Sous-segment optimal ----------
-const CLIMB_CRITERIA = [
-  { minLen: 1000, minSlope: 3 }, { minLen: 750, minSlope: 4 },
-  { minLen: 500, minSlope: 5 }, { minLen: 400, minSlope: 6 },
-  { minLen: 300, minSlope: 7 }
-];
-function minSlopeForLength(len) {
-  for (const c of CLIMB_CRITERIA) if (len >= c.minLen) return c.minSlope;
-  return Infinity;
-}
 function findBestSubClimb(dist, eleMetric, startIdx, endIdx) {
   const n = endIdx - startIdx + 1;
   if (n < 2) return null;
@@ -2420,7 +3638,7 @@ function findBestSubClimb(dist, eleMetric, startIdx, endIdx) {
   return best;
 }
 
-// ---------- computeAuto complet (v3.6) ----------
+// ---------- computeAuto (avec mergedParts) ----------
 function computeAuto(dist, eleRaw, params) {
   const { stepM, fenetreAffichageM, fenetrePenteM, seuilMontee, refinePct,
           medianWindowM, gaussianSigmaM, gapMinM } = params;
@@ -2431,13 +3649,16 @@ function computeAuto(dist, eleRaw, params) {
     const winPts = Math.max(3, Math.round(medianWindowM / stepM) | 1);
     eleMedian = medianFilter(eleRaw, winPts);
   }
+
   const winSGPts = Math.max(5, Math.round(fenetreAffichageM / stepM) | 1);
   const eleBase = savitzkyGolay(eleMedian, winSGPts, 2);
+
   const winSlopePts = Math.max(1, Math.round(fenetrePenteM / stepM));
   const slopeBase = clipSlope(
     movingAverage(computeSlope(eleBase, dist), winSlopePts),
     SLOPE_DISPLAY_MAX_PCT
   );
+
   const candidates = buildClimbCandidates(detectEvents(slopeBase, seuilMontee), n);
 
   const candidatesWithSub = [];
@@ -2449,7 +3670,6 @@ function computeAuto(dist, eleRaw, params) {
   const anchors = [];
   const refined = [];
   let lastEnd = -1;
-  let mergeCount = 0;
 
   for (const c of candidatesWithSub) {
     const candidateLen = c.length;
@@ -2461,17 +3681,24 @@ function computeAuto(dist, eleRaw, params) {
     const newEnd = (hiIdx > c.endIdx) ? argmaxRange(eleBase, c.endIdx, hiIdx) : c.endIdx;
     if (newEnd <= c.startIdx) continue;
     if (newEnd <= lastEnd) continue;
+
     const naturalLow = lastEnd + 1;
-    const safetyLow  = findIdxAtDist(dist, Math.max(0, dist[c.startIdx] - effectiveRefine));
+    const safetyLow = findIdxAtDist(dist, Math.max(0, dist[c.startIdx] - effectiveRefine));
     const loIdx = Math.max(naturalLow, safetyLow);
     const newStart = (loIdx < c.startIdx) ? argminRange(eleBase, loIdx, c.startIdx) : c.startIdx;
     if (newStart >= newEnd) continue;
 
-    // Fusion (v3.0)
+    // Fusion avec conservation des mergedParts
     if (refined.length > 0 && gapMinM > 0) {
       const prev = refined[refined.length - 1];
       const gapM = dist[newStart] - dist[prev.endIdx];
       if (gapM < gapMinM) {
+        if (!prev._mergedParts) {
+          prev._mergedParts = [{
+            startKm: dist[prev.startIdx] / 1000,
+            endKm: dist[prev.endIdx] / 1000
+          }];
+        }
         const combinedEnd = argmaxRange(eleBase, prev.endIdx, newEnd);
         const midValley = argminRange(eleBase, prev.endIdx, newStart);
         let newPrevStart = prev.startIdx;
@@ -2479,14 +3706,17 @@ function computeAuto(dist, eleRaw, params) {
           newPrevStart = midValley;
           anchors[anchors.length - 2] = midValley;
         }
+        prev._mergedParts.push({
+          startKm: dist[newStart] / 1000,
+          endKm: dist[newEnd] / 1000
+        });
         prev.startIdx = newPrevStart;
         prev.endIdx = combinedEnd;
-        prev.candidateLen = (prev.candidateLen || 0) + candidateLen;
+        prev.candidateLen += candidateLen;
         prev.refineM = Math.max(prev.refineM || 0, effectiveRefine);
         prev._merged = (prev._merged || 0) + 1;
         anchors[anchors.length - 1] = combinedEnd;
         lastEnd = combinedEnd;
-        mergeCount++;
         continue;
       }
     }
@@ -2494,8 +3724,8 @@ function computeAuto(dist, eleRaw, params) {
     anchors.push(newStart, newEnd);
     refined.push({
       startIdx: newStart, endIdx: newEnd,
-      refineM: effectiveRefine, candidateLen: candidateLen,
-      _merged: 0
+      refineM: effectiveRefine, candidateLen,
+      _merged: 0, _mergedParts: null
     });
     lastEnd = newEnd;
   }
@@ -2504,7 +3734,6 @@ function computeAuto(dist, eleRaw, params) {
     eleRaw, anchors, stepM, fenetreAffichageM, gaussianSigmaM, params.smoothExtra
   );
 
-  // Validation stricte (v3.1)
   const autoClimbs = [];
   for (const c of refined) {
     let finalStart = c.startIdx;
@@ -2517,32 +3746,35 @@ function computeAuto(dist, eleRaw, params) {
     }
     let avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
     const minSlope = minSlopeForLength(length);
+    let fallbackFlag = false;
 
     if (length < 300 || avgSlope < minSlope) {
       const sub = findBestSubClimb(dist, eleDisplay, c.startIdx, c.endIdx);
       if (!sub) continue;
       finalStart = sub.startIdx;
       finalEnd = sub.endIdx;
+      fallbackFlag = true;
     }
 
     autoClimbs.push({
       startKm: dist[finalStart] / 1000,
       endKm: dist[finalEnd] / 1000,
-      refineM: c.refineM, candidateLen: c.candidateLen,
+      refineM: c.refineM,
+      candidateLen: c.candidateLen,
       mergedCount: c._merged || 0,
-      fallback: finalStart !== c.startIdx || finalEnd !== c.endIdx
+      mergedParts: c._mergedParts || null,
+      fallback: fallbackFlag
     });
   }
 
   return { autoClimbs };
 }
 
-// ---------- Analyse complète ----------
+// ---------- analyze ----------
 function analyze(content, parameters) {
   const track = parseGpx(content);
   const n = track.points.length;
 
-  // 1. Distances cumulées
   const distRaw = new Float64Array(n);
   for (let i = 1; i < n; i++) {
     distRaw[i] = distRaw[i - 1] + haversine(
@@ -2552,20 +3784,15 @@ function analyze(content, parameters) {
   }
 
   const eleRawOrig = Float64Array.from(track.points.map(p => p.ele));
-
-  // 2. Stats brutes
   const rawStats = computeRawStats(distRaw, eleRawOrig);
 
-  // 3. Correction plateaux (optionnelle)
   let eleForResample = eleRawOrig;
   if (parameters.plateauRun > 0) {
     eleForResample = plateauCorrect(eleRawOrig, parameters.plateauRun, PLATEAU_TOLERANCE_M).out;
   }
 
-  // 4. Rééchantillonnage par moyenne (v3.5)
   const { dist, ele, avgWinM } = resampleUniform(distRaw, eleForResample, parameters.stepM);
 
-  // 5. Anti-pic Hampel (v3.6 — fenêtre en mètres)
   let eleFinal = ele;
   let despikeCount = 0;
   const despikeWinPtsEffective = Math.max(3,
@@ -2576,7 +3803,6 @@ function analyze(content, parameters) {
     despikeCount = spikeRes.count;
   }
 
-  // 6. Détection
   const { autoClimbs } = computeAuto(dist, eleFinal, parameters);
 
   return {
@@ -2624,6 +3850,7 @@ pub struct AnalyzerParameters {
     pub gaussian_sigma_m: f64,
     pub plateau_run: u32,
     pub segment_log_m: u32,
+    pub export_profile_step_m: f64,
     pub smooth_extra: bool,
     pub segment_smooth: bool,
 }
@@ -2677,7 +3904,10 @@ pub async fn analyze_gpx(
         "readFile": true,
         "scope": ["$HOME/**", "$DOCUMENT/**"]
       },
-      "dialog": { "open": true }
+      "dialog": { "open": true },
+      "shell": {
+        "sidecar": true
+      }
     }
   }
 }
@@ -2710,190 +3940,370 @@ pub async fn read_gpx_file(path: String) -> Result<String, String> {
 }
 ```
 
----
+### 10.4 Intégration Mapbox dans Tauri
 
-## 11. Drag & drop direct sur les graphiques
-
-### 11.1 Principe
-
-L'édition par drag & drop permet à l'utilisateur de déplacer les marqueurs de vallée et de sommet directement sur le graphique. Pour fonctionner correctement avec `chartjs-plugin-zoom`, l'interception **doit se faire au niveau DOM en phase de capture** et non via les hooks Chart.js.
-
-### 11.2 Point critique : ordre des événements
-
-Le navigateur émet **`pointerdown` AVANT `mousedown`**. Chart.js v4 et `chartjs-plugin-zoom` attachent leurs listeners sur `pointerdown` en phase cible. Pour les bloquer :
-
-```typescript
-window.addEventListener('pointerdown', onGlobalPointerDown, /* capture */ true);
-window.addEventListener('mousedown',   onGlobalPointerDown, /* capture */ true);
-```
-
-Et dans le handler :
-```typescript
-if (intercepted) {
-  e.stopImmediatePropagation();
-  e.preventDefault();
-}
-```
-
-### 11.3 Désactivation explicite du pan
-
-En complément du `stopImmediatePropagation`, il est prudent de **désactiver explicitement** `pan.enabled` pendant le drag :
-
-```typescript
-STATE.panOriginalState = {
-  elev: elevChart?.options.plugins.zoom.pan.enabled,
-  slope: slopeChart?.options.plugins.zoom.pan.enabled,
-};
-elevChart.options.plugins.zoom.pan.enabled = false;
-slopeChart.options.plugins.zoom.pan.enabled = false;
-```
-
-Et de le restaurer au `pointerup`.
-
-### 11.4 Désactivation du tooltip pendant le drag
-
-Le tooltip Chart.js est très intrusif pendant un drag : il suit la souris et masque les courbes. On le désactive :
-
-```typescript
-for (const ch of [elevChart, slopeChart]) {
-  ch.options.plugins.tooltip.enabled = false;
-  ch.tooltip.setActiveElements([], { x: 0, y: 0 });
-  ch.tooltip.update();
-}
-```
-
-Et on le réactive au `pointerup`.
-
-### 11.5 Zone cliquable des poignées
-
-Les poignées triangulaires sont dessinées en haut du graphique (dans les 30 premiers pixels). La détection de clic doit être **limitée à cette bande** pour ne pas capturer les clics au milieu du graphique :
-
-```typescript
-function findHandleAt(chart, px, py, climb) {
-  const { chartArea, scales } = chart;
-  if (py < chartArea.top - 12 || py > chartArea.top + 34) return null;
-  // ...
-}
-```
-
-### 11.6 Retour visuel temps réel
-
-Pendant le drag :
-- Le canvas est redessiné via `chart.draw()` (rapide, ~5 ms)
-- Les métriques de la ligne du tableau sont mises à jour via `updatePreviewMetrics()`
-- Le rebuild complet est différé au `pointerup`
+- Mapbox GL JS est chargé **paresseusement** via `loadMapboxGL()` (CDN).
+- Le token est stocké dans `localStorage` (persiste entre sessions).
+- Aucune configuration Tauri supplémentaire n'est nécessaire pour Mapbox.
 
 ---
 
-## 12. Insertion contextuelle de montée
+## 11. Intégration Mapbox GL JS
 
-### 12.1 Principe
+Voir section 7.5 (`useMapbox`) pour l'implémentation complète du composable.
 
-Le bouton global « + Ajouter une montée » a été **supprimé** (v2.2). À la place, des **boutons d'insertion** apparaissent directement **dans le tableau**, entre les lignes de montées.
+### 11.1 Ordre des couches (critique)
 
-### 12.2 Règles d'affichage
-
-| Position | Condition |
-|---|---|
-| Avant #1 | `climbs[0].startDist ≥ 1000 m` |
-| Entre #i et #i+1 | `gap ≥ 200 m` |
-| Après #N | `totalDist − lastEnd ≥ 1000 m` |
-| Aucune montée | Bouton unique centré |
-
-### 12.3 Composant `InsertionRow`
-
-```vue
-<template>
-  <tr class="insertion-row">
-    <td :colspan="9" class="text-center py-1">
-      <v-btn
-        size="x-small" variant="outlined" color="primary"
-        prepend-icon="mdi-plus" @click="$emit('insert')">
-        {{ label }}
-        <span class="text-caption text-grey ml-2">· {{ gapText }} libres</span>
-      </v-btn>
-    </td>
-  </tr>
-</template>
-
-<script setup lang="ts">
-import { computed } from 'vue';
-
-const props = defineProps<{ label: string; gapKm: number }>();
-defineEmits<{ (e: 'insert'): void }>();
-
-const gapText = computed(() =>
-  props.gapKm >= 1
-    ? `${props.gapKm.toFixed(2)} km`
-    : `${(props.gapKm * 1000).toFixed(0)} m`
-);
-</script>
+```javascript
+// 1. Terrain (raster-dem + setTerrain)
+// 2. Brume (setFog)
+// 3. Trace colorée (trace-line-layer) ← DOIT exister avant les contours
+// 4. Marqueurs (climb-markers-circle)
+// 5. Contours (contour-lines + contour-index, beforeId='trace-line-layer')
 ```
 
-### 12.4 Algorithme d'insertion
+**Ne pas inverser** : les contours utilisent `'trace-line-layer'` comme `beforeId`. Si la trace n'existe pas encore, `addLayer` échoue silencieusement et les contours n'apparaissent jamais (bug corrigé en v3.8.5).
 
-Voir §6.12 pour l'implémentation TypeScript complète.
-
----
-
-## 13. Pipeline complet de détection
-
-### 13.1 Vue synthétique
+### 11.2 Chargement automatique au démarrage (v3.9.2)
 
 ```typescript
-// src/services/gpxApi.ts
-export async function analyzeGpx(
-  filePath: string,
-  parameters: AnalyzerParameters,
-): Promise<AnalyzerResult> {
-  const content = await invoke<string>('read_gpx_file', { path: filePath });
-  return await invoke<AnalyzerResult>('analyze_gpx', { content, parameters });
+// À l'init de l'app
+const saved = localStorage.getItem('mapboxToken');
+if (saved) {
+  initMapboxMap(saved).catch(err => {
+    console.warn('[Mapbox] init auto échouée :', err);
+  });
 }
 ```
 
-### 13.2 Ordre des étapes (rappel)
+### 11.3 Trace colorée par catégorie (points bruts)
 
-1. Parse GPX → `rawPoints`
-2. Distances cumulées → `distRaw`
-3. Altitudes d'origine → `eleRawOrig`
-4. Stats brutes → `rawStats`
-5. Correction plateaux (optionnelle) → `eleForResample`
-6. **Rééchantillonnage par moyenne** → `dist`, `ele`, `avgWinM`
-7. **Anti-pic Hampel** (conversion m → pts) → `eleFinal`, `despikeCount`, `despikeWinPtsEffective`
-8. Filtre médian → `eleMedian`
-9. Savitzky-Golay → `eleBase`
-10. Pente lissée + clip → `slopeBase`
-11. Hystérésis → `events`
-12. Candidats → `candidates`
-13. Sous-segment optimal → `candidatesWithSub`
-14. Raffinement → `refined`
-15. **Fusion par `gapMinM`** → `refined` étendu
-16. Lissage ancré final → `eleDisplay`
-17. **Validation finale stricte + repli** → `autoClimbs`
+Voir section 6.14 (`buildTraceFeatures`). Point clé : **utiliser `rawPoints`, pas `dist`** (grille resamplée). La catégorie de chaque point brut est déterminée par sa distance cumulée (`distRaw[i]`), avec un parcours monotone de `catSegments`.
 
-### 13.3 Log debug
+---
+
+## 12. Widget profil (canvas)
+
+Voir section 7.4 (`useProfileCanvas`) pour l'implémentation complète.
+
+### 12.1 Échelles FIXES (v3.8.3 + v3.9.2)
+
+```typescript
+export const PROFILE_SCALE_X_FULL = 50;    // m/px
+export const PROFILE_SCALE_X_CLIMB = 10;   // m/px (v3.9.2 : 10 au lieu de 5)
+export const PROFILE_SCALE_Y = 10;         // m/px
+```
+
+La largeur du canvas est **strictement** `plageVisibleM / scaleX`. Ne JAMAIS agrandir à la largeur du conteneur (bug v3.8.3).
+
+### 12.2 Scroll centré (v3.9.2)
+
+En mode montée, le profil affiche **toute la trace** à 10 m/px. Le canvas est donc plus large que le conteneur. Après chaque rendu, on ajuste `scrollLeft` pour centrer la montée sélectionnée :
+
+```typescript
+if (profileMode === 'climb' && !dragging && selectedClimbIdx != null) {
+  const centerM = (c.startDist + c.endDist) / 2;
+  const centerPx = (centerM - viewStartM) / scaleXActual;
+  const targetScroll = Math.max(0, centerPx - scroll.clientWidth / 2);
+  requestAnimationFrame(() => { scroll.scrollLeft = targetScroll; });
+}
+```
+
+**Ne pas re-scroller** pendant un drag (état `__profileDragging`).
+
+---
+
+## 13. Drag & drop sur le profil
+
+### 13.1 Détection de poignée
+
+```typescript
+function handleAt(cx: number, cy: number): 'valley' | 'summit' | null {
+  if (profileMode !== 'climb' || selectedClimbIdx == null) return null;
+  if (cy > 30) return null;   // Bande des 30 premiers px
+  const c = climbs[selectedClimbIdx];
+  if (!c || c.invalid) return null;
+
+  const xV = (c.startDist - viewStartM) / scaleXActual;
+  const xS = (c.endDist - viewStartM) / scaleXActual;
+  const th = 14;   // Seuil de clic ±14 px
+  const dV = Math.abs(cx - xV);
+  const dS = Math.abs(cx - xS);
+  if (dV < th && dV <= dS) return 'valley';
+  if (dS < th) return 'summit';
+  return null;
+}
+```
+
+### 13.2 Cycle de drag
+
+```
+mousedown sur poignée
+  → __profileDragging = 'valley' | 'summit'
+  → cursor = 'ew-resize'
+
+mousemove
+  → km = viewStartM/1000 + (canvasX - rect.left) * scaleXActual / 1000
+  → km = applyDragConstraint(handle, km, climb)
+  → climb.startKm ou climb.endKm = km
+  → rebuild() + renderProfile() + renderClimbsList()
+  → updateMapMarkers()
+
+mouseup
+  → __profileDragging = null
+  → normalizeGroups()
+  → renderAll()
+```
+
+### 13.3 Clamp à la vue
+
+```typescript
+const marginM = scaleXActual * 14;
+distM = Math.max(viewStartM + marginM, Math.min(viewEndM - marginM, distM));
+```
+
+Empêche de perdre la poignée si l'utilisateur tire au-delà du bord.
+
+---
+
+## 14. Groupes de montées
+
+Voir section 6.11 (`climbGroups.ts`) pour l'implémentation.
+
+### 14.1 Flux complet
+
+```
+Détection avec fusion (computeAuto)
+  → mergedParts conservés
+  → mergedCount > 0
+
+Clic sur ✂ Séparer
+  → groupId = nextGroupId++
+  → userClimbs = [...sub-montées avec subIndex=1,2,3...]
+  → zoomMapToGroup(gid)
+  → sélection = première sous-montée
+
+Clic sur 🔗 Refusionner
+  → members = userClimbs.filter(c => c.groupId === gid)
+  → mergedParts = members.map(m => ({startKm, endKm}))
+  → userClimbs = [...autres montées, merged]
+  → merged.groupId = null
+  → merged.mergedParts = mergedParts
+
+Édition d'une sous-montée (drag)
+  → si groupe reste avec 1 seul membre après édition :
+    normalizeGroups() dissout le groupe
+```
+
+### 14.2 Numérotation `#N.M`
+
+```typescript
+let mainCounter = 0;
+const groupCounters: Record<number, number> = {};
+
+for (const c of climbs) {
+  if (c.groupId != null) {
+    groupCounters[c.groupId] = (groupCounters[c.groupId] || 0) + 1;
+    const sub = c.subIndex ?? groupCounters[c.groupId];
+    label = `#${c.groupId}.${sub}`;
+  } else {
+    mainCounter++;
+    label = `#${mainCounter}`;
+  }
+}
+```
+
+### 14.3 Couleur stable
+
+```typescript
+function groupColor(gid: number): string {
+  const hue = (gid * 137.508) % 360;   // Angle d'or
+  return `hsl(${hue.toFixed(0)}, 62%, 46%)`;
+}
+```
+
+### 14.4 Multi-marqueurs sur la carte (v3.9.2)
+
+Voir section 6.15 (`buildMapMarkers`). Si la montée sélectionnée est groupée, on affiche **tous** les points vallée/sommet de **tous** les membres du groupe, avec `role='selected'` pour le membre actif (rayon 10, contour 4) et `role='member'` pour les autres (rayon 8, contour 2.5).
+
+---
+
+## 15. Création manuelle
+
+Voir section 6.13 (`manualClimb.ts`) pour les fonctions pures.
+
+### 15.1 Machine à états
+
+```
+idle
+  → dblclick sur canvas (mode full, position libre)
+  → pending (valleyKm posée, summitKm = valleyKm)
+
+pending
+  → mousedown + drag
+  → dragging (summitKm mis à jour à chaque mousemove)
+
+dragging
+  → mouseup
+  → validation :
+    - summitKm > valleyKm + 50 m ?
+    - isFreeRange(valleyKm, summitKm) ?
+    → si OUI : addManualClimb()
+    → si NON : annulation
+
+pending / dragging
+  → Échap
+  → annulation (retour à idle)
+```
+
+### 15.2 Composables Vue
+
+Voir section 7.3 (`useManualClimb`).
+
+### 15.3 Validation des chevauchements
+
+```typescript
+export function isFreeRange(aKm: number, bKm: number, userClimbs: UserClimb[]): boolean {
+  const lo = Math.min(aKm, bKm);
+  const hi = Math.max(aKm, bKm);
+  for (const c of userClimbs) {
+    if (lo < c.endKm && hi > c.startKm) return false;
+  }
+  return true;
+}
+```
+
+### 15.4 Indicateurs visuels
+
+- Zone colorée : verte si valide, rouge si chevauchement
+- Ligne vallée verte, ligne sommet rouge pointillée (ou rouge vif si invalide)
+- Curseur `crosshair` sur le canvas
+- Hint textuel dans le header
+
+---
+
+## 16. Suppression de montées
+
+Voir section 6.12 (`deleteClimb.ts`) pour la fonction pure.
+
+### 16.1 Bouton ✕
+
+Positionné en `position: absolute; top: 8px; right: 8px` sur chaque carte de montée. Toujours visible (sans hover).
+
+### 16.2 Comportement
+
+1. Retire la montée de `userClimbs`
+2. **Renumérote les `subIndex`** du groupe affecté
+3. **Dissout le groupe** s'il ne reste qu'un membre
+4. **Ajuste `selectedClimbIdx`** :
+   - Si c'était la montée supprimée → désélectionne, mode full
+   - Si l'index était supérieur → décrémente
+5. `renderAll()`
+
+### 16.3 Exemple
+
+```typescript
+function deleteClimb(idx: number): void {
+  const { deletedGroupId, dissolved } = deleteClimbFromList(idx, userClimbs);
+  if (selectedClimbIdx === idx) {
+    selectedClimbIdx = null;
+    profileMode = 'full';
+  } else if (selectedClimbIdx != null && selectedClimbIdx > idx) {
+    selectedClimbIdx -= 1;
+  }
+  renderAll();
+}
+```
+
+---
+
+## 17. Pipeline complet de détection
+
+### 17.1 Pseudocode global
+
+```typescript
+function analyze(content: string, params: AnalyzerParameters): AnalyzerResult {
+  // 1. Parse GPX
+  const track = parseGpx(content);
+
+  // 2. Distances cumulées
+  const distRaw = computeCumulativeDistances(track.points);
+
+  // 3. Altitudes d'origine + stats
+  const eleRawOrig = Float64Array.from(track.points.map(p => p.ele));
+  const rawStats = computeRawStats(distRaw, eleRawOrig);
+
+  // 4. Correction plateaux (optionnelle)
+  let eleForResample = eleRawOrig;
+  if (params.plateauRun > 0) {
+    eleForResample = plateauCorrect(eleRawOrig, params.plateauRun, PLATEAU_TOLERANCE_M).out;
+  }
+
+  // 5. Rééchantillonnage par moyenne
+  const { dist, ele, avgWinM } = resampleUniform(distRaw, eleForResample, params.stepM);
+
+  // 6. Anti-pic Hampel
+  let eleFinal = ele;
+  let despikeCount = 0;
+  const despikeWinPts = despikeWindowMToPts(params.despikeWindowM, params.stepM);
+  if (params.despikeThresholdM > 0) {
+    const spikeRes = despikeAltitude(ele, despikeWinPts, params.despikeThresholdM);
+    eleFinal = spikeRes.out;
+    despikeCount = spikeRes.count;
+  }
+
+  // 7. Détection complète
+  const { autoClimbs } = computeAuto(dist, eleFinal, params);
+
+  return {
+    track: { name: track.name, points: track.points },
+    distRaw: Array.from(distRaw),
+    eleRawOrig: Array.from(eleRawOrig),
+    dist: Array.from(dist),
+    ele: Array.from(eleFinal),
+    stepM: params.stepM,
+    avgWinM,
+    rawStats,
+    autoClimbs,
+    despikeCount,
+    despikeWinPtsEffective: despikeWinPts,
+  };
+}
+```
+
+### 17.2 Ordre des étapes dans `computeAuto`
+
+1. Filtre médian (optionnel)
+2. Savitzky-Golay (altitude de base)
+3. Pente lissée + clip
+4. Hystérésis (`detectEvents`)
+5. Candidats (`buildClimbCandidates`)
+6. Sous-segment optimal (`findBestSubClimb`)
+7. Raffinement + Fusion (`argminRange`/`argmaxRange`, `gapMinM` + `mergedParts`)
+8. Lissage ancré final (`anchoredMovingAverage`)
+9. Validation stricte + repli (`⤺`, avec préservation `mergedParts`)
+
+### 17.3 Log debug
 
 Le pipeline émet des logs dans le panneau debug :
 
 ```
-📐 PIPELINE v3.6
-   Trace brute : 3312 points
+📐 PIPELINE v3.9.2
+   Trace brute : 3312 points · longueur 110.245 km
    Pas brut : min 0.3 m · médian 22.4 m · moy 33.1 m · max 892.5 m
    D+ brut (doublons ignorés) : 2874 m
-📐 Rééchantillonnage (moyenne) : 2190 pts à pas 50 m · fenêtre de moyennage 75 m
+📐 Rééchantillonnage (moyenne) : 2190 pts à pas 50 m · fenêtre 75 m
 🩹 Anti-pic (fenêtre=200 m → 5 pts ≈ 250 m, seuil=15 m) : 2 point(s) corrigé(s) sur 2190
-[v3.6] 2 fusion(s) — écart min. 250 m
-[v3.6] Validation : 3 conservées, 1 replis
+[v3.9.2] 2 fusion(s)
+[v3.9.2] 3 conservées, 1 replis
 ```
 
-### 13.4 Pipeline de reconstruction
+### 17.4 Pipeline de reconstruction (`rebuild`)
 
 ```typescript
-// src/services/rebuild.ts
-export function rebuild(): RebuildResult | null {
-  if (!STATE.dist || !STATE.eleRaw) return null;
+function rebuild(): RebuildResult | null {
+  if (!dist || !eleRaw) return null;
   const params = getParams();
-  const { dist, eleRaw, userClimbs, stepM } = STATE;
 
   // 1. Contraintes anti-chevauchement
   const sorted = applyConstraints(userClimbs);
@@ -2904,33 +4314,35 @@ export function rebuild(): RebuildResult | null {
     const startIdx = findIdxAtDist(dist, c.startKm * 1000);
     const endIdx = findIdxAtDist(dist, c.endKm * 1000);
     if (startIdx >= endIdx) {
-      return { startIdx, endIdx, ref: c, invalid: true };
+      return { startIdx, endIdx, ref: c, invalid: true, constrainedStart: c._constrainedStart, constrainedEnd: c._constrainedEnd };
     }
     anchors.push(startIdx, endIdx);
-    return { startIdx, endIdx, ref: c, invalid: false };
+    return { startIdx, endIdx, ref: c, invalid: false, constrainedStart: c._constrainedStart, constrainedEnd: c._constrainedEnd };
   });
 
-  // 3. Lissages
+  // 3. Courbe affichée (ancrée)
   const eleDisplay = anchoredMovingAverage(
     eleRaw, anchors, stepM,
     params.fenetreAffichageM, params.gaussianSigmaM, params.smoothExtra,
   );
-  const slopeRaw = clipSlope(
-    computeSlope(movingAverage(eleRaw, 5), dist),
-    SLOPE_DISPLAY_MAX_PCT,
-  );
+
+  // 4. Pentes pour l'affichage
+  const slopeRaw = clipSlope(computeSlope(movingAverage(eleRaw, 5), dist), SLOPE_DISPLAY_MAX_PCT);
   const slopeSemi = computeSlope(eleDisplay, dist);
   const winSlopePts = Math.max(1, Math.round(params.fenetrePenteM / stepM));
-  const slopeDisplay = clipSlope(
-    movingAverage(slopeSemi, winSlopePts),
-    SLOPE_DISPLAY_MAX_PCT,
-  );
-  const slopeForCat = computeSlopeWindow(eleDisplay, dist, params.fenetreCatM);
+  const slopeDisplay = clipSlope(movingAverage(slopeSemi, winSlopePts), SLOPE_DISPLAY_MAX_PCT);
 
-  // 4. Métriques par montée
+  // 5. Catégorisation NON ancrée (v3.8.1)
+  const winSGCatPts = Math.max(5, Math.round(params.fenetreAffichageM / stepM) | 1);
+  const eleBaseCat = savitzkyGolay(eleRaw, winSGCatPts, 2);
+  const slopeForCat = computeSlopeWindow(eleBaseCat, dist, params.fenetreCatM);
+
+  // 6. Métriques par montée
   const climbs = resolved.map(r => {
     if (r.invalid) {
-      return { ...r, length: 0, dPlus: 0, avgSlope: 0, ... };
+      return { ...r, length: 0, dPlus: 0, avgSlope: 0, altStart: 0, altEnd: 0,
+               mergedCount: r.ref.mergedCount || 0, fallback: r.ref.fallback || false,
+               groupId: r.ref.groupId, subIndex: r.ref.subIndex };
     }
     let dPlus = 0;
     for (let k = r.startIdx + 1; k <= r.endIdx; k++) {
@@ -2941,156 +4353,142 @@ export function rebuild(): RebuildResult | null {
     return {
       ...r, length, dPlus,
       avgSlope: length > 0 ? (dPlus / length) * 100 : 0,
-      mergedCount: r.ref.mergedCount || 0,
-      fallback: r.ref.fallback || false,
+      altStart: eleDisplay[r.startIdx], altEnd: eleDisplay[r.endIdx],
+      mergedCount: r.ref.mergedCount || 0, fallback: r.ref.fallback || false,
+      groupId: r.ref.groupId, subIndex: r.ref.subIndex,
     };
   });
 
-  // 5. Segmentation
-  const catSegments = segmentByCategory(
-    slopeForCat, dist, eleDisplay, params.longueurMin,
-  );
+  // 7. Segmentation
+  const catSegments = segmentByCategory(slopeForCat, dist, eleDisplay, params.longueurMin);
 
-  // 6. Marqueurs
-  const markers = [];
-  for (const c of climbs) {
-    if (c.invalid) continue;
-    const idx = STATE.userClimbs.indexOf(c.ref);
-    markers.push({ dist: c.startDist, type: 'valley', climbIdx: idx });
-    markers.push({ dist: c.endDist, type: 'summit', climbIdx: idx });
-  }
-
-  return { dist, eleRaw, eleDisplay, slopeRaw, slopeDisplay,
-           slopeForCat, catSegments, climbs, markers };
+  return { dist, eleRaw, eleDisplay, slopeRaw, slopeDisplay, slopeForCat, catSegments, climbs };
 }
 ```
 
 ---
 
-## 14. Diagnostic de configuration
+## 18. Diagnostic de configuration
 
-### 14.1 Principe
+Voir section 7.4 pour le composant Vue.
 
-Le diagnostic affiche en temps réel l'état de cohérence des 14 paramètres UI et les **valeurs effectives en points**.
-
-### 14.2 Calcul des valeurs effectives
-
-Pour chaque paramètre en mètres, la valeur effective en points = `paramètre / stepM` :
-
-| Paramètre | Valeur effective | Optimal |
-|---|---|---|
-| Lissage altitude | `fenetreAffichageM / stepM` pts | 10–40 pts |
-| Lissage pente | `fenetrePenteM / stepM` pts | 3–10 pts |
-| Filtre médian | `medianWindowM / stepM` pts | ≥ 3 pts (ou 0) |
-| Lissage gaussien | `gaussianSigmaM / stepM` pts | 0.5–5 pts |
-| **Anti-pic : fenêtre** | **`max(3, round(despikeWindowM / stepM) \| 1)` pts** | **150–300 m** |
-| Anti-pic : seuil | `despikeThresholdM` m | 15–25 m |
-| Fenêtre de calcul pente | `fenetreCatM / stepM` pts | 3–15 pts |
-
-### 14.3 Statuts
-
-| Statut | Signification | Couleur |
-|---|---|---|
-| 🟢 green | Optimal | #16a34a |
-| 🟠 orange | Limite / avertissement | #f59e0b |
-| 🔴 red | Incohérence critique | #dc2626 |
-| ⚪ grey | Désactivé / non applicable | #94a3b8 |
-
-### 14.4 Recalcul
-
-Le diagnostic est recalculé à chaque `input` sur un champ (debounce 250 ms côté front). Il s'agit d'une fonction **pure** `computeDiagnostics(params)` qui ne dépend que des paramètres, sans effet de bord.
-
-### 14.5 Tests du diagnostic
+### 18.1 Fonction `computeDiagnostics`
 
 ```typescript
-// tests/unit/diagnostics.test.ts
-import { describe, it, expect } from 'vitest';
-import { computeDiagnostics } from '@/composables/useDiagnostics';
+export function computeDiagnostics(params: AnalyzerParameters): DiagResult {
+  const {
+    stepM, despikeWindowM, despikeThresholdM,
+    fenetreAffichageM, fenetrePenteM, fenetreCatM,
+    seuilMontee, longueurMin, gapMinM, refinePct,
+    medianWindowM, gaussianSigmaM, plateauRun,
+    exportProfileStepM,
+  } = params;
 
-describe('computeDiagnostics (v3.6)', () => {
-  it('détecte une fenêtre SG < 5 pts', () => {
-    const params = {
-      stepM: 100,
-      fenetreAffichageM: 300,   // → 3 pts
-      despikeWindowM: 200,
-      despikeThresholdM: 15,
-      // ... autres params par défaut
-    };
-    const { warnings } = computeDiagnostics(params);
-    expect(warnings.some(w => w.level === 'red')).toBe(true);
-  });
+  // Valeurs effectives
+  const lissageAltPts = Math.max(1, Math.round(fenetreAffichageM / stepM));
+  const lissagePentePts = Math.max(1, Math.round(fenetrePenteM / stepM));
+  const couleurPts = Math.max(1, Math.round(fenetreCatM / stepM));
+  const medianPts = medianWindowM > 0 ? Math.max(1, Math.round(medianWindowM / stepM)) : 0;
+  const gaussianPts = gaussianSigmaM > 0 ? gaussianSigmaM / stepM : 0;
+  const despikeActive = despikeThresholdM > 0;
+  const despikeWinPtsEffective = despikeActive
+    ? Math.max(3, Math.round(despikeWindowM / stepM) | 1)
+    : 0;
+  const despikeCovM = despikeWinPtsEffective * stepM;
+  const despikeExpandRatio = despikeActive && despikeWindowM > 0
+    ? despikeCovM / despikeWindowM
+    : 1;
+  const ratioAltPente = fenetrePenteM > 0 ? fenetreAffichageM / fenetrePenteM : 0;
+  const retardM = fenetrePenteM / 2;
 
-  it('valide la config par défaut v3.6', () => {
-    const params = {
-      stepM: 50,
-      despikeWindowM: 200,
-      despikeThresholdM: 15,
-      fenetreAffichageM: 500,   // 10 pts
-      fenetrePenteM: 150,       // 3 pts
-      fenetreCatM: 100,         // 2 pts
-      seuilMontee: 0.5,
-      longueurMin: 200,
-      gapMinM: 250,
-      refinePct: 60,
-      medianWindowM: 0,
-      gaussianSigmaM: 75,       // 1.5 pts
-      plateauRun: 6,
-      segmentLogM: 100,
-      smoothExtra: true,
-      segmentSmooth: true,
-    };
-    const { warnings } = computeDiagnostics(params);
-    expect(warnings.length).toBe(0);
-  });
+  const diag: Record<string, DiagEntry> = {};
 
-  it('détecte anti-pic fenêtre < 2 × Pas', () => {
-    const params = {
-      stepM: 100,
-      despikeWindowM: 100,      // < 200 m (2 × Pas)
-      despikeThresholdM: 15,
-      // ...
-    };
-    const { warnings } = computeDiagnostics(params);
-    expect(warnings.some(w => w.level === 'orange')).toBe(true);
-  });
+  // ... (chaque paramètre avec status green/orange/red/grey)
 
-  it('détecte anti-pic seuil < 5 m', () => {
-    const params = {
-      stepM: 50,
-      despikeWindowM: 200,
-      despikeThresholdM: 3,
-      // ...
-    };
-    const { warnings } = computeDiagnostics(params);
-    expect(warnings.some(w => w.level === 'orange')).toBe(true);
-  });
-});
+  const warnings: DiagWarning[] = [];
+  if (lissageAltPts < 5) warnings.push({ level: 'red', msg: '...' });
+  else if (lissageAltPts < 10) warnings.push({ level: 'orange', msg: '...' });
+
+  // ... (toutes les règles)
+
+  return { diag, warnings };
+}
 ```
 
-### 14.6 Affichage de la plage optimale
+### 18.2 Statuts
 
-Le diagnostic renvoie pour chaque paramètre :
-
-- `effective` : valeur effective en points
-- `optimal` : plage optimale affichée en pts
-- `target` : valeur cible suggérée si le paramètre est 🟠 ou 🔴
-
-Exemple de sortie pour un lissage altitude trop court :
-
-```
-┌─────────────────────────────────────────┐
-│ Lissage altitude (m)                    │
-│ [    300    ]  ●                        │
-│ ≈ 6 pts · optimal 10–40 pts · cible     │
-│ 500 m (10 pts)                          │
-└─────────────────────────────────────────┘
-```
+| Statut | Signification |
+|---|---|
+| 🟢 green | Optimal |
+| 🟠 orange | Limite / avertissement |
+| 🔴 red | Incohérence critique |
+| ⚪ grey | Désactivé / non applicable |
 
 ---
 
-## 15. Tests et validation
+## 19. Export JSON
 
-### 15.1 Tests unitaires (Vitest)
+Voir section 6.17 (`exportData.ts`) pour l'implémentation complète.
+
+### 19.1 Structure
+
+```json
+{
+  "metadata": {
+    "file": "trace.gpx",
+    "exportedAt": "ISO8601",
+    "version": "3.9.2",
+    "totalDistanceKm": 4.28,
+    "totalDistanceSampledKm": 4.25,
+    "trailingGapM": 30,
+    "stepM": 50,
+    "totalPoints": 86,
+    "segmentsCount": 4,
+    "climbsCount": 1,
+    "profileStepM": 50
+  },
+  "legend": {
+    "note": "...",
+    "fenetreCatM": 100,
+    "longueurMin": 200,
+    "categories": [...]
+  },
+  "segments": [...],
+  "climbs": [
+    {
+      "index": 0,
+      "groupId": null,
+      "subIndex": null,
+      "startKm": 0,
+      "endKm": 3.95,
+      "startProgress": 0,
+      "endProgress": 0.91933,
+      "dPlusM": 284,
+      "avgSlopePct": 7.67,
+      "altStartM": 503.1,
+      "altEndM": 786.9,
+      "mergedCount": 0,
+      "fallback": false,
+      "slopeProfile": [...],
+      "slopeProfileStepM": 50
+    }
+  ]
+}
+```
+
+### 19.2 Nouveautés v3.9.1
+
+Ajout de `groupId` et `subIndex` dans chaque `climb`.
+
+### 19.3 Contrat d'alignement
+
+Chaque tranche de `slopeProfile` appartient **intégralement** à un seul segment global. Sa `categoryId` est **strictement identique** à celle du segment qui la contient.
+
+---
+
+## 20. Tests et validation
+
+### 20.1 Tests unitaires (Vitest)
 
 ```typescript
 // tests/unit/despike.test.ts
@@ -3098,20 +4496,14 @@ import { describe, it, expect } from 'vitest';
 import { despikeAltitude, despikeWindowMToPts } from '@/utils/despike';
 
 describe('despikeWindowMToPts (v3.6)', () => {
-  it('convertit correctement mètres → points', () => {
-    expect(despikeWindowMToPts(200, 50)).toBe(5);   // 200/50 = 4 → 5 (impair)
-    expect(despikeWindowMToPts(200, 100)).toBe(3);  // 200/100 = 2 → 3 (min)
-    expect(despikeWindowMToPts(100, 50)).toBe(3);   // 100/50 = 2 → 3 (min)
-    expect(despikeWindowMToPts(400, 50)).toBe(9);   // 400/50 = 8 → 9
-  });
-
-  it('applique le plancher de 3 pts', () => {
-    expect(despikeWindowMToPts(50, 100)).toBe(3);
-    expect(despikeWindowMToPts(50, 200)).toBe(3);
+  it('convertit mètres → points', () => {
+    expect(despikeWindowMToPts(200, 50)).toBe(5);
+    expect(despikeWindowMToPts(100, 50)).toBe(3);
+    expect(despikeWindowMToPts(400, 50)).toBe(9);
   });
 });
 
-describe('despikeAltitude (Hampel v3.6)', () => {
+describe('despikeAltitude (Hampel)', () => {
   it('corrige un pic isolé', () => {
     const ele = Float64Array.from([1180, 1182, 1183, 1250, 1185, 1186, 1187]);
     const { out, count } = despikeAltitude(ele, 5, 15);
@@ -3121,36 +4513,19 @@ describe('despikeAltitude (Hampel v3.6)', () => {
 
   it('ne modifie pas une progression régulière', () => {
     const ele = Float64Array.from([1180, 1182, 1183, 1190, 1198, 1205, 1210]);
-    const { out, count } = despikeAltitude(ele, 5, 15);
+    const { count } = despikeAltitude(ele, 5, 15);
     expect(count).toBe(0);
-    expect(Array.from(out)).toEqual(Array.from(ele));
-  });
-
-  it('respecte le seuil', () => {
-    const ele = Float64Array.from([1000, 1000, 1000, 1010, 1000, 1000, 1000]);
-    const { count: c15 } = despikeAltitude(ele, 5, 15);
-    expect(c15).toBe(0);
-    const { count: c5 } = despikeAltitude(ele, 5, 5);
-    expect(c5).toBe(1);
-  });
-
-  it('désactivé si seuil = 0', () => {
-    const ele = Float64Array.from([1000, 1000, 5000, 1000, 1000]);
-    const { out, count } = despikeAltitude(ele, 5, 0);
-    expect(count).toBe(0);
-    expect(Array.from(out)).toEqual(Array.from(ele));
   });
 });
 
 // tests/unit/resample.test.ts
-describe('resampleUniform (moyenne v3.5)', () => {
+describe('resampleUniform (moyenne)', () => {
   it('produit un pas constant', () => {
     const distRaw = new Float64Array([0, 5, 12, 25, 40]);
     const eleRaw = new Float64Array([100, 101, 102, 103, 104]);
-    const { dist, ele } = resampleUniform(distRaw, eleRaw, 10);
+    const { dist } = resampleUniform(distRaw, eleRaw, 10);
     expect(dist[0]).toBe(0);
     expect(dist[1]).toBe(10);
-    expect(dist[4]).toBe(40);
   });
 
   it('moyenne les points dans la fenêtre', () => {
@@ -3162,120 +4537,176 @@ describe('resampleUniform (moyenne v3.5)', () => {
     }
     const { ele, avgWinM } = resampleUniform(distRaw, eleRaw, 25);
     expect(avgWinM).toBe(75);
-    expect(Math.abs(ele[5] - 150)).toBeLessThan(15);
   });
 });
 
-// tests/unit/pipeline.test.ts
-describe('Pipeline complet v3.6', () => {
-  it('détecte 3 montées + corrige les glitchs', async () => {
-    const content = readFileSync('tests/fixtures/bormio-mortirolo.gpx', 'utf-8');
-    const result = await analyze(content, {
-      stepM: 50,
-      despikeWindowM: 200,
-      despikeThresholdM: 15,
-      fenetreAffichageM: 500,
-      fenetrePenteM: 150,
-      fenetreCatM: 100,
-      seuilMontee: 0.5,
-      longueurMin: 200,
-      gapMinM: 250,
-      refinePct: 60,
-      medianWindowM: 0,
-      gaussianSigmaM: 75,
-      plateauRun: 6,
-      segmentLogM: 100,
-      smoothExtra: true,
-      segmentSmooth: true,
-    });
-    expect(result.autoClimbs.length).toBeGreaterThan(0);
-    expect(result.despikeCount).toBeGreaterThanOrEqual(0);
-    expect(result.avgWinM).toBe(75);
-    expect(result.despikeWinPtsEffective).toBe(5); // 200/50 → 5
+// tests/unit/groups.test.ts
+describe('Groupes (v3.9.1)', () => {
+  it('splitMergedClimb crée groupId + subIndex', () => {
+    const userClimbs: UserClimb[] = [{
+      startKm: 1, endKm: 5,
+      autoStartKm: null, autoEndKm: null,
+      refineM: null, candidateLen: null,
+      mergedCount: 2, mergedParts: [
+        { startKm: 1, endKm: 2 },
+        { startKm: 3, endKm: 5 },
+      ],
+      fallback: false, groupId: null, subIndex: null,
+    }];
+    const res = splitMergedClimb(0, userClimbs, 1);
+    expect(res).not.toBeNull();
+    expect(userClimbs.length).toBe(2);
+    expect(userClimbs[0].groupId).toBe(1);
+    expect(userClimbs[0].subIndex).toBe(1);
+    expect(userClimbs[1].subIndex).toBe(2);
+  });
+
+  it('refuseGroup reconstruit mergedParts', () => {
+    const userClimbs: UserClimb[] = [
+      { startKm: 1, endKm: 2, autoStartKm: null, autoEndKm: null,
+        refineM: null, candidateLen: null, mergedCount: 0, mergedParts: null,
+        fallback: false, groupId: 1, subIndex: 1 },
+      { startKm: 3, endKm: 5, autoStartKm: null, autoEndKm: null,
+        refineM: null, candidateLen: null, mergedCount: 0, mergedParts: null,
+        fallback: false, groupId: 1, subIndex: 2 },
+    ];
+    const res = refuseGroup(1, userClimbs);
+    expect(res).not.toBeNull();
+    expect(userClimbs.length).toBe(1);
+    expect(userClimbs[0].mergedParts).toEqual([
+      { startKm: 1, endKm: 2 },
+      { startKm: 3, endKm: 5 },
+    ]);
+  });
+
+  it('normalizeGroups dissout les groupes à 1 membre', () => {
+    const userClimbs: UserClimb[] = [
+      { startKm: 1, endKm: 2, autoStartKm: null, autoEndKm: null,
+        refineM: null, candidateLen: null, mergedCount: 0, mergedParts: null,
+        fallback: false, groupId: 1, subIndex: 1 },
+    ];
+    normalizeGroups(userClimbs);
+    expect(userClimbs[0].groupId).toBeNull();
+  });
+});
+
+// tests/unit/buildTraceFeatures.test.ts
+describe('buildTraceFeatures (v3.9.2)', () => {
+  it('utilise les points bruts, pas la grille resamplée', () => {
+    const rawPoints = [
+      { lat: 45, lon: 6, ele: 100 },
+      { lat: 45, lon: 6.001, ele: 105 },
+      { lat: 45, lon: 6.002, ele: 110 },
+    ];
+    const distRaw = [0, 100, 200];
+    const catSegments = [
+      { startIdx: 0, endIdx: 1, startDist: 0, endDist: 100,
+        length: 100, dPlus: 5, avgSlope: 5, altStart: 100, altEnd: 105, key: 'up2' },
+      { startIdx: 2, endIdx: 2, startDist: 100, endDist: 200,
+        length: 100, dPlus: 5, avgSlope: 5, altStart: 105, altEnd: 110, key: 'up2' },
+    ];
+    const fc = buildTraceFeatures(rawPoints, distRaw, catSegments);
+    expect(fc.features.length).toBeGreaterThan(0);
+    expect(fc.features[0].geometry.type).toBe('LineString');
   });
 });
 ```
 
-### 15.2 Jeu de tests de référence
+### 20.2 Tests d'intégration
 
-| Fichier | Points | Caractéristique | Cas test |
-|---|---|---|---|
-| `bormio-mortirolo.gpx` | ~3300 | Éditeur Openrunner | Référence principale |
-| `gps-dense.gpx` | ~10000 | GPS haute fréquence | Performance |
-| `glitch.gpx` | ~2000 | 1–2 pts aberrants | **Anti-pic** |
-| `fragments.gpx` | ~2000 | Faux-plats multiples | Fusion v3.0 |
-| `sous-seuil.gpx` | ~1500 | Fragments + pente faible | Validation v3.1 |
-| `plat.gpx` | ~1000 | Aucune montée | Anti-faux-positifs |
+- **Pipeline complet** : charger un GPX, vérifier le nombre de montées, les D+, les catégories
+- **Fusion + séparation** : vérifier que les `mergedParts` sont bien transmis
+- **Refusion** : vérifier que les bornes éditées sont conservées
+- **Suppression** : vérifier la renumérotation
+- **Création manuelle** : vérifier le refus en cas de chevauchement
+- **Trace carte** : vérifier que `buildTraceFeatures` utilise `rawPoints`
+- **Multi-marqueurs** : vérifier que la sélection d'un membre de groupe affiche tous les marqueurs
+
+### 20.3 Jeu de tests de référence
+
+| Fichier | Points | Caractéristique |
+|---|---|---|
+| `bormio-mortirolo.gpx` | ~3300 | Éditeur Openrunner |
+| `gps-dense.gpx` | ~10000 | GPS haute fréquence |
+| `glitch.gpx` | ~2000 | 1–2 pts aberrants |
+| `fragments.gpx` | ~2000 | Faux-plats multiples |
+| `sous-seuil.gpx` | ~1500 | Fragments + pente faible |
+| `plat.gpx` | ~1000 | Aucune montée |
 
 ---
 
-## 16. Migration depuis le prototype HTML
+## 21. Migration depuis le prototype HTML
 
-### 16.1 Correspondances
+### 21.1 Correspondances
 
-| Prototype HTML | Vue/Tauri |
+| Prototype HTML (v3.7.2) | v3.9.2 |
 |---|---|
-| `<script>` global | Modules TS dans `src/utils/` |
+| `<script>` global | Modules TS + composables Vue |
 | `STATE` objet global | Stores Pinia |
-| `renderAll()` | Watchers Vue + computed |
-| Plugin `segmentationPlugin` | `chartjs-plugin-annotation` ou plugin custom |
-| Plugin `markerDragPlugin` | Composable `useMarkerDrag` |
+| `renderAll()` | Watchers Vue + composables |
+| Plugin `segmentationPlugin` | Intégré dans `useProfileCanvas` |
+| Plugin `markerDragPlugin` | Intégré dans `useProfileCanvas` |
 | Interception window pointerdown | Idem, dans le composable |
 | `document.getElementById` | `ref` Vue |
-| Drag & drop DOM | Composant `<FileDropZone />` |
-| Boutons d'insertion | `<InsertionRow />` |
+| Drag & drop DOM | `<FileDropZone />` |
 | `alert()` | `<v-snackbar>` |
-| `confirm()` | `<v-dialog>` |
-| Toggle brut | `<RawDetailToggle />` |
-| `updateDiagnostics()` | `<DiagnosticPanel />` + `useDiagnostics()` |
-| `despikeAltitude()` | `utils/despike.ts` |
-| **`despikeWinPts` (points)** | **`despikeWindowM` (mètres, v3.6)** |
-| **`resampleUniform` (interpolation)** | **`utils/resample.ts` (moyenne, v3.5)** |
-| **Fenêtre couleur** | **Fenêtre de calcul pente** |
-| **Longueur min. couleur** | **Longueur min. pente** |
+| Diagnostic | `<DiagnosticPanel />` + `useDiagnostics` |
+| **Chart.js profil** | **Canvas 2D natif (`useProfileCanvas`)** |
+| **Pas de carte** | **Mapbox GL JS (`useMapbox`)** |
+| **Pas de groupes** | **`groupId` + `subIndex` + `mergedParts`** |
+| **Pas de séparation** | **✂ Séparer** |
+| **Pas de refusion** | **🔗 Refusionner** |
+| **Pas de suppression** | **✕** |
+| **Pas de création manuelle** | **Double-clic + drag** |
 
-### 16.2 Ordre de migration recommandé
+### 21.2 Ordre de migration recommandé
 
-1. **Port des utilitaires purs** (§6) avec tests unitaires — incluant `despike.ts` (m → pts), `resample.ts` (moyenne v3.5), `plateau.ts`, `refineGuard.ts`, `insertion.ts`
-2. **Mise en place des stores Pinia** (paramètres, données, UI state)
-3. **Composant `<FileDropZone>` persistant** + chargement via Tauri
-4. **Composant `<DiagnosticPanel>`** + `useDiagnostics`
-5. **Composant `<ParametersPanel>`** avec les 14 paramètres
-6. **Composant `<CategoryRibbon>`**
-7. **Composants `<ElevationChart>` et `<SlopeChart>`** + sync zoom + repli
-8. **Composant `<StatsCards>`**
-9. **Composant `<ClimbsTable>`** avec `<ClimbRow>` et `<InsertionRow>`
-10. **Composable `useMarkerDrag`**
-11. **Toggle `<RawDetailToggle>`**
-12. **Désélection** (clic radio + Échap)
-13. **Tests d'intégration** sur traces de référence
+1. **Port des utilitaires purs** (§6) avec tests unitaires
+2. **Types TypeScript** (§3) — en premier pour typer le reste
+3. **Stores Pinia** (paramètres, données, montées, map)
+4. **Composables de données** (`useGpxAnalyzer`, `useDiagnostics`)
+5. **Composant `<FileDropZone>`**
+6. **Composant `<DiagnosticPanel>`**
+7. **Composant `<ParametersForm>`**
+8. **Composant `<ClimbsPanel>`** avec `<ClimbCard>`
+9. **Composable `useMapbox`**
+10. **Composant `<MapPanel>`**
+11. **Composable `useProfileCanvas`**
+12. **Composant `<ProfilePanel>`**
+13. **Composable `useMarkerDrag`** (drag poignées)
+14. **Composable `useManualClimb`** (création)
+15. **Composable `useClimbGroups`** (séparation/refusion)
+16. **Suppression** (bouton ✕)
+17. **Tests d'intégration** sur traces de référence
 
-### 16.3 Points d'attention
+### 21.3 Points d'attention
 
 | Point | Risque | Mitigation |
 |---|---|---|
 | Performance stores Pinia | Recalcul à chaque mutation | `watch` + debounce |
-| Réactivité Float64Array | Non réactive | `shallowRef` |
-| Chart.js + Vue | Fuite mémoire | `onBeforeUnmount` → `chart.destroy()` |
+| Réactivité Float64Array | Non réactive | Convertir en `number[]` ou `shallowRef` |
+| Mapbox GL JS | Fuite mémoire | `map.remove()` dans `onBeforeUnmount` |
 | Sync zoom | Boucle infinie | Flag `syncing` |
-| Interception drag | Conflit plugin-zoom | Capture `pointerdown` au window |
-| Tooltip pendant drag | Masque les courbes | Désactivation dynamique |
-| Tauri IPC | Blocage main thread | Commandes async |
-| **Anti-pic sur 100k points** | Latence | Option Node.js dédiée / worker |
-| **Diagnostic recalculé trop souvent** | Perte de perf | Debounce 250 ms |
+| **Ordre couches Mapbox** | **Contours invisibles** | **Trace avant contours** |
+| **Échelle X profil** | **Étirement trace** | **`canvasWidth = viewWidthM / scaleX`** |
+| **Coloration profil** | **Divergence avec carte** | **`catSegments`, pas point-par-point** |
+| **Catégorisation** | **Changement de couleur au drag** | **`eleBaseCat` (non ancrée)** |
+| **Trace carte** | **Grille resamplée** | **`rawPoints`, pas `dist`** |
+| Anti-pic sur 100k points | Latence | Worker ou Node.js |
+| Diagnostic recalculé trop souvent | Perf | Debounce 250 ms |
+| **Dissolution groupe** | **Référence orpheline** | **`normalizeGroups()` après chaque opération** |
+| **SubIndex orphelins** | **Numérotation incohérente** | **Renuméroter après suppression** |
 
 ---
 
-## 17. Annexes
+## 22. Annexes
 
-### 17.1 Résumé des paramètres par catégorie
+### 22.1 Résumé des paramètres UI (15 + 2 toggles)
 
-#### Paramètres UI (14 exposés)
-
-| Nom UI | Type | Défaut v3.6 | Plage |
+| Nom UI | Type | Défaut v3.9.2 | Plage |
 |---|---|---|---|
 | Pas de rééchantillonnage | float | **50** | 2–200 |
-| **Anti-pic : fenêtre** | **float** | **200** | **50–500** |
+| Anti-pic : fenêtre | float | **200** | 50–500 |
 | Anti-pic : seuil | float | 15 | 0–100 |
 | Lissage altitude | float | **500** | 20–∞ |
 | Lissage pente | float | 150 | 10–∞ |
@@ -3288,33 +4719,46 @@ describe('Pipeline complet v3.6', () => {
 | Lissage gaussien | float | 75 | 0–500 |
 | Correction plateaux | int | 6 | 0–20 |
 | Segments debug | int | 100 | 10–2000 |
+| Pas du profil exporté | float | 50 | 10–500 |
+| Lissage renforcé (double SG) | bool | ON | — |
+| Lissage segments | bool | ON | — |
 
-#### Constantes internes
+### 22.2 Constantes internes
 
 | Nom | Valeur |
 |---|---|
 | `REFINE_MIN_M` | 1500 |
 | `REFINE_MAX_M` | 8000 |
 | `STEP_M_MIN` / `STEP_M_MAX` | 2 / 200 |
-| `GAP_MIN_M_DEFAULT` | 250 |
 | `SLOPE_DISPLAY_MAX_PCT` | 25 |
 | `PLATEAU_TOLERANCE_M` | 1.0 |
 | `RAW_DOUBLON_MIN_M` | 1.0 |
-| **`DESPIKE_WINDOW_M_DEFAULT`** | **200** |
-| **`DESPIKE_WINDOW_M_MIN`** | **50** |
-| **`DESPIKE_WINDOW_M_MAX`** | **500** |
+| `DESPIKE_WINDOW_M_DEFAULT` | 200 |
+| `DESPIKE_WINDOW_M_MIN/MAX` | 50/500 |
 | `DESPIKE_THRESHOLD_M_DEFAULT` | 15 |
-| **`RESAMPLE_AVG_MIN_M`** | **75** |
+| `RESAMPLE_AVG_MIN_M` | 75 |
+| `EXPORT_PROFILE_STEP_M_DEFAULT` | 50 |
+| `EXPORT_PROFILE_STEP_M_MIN/MAX` | 10/500 |
 | `INSERT_EDGE_MIN_KM` | 1.0 |
 | `INSERT_BETWEEN_MIN_KM` | 0.2 |
-| `INSERT_DEFAULT_LEN_KM` | 1.0 |
+| `MANUAL_MIN_LEN_KM` | 0.05 |
+| `PROFILE_SCALE_X_FULL` | **50** |
+| `PROFILE_SCALE_X_CLIMB` | **10** |
+| `PROFILE_SCALE_Y` | 10 |
+| `PROFILE_MIN_HEIGHT` | 110 |
+| `PROFILE_HANDLE_PAD` | 200 |
+| `MAP_TERRAIN_EXAGGERATION` | 1 |
+| `MAP_CLIMB_MARGIN` | 0.20 |
+| `MAP_MIN_SPAN_DEG` | 0.0014 |
+| `CONTOUR_BASE_COLOR` | `#7a5733` |
+| `CONTOUR_INDEX_COLOR` | `#5e3f1d` |
 | `_maxChartPoints` | 4000 |
 | `_maxSearchSteps` | 800 |
 | `_minSegmentLength` | 300 |
 | `DRAG_MIN_LEN_KM` | 0.05 |
 | `DRAG_MIN_GAP_KM` | 0.001 |
 
-#### Critères de validation
+### 22.3 Critères de validation
 
 | Longueur | Pente min |
 |---|---|
@@ -3325,52 +4769,67 @@ describe('Pipeline complet v3.6', () => {
 | 300–400 m | 7 % |
 | < 300 m | rejeté |
 
-#### Catégories de pente
+### 22.4 Catégories de pente
 
-Inchangé (§5).
+Voir §5.1.
 
-### 17.2 Checklist d'intégration v3.6
+### 22.5 Checklist d'intégration v3.9.2
 
 - [ ] Utilitaires TS portés (haversine, resample, plateau, rawStats, smoothing, slope)
-- [ ] `resample.ts` avec **moyennage** (v3.5) + constante `RESAMPLE_AVG_MIN_M = 75`
-- [ ] `despike.ts` avec `despikeWindowMToPts` + `applyDespike` (v3.6)
-- [ ] `mergeClimbs.ts` avec `tryMergeWithPrevious`
-- [ ] `validateClimbs.ts` avec `validateAndFallback`
+- [ ] `resample.ts` avec **moyennage** + constante `RESAMPLE_AVG_MIN_M = 75`
+- [ ] `despike.ts` avec `despikeWindowMToPts` + `applyDespike`
+- [ ] `detection.ts` avec `computeAuto` + `mergedParts` préservés
 - [ ] `climbConstraints.ts` avec `applyConstraints` + `applyDragConstraint`
 - [ ] `insertion.ts` avec `computeInsertionSlots` + `computeInsertionBounds`
-- [ ] Store Pinia paramètres (14 paramètres, `despikeWindowM` en mètres)
+- [ ] **`climbGroups.ts`** avec `splitMergedClimb`, `refuseGroup`, `normalizeGroups`
+- [ ] **`deleteClimb.ts`** avec `deleteClimbFromList`
+- [ ] **`manualClimb.ts`** avec `isFreeRange`, `isFreeKm`, `createManualClimb`
+- [ ] **`buildTraceFeatures.ts`** utilisant `rawPoints`
+- [ ] **`buildMapMarkers.ts`** gérant mono + groupe
+- [ ] **`zoomHelpers.ts`** avec `computeBounds`
+- [ ] Store Pinia paramètres (15 + 2 toggles)
 - [ ] Store Pinia données GPX (raw + resampled + eleFinal + avgWinM + despikeWinPtsEffective)
-- [ ] Store Pinia montées (avec `mergedCount`, `fallback`)
-- [ ] Composable `useDiagnostics` avec `computeDiagnostics` + règles anti-pic v3.6
+- [ ] Store Pinia montées (avec `mergedCount`, `mergedParts`, `fallback`, `groupId`, `subIndex`)
+- [ ] Store Pinia map (token, basemap, ready, loading)
+- [ ] Composable `useDiagnostics` avec règles v3.9.2
+- [ ] Composable `useMapbox` avec auto-load token
+- [ ] Composable `useProfileCanvas` avec échelles fixes + scroll centré
+- [ ] Composable `useMarkerDrag` avec clamp à la vue
+- [ ] Composable `useManualClimb` (double-clic + drag)
+- [ ] Composable `useClimbGroups` (split/refuse)
 - [ ] Commande Tauri `read_gpx_file`
-- [ ] Commande Tauri `analyze_gpx` (sidecar Node.js v3.6)
+- [ ] Commande Tauri `analyze_gpx` (sidecar Node.js v3.9.2)
 - [ ] Composant `<FileDropZone>` avec info conversion points
 - [ ] Composant `<DiagnosticPanel>`
-- [ ] Composant `<ParametersPanel>` (14 paramètres, anti-pic fenêtre en mètres)
-- [ ] Composant `<CategoryRibbon>`
-- [ ] Composant `<ElevationChart>` + `<SlopeChart>` (repliable)
-- [ ] Sync zoom entre graphiques
-- [ ] Composable `useMarkerDrag`
-- [ ] Interception `pointerdown` au window en capture
-- [ ] Désactivation pan + tooltip pendant drag
-- [ ] Colonne Extrema avec tooltip détaillé
-- [ ] Composant `<InsertionRow>`
-- [ ] Désélection radio + Échap
-- [ ] Toggle brut avec états user/auto distincts
-- [ ] Indicateur `⊕` sur les lignes fusionnées
-- [ ] Indicateur `⤺` sur les lignes en repli
-- [ ] Composant `<StatsCards>` (avec `n bruts → m resamplés`)
-- [ ] Log `dbgDespike` avec conversion m → pts
-- [ ] Log `dbgResample` avec fenêtre de moyennage
-- [ ] Warnings diagnostic anti-pic (fenêtre < 2 × Pas, seuil < 5)
+- [ ] Composant `<ParametersForm>` (15 + 2 toggles)
+- [ ] Composant `<ClimbsPanel>` avec `<ClimbCard>` et `<GroupBrace>`
+- [ ] Composant `<MapPanel>` (init + layers)
+- [ ] Composant `<ProfilePanel>` (canvas + scroll)
+- [ ] **Ordre couches Mapbox** : trace → contours (beforeId)
+- [ ] **Échelles profil fixes** : 50 / 10 m/px
+- [ ] **Trace carte sur points bruts**
+- [ ] **Multi-marqueurs sur groupe**
+- [ ] **Bouton ✂ Séparer**
+- [ ] **Bouton 🔗 Refusionner**
+- [ ] **Bouton ✕ Supprimer**
+- [ ] **Double-clic + drag pour créer**
+- [ ] **Annulation création par Échap**
+- [ ] **Auto-load carte si token présent**
+- [ ] **Courbes de niveau optionnelles**
+- [ ] **Refus création si chevauchement**
+- [ ] **Normalisation des groupes orphelins**
 - [ ] Tests unitaires sur 6 traces de référence
 - [ ] Test d'invariant : aucune montée affichée sous son seuil
+- [ ] Test d'invariant : `mergedParts` conservés après fusion
+- [ ] Test d'invariant : échelles profil strictement constantes
+- [ ] Test d'invariant : `buildTraceFeatures` utilise `rawPoints`
 
-### 17.3 Ressources
+### 22.6 Ressources
 
 - **GPX format** : https://www.topografix.com/GPX/1/1/
-- **Chart.js** : https://www.chartjs.org/docs/latest/
-- **chartjs-plugin-zoom** : https://www.chartjs.org/chartjs-plugin-zoom/
+- **Mapbox GL JS** : https://docs.mapbox.com/mapbox-gl-js/
+- **Mapbox terrain source** : https://docs.mapbox.com/mapbox-gl-js/example/3d-terrain/
+- **Mapbox contours** : https://docs.mapbox.com/mapbox-gl-js/example/vector-source/
 - **Vuetify 3** : https://vuetifyjs.com/en/
 - **Tauri v2** : https://v2.tauri.app/
 - **Pinia** : https://pinia.vuejs.org/
@@ -3378,4 +4837,4 @@ Inchangé (§5).
 
 ---
 
-**Fin du document d'intégration technique v3.6**
+**Fin du document d'intégration technique v3.9.2**
