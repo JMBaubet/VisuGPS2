@@ -1,8 +1,8 @@
 # PRD — Analyseur de profil altimétrique GPX
 
 **Nom de code** : GPX Climb Analyzer
-**Version** : 3.9.2
-**Date** : 2026-10-17
+**Version** : 3.9.6
+**Date** : 2026-10-18
 **Statut** : Spécification produit — application web monopage (SPA)
 **Auteur** : [à compléter]
 **Destinataire** : développeur front-end, product owner
@@ -32,7 +32,7 @@
 5. [Parcours utilisateur](#5-parcours-utilisateur)
 6. [Architecture technique](#6-architecture-technique)
 7. [Exigences non-fonctionnelles](#7-exigences-non-fonctionnelles)
-8. [Hors périmètre (V3.9.2)](#8-hors-périmètre-v392)
+8. [Hors périmètre (V3.9.6)](#8-hors-périmètre-v396)
 9. [Évolutions envisagées (V4+)](#9-évolutions-envisagées-v4)
 10. [Risques et mitigation](#10-risques-et-mitigation)
 11. [Critères d'acceptation](#11-critères-dacceptation)
@@ -58,6 +58,11 @@ Trois problèmes majeurs apparaissent :
 
 Depuis la v3.8, l'application a été refondue autour d'un layout 3 colonnes et d'une intégration Mapbox 3D, permettant une visualisation géographique du parcours parallèlement au profil altimétrique. La v3.9.x a introduit la gestion des groupes de montées (séparation/refusion), la création manuelle et la suppression — répondant aux besoins d'édition fine exprimés par les utilisateurs avancés.
 
+La **v3.9.6** apporte deux évolutions majeures côté export :
+
+- **Suppression de `slopeProfile`** (v3.9.4) : la structure `segments[]` le rend redondant, et le paramètre `exportProfileStepM` disparaît en conséquence (15 → 14 paramètres numériques).
+- **Export JSON consolidé** (v3.9.6) : dans le JSON exporté, une montée fusionnée (séparée ou non) apparaît comme **une seule entrée** dans `climbs[]`, avec `isMerged`, `isSeparated` et `mergedParts`. Les champs `groupId`, `subIndex` et `originMergedCount` sont **internes à l'UI** et ne sont pas exportés.
+
 ### 1.2 Objectif
 
 Fournir un outil web autonome permettant :
@@ -76,7 +81,8 @@ Fournir un outil web autonome permettant :
 - de **supprimer** des montées individuelles,
 - de segmenter par catégorie de pente (identique entre carte et profil),
 - d'afficher un **diagnostic de configuration** en temps réel,
-- d'**exporter la segmentation et les montées au format JSON** pour consommation externe (affichage cartographique Mapbox, visuels de montée).
+- d'**exporter la segmentation et les montées au format JSON** pour consommation externe (affichage cartographique Mapbox, visuels de montée),
+- 🆕 de produire un **export JSON consolidé** : une montée fusionnée (séparée ou non) = **une seule entrée** dans `climbs[]`, avec `isMerged`, `isSeparated` et `mergedParts[]` détaillant les sous-montées.
 
 ### 1.3 Proposition de valeur
 
@@ -91,11 +97,12 @@ Fournir un outil web autonome permettant :
 | Anti-glitch | Filtre anti-pic ciblé, ne modifie que les points aberrants |
 | **Fidélité carte** | Trace sur la carte = points bruts du GPX (pas la grille resamplée) |
 | **Groupes persistants** | `groupId`/`subIndex`, numérotation `#N.M`, couleur stable par groupe |
+| **Export consolidé** 🆕 | Une montée fusionnée = une seule entrée JSON, quel que soit l'état UI |
 | Confidentialité | 100 % côté navigateur, aucun envoi sur un serveur (sauf tuiles Mapbox) |
 | Richesse | Analyse multi-niveaux : segmentation + montées significatives + carte |
 | Cohérence | Anti-chevauchement, anti-zones-blanches, catégorisation par fenêtre |
 | Prévisibilité | Fenêtre anti-pic indépendante du Pas (v3.6) |
-| Interopérabilité | Export JSON léger, progressions 0–1 prêtes pour `line-gradient` Mapbox (v3.7) |
+| Interopérabilité | Export JSON léger, progressions 0–1 prêtes pour `line-gradient` Mapbox |
 
 ### 1.4 Vision produit à terme
 
@@ -105,7 +112,7 @@ Fournir un outil web autonome permettant :
 - L'export cartographique et l'intégration dans des applications tierces (existante via JSON)
 - L'édition de la trace elle-même (dans le périmètre V4+)
 
-La v3.9.2 est une étape majeure : elle introduit la carte 3D, le layout 3 colonnes, la gestion des groupes, la création manuelle et la suppression. Les prochaines versions se concentreront sur l'ergonomie (undo/redo), la persistance (localStorage), et l'interopérabilité étendue (import FIT/TCX).
+La v3.9.6 consolide l'édition (groupes, création, suppression) et simplifie drastiquement l'export JSON pour les intégrateurs. Les prochaines versions se concentreront sur l'ergonomie (undo/redo), la persistance (localStorage), et l'interopérabilité étendue (import FIT/TCX).
 
 ---
 
@@ -117,7 +124,7 @@ La v3.9.2 est une étape majeure : elle introduit la carte 3D, le layout 3 colon
 | **Randonneur / traileur** | Évaluer la difficulté d'un parcours | Voir les portions raides, D+ cumulé, carte 3D pour visualiser le terrain |
 | **Organisateur d'événement** | Vérifier un tracé | Ajouter des montées non détectées, séparer des fusions, supprimer des faux positifs |
 | **Data analyst / développeur** | Explorer et valider les données GPX | Paramétrer finement, comprendre les effets, exporter pour analyses |
-| **Intégrateur / visualiseur** | Afficher la trace sur une carte tierce | Consommer un JSON avec progressions normalisées, catégories précises |
+| 🆕 **Intégrateur / visualiseur** | Afficher la trace sur une carte tierce ou un site externe | Consommer un JSON **consolidé** (1 entrée par montée logique), avec progressions normalisées et catégories précises |
 
 ### 2.1 Personas détaillés
 
@@ -140,6 +147,12 @@ La v3.9.2 est une étape majeure : elle introduit la carte 3D, le layout 3 colon
 - Intègre l'outil dans une SPA existante
 - Consomme la Note technique pour le portage TS, le JSON exporté pour l'affichage carte
 - N'utilise pas l'UI directe mais l'API et l'export
+
+🆕 **Persona 5 — Karim, intégrateur Mapbox**
+- Reçoit des fichiers JSON d'analystes (produits par GPX Climb Analyzer)
+- Doit afficher les montées sur une carte Mapbox avec `line-gradient`
+- Bénéficie de l'export consolidé : **une seule entrée par montée logique** dans `climbs[]`, avec `mergedParts[]` disponible s'il veut afficher le détail
+- N'a **jamais** à gérer la logique de groupe UI (`groupId`/`subIndex` absents)
 
 ---
 
@@ -196,7 +209,7 @@ La v3.9.2 est une étape majeure : elle introduit la carte 3D, le layout 3 colon
 | F-21 | Stats brutes (D+, D−, altitudes min/max) sur données GPX d'origine, doublons ignorés | Must | v0.4 |
 | F-22 | Conservation de la longueur réelle (`totalDistRawM`) distincte de la longueur de la grille (`totalDistSampledM`) | Must | v3.7 |
 | F-23 | Mesure de la queue de trace ignorée (`trailingGapM`) | Must | v3.7 |
-| **F-24** | **Catégorisation sur altitude NON ancrée (évite les changements de couleur pendant le drag)** | **Must** | **v3.8.1** |
+| F-24 | Catégorisation sur altitude NON ancrée (évite les changements de couleur pendant le drag) | Must | v3.8.1 |
 
 **F-10 — Haversine** :
 - Utilise `atan2` pour la stabilité numérique
@@ -243,7 +256,7 @@ La v3.9.2 est une étape majeure : elle introduit la carte 3D, le layout 3 colon
 | F-38 | Transparence : affichage de la valeur effective du garde-fou par montée | Must | v2.0 |
 | F-39 | Indicateur visuel `⊕` sur les montées issues d'une fusion | Must | v3.0 |
 | F-40 | Indicateur visuel `⤺` sur les montées issues d'un repli | Must | v3.1 |
-| **F-41** | **Conservation des `mergedParts` lors de la fusion (permet la séparation ultérieure)** | **Must** | **v3.9.0** |
+| F-41 | Conservation des `mergedParts` lors de la fusion (permet la séparation ultérieure) | Must | v3.9.0 |
 
 **F-30 — Hystérésis** :
 - Entrée en mode "climb" quand `slope > +seuil`
@@ -274,6 +287,7 @@ La v3.9.2 est une étape majeure : elle introduit la carte 3D, le layout 3 colon
 - Structure : `[{ startKm, endKm }, ...]`
 - Conservé à travers la validation stricte
 - Transmis à `userClimbs` pour permettre la séparation
+- 🆕 **v3.9.6** : exporté directement dans `climbs[i].mergedParts` (voir §3.13)
 
 ---
 
@@ -291,6 +305,8 @@ Une montée n'est retenue que si elle satisfait l'un des couples (longueur, pent
 | < 300 m | Rejetée |
 
 Ces critères sont **affichés** à l'utilisateur dans un panneau dédié du volet de droite mais **non modifiables** dans la version 3.x. Une évolution V4 est prévue pour les rendre éditables (F-V4-03).
+
+---
 
 ### 3.5 Édition manuelle des montées
 
@@ -315,7 +331,7 @@ Ces critères sont **affichés** à l'utilisateur dans un panneau dédié du vol
 | F-66 | Robustesse drag : garde-fous canvas null | Must | v3.7.1 |
 | F-67 | Nettoyage des listeners orphelins | Must | v3.7.1 |
 | F-68 | `renderAll` inerte pendant drag | Must | v3.7.1 |
-| **F-69** | **Suppression avec renumérotation `subIndex` des groupes** | **Must** | **v3.9.2** |
+| F-69 | Suppression avec renumérotation `subIndex` des groupes | Must | v3.9.2 |
 
 **F-60 — Drag sur le profil** :
 - Poignées draggables en haut du canvas (bande des 30 premiers px)
@@ -348,8 +364,8 @@ Ces critères sont **affichés** à l'utilisateur dans un panneau dédié du vol
 | F-74 | Zoom sur segment par clic sur ribbon | Should | Obsolète v3.8 |
 | F-75 | Tableau statistiques par catégorie | Should | Obsolète v3.8 |
 | F-76 | Catégorisation par pente moyenne sur fenêtre glissante | Must | v0.10 |
-| F-77 | Alignement strict des tranches de `slopeProfile` sur les segments globaux | Must | v3.7 |
-| **F-78** | **Coloration du profil via `catSegments` (identité stricte avec la carte)** | **Must** | **v3.8.1** |
+| F-77 | Alignement strict des tranches de `slopeProfile` sur les segments globaux | Must | ❌ Obsolète v3.9.4 |
+| F-78 | Coloration du profil via `catSegments` (identité stricte avec la carte) | Must | v3.8.1 |
 
 #### 3.6.1 Grille des catégories
 
@@ -379,6 +395,8 @@ POUR i DE 1 À n:
 
 Conséquence : la somme des longueurs des segments après fusion **égale exactement la distance totale**.
 
+**F-77 — Obsolète v3.9.4** : `slopeProfile` a été supprimé de l'export. Les tranches de `slopeProfile` n'existent plus. Cette exigence est **retirée**.
+
 **F-78 — Coloration via `catSegments`** :
 - La carte et le profil utilisent tous deux `data.catSegments`
 - Aucune divergence possible
@@ -390,22 +408,22 @@ Conséquence : la somme des longueurs des segments après fusion **égale exacte
 
 | ID | Fonctionnalité | Priorité | Version |
 |---|---|---|---|
-| **F-80** | **Carte Mapbox GL JS v3.7+** | **Must** | **v3.8** |
-| **F-81** | **Terrain 3D (`mapbox-dem`, exagération 1×)** | **Must** | **v3.8** |
-| **F-82** | **Trace colorée par catégorie de pente** | **Must** | **v3.8** |
-| **F-83** | **Trace = points bruts du GPX (pas la grille resamplée)** | **Must** | **v3.9.2** |
-| **F-84** | **Marqueurs vallée/sommet de la montée sélectionnée** | **Must** | **v3.8** |
-| **F-85** | **Multi-marqueurs pour montées groupées** | **Must** | **v3.9.2** |
-| **F-86** | **Zoom sur montée sélectionnée (marge 20 %)** | **Must** | **v3.8** |
-| **F-87** | **Zoom sur groupe entier si montée groupée** | **Must** | **v3.9.2** |
-| **F-88** | **Bascule satellite / standard** | **Must** | **v3.8** |
-| **F-89** | **Bouton recentrer sur la trace** | **Must** | **v3.8** |
-| **F-90** | **Courbes de niveau optionnelles (mapbox-terrain-v2)** | **Should** | **v3.8.4** |
-| **F-91** | **Champ token Mapbox avec persistance localStorage** | **Must** | **v3.8** |
-| **F-92** | **Chargement automatique de la carte si token présent** | **Must** | **v3.9.2** |
-| **F-93** | **Mise à jour des marqueurs en temps réel pendant le drag** | **Must** | **v3.8** |
-| **F-94** | **Terrain 3D avec pitch 60°** | **Must** | **v3.8** |
-| **F-95** | **Ordre des couches : trace avant contours (corrige contours invisibles)** | **Must** | **v3.8.5** |
+| F-80 | Carte Mapbox GL JS v3.7+ | Must | v3.8 |
+| F-81 | Terrain 3D (`mapbox-dem`, exagération 1×) | Must | v3.8 |
+| F-82 | Trace colorée par catégorie de pente | Must | v3.8 |
+| F-83 | Trace = points bruts du GPX (pas la grille resamplée) | Must | v3.9.2 |
+| F-84 | Marqueurs vallée/sommet de la montée sélectionnée | Must | v3.8 |
+| F-85 | Multi-marqueurs pour montées groupées | Must | v3.9.2 |
+| F-86 | Zoom sur montée sélectionnée (marge 20 %) | Must | v3.8 |
+| F-87 | Zoom sur groupe entier si montée groupée | Must | v3.9.2 |
+| F-88 | Bascule satellite / standard | Must | v3.8 |
+| F-89 | Bouton recentrer sur la trace | Must | v3.8 |
+| F-90 | Courbes de niveau optionnelles (mapbox-terrain-v2) | Should | v3.8.4 |
+| F-91 | Champ token Mapbox avec persistance localStorage | Must | v3.8 |
+| F-92 | Chargement automatique de la carte si token présent | Must | v3.9.2 |
+| F-93 | Mise à jour des marqueurs en temps réel pendant le drag | Must | v3.8 |
+| F-94 | Terrain 3D avec pitch 60° | Must | v3.8 |
+| F-95 | Ordre des couches : trace avant contours (corrige contours invisibles) | Must | v3.8.5 |
 
 **F-80 — Chargement paresseux** :
 - `loadMapboxGL()` injecte le CSS + JS depuis le CDN
@@ -465,22 +483,22 @@ Conséquence : la somme des longueurs des segments après fusion **égale exacte
 
 | ID | Fonctionnalité | Priorité | Version |
 |---|---|---|---|
-| **F-100** | **Canvas 2D natif (remplace Chart.js)** | **Must** | **v3.8** |
-| **F-101** | **Échelle X fixe : 50 m/px en mode full** | **Must** | **v3.8.3** |
-| **F-102** | **Échelle X fixe : 10 m/px en mode montée** | **Must** | **v3.9.2** |
-| **F-103** | **Échelle Y fixe : 10 m/px** | **Must** | **v3.8** |
-| **F-104** | **Coloration par `catSegments`** | **Must** | **v3.8.1** |
-| **F-105** | **Lignes verticales vallée/sommet** | **Must** | **v3.8** |
-| **F-106** | **Couleur de groupe pour les membres** | **Must** | **v3.9.1** |
-| **F-107** | **Scroll horizontal** | **Must** | **v3.8** |
-| **F-108** | **Centrage automatique sur la montée sélectionnée** | **Must** | **v3.9.2** |
-| **F-109** | **Poignées draggables (mode montée)** | **Must** | **v3.8** |
-| **F-110** | **Surbrillance jaune de la montée sélectionnée** | **Must** | **v3.8** |
-| **F-111** | **Bouton ✕ pour retour au mode full** | **Must** | **v3.8** |
-| **F-112** | **Création manuelle par double-clic + drag** | **Must** | **v3.9.0** |
-| **F-113** | **Indicateurs visuels pendant la création** | **Must** | **v3.9.0** |
-| **F-114** | **Annulation création par Échap** | **Must** | **v3.9.0** |
-| **F-115** | **Refus de création si chevauchement** | **Must** | **v3.9.0** |
+| F-100 | Canvas 2D natif (remplace Chart.js) | Must | v3.8 |
+| F-101 | Échelle X fixe : 50 m/px en mode full | Must | v3.8.3 |
+| F-102 | Échelle X fixe : 10 m/px en mode montée | Must | v3.9.2 |
+| F-103 | Échelle Y fixe : 10 m/px | Must | v3.8 |
+| F-104 | Coloration par `catSegments` | Must | v3.8.1 |
+| F-105 | Lignes verticales vallée/sommet | Must | v3.8 |
+| F-106 | Couleur de groupe pour les membres | Must | v3.9.1 |
+| F-107 | Scroll horizontal | Must | v3.8 |
+| F-108 | Centrage automatique sur la montée sélectionnée | Must | v3.9.2 |
+| F-109 | Poignées draggables (mode montée) | Must | v3.8 |
+| F-110 | Surbrillance jaune de la montée sélectionnée | Must | v3.8 |
+| F-111 | Bouton ✕ pour retour au mode full | Must | v3.8 |
+| F-112 | Création manuelle par double-clic + drag | Must | v3.9.0 |
+| F-113 | Indicateurs visuels pendant la création | Must | v3.9.0 |
+| F-114 | Annulation création par Échap | Must | v3.9.0 |
+| F-115 | Refus de création si chevauchement | Must | v3.9.0 |
 
 **F-100 — Canvas 2D** :
 - Remplace Chart.js utilisé jusqu'à v3.7.2
@@ -522,16 +540,17 @@ if (profileMode === 'climb' && !dragging && selectedClimbIdx != null) {
 
 | ID | Fonctionnalité | Priorité | Version |
 |---|---|---|---|
-| **F-120** | **Séparation d'une montée fusionnée (✂)** | **Must** | **v3.9.0** |
-| **F-121** | **Champ `groupId` persistant** | **Must** | **v3.9.1** |
-| **F-122** | **Champ `subIndex` pour numérotation `#N.M`** | **Must** | **v3.9.1** |
-| **F-123** | **Bandeau de groupe coloré** | **Must** | **v3.9.1** |
-| **F-124** | **Bordure gauche colorée par groupe** | **Should** | **v3.9.1** |
-| **F-125** | **Badge `🔗 N` dans l'en-tête** | **Must** | **v3.9.1** |
-| **F-126** | **Refusion d'un groupe (🔗)** | **Must** | **v3.9.1** |
-| **F-127** | **Reconstruction de `mergedParts` à la refusion** | **Must** | **v3.9.1** |
-| **F-128** | **Couleur stable par `groupId` (hsl angle d'or)** | **Should** | **v3.9.1** |
-| **F-129** | **Dissolution automatique des groupes à 1 membre** | **Must** | **v3.9.1** |
+| F-120 | Séparation d'une montée fusionnée (✂) | Must | v3.9.0 |
+| F-121 | Champ `groupId` persistant | Must | v3.9.1 |
+| F-122 | Champ `subIndex` pour numérotation `#N.M` | Must | v3.9.1 |
+| F-123 | Bandeau de groupe coloré | Must | v3.9.1 |
+| F-124 | Bordure gauche colorée par groupe | Should | v3.9.1 |
+| F-125 | Badge `🔗 N` dans l'en-tête | Must | v3.9.1 |
+| F-126 | Refusion d'un groupe (🔗) | Must | v3.9.1 |
+| F-127 | Reconstruction de `mergedParts` à la refusion | Must | v3.9.1 |
+| F-128 | Couleur stable par `groupId` (hsl angle d'or) | Should | v3.9.1 |
+| F-129 | Dissolution automatique des groupes à 1 membre | Must | v3.9.1 |
+| 🆕 F-129b | Champ UI `isSeparated` (traçabilité de la séparation) | Must | v3.9.6 |
 
 **F-120 — Séparation** :
 - Alloue un `groupId` depuis `STATE.nextGroupId++`
@@ -540,6 +559,7 @@ if (profileMode === 'climb' && !dragging && selectedClimbIdx != null) {
 - Tri par `startKm`
 - Sélection de la première sous-montée
 - Zoom carte sur tout le groupe
+- 🆕 `isSeparated` positionné à `true` sur chaque sous-montée
 
 **F-126 — Refusion** :
 - Récupère tous les membres du groupe
@@ -547,6 +567,7 @@ if (profileMode === 'climb' && !dragging && selectedClimbIdx != null) {
 - Reconstruit `mergedParts`
 - Crée une nouvelle montée fusionnée
 - Dissout le groupe
+- 🆕 `isSeparated` positionné à `false` sur la montée refusionnée
 
 **F-128 — Couleur stable** :
 ```javascript
@@ -560,6 +581,13 @@ Distribution optimale des teintes (angle d'or évite les clusters).
 **F-129 — Dissolution** :
 - Appelée par `normalizeGroups()` à la fin des drags et après `recomputeAuto`
 - Si un groupe a < 2 membres, retire `groupId` et `subIndex`
+- 🆕 `isSeparated` repasse à `false`
+
+**🆕 F-129b — `isSeparated`** :
+- Booléen interne à l'UI (non affiché directement dans la liste)
+- Sert de **discriminant d'export** : `true` si l'utilisateur a séparé la fusion, `false` sinon
+- Positionné à `true` lors de la séparation, `false` lors de la refusion ou dissolution
+- Voir §3.13 pour son utilisation dans le JSON exporté
 
 ---
 
@@ -567,16 +595,16 @@ Distribution optimale des teintes (angle d'or évite les clusters).
 
 | ID | Fonctionnalité | Priorité | Version |
 |---|---|---|---|
-| **F-130** | **Double-clic sur profil pour poser la vallée** | **Must** | **v3.9.0** |
-| **F-131** | **Clic-glisser pour définir le sommet** | **Must** | **v3.9.0** |
-| **F-132** | **Refus si vallée dans montée existante** | **Must** | **v3.9.0** |
-| **F-133** | **Refus si plage chevauche une montée existante** | **Must** | **v3.9.0** |
-| **F-134** | **Longueur minimale 50 m** | **Must** | **v3.9.0** |
-| **F-135** | **Insertion triée dans la liste** | **Must** | **v3.9.0** |
-| **F-136** | **Sélection automatique après création** | **Must** | **v3.9.0** |
-| **F-137** | **Zoom carte sur la nouvelle montée** | **Should** | **v3.9.0** |
-| **F-138** | **Flash rouge si position invalide** | **Should** | **v3.9.0** |
-| **F-139** | **Hint textuel contextuel** | **Should** | **v3.9.0** |
+| F-130 | Double-clic sur profil pour poser la vallée | Must | v3.9.0 |
+| F-131 | Clic-glisser pour définir le sommet | Must | v3.9.0 |
+| F-132 | Refus si vallée dans montée existante | Must | v3.9.0 |
+| F-133 | Refus si plage chevauche une montée existante | Must | v3.9.0 |
+| F-134 | Longueur minimale 50 m | Must | v3.9.0 |
+| F-135 | Insertion triée dans la liste | Must | v3.9.0 |
+| F-136 | Sélection automatique après création | Must | v3.9.0 |
+| F-137 | Zoom carte sur la nouvelle montée | Should | v3.9.0 |
+| F-138 | Flash rouge si position invalide | Should | v3.9.0 |
+| F-139 | Hint textuel contextuel | Should | v3.9.0 |
 
 **F-130 — Double-clic** :
 - Mode full uniquement
@@ -605,16 +633,18 @@ function isFreeRange(aKm, bKm) {
 - Bref flash rouge sur le canvas à la position invalide
 - `setTimeout(() => renderProfile(), 200)`
 
+**Note v3.9.6** : la montée créée manuellement porte `isSeparated: false`, `mergedCount: 0`, `mergedParts: null`. Elle apparaît dans le JSON comme une **montée autonome standard** (`isMerged: false`).
+
 ---
 
 ### 3.11 Suppression d'une montée
 
 | ID | Fonctionnalité | Priorité | Version |
 |---|---|---|---|
-| **F-140** | **Bouton ✕ sur chaque carte de montée** | **Must** | **v3.9.2** |
-| **F-141** | **Renumérotation des `subIndex` du groupe affecté** | **Must** | **v3.9.2** |
-| **F-142** | **Dissolution du groupe si < 2 membres** | **Must** | **v3.9.2** |
-| **F-143** | **Ajustement de `selectedClimbIdx`** | **Must** | **v3.9.2** |
+| F-140 | Bouton ✕ sur chaque carte de montée | Must | v3.9.2 |
+| F-141 | Renumérotation des `subIndex` du groupe affecté | Must | v3.9.2 |
+| F-142 | Dissolution du groupe si < 2 membres | Must | v3.9.2 |
+| F-143 | Ajustement de `selectedClimbIdx` | Must | v3.9.2 |
 
 **F-140 — Bouton ✕** :
 - Positionné en `position: absolute; top: 8px; right: 8px`
@@ -625,6 +655,8 @@ function isFreeRange(aKm, bKm) {
 - Si la montée supprimée était sélectionnée → désélection + retour au mode full
 - Si l'index sélectionné > index supprimé → décrémente
 - Sinon inchangé
+
+**Note v3.9.6** : après suppression d'un membre de groupe, la montée **consolidée** reste dans `climbs[]` de l'export, mais `mergedParts` est recalculé et `mergedCount` décrémenté. Si le groupe est dissous, la montée restante devient autonome (`isMerged: false`, `mergedParts: null`).
 
 ---
 
@@ -662,24 +694,30 @@ function isFreeRange(aKm, bKm) {
 | ID | Fonctionnalité | Priorité | Version |
 |---|---|---|---|
 | F-160 | Export JSON par bouton | Must | v3.7 |
-| F-161 | Liste des segments (start/end km + progressions + pente + D+) | Must | v3.7 |
-| F-162 | Liste des montées (bornes, progressions, métriques) | Must | v3.7 |
-| F-163 | `slopeProfile` par montée, aligné sur les segments | Must | v3.7 |
-| F-164 | Granularité `exportProfileStepM` (10–500 m) | Must | v3.7 |
+| F-161 | Liste plate des segments (start/end km + progressions + pente + D+) | Must | v3.7 |
+| F-162 | Liste **consolidée** des montées (bornes, progressions, métriques) | Must | v3.7 / 🆕 v3.9.6 |
+| F-163 | ~~`slopeProfile` par montée, aligné sur les segments~~ | ❌ | Retiré v3.9.4 |
+| F-164 | ~~Granularité `exportProfileStepM` (10–500 m)~~ | ❌ | Retiré v3.9.4 |
 | F-165 | `metadata` : `totalDistanceKm` + `totalDistanceSampledKm` | Must | v3.7 |
 | F-166 | `trailingGapM` exposé | Must | v3.7 |
 | F-167 | Section `legend` avec catégories | Must | v3.7 |
 | F-168 | Format plat (pas de FeatureCollection) | Must | v3.7.2 |
-| **F-169** | **`groupId` et `subIndex` dans chaque `climb`** | **Must** | **v3.9.1** |
+| F-169 | ~~`groupId` et `subIndex` dans chaque `climb`~~ | ❌ | Retiré v3.9.6 |
+| 🆕 F-170 | Champ `climb.isMerged` (booléen) | Must | v3.9.6 |
+| 🆕 F-171 | Champ `climb.isSeparated` (booléen) | Must | v3.9.6 |
+| 🆕 F-172 | Champ `climb.mergedParts` (array ≥ 2 si `isMerged: true`) | Must | v3.9.6 |
+| 🆕 F-173 | Compteurs `metadata.mergedClimbsCount` et `metadata.separatedClimbsCount` | Must | v3.9.6 |
+| 🆕 F-174 | **Une montée fusionnée (séparée ou non) = une seule entrée** dans `climbs[]` | Must | v3.9.6 |
+| 🆕 F-175 | Aucun champ interne UI (`groupId`, `subIndex`, `originMergedCount`) dans le JSON | Must | v3.9.6 |
 
-#### 3.13.1 Structure du JSON exporté
+#### 3.13.1 Structure du JSON exporté (v3.9.6)
 
 ```json
 {
   "metadata": {
     "file": "trace.gpx",
     "exportedAt": "ISO8601",
-    "version": "3.9.2",
+    "version": "3.9.6",
     "totalDistanceKm": 4.28,
     "totalDistanceSampledKm": 4.25,
     "trailingGapM": 30,
@@ -687,10 +725,11 @@ function isFreeRange(aKm, bKm) {
     "totalPoints": 86,
     "segmentsCount": 4,
     "climbsCount": 1,
-    "profileStepM": 50
+    "mergedClimbsCount": 1,
+    "separatedClimbsCount": 0
   },
   "legend": {
-    "note": "...",
+    "note": "Bornes hautes exclusives. ...",
     "fenetreCatM": 100,
     "longueurMin": 200,
     "categories": [
@@ -714,8 +753,6 @@ function isFreeRange(aKm, bKm) {
   "climbs": [
     {
       "index": 0,
-      "groupId": null,
-      "subIndex": null,
       "startKm": 0,
       "endKm": 3.95,
       "startProgress": 0,
@@ -726,21 +763,29 @@ function isFreeRange(aKm, bKm) {
       "altEndM": 786.9,
       "mergedCount": 0,
       "fallback": false,
-      "slopeProfile": [
-        {
-          "kmStart": 0.25,
-          "kmEnd": 0.3,
-          "eleStartM": 503.1,
-          "eleEndM": 506.8,
-          "avgSlopePct": 7.42,
-          "categoryId": "up2"
-        }
-      ],
-      "slopeProfileStepM": 50
+      "isMerged": false,
+      "isSeparated": false,
+      "mergedParts": null
     }
   ]
 }
 ```
+
+**Champs SUPPRIMÉS depuis la v3.9.6** (vs v3.9.2) :
+- ❌ `climb.groupId` (interne UI)
+- ❌ `climb.subIndex` (interne UI)
+- ❌ `climb.originMergedCount` (interne UI)
+- ❌ `climb.slopeProfile` (retiré v3.9.4)
+- ❌ `climb.slopeProfileStepM` (retiré v3.9.4)
+- ❌ `metadata.profileStepM` (retiré v3.9.4)
+- ❌ `legend.exportProfileStepM` (retiré v3.9.4)
+
+**Champs AJOUTÉS en v3.9.6** :
+- ✅ `climb.isMerged`
+- ✅ `climb.isSeparated`
+- ✅ `climb.mergedParts` (détail des sous-montées)
+- ✅ `metadata.mergedClimbsCount`
+- ✅ `metadata.separatedClimbsCount`
 
 #### 3.13.2 Contrat d'utilisation des progressions
 
@@ -760,16 +805,78 @@ map.addLayer({
 
 Pour éviter les dégradés progressifs entre deux stops, répéter la même couleur au début et à la fin de chaque segment.
 
-#### 3.13.3 Contrat d'alignement du `slopeProfile`
+#### 3.13.3 ~~Contrat d'alignement du `slopeProfile`~~ (retiré v3.9.4)
 
-Chaque tranche de `slopeProfile` appartient **intégralement** à un seul segment global. Sa `categoryId` est donc **strictement identique** à celle affichée par la carte.
+**Cette section n'est plus applicable.** Le champ `slopeProfile` a été supprimé avec le paramètre `exportProfileStepM`. Les consommateurs doivent utiliser `segments[]` pour la coloration par catégorie et `climbs[].startProgress`/`endProgress` pour la vue d'ensemble.
 
-Deux modes de découpage sont possibles selon `exportProfileStepM` :
+#### 3.13.4 🆕 Contrat de consommation d'une montée fusionnée
 
-- Si `exportProfileStepM` divise la longueur du segment : tranches régulières
-- Sinon : les tranches sont réparties uniformément sur la longueur du segment (ex. segment de 300 m → `[150][150]` avec `profileStepM=200`)
+**Vue d'ensemble** : itérer sur `climbs[]`, utiliser `startKm`/`endKm` comme bornes globales.
 
-Le choix de longueurs uniformes par segment (plutôt que tranches pleines + résidu) est délibéré : il évite les tranches ridicules en fin de segment et rend le contrat simple à comprendre pour le consommateur du JSON.
+**Distinguer une fusion** : regarder `isMerged`.
+- `isMerged: false` → montée simple, `mergedParts: null`
+- `isMerged: true` → montée fusionnée, `mergedParts[]` contient le détail
+
+**Distinguer l'état UI** : regarder `isSeparated`.
+- `isMerged: true && isSeparated: false` → fusion « compacte » (l'utilisateur n'a pas séparé)
+- `isMerged: true && isSeparated: true` → fusion « dépliée » (l'utilisateur a séparé)
+
+**Vue détaillée d'une fusion** : itérer sur `mergedParts[]` pour obtenir chaque sous-montée avec ses propres métriques (`startKm`, `endKm`, `dPlusM`, `avgSlopePct`, `altStartM`, `altEndM`).
+
+**Important** : la structure et les valeurs de tous les champs (sauf `isSeparated`) sont **strictement identiques** entre une fusion séparée et une fusion non séparée.
+
+**Ne PAS dépendre de** :
+- ❌ `groupId` (absent — ancien champ v3.9.1)
+- ❌ `subIndex` (absent — ancien champ v3.9.1)
+- ❌ `originMergedCount` (absent — ancien champ v3.9.1)
+- ❌ `slopeProfile` (absent — retiré v3.9.4)
+- ❌ `slopeProfileStepM` (absent — retiré v3.9.4)
+
+#### 3.13.5 🆕 Invariants garantis par l'export v3.9.6
+
+Quel que soit le cheminement UI (fusion → séparation → édition → refusion → re-séparation → …), l'export garantit :
+
+1. **Une montée logique = une entrée** dans `climbs[]`
+2. **`isMerged` reflète l'origine** : `true` si la montée provient d'une fusion
+3. **`isSeparated` reflète l'état UI actuel** : `true` si l'utilisateur a séparé, `false` sinon
+4. **`mergedParts` est toujours présent** si `isMerged = true`, avec au moins 2 sous-montées
+5. **`mergedParts` reflète les bornes actuelles** (éditions incluses)
+6. **Les métriques globales sont cohérentes** avec les bornes globales
+7. **Aucun champ UI n'est exporté** : pas de `groupId`, `subIndex`, `originMergedCount`
+8. **Les `partIndex` sont séquentiels** : 0, 1, 2, … dans l'ordre des `startKm`
+
+#### 3.13.6 🆕 Exemple de migration pour un consommateur v3.9.1 → v3.9.6
+
+**AVANT (v3.9.1)** :
+```javascript
+// Détection d'une fusion
+const mergedClimbs = json.climbs.filter(c => c.groupId != null);
+
+// Itération sur les sous-montées
+json.climbs.forEach(c => {
+  if (c.groupId === gid) {
+    console.log(`Sous-montée #${c.groupId}.${c.subIndex}`);
+  }
+});
+```
+
+**APRÈS (v3.9.6)** :
+```javascript
+// Détection d'une fusion
+const mergedClimbs = json.climbs.filter(c => c.isMerged);
+
+// Distinction séparée / non séparée
+const separatedClimbs = json.climbs.filter(c => c.isSeparated);
+
+// Itération sur les sous-montées
+json.climbs.forEach(c => {
+  if (c.isMerged && c.mergedParts) {
+    c.mergedParts.forEach(part => {
+      console.log(`Sous-montée ${part.partIndex} : ${part.startKm} → ${part.endKm}`);
+    });
+  }
+});
+```
 
 ---
 
@@ -777,31 +884,31 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 
 | ID | Fonctionnalité | Priorité | Version |
 |---|---|---|---|
-| **F-170** | **Toolbar supérieure (56 px)** | **Must** | **v3.8** |
-| **F-171** | **Colonne gauche — Montées (320 px)** | **Must** | **v3.8** |
-| **F-172** | **Colonne centrale — Carte + Profil** | **Must** | **v3.8** |
-| **F-173** | **Colonne droite — Paramètres (340 px, repliable)** | **Must** | **v3.8** |
-| **F-174** | **Bouton ⚙️ pour replier/déplier le volet params** | **Must** | **v3.8** |
-| **F-175** | **Drag overlay plein écran pendant le drop** | **Must** | **v3.8** |
-| **F-176** | **Stats mini dans la colonne gauche** | **Must** | **v3.8** |
-| **F-177** | **Drop-zone persistante dans la toolbar** | **Must** | **v3.8** |
-| **F-178** | **Bouton 🐛 debug dans la toolbar** | **Should** | **v3.8** |
-| **F-179** | **Responsive < 900 px (colonnes empilées)** | **Should** | **v3.8** |
+| F-180 | Toolbar supérieure (56 px) | Must | v3.8 |
+| F-181 | Colonne gauche — Montées (320 px) | Must | v3.8 |
+| F-182 | Colonne centrale — Carte + Profil | Must | v3.8 |
+| F-183 | Colonne droite — Paramètres (340 px, repliable) | Must | v3.8 |
+| F-184 | Bouton ⚙️ pour replier/déplier le volet params | Must | v3.8 |
+| F-185 | Drag overlay plein écran pendant le drop | Must | v3.8 |
+| F-186 | Stats mini dans la colonne gauche | Must | v3.8 |
+| F-187 | Drop-zone persistante dans la toolbar | Must | v3.8 |
+| F-188 | Bouton 🐛 debug dans la toolbar | Should | v3.8 |
+| F-189 | Responsive < 900 px (colonnes empilées) | Should | v3.8 |
 
-**F-170 — Toolbar** :
+**F-180 — Toolbar** :
 - Marque + version à gauche
 - Drop-zone persistante au centre
 - Boutons 🐛 et ⚙️ à droite
 - Hauteur fixe 56 px
 - Ombre légère
 
-**F-173 — Volet params** :
+**F-183 — Volet params** :
 - Largeur 340 px
 - Repliable (width → 0 avec transition)
 - Header avec pastille diagnostic
 - Sections : Mapbox, Préparation, Lissage, Détection, Export & Debug, Options
 
-**F-179 — Responsive** :
+**F-189 — Responsive** :
 - En dessous de 900 px, les colonnes s'empilent verticalement
 - Utilise `flex-wrap` ou `grid`
 
@@ -809,7 +916,7 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 
 ## 4. Paramètres utilisateur
 
-### 4.1 Paramètres numériques (15)
+### 4.1 Paramètres numériques (14) 🆕
 
 | Nom UI | Nom technique | Plage | Défaut | Unité | Impact |
 |---|---|---|---|---|---|
@@ -827,7 +934,9 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 | Lissage gaussien | `gaussianSigmaM` | 0–500 | **75** | m | Adoucissement post-ancrage |
 | Correction plateaux | `plateauRun` | 0–20 | **6** | pts | Détection des marches MNT/GPS |
 | Segments debug | `segmentLogM` | 10–2000 | **100** | m | Granularité log debug |
-| Pas du profil exporté | `exportProfileStepM` | 10–500 | **50** | m | Granularité du `slopeProfile` exporté |
+| ~~Pas du profil exporté~~ | ~~`exportProfileStepM`~~ | ~~10–500~~ | ~~50~~ | ~~m~~ | ❌ **Retiré v3.9.4** |
+
+**Note v3.9.4/v3.9.6** : le paramètre `exportProfileStepM` (15ᵉ paramètre numérique de la v3.9.2) a été **supprimé** avec la fonctionnalité `slopeProfile`. Le nombre de paramètres numériques est passé de 15 à **14**.
 
 ### 4.2 Toggles (2)
 
@@ -857,23 +966,22 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 | `INSERT_BETWEEN_MIN_KM` | 0.2 | Espace entre montées insertion |
 | `INSERT_DEFAULT_LEN_KM` | 1.0 | Longueur cible insertion |
 | `MANUAL_MIN_LEN_KM` | 0.05 | Longueur min. création manuelle |
-| `EXPORT_PROFILE_STEP_M_DEFAULT` | 50 | Granularité par défaut |
-| `EXPORT_PROFILE_STEP_M_MIN` | 10 | Plancher |
-| `EXPORT_PROFILE_STEP_M_MAX` | 500 | Plafond |
-| **`PROFILE_SCALE_X_FULL`** | **50** | **m/px profil complet** |
-| **`PROFILE_SCALE_X_CLIMB`** | **10** | **m/px widget montée** |
-| **`PROFILE_SCALE_Y`** | **10** | **m/px vertical** |
+| `PROFILE_SCALE_X_FULL` | **50** | m/px profil complet |
+| `PROFILE_SCALE_X_CLIMB` | **10** | m/px widget montée |
+| `PROFILE_SCALE_Y` | **10** | m/px vertical |
 | `PROFILE_MIN_HEIGHT` | 110 | Hauteur mini canvas |
 | `PROFILE_HANDLE_PAD` | 200 | Marge en m autour d'une montée |
-| **`MAP_TERRAIN_EXAGGERATION`** | **1** | **Exagération terrain 3D** |
-| **`MAP_CLIMB_MARGIN`** | **0.20** | **Marge zoom montée** |
-| **`MAP_MIN_SPAN_DEG`** | **0.0014** | **Emprise minimale (~150 m)** |
-| **`CONTOUR_BASE_COLOR`** | **`#7a5733`** | **Couleur contours normaux** |
-| **`CONTOUR_INDEX_COLOR`** | **`#5e3f1d`** | **Couleur contours d'index** |
+| `MAP_TERRAIN_EXAGGERATION` | **1** | Exagération terrain 3D |
+| `MAP_CLIMB_MARGIN` | **0.20** | Marge zoom montée |
+| `MAP_MIN_SPAN_DEG` | **0.0014** | Emprise minimale (~150 m) |
+| `CONTOUR_BASE_COLOR` | **`#7a5733`** | Couleur contours normaux |
+| `CONTOUR_INDEX_COLOR` | **`#5e3f1d`** | Couleur contours d'index |
 | `DRAG_MIN_LEN_KM` | 0.05 | Longueur min drag |
 | `DRAG_MIN_GAP_KM` | 0.001 | Gap min drag |
 | `_maxSearchSteps` | 800 | Sous-échantillonnage findBestSubClimb |
 | `_minSegmentLength` | 300 | Longueur min absolue |
+
+**Constantes supprimées en v3.9.4** : `EXPORT_PROFILE_STEP_M_DEFAULT`, `EXPORT_PROFILE_STEP_M_MIN`, `EXPORT_PROFILE_STEP_M_MAX`.
 
 ### 4.4 Guide de réglage anti-pic
 
@@ -898,7 +1006,9 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 | Écart min. ≥ Pas | `gapMinM ≥ stepM` (ou 0) | Paramètre inopérant |
 | Anti-pic fenêtre ≥ 2 × Pas | `despikeWindowM ≥ 2 × stepM` (ou seuil = 0) | Arrondi force une fenêtre > demandée |
 | Anti-pic seuil ≥ 5 m | `despikeThresholdM ≥ 5` (ou 0) | Risque d'écrêter des bosses |
-| Pas du profil exporté ≤ Longueur min. pente | `exportProfileStepM ≤ longueurMin` | Tranches raccourcies |
+| ~~Pas du profil exporté ≤ Longueur min. pente~~ | ~~`exportProfileStepM ≤ longueurMin`~~ | ❌ **Retiré v3.9.4** |
+
+**Note v3.9.4/v3.9.6** : la 9ᵉ règle historique (`exportProfileStepM ≤ longueurMin`) a été **supprimée**. Le nombre de règles de cohérence passe de 9 à **8**.
 
 ---
 
@@ -932,7 +1042,7 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 11. Il peut **supprimer** une montée (`✕`)
 12. Il peut **créer** une montée (double-clic + drag sur profil full)
 13. Il peut **désélectionner** (clic ✕ ou re-clic sur la carte)
-14. Il exporte le JSON
+14. 🆕 Il exporte le JSON → **fichier consolidé** (une entrée par montée logique)
 
 ### 5.2 Parcours d'erreur
 
@@ -949,25 +1059,26 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 | Montée sans sous-segment valide | Rejetée (log debug) |
 | Anti-pic fenêtre < 2 × Pas | Warning diagnostic (🟠) |
 | Anti-pic seuil < 5 m | Warning diagnostic (🟠) |
-| `exportProfileStepM > longueurMin` | Warning diagnostic (🟠) |
-| **Création manuelle chevauchante** | **Refus + flash rouge** |
-| **Vallée création dans montée existante** | **Refus + flash rouge** |
-| **Token Mapbox invalide** | **Message d'erreur dans le volet** |
-| **Token Mapbox absent** | **Placeholder, pas d'erreur bloquante** |
-| **Clic ✂ sur montée non fusionnée** | **Bouton absent (impossible)** |
-| **Clic 🔗 sur groupe à 1 membre** | **Bouton absent (normalizeGroups a dissous)** |
+| Création manuelle chevauchante | Refus + flash rouge |
+| Vallée création dans montée existante | Refus + flash rouge |
+| Token Mapbox invalide | Message d'erreur dans le volet |
+| Token Mapbox absent | Placeholder, pas d'erreur bloquante |
+| Clic ✂ sur montée non fusionnée | Bouton absent (impossible) |
+| Clic 🔗 sur groupe à 1 membre | Bouton absent (normalizeGroups a dissous) |
+| 🆕 Export : montée fusionnée sans `mergedParts` exploitables | Log warning, montée exportée comme fusion **sans détail** |
+| 🆕 Export : fichier vide (aucune montée) | JSON valide avec `climbs: []` |
 
 ### 5.3 Parcours avancé — organiser un col enchaîné
 
 1. Charger un GPX de col enchaîné (Mortirolo, etc.)
 2. La détection produit **1 montée fusionnée** (`mergedCount > 0`)
 3. L'utilisateur clique **✂ Séparer** → groupe `#N` créé avec `#N.1`, `#N.2`, `#N.3`
-4. La carte zoome sur **tout le groupe** et affiche **tous les marqueurs** (v3.9.2)
+4. La carte zoome sur **tout le groupe** et affiche **tous les marqueurs**
 5. L'utilisateur peut :
    - Éditer chaque sous-montée individuellement (drag)
    - Supprimer une sous-montée qui n'aurait pas dû être détectée (✕)
    - Refusionner le tout (🔗) — les bornes éditées sont conservées
-6. Exporter le JSON avec les `groupId`/`subIndex`
+6. 🆕 Exporter le JSON → **une seule entrée** dans `climbs[]`, avec `isMerged: true`, `isSeparated` (true ou false selon l'état final) et `mergedParts[]` détaillant chaque sous-col
 
 ### 5.4 Parcours avancé — ajouter une montée manuellement
 
@@ -979,6 +1090,7 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 6. Il **relâche** → montée créée et sélectionnée
 7. Le profil passe en mode montée, centré sur la nouvelle montée
 8. La carte zoome sur la montée
+9. 🆕 À l'export, la montée manuelle apparaît comme une entrée **autonome** standard (`isMerged: false`, `mergedParts: null`)
 
 ---
 
@@ -999,7 +1111,7 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 | Stockage token | localStorage | Persistance |
 | Stockage toggle contours | localStorage | Persistance |
 
-### 6.2 Pipeline complet (v3.9.2)
+### 6.2 Pipeline complet (v3.9.6)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -1066,15 +1178,18 @@ Le choix de longueurs uniformes par segment (plutôt que tranches pleines + rés
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ EXPORT JSON (buildExportData)                               │
+│ EXPORT JSON (buildExportData) 🆕 v3.9.6                     │
 ├─────────────────────────────────────────────────────────────┤
-│ 1. Rebuild (fraîcheur des données)                          │
-│ 2. Segments plats (startKm/endKm/progressions/…)            │
-│ 3. Montées (bornes, métriques, slopeProfile, groupId)       │
-│ 4. slopeProfile : découpage par segment global              │
-│    (aucune tranche ne traverse une frontière)               │
-│ 5. Legend + metadata                                        │
-│ 6. Blob → download                                          │
+│ 1. rebuild() → data fraîche                                 │
+│ 2. segments[] ← data.catSegments                            │
+│ 3. climbs[] ← consolidateClimbsForExport(data)              │
+│    → 1 entrée par montée logique                            │
+│    → isMerged / isSeparated / mergedParts                   │
+│    → PAS de groupId / subIndex / originMergedCount          │
+│ 4. metadata ← compteurs + totalDist*                        │
+│    → mergedClimbsCount / separatedClimbsCount               │
+│ 5. legend ← catégories + params                             │
+│ 6. JSON.stringify + Blob + download                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -1111,6 +1226,23 @@ STATE = {
   // Cache de rendu
   eleDisplay: number[],
   __lastData: RebuildResult | null
+}
+
+// 🆕 v3.9.6 : UserClimb enrichi
+UserClimb = {
+  startKm: number,
+  endKm: number,
+  autoStartKm: number | null,
+  autoEndKm: number | null,
+  refineM: number | null,
+  candidateLen: number | null,
+  mergedCount: number,
+  mergedParts: { startKm, endKm }[] | null,
+  fallback: boolean,
+  groupId: number | null,         // ← interne UI (NON exporté)
+  subIndex: number | null,        // ← interne UI (NON exporté)
+  originMergedCount: number | null, // ← interne UI (NON exporté)
+  isSeparated: boolean            // ← discriminant d'export
 }
 
 MAP_STATE = {
@@ -1158,7 +1290,7 @@ MAP_STATE = {
 23. loadFile
 24. recomputeAuto
 25. computeDiagnostics, updateDiagnostics
-26. buildClimbSlopeProfile, buildExportData, exportJson
+26. 🆕 consolidateClimbsForExport, buildExportData, exportJson
 27. setupGlobalDragDrop
 28. Interface (boutons, toggles)
 29. initMapUI (avec auto-load token)
@@ -1166,6 +1298,8 @@ MAP_STATE = {
 31. Annulation création par Échap
 32. Enregistrement des plugins + init
 ```
+
+**Note v3.9.4/v3.9.6** : `buildClimbSlopeProfile` a été **supprimé** (plus de `slopeProfile`). Remplacé par `consolidateClimbsForExport`.
 
 ---
 
@@ -1199,7 +1333,8 @@ MAP_STATE = {
 | renderProfile | < 50 ms | — |
 | buildTraceFeatures | < 50 ms | — |
 | updateMapTrace (setData) | < 100 ms | — |
-| exportJson | < 500 ms | — |
+| 🆕 consolidateClimbsForExport | < 20 ms | — |
+| 🆕 buildExportData | < 500 ms | — |
 
 ### 7.2 Limites connues
 
@@ -1210,14 +1345,14 @@ MAP_STATE = {
 
 ---
 
-## 8. Hors périmètre (V3.9.2)
+## 8. Hors périmètre (V3.9.6)
 
 - Carte OSM alternative (seulement Mapbox)
 - Export PDF / PNG du profil
 - Sauvegarde de la configuration utilisateur (localStorage) — sauf token + contours
 - Comparaison multi-tracks
 - Détection automatique de « cols » nommés
-- Export CSV / JSON alternatif
+- Export CSV
 - Import FIT, TCX
 - Édition des seuils de catégorie
 - Génération de géométrie LineString complète dans le JSON
@@ -1227,6 +1362,9 @@ MAP_STATE = {
 - Traduction anglaise
 - Mode hors-ligne (Mapbox nécessite internet)
 - Édition de la trace elle-même (déplacement de points GPS)
+- 🆕 **`slopeProfile` dans l'export** (retiré v3.9.4)
+- 🆕 **`groupId`, `subIndex`, `originMergedCount` dans l'export** (retirés v3.9.6)
+- 🆕 **Paramètre `exportProfileStepM`** (retiré v3.9.4)
 
 ---
 
@@ -1246,7 +1384,6 @@ MAP_STATE = {
 | **P3** | Export CSV des montées détectées | Faible |
 | **P3** | Traduction anglaise | Faible |
 | **P3** | Anti-pic adaptatif (détection automatique de la fenêtre) | Élevée |
-| **P3** | Choix de méthode de découpage du slopeProfile | Faible |
 | **P3** | Personnalisation des couleurs de catégories | Faible |
 
 ### 9.1 Détail des P1
@@ -1267,7 +1404,15 @@ MAP_STATE = {
 - Restauration au chargement
 - Bouton « Réinitialiser aux défauts »
 
-### 9.2 Détail des P2
+### 9.2 Évolutions déjà livrées en v3.9.4/v3.9.6 (ne plus planifier)
+
+- ✅ Suppression de `slopeProfile` (v3.9.4)
+- ✅ Suppression de `exportProfileStepM` (v3.9.4)
+- ✅ Export consolidé (v3.9.6)
+- ✅ Champs `isMerged`, `isSeparated`, `mergedParts` dans l'export (v3.9.6)
+- ✅ Compteurs `mergedClimbsCount`, `separatedClimbsCount` (v3.9.6)
+
+### 9.3 Détail des P2 (mis à jour)
 
 **Carte OSM** :
 - Nécessite un serveur de tuiles OSM ou MapTiler
@@ -1289,6 +1434,11 @@ MAP_STATE = {
 - Aimantation de la poignée au point le plus proche
 - Améliore la précision du drag
 
+**Prévisualisation Mapbox intégrée** :
+- Consommer directement le JSON exporté
+- Afficher la trace avec `line-gradient` et les montées cliquables
+- Utile pour valider le JSON avant de le livrer à un tiers
+
 ---
 
 ## 10. Risques et mitigation
@@ -1308,22 +1458,26 @@ MAP_STATE = {
 | Anti-pic inefficace | Glitch persiste | Diagnostic avertit si fenêtre < 2 × Pas | ✅ v3.3 |
 | Bruit résiduel à petit Pas | Signal bruité malgré Pas fin | Rééchantillonnage par moyenne | ✅ v3.5 |
 | Fenêtre anti-pic dépendante du Pas | Comportement imprévisible | Fenêtre en mètres | ✅ v3.6 |
-| **Destruction du canvas pendant le drag** | **Crash `chart.canvas is null`** | **`renderAll` inerte pendant drag** | ✅ v3.7.1 |
-| **Listeners `mousemove` orphelins** | **Erreurs à chaque survol** | **Retrait explicite (`_hoverListener`)** | ✅ v3.7.1 |
-| **Divergence catégories carte ↔ profil (v3.8)** | **Incohérence utilisateur** | **`slopeProfile` aligné + coloration via `catSegments`** | ✅ v3.8.1 |
-| **Couleurs changent au drag (v3.8)** | **Instabilité visuelle** | **`eleBaseCat` non ancrée** | ✅ v3.8.1 |
-| **Étirement trace au zoom (v3.8)** | **Fausse échelle** | **Échelle X fixe** | ✅ v3.8.3 |
-| **Contours invisibles (v3.8.4)** | **Fonctionnalité cassée** | **Ordre des couches** | ✅ v3.8.5 |
-| **Zoom carte sur mauvais objet (v3.8.1)** | **Vue incorrecte** | **`zoomMapToClimb` accepte les 2 formats** | ✅ v3.8.2 |
-| **Séparation sans refusion possible (v3.9.0)** | **Perte de lien** | **`groupId` + `subIndex`** | ✅ v3.9.1 |
-| **Suppression impossible (v3.9.1)** | **UX** | **Bouton ✕** | ✅ v3.9.2 |
-| **Marqueurs groupe mono (v3.9.1)** | **Visualisation incomplète** | **Multi-marqueurs** | ✅ v3.9.2 |
-| **Trace carte ≠ GPX (v3.8→v3.9.1)** | **Fidélité** | **Points bruts** | ✅ v3.9.2 |
-| **Distance exportée ≠ distance réelle** | **Décalage progressions Mapbox** | **`totalDistRawM` distinct** | ✅ v3.7 |
-| **JSON surchargé** | **Difficulté d'intégration** | **Format plat, sans FeatureCollection** | ✅ v3.7.2 |
-| **Token Mapbox en clair dans le code** | **Fuite** | **localStorage + input utilisateur** | ✅ v3.8 |
-| **Perte de token au reload** | **UX** | **localStorage** | ✅ v3.8 |
-| **Carte non chargée au démarrage** | **UX** | **Auto-load v3.9.2** | ✅ v3.9.2 |
+| Destruction du canvas pendant le drag | Crash `chart.canvas is null` | `renderAll` inerte pendant drag | ✅ v3.7.1 |
+| Listeners `mousemove` orphelins | Erreurs à chaque survol | Retrait explicite (`_hoverListener`) | ✅ v3.7.1 |
+| Divergence catégories carte ↔ profil (v3.8) | Incohérence utilisateur | `slopeProfile` aligné + coloration via `catSegments` | ✅ v3.8.1 |
+| Couleurs changent au drag (v3.8) | Instabilité visuelle | `eleBaseCat` non ancrée | ✅ v3.8.1 |
+| Étirement trace au zoom (v3.8) | Fausse échelle | Échelle X fixe | ✅ v3.8.3 |
+| Contours invisibles (v3.8.4) | Fonctionnalité cassée | Ordre des couches | ✅ v3.8.5 |
+| Zoom carte sur mauvais objet (v3.8.1) | Vue incorrecte | `zoomMapToClimb` accepte les 2 formats | ✅ v3.8.2 |
+| Séparation sans refusion possible (v3.9.0) | Perte de lien | `groupId` + `subIndex` | ✅ v3.9.1 |
+| Suppression impossible (v3.9.1) | UX | Bouton ✕ | ✅ v3.9.2 |
+| Marqueurs groupe mono (v3.9.1) | Visualisation incomplète | Multi-marqueurs | ✅ v3.9.2 |
+| Trace carte ≠ GPX (v3.8→v3.9.1) | Fidélité | Points bruts | ✅ v3.9.2 |
+| Distance exportée ≠ distance réelle | Décalage progressions Mapbox | `totalDistRawM` distinct | ✅ v3.7 |
+| JSON surchargé | Difficulté d'intégration | Format plat, sans FeatureCollection | ✅ v3.7.2 |
+| Token Mapbox en clair dans le code | Fuite | localStorage + input utilisateur | ✅ v3.8 |
+| Perte de token au reload | UX | localStorage | ✅ v3.8 |
+| Carte non chargée au démarrage | UX | Auto-load v3.9.2 | ✅ v3.9.2 |
+| 🆕 **JSON exporté avec sous-montées séparées** | **Consommateur confus** | **Export consolidé v3.9.6** | ✅ v3.9.6 |
+| 🆕 **Champs UI dans l'export** | **Couplage UI/consommateur** | **Suppression `groupId`/`subIndex`/`originMergedCount`** | ✅ v3.9.6 |
+| 🆕 **Redondance `slopeProfile`/`segments`** | **Taille du JSON** | **Suppression `slopeProfile` v3.9.4** | ✅ v3.9.4 |
+| 🆕 **Migration cassante pour consommateurs v3.9.1** | **Régressions d'intégration** | **Documenter le contrat v3.9.6 + exemples** | ⚠️ À surveiller |
 
 ---
 
@@ -1354,7 +1508,7 @@ MAP_STATE = {
 | CA-21 | Anti-pic ne modifie pas une vraie bosse | Trace + seuil=25 m | v3.3 |
 | CA-22 | Diagnostic avertit si fenêtre < 2 × Pas ou seuil < 5 m | Régler fenêtre=50m @ Pas=50 | v3.3 |
 | CA-23 | Rendu visuel à Pas=50 m comparable à Pas=25 m | Trace GPS dense | v3.5 |
-| CA-24 | Diagnostic 🟢 avec les défauts v3.9.2 | Chargement sans modification | v3.9.2 |
+| CA-24 | Diagnostic 🟢 avec les défauts v3.9.6 | Chargement sans modification | v3.9.6 |
 | CA-25 | `avgWinM` affiché dans le log Debug | Vérification log | v3.5 |
 | CA-26 | Renommages appliqués : `Fenêtre de calcul pente`, `Longueur min. pente` | Inspection UI | v3.5.2 |
 | CA-27 | `Anti-pic : fenêtre` affichée en mètres dans le formulaire et le diagnostic | Inspection UI | v3.6 |
@@ -1363,32 +1517,41 @@ MAP_STATE = {
 | CA-30 | Drag fluide sans erreur console (survol graphiques) | Ouvrir console, draguer | v3.7.1 |
 | CA-31 | `totalDistanceKm` reflète la longueur réelle, pas la grille | Comparer avec mesure GPX source | v3.7 |
 | CA-32 | `trailingGapM` cohérent avec `totalDistRawM - totalDistSampledM` | Inspection JSON | v3.7 |
-| CA-33 | Aucune tranche de `slopeProfile` ne traverse une frontière | Vérifier par inspection | v3.7 |
-| CA-34 | `categoryId` d'une tranche = `categoryId` du segment qui la contient | Comparer | v3.7 |
+| CA-33 | ~~Aucune tranche de `slopeProfile` ne traverse une frontière~~ | ❌ Obsolète v3.9.4 | — |
+| CA-34 | ~~`categoryId` d'une tranche = `categoryId` du segment parent~~ | ❌ Obsolète v3.9.4 | — |
 | CA-35 | Export JSON valide et parseable | Ouvrir dans un éditeur JSON | v3.7 |
 | CA-36 | `startProgress`/`endProgress` = fraction de `totalDistanceKm` | Vérifier dernier segment | v3.7 |
-| CA-37 | Diagnostic `exportProfileStepM` 🟠 si > longueurMin | Régler | v3.7 |
+| CA-37 | ~~Diagnostic `exportProfileStepM` 🟠 si > longueurMin~~ | ❌ Obsolète v3.9.4 | — |
 | CA-38 | Aucune clé `profile`, `geometry`, `type`, `lengthM`, `categoryLabel` dans le JSON | Inspection | v3.7.2 |
-| CA-39 | **Carte se charge auto si token présent** | localStorage rempli | v3.9.2 |
-| CA-40 | **Trace carte = points bruts du GPX** | Comparer visuellement | v3.9.2 |
-| CA-41 | **Couverture des couleurs carte = profil** | Compare carte et profil | v3.8.1 |
-| CA-42 | **Couleurs stables pendant le drag** | Drag d'une poignée | v3.8.1 |
-| CA-43 | **Échelle X profil strictement fixe** | Mesurer entre deux points | v3.8.3 |
-| CA-44 | **Séparation crée `#N.1`, `#N.2`** | Cliquer ✂ | v3.9.1 |
-| CA-45 | **Refusion restaure la montée fusionnée** | Cliquer 🔗 | v3.9.1 |
-| CA-46 | **Refusion conserve les bornes éditées** | Éditer, séparer, refusionner | v3.9.1 |
-| CA-47 | **Suppression renumérote les `subIndex`** | Supprimer un membre de groupe | v3.9.2 |
-| CA-48 | **Création manuelle refuse les chevauchements** | Double-clic dans une montée | v3.9.0 |
-| CA-49 | **Création manuelle insère au bon endroit** | Créer entre deux montées | v3.9.0 |
-| CA-50 | **Multi-marqueurs sur groupe** | Sélectionner un membre de groupe | v3.9.2 |
-| CA-51 | **Zoom groupe = toute la zone du groupe** | Cliquer sur un membre | v3.9.2 |
-| CA-52 | **Profil montée = trace complète + scroll centré** | Sélectionner une montée | v3.9.2 |
-| CA-53 | **Échelle montée = 10 m/px** | Mesurer deux points | v3.9.2 |
-| CA-54 | **Courbes de niveau visibles** | Toggle dans params | v3.8.5 |
-| CA-55 | **Ordre des couches Mapbox** | Carte avec contours activés | v3.8.5 |
-| CA-56 | **Bouton ✕ sur chaque carte** | Inspection UI | v3.9.2 |
-| CA-57 | **Séparation puis refusion avec édition** | Éditer, séparer, refusionner, vérifier | v3.9.1 |
-| CA-58 | **Normalisation des groupes orphelins** | Supprimer membres jusqu'à 1 | v3.9.1 |
+| CA-39 | Carte se charge auto si token présent | localStorage rempli | v3.9.2 |
+| CA-40 | Trace carte = points bruts du GPX | Comparer visuellement | v3.9.2 |
+| CA-41 | Couverture des couleurs carte = profil | Compare carte et profil | v3.8.1 |
+| CA-42 | Couleurs stables pendant le drag | Drag d'une poignée | v3.8.1 |
+| CA-43 | Échelle X profil strictement fixe | Mesurer entre deux points | v3.8.3 |
+| CA-44 | Séparation crée `#N.1`, `#N.2` | Cliquer ✂ | v3.9.1 |
+| CA-45 | Refusion restaure la montée fusionnée | Cliquer 🔗 | v3.9.1 |
+| CA-46 | Refusion conserve les bornes éditées | Éditer, séparer, refusionner | v3.9.1 |
+| CA-47 | Suppression renumérote les `subIndex` | Supprimer un membre de groupe | v3.9.2 |
+| CA-48 | Création manuelle refuse les chevauchements | Double-clic dans une montée | v3.9.0 |
+| CA-49 | Création manuelle insère au bon endroit | Créer entre deux montées | v3.9.0 |
+| CA-50 | Multi-marqueurs sur groupe | Sélectionner un membre de groupe | v3.9.2 |
+| CA-51 | Zoom groupe = toute la zone du groupe | Cliquer sur un membre | v3.9.2 |
+| CA-52 | Profil montée = trace complète + scroll centré | Sélectionner une montée | v3.9.2 |
+| CA-53 | Échelle montée = 10 m/px | Mesurer deux points | v3.9.2 |
+| CA-54 | Courbes de niveau visibles | Toggle dans params | v3.8.5 |
+| CA-55 | Ordre des couches Mapbox | Carte avec contours activés | v3.8.5 |
+| CA-56 | Bouton ✕ sur chaque carte | Inspection UI | v3.9.2 |
+| CA-57 | Séparation puis refusion avec édition | Éditer, séparer, refusionner, vérifier | v3.9.1 |
+| CA-58 | Normalisation des groupes orphelins | Supprimer membres jusqu'à 1 | v3.9.1 |
+| 🆕 CA-59 | Aucun champ `slopeProfile` ni `slopeProfileStepM` dans le JSON | Inspection | v3.9.4 |
+| 🆕 CA-60 | Aucun paramètre `exportProfileStepM` dans l'UI | Inspection UI | v3.9.4 |
+| 🆕 CA-61 | Aucun champ `groupId`, `subIndex`, `originMergedCount` dans le JSON | Inspection | v3.9.6 |
+| 🆕 CA-62 | Une montée fusionnée (séparée ou non) = **une seule entrée** dans `climbs[]` | Séparer puis exporter | v3.9.6 |
+| 🆕 CA-63 | `isMerged` et `isSeparated` correctement positionnés | Séparer, refusionner, exporter | v3.9.6 |
+| 🆕 CA-64 | `mergedParts` présent (≥ 2 entrées) si `isMerged: true` | Exporter une fusion | v3.9.6 |
+| 🆕 CA-65 | `metadata.mergedClimbsCount` et `separatedClimbsCount` cohérents | Vérifier comptage | v3.9.6 |
+| 🆕 CA-66 | Après édition + refusion, `mergedParts` reflète les bornes éditées | Éditer, refusionner, exporter | v3.9.6 |
+| 🆕 CA-67 | Montée manuelle exportée avec `isMerged: false`, `mergedParts: null` | Créer, exporter | v3.9.6 |
 
 ---
 
@@ -1406,6 +1569,9 @@ MAP_STATE = {
 | Trace très courte (< 1 km) | ~500 m | Une seule petite bosse | Test échelle X fixe (canvas étroit) |
 | Trace ultra-longue (> 200 km) | 250 km | Ultra-distance | Test performance |
 | Trace avec 10 cols enchaînés | 150 km | Cols séparés de 2 km | Test fusion/séparation/refusion |
+| 🆕 Trace 1 col fusionné | 30 km | Fusion simple non séparée | Test export `isMerged=true, isSeparated=false` |
+| 🆕 Trace 1 col fusionné + séparé | 30 km | Séparation en 2 sous-cols | Test export `isMerged=true, isSeparated=true, mergedParts` |
+| 🆕 Trace 1 col fusionné édité | 30 km | Édition puis refusion | Test export `mergedParts` avec bornes éditées |
 
 ---
 
@@ -1413,7 +1579,7 @@ MAP_STATE = {
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ ⛰️ GPX Analyzer v3.9.2                          🐛  ⚙️          │
+│ ⛰️ GPX Analyzer v3.9.6                          🐛  ⚙️          │
 │ ┌─────────────────────────────────────┐                          │
 │ │ 📁 trace.gpx · 3312 → 2190 pts      │                          │
 │ └─────────────────────────────────────┘                          │
@@ -1454,6 +1620,8 @@ MAP_STATE = {
 │            │                                    │ [💾 Export]    │
 └────────────┴────────────────────────────────────┴────────────────┘
 ```
+
+**Note v3.9.6** : le bouton **💾 Exporter JSON** produit un **JSON consolidé** (une entrée par montée logique). Le panneau de paramètres ne contient plus le champ « Pas du profil exporté » (retiré v3.9.4) → **14 paramètres numériques** au lieu de 15.
 
 ### 13.1 États visuels des cartes de montée
 
@@ -1517,6 +1685,18 @@ Mode création (vallée posée):
 └──────────────────────────────────────────────┘
 ```
 
+### 13.3 🆕 Dialogue d'export (implicite, via bouton)
+
+L'export JSON est déclenché par le bouton **💾 Exporter JSON** et produit un téléchargement direct `nom_trace_analysis.json`. Aucun dialogue intermédiaire.
+
+**Structure du fichier téléchargé** (rappel) :
+- `metadata` : informations globales + compteurs `mergedClimbsCount`/`separatedClimbsCount`
+- `legend` : catégories et paramètres clés
+- `segments[]` : liste plate des segments de catégorie
+- `climbs[]` : liste **consolidée** des montées (une entrée par montée logique)
+
+Voir §3.13 pour la structure complète.
+
 ---
 
 ## 14. Glossaire
@@ -1551,21 +1731,28 @@ Mode création (vallée posée):
 | **Anti-pic** | Filtre médian conditionnel — ne remplace que les points aberrants |
 | **Fenêtre anti-pic** | Largeur (en mètres) du voisinage inspecté |
 | **Diagnostic** | Panneau de cohérence en temps réel des paramètres |
-| **Valeur effective** | Valeur calculée en points (= paramètre en mètres ÷ stepM) |
+| **Valeur effective** | Valeur calculée en points (= paramètre en mètres ÷ Pas) |
 | **`totalDistRawM`** | Longueur réelle de la trace GPX d'origine, avant resampling |
 | **`totalDistSampledM`** | Longueur couverte par la grille resamplée (multiple de `stepM`) |
 | **`trailingGapM`** | Queue de trace au-delà du dernier multiple de `stepM`, ignorée par le resampling |
 | **`startProgress` / `endProgress`** | Fractions 0–1 de la longueur totale, compatibles `line-gradient` Mapbox |
-| **`slopeProfile`** | Sous-profil de pente d'une montée, découpé en tranches alignées sur les segments globaux |
 | **`catSegments`** | Liste des segments de catégorie fusionnés (utilisée par la carte ET le profil) |
 | **`eleDisplay`** | Altitude lissée **ancrée** sur les bornes des montées (courbe affichée) |
 | **`eleBaseCat`** | Altitude lissée **non ancrée** (utilisée pour la catégorisation des couleurs) |
-| **`groupId`** | Identifiant entier du groupe de montées (null si autonome) |
-| **`subIndex`** | Position d'un membre dans son groupe (1, 2, 3…) |
-| **`mergedParts`** | Tableau des bornes des sous-montées d'origine (permet la séparation) |
-| **`mergedCount`** | Nombre de fusions ayant contribué à une montée |
+| **`groupId`** | Identifiant entier du groupe UI (interne, **NON exporté** depuis v3.9.6) |
+| **`subIndex`** | Position d'un membre dans son groupe UI (interne, **NON exporté** depuis v3.9.6) |
+| **`originMergedCount`** | Nombre de montées dans la fusion d'origine UI (interne, **NON exporté** depuis v3.9.6) |
+| **`mergedParts`** | Tableau des bornes des sous-montées d'origine (UI et **export v3.9.6**) |
+| **`mergedCount`** | Nombre de fusions ayant contribué à une montée (UI et **export**) |
+| 🆕 **`isMerged`** | Booléen export (v3.9.6) : la montée résulte d'une fusion |
+| 🆕 **`isSeparated`** | Booléen export (v3.9.6) : la fusion a été séparée dans l'UI |
+| 🆕 **`mergedClimbsCount`** | Compteur metadata (v3.9.6) : nombre de montées avec `isMerged=true` |
+| 🆕 **`separatedClimbsCount`** | Compteur metadata (v3.9.6) : nombre de montées avec `isSeparated=true` |
+| ❌ **`slopeProfile`** | Champ **retiré** en v3.9.4 (redondant avec `segments[]`) |
+| ❌ **`exportProfileStepM`** | Paramètre **retiré** en v3.9.4 (plus de `slopeProfile`) |
+| 🆕 **Export consolidé** | Format JSON v3.9.6 où une montée fusionnée = une seule entrée |
 | **Mapbox GL JS** | Bibliothèque de cartographie vectorielle 3D (Mapbox) |
-| **`mapbox-terrain-v2`** | Source vectorielle Mapbox pour les courbes de niveau |
+| **`mapbox-terrain-v2`** | Source vectorielle Mapbox pour les courbes de niveau (10 m d'intervalle) |
 | **`mapbox-dem`** | Source raster-dem Mapbox pour le terrain 3D |
 | **`fitBounds`** | Fonction Mapbox pour zoomer sur une emprise |
 | **`localStorage`** | Stockage persistant du navigateur |
@@ -1609,15 +1796,18 @@ Mode création (vallée posée):
 | 3.7 | 2026-09-24 | Export JSON : segments + montées + slopeProfile · Seuil descente raide −7 % · `totalDistRawM` / `totalDistSampledM` / `trailingGapM` · `startProgress`/`endProgress` · `slopeProfile` aligné · Diagnostic `exportProfileStepM` |
 | 3.7.1 | 2026-09-24 | Correctif drag : `renderAll` inerte · Nettoyage listeners · Garde-fous canvas null |
 | 3.7.2 | 2026-09-24 | JSON allégé : suppression `categoryDistances`, `segmentsTimeline`, `FeatureCollection`, `profile`, `lengthM`, `dPlusM` (slopeProfile), `categoryLabel`, `refineM` |
-| **3.8** | **2026-10-15** | **Refonte UI 3 colonnes · Carte Mapbox 3D · Widget profil canvas 2D · Suppression Chart.js · Chargement paresseux Mapbox** |
-| **3.8.1** | **2026-10-15** | **Catégorisation sur `eleBaseCat` non ancrée · Coloration profil via `catSegments` · Correctif divergence carte/profil** |
-| **3.8.2** | **2026-10-15** | **Correctif `zoomMapToClimb` acceptant `{startKm, endKm}` et `{startDist, endDist}` · Emprise minimale 150 m** |
-| **3.8.3** | **2026-10-16** | **Correctif échelle X profil strictement fixe (`canvasWidth = viewWidthM / scaleX`)** |
-| **3.8.4** | **2026-10-16** | **Courbes de niveau optionnelles (`mapbox-terrain-v2`)** |
-| **3.8.5** | **2026-10-16** | **Correctif ordre couches Mapbox : trace avant contours (`beforeId`)** |
-| **3.9.0** | **2026-10-16** | **Séparation des montées fusionnées en sous-montées · Création manuelle par double-clic + drag · Conservation `mergedParts`** |
-| **3.9.1** | **2026-10-16** | **Groupes persistants (`groupId` + `subIndex`) · Refusion · Numérotation `#N.M` · Couleur stable par groupe** |
-| **3.9.2** | **2026-10-17** | **Échelle widget montée 10 m/px · Auto-load carte si token · Suppression ✕ · Multi-marqueurs groupe · Widget montée = trace complète + scroll centré · Trace carte sur points bruts du GPX** |
+| 3.8 | 2026-10-15 | Refonte UI 3 colonnes · Carte Mapbox 3D · Widget profil canvas 2D · Suppression Chart.js · Chargement paresseux Mapbox |
+| 3.8.1 | 2026-10-15 | Catégorisation sur `eleBaseCat` non ancrée · Coloration profil via `catSegments` · Correctif divergence carte/profil |
+| 3.8.2 | 2026-10-15 | Correctif `zoomMapToClimb` acceptant `{startKm, endKm}` et `{startDist, endDist}` · Emprise minimale 150 m |
+| 3.8.3 | 2026-10-16 | Correctif échelle X profil strictement fixe (`canvasWidth = viewWidthM / scaleX`) |
+| 3.8.4 | 2026-10-16 | Courbes de niveau optionnelles (`mapbox-terrain-v2`) |
+| 3.8.5 | 2026-10-16 | Correctif ordre couches Mapbox : trace avant contours (`beforeId`) |
+| 3.9.0 | 2026-10-16 | Séparation des montées fusionnées en sous-montées · Création manuelle par double-clic + drag · Conservation `mergedParts` |
+| 3.9.1 | 2026-10-16 | Groupes persistants (`groupId` + `subIndex`) · Refusion · Numérotation `#N.M` · Couleur stable par groupe |
+| 3.9.2 | 2026-10-17 | Échelle widget montée 10 m/px · Auto-load carte si token · Suppression ✕ · Multi-marqueurs groupe · Widget montée = trace complète + scroll centré · Trace carte sur points bruts du GPX |
+| 🆕 3.9.4 | 2026-10-17 | **Suppression de `slopeProfile` dans l'export** · **Suppression du paramètre `exportProfileStepM`** (15 → 14 paramètres numériques) · **Suppression des champs** `slopeProfileStepM`, `metadata.profileStepM`, `legend.exportProfileStepM` · Retrait de la 9ᵉ règle de cohérence · Retrait des constantes `EXPORT_PROFILE_STEP_M_*` |
+| 🆕 3.9.5 | 2026-10-18 | **Préparation de l'export consolidé** : ajout des champs `isSeparated` dans l'état UI · Ajout des compteurs `mergedClimbsCount` et `separatedClimbsCount` · Mise à jour de la consolidation (interne) |
+| 🆕 3.9.6 | 2026-10-18 | **Export JSON consolidé** : une montée fusionnée (séparée ou non) = **une seule entrée** dans `climbs[]` · Champs `isMerged`, `isSeparated`, `mergedParts` · **Retrait des champs UI** `groupId`, `subIndex`, `originMergedCount` de l'export · Compteurs `mergedClimbsCount` et `separatedClimbsCount` dans `metadata` |
 
 ---
 
@@ -1715,35 +1905,74 @@ seuil(L) = 3 % si L ≥ 1000 m
          = ∞   si L < 300
 ```
 
-### 16.7 Découpage du `slopeProfile`
+### 16.7 ~~Découpage du `slopeProfile`~~ (retiré v3.9.4)
 
+**Cette section n'est plus applicable.** Le champ `slopeProfile` a été **supprimé en v3.9.4** avec le paramètre `exportProfileStepM`.
+
+**Remplacé par** : la liste plate `segments[]` dans l'export, qui contient déjà les segments de catégorie fusionnés (via `longueurMin`). Les consommateurs doivent utiliser `segments[]` pour la coloration et `climbs[]` pour les montées.
+
+### 16.7bis 🆕 Consolidation de l'export (v3.9.6)
+
+**Règle cardinale** : une montée fusionnée (séparée ou non) = **une seule entrée** dans `climbs[]`.
+
+```typescript
+// Pseudo-algorithme
+function consolidateClimbsForExport(data, totalDistRawM):
+  result = []
+  seenGroups = Set()
+
+  for c in data.climbs:
+    if c.invalid: continue
+
+    if c.groupId != null:
+      // Fusion SÉPARÉE → ré-agréger en une entrée
+      if seenGroups.has(c.groupId): continue
+      seenGroups.add(c.groupId)
+
+      members = data.climbs
+        .filter(x => x.groupId == c.groupId && !x.invalid)
+        .sort((a, b) => a.startDist - b.startDist)
+
+      globalStartIdx = members[0].startIdx
+      globalEndIdx = members[last].endIdx
+      mergedParts = members.map((m, k) => ({ partIndex: k, ...metrics(m) }))
+
+      result.push({
+        ...metrics(globalStartIdx, globalEndIdx),
+        mergedCount: members.length - 1,
+        isMerged: true,
+        isSeparated: true,
+        mergedParts
+      })
+    else:
+      // Autonome OU fusion non séparée
+      isMerged = (c.mergedCount || 0) > 0
+      mergedParts = null
+      if isMerged && c.ref.mergedParts && c.ref.mergedParts.length >= 2:
+        mergedParts = c.ref.mergedParts.map((part, k) => ({
+          partIndex: k, ...metricsFromKm(part.startKm, part.endKm)
+        }))
+
+      result.push({
+        ...metrics(c.startIdx, c.endIdx),
+        mergedCount: c.mergedCount || 0,
+        isMerged,
+        isSeparated: false,
+        mergedParts
+      })
+
+  result.sort((a, b) => a.startKm - b.startKm)
+  return result
 ```
-Pour chaque montée [startIdx, endIdx] :
 
-  1. Identifier les segments globaux intersectant la montée :
-       relevantSegs = catSegments.filter(s =>
-         s.endDist > climbStartDist && s.startDist < climbEndDist)
+**Propriétés garanties** :
 
-  2. Pour chaque segment intersectant :
-       segStart = max(seg.startDist, climbStartDist)
-       segEnd   = min(seg.endDist,   climbEndDist)
-       segLen   = segEnd − segStart
-
-  3. Découper en tranches uniformes :
-       nChunks  = max(1, ceil(segLen / profileStepM))
-       chunkLen = segLen / nChunks
-
-  4. Pour chaque tranche :
-       - kmStart / kmEnd   = bornes réelles (arrondies 4 décimales)
-       - eleStartM / eleEndM = altitudes lissées ancrées
-       - avgSlopePct       = pente physique D+/longueur
-       - categoryId        = seg.key   ← hérité du segment parent
-
-Propriété garantie :
-  Aucune tranche ne traverse une frontière de segment.
-  Le categoryId de chaque tranche est strictement identique
-  à celui du segment global qui la contient.
-```
+1. **Une montée logique = une entrée** dans `climbs[]`
+2. **`isMerged`** : `true` si la montée provient d'une fusion
+3. **`isSeparated`** : `true` si l'utilisateur a séparé dans l'UI, `false` sinon
+4. **`mergedParts`** : array ≥ 2 entrées si `isMerged = true`, `null` sinon
+5. **`mergedParts`** reflète les bornes **actuelles** (éditions incluses)
+6. **Aucun champ UI** (`groupId`, `subIndex`, `originMergedCount`) n'est exporté
 
 ### 16.8 Groupes — séparation et refusion
 
@@ -1760,6 +1989,8 @@ Créer une montée par sous-montée :
   - fallback : false
   - groupId : gid
   - subIndex : k + 1
+  - originMergedCount : originCount
+  - isSeparated : true
 Trier par startKm
 Sélectionner la première
 Zoomer la carte sur tout le groupe
@@ -1779,6 +2010,8 @@ Créer la montée fusionnée :
   - mergedCount = members.length - 1
   - mergedParts = mergedParts
   - groupId = null, subIndex = null
+  - originMergedCount = null
+  - isSeparated = false
 Trier par startKm
 Sélectionner la montée fusionnée
 ```
@@ -1799,6 +2032,8 @@ Validation :
 Annulation : Échap
 ```
 
+**Note v3.9.6** : la montée créée porte `isSeparated: false`, `mergedCount: 0`, `mergedParts: null`. Elle apparaît dans l'export comme une entrée `isMerged: false`, `mergedParts: null`.
+
 ### 16.10 Normalisation des groupes
 
 ```
@@ -1813,9 +2048,11 @@ Logique :
     Si c.groupId != null ET counts[c.groupId] < 2 :
       c.groupId = null
       c.subIndex = null
+      c.originMergedCount = null
+      c.isSeparated = false
 ```
 
-### 16.11 Valeurs par défaut v3.9.2
+### 16.11 Valeurs par défaut v3.9.6
 
 | Paramètre | Défaut | Unité |
 |---|---|---|
@@ -1833,9 +2070,10 @@ Logique :
 | Lissage gaussien | 75 | m |
 | Correction plateaux | 6 | pts |
 | Segments debug | 100 | m |
-| Pas du profil exporté | 50 | m |
 | Double SG | ON | — |
 | Lissage segments | ON | — |
+
+**Note v3.9.4/v3.9.6** : le paramètre `Pas du profil exporté` (15ᵉ) a été **supprimé**. Le total est de **14 paramètres numériques + 2 toggles**.
 
 Diagnostic attendu avec ces défauts : 🟢 **Cohérent — aucun avertissement**.
 
@@ -1855,7 +2093,6 @@ Recherche extrema ............... 60 %
 Filtre médian ................... 0
 Lissage gaussien ................ 75 m
 Correction plateaux ............. 6 pts
-Pas du profil exporté ........... 50 m
 ```
 
 **Configuration pour trace GPS dense (Pas = 25 m)** :
@@ -1868,7 +2105,6 @@ Lissage altitude ................ 400 m
 Lissage pente ................... 150 m
 Filtre médian ................... 0
 Lissage gaussien ................ 75 m
-Pas du profil exporté ........... 50 m
 ```
 
 ### 16.12 Matrice des corrections de bugs connus
@@ -1887,6 +2123,10 @@ Pas du profil exporté ........... 50 m
 | v3.9.1 | Suppression impossible | Bouton ✕ (v3.9.2) |
 | v3.9.1 | Marqueurs groupe mono | Multi-marqueurs (v3.9.2) |
 | v3.9.1 | Trace carte = grille resamplée | Points bruts (v3.9.2) |
+| 🆕 v3.9.4 | `slopeProfile` redondant + `exportProfileStepM` complexifiait le diagnostic | Suppression des deux |
+| 🆕 v3.9.4 | Règle de cohérence `exportProfileStepM ≤ longueurMin` maintenait un paramètre obsolète | Suppression de la règle |
+| 🆕 v3.9.6 | Sous-montées séparées exportées individuellement → confusion consommateur | Export consolidé (1 entrée / montée logique) |
+| 🆕 v3.9.6 | `groupId`/`subIndex`/`originMergedCount` dans le JSON → couplage UI | Retrait des champs de l'export |
 
 ### 16.13 Matrice d'accessibilité
 
@@ -1917,11 +2157,11 @@ Pas du profil exporté ........... 50 m
 | CSS Grid / Flexbox | ✅ | ✅ | ✅ | ✅ |
 | `<dialog>` (V4) | ✅ | ✅ | ✅ | ✅ |
 
-### 16.15 Checklist de release v3.9.2
+### 16.15 Checklist de release v3.9.6
 
 - [ ] Tous les tests unitaires passent
 - [ ] Tous les tests d'intégration passent
-- [ ] Tous les critères d'acceptation validés
+- [ ] Tous les critères d'acceptation validés (CA-01 à CA-67)
 - [ ] Diagnostic 🟢 avec la config par défaut
 - [ ] Chargement d'une trace de référence sans erreur
 - [ ] Carte se charge auto avec token en localStorage
@@ -1932,10 +2172,26 @@ Pas du profil exporté ........... 50 m
 - [ ] Multi-marqueurs visibles sur montée groupée
 - [ ] Widget montée à 10 m/px avec scroll centré
 - [ ] Courbes de niveau visibles si toggle activé
-- [ ] Export JSON contient `groupId` et `subIndex`
+- [ ] 🆕 **Export JSON : une montée fusionnée = une seule entrée dans `climbs[]`**
+- [ ] 🆕 **Export JSON : champs `isMerged`, `isSeparated`, `mergedParts` présents**
+- [ ] 🆕 **Export JSON : champs `groupId`, `subIndex`, `originMergedCount` absents**
+- [ ] 🆕 **Export JSON : `slopeProfile` et `slopeProfileStepM` absents**
+- [ ] 🆕 **Export JSON : `metadata.mergedClimbsCount` et `separatedClimbsCount` cohérents**
+- [ ] 🆕 **Export JSON : édition + refusion → `mergedParts` reflète les bornes éditées**
+- [ ] 🆕 **Export JSON : montée manuelle → `isMerged: false`, `mergedParts: null`**
+- [ ] 🆕 **UI : 14 paramètres numériques (pas de `exportProfileStepM`)**
+- [ ] 🆕 **Diagnostic : 8 règles de cohérence (sans `exportProfileStepM`)**
 - [ ] Pas d'erreur console dans les scénarios nominaux
 - [ ] Documentation à jour (MUT, Algorithmes, Note technique, PRD)
 
+### 16.16 🆕 Ressources v3.9.6
+
+- **Exemple de JSON exporté** : voir §3.13.1
+- **Contrat de consommation d'une fusion** : voir §3.13.4
+- **Invariants garantis** : voir §3.13.5
+- **Migration v3.9.1 → v3.9.6** : voir §3.13.6
+- **Algorithme de consolidation** : voir §16.7bis
+
 ---
 
-**Fin du PRD v3.9.2**
+**Fin du PRD v3.9.6**

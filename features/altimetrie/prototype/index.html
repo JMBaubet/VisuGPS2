@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Analyse GPX — Carte 3D + Profil (v3.9.2)</title>
+  <title>Analyse GPX — Carte 3D + Profil (v3.9.6)</title>
   <style>
     * {
       box-sizing: border-box;
@@ -318,6 +318,11 @@
 
     .climb-badge.grouped {
       background: #e0e7ff;
+      color: #3730a3;
+    }
+
+    .climb-badge.grouped.from-merge {
+      background: #c7d2fe;
       color: #3730a3;
     }
 
@@ -1030,7 +1035,7 @@
 
 <body>
   <header class="toolbar">
-    <div class="toolbar-brand">⛰️ GPX Analyzer <span class="version">v3.9.2</span></div>
+    <div class="toolbar-brand">⛰️ GPX Analyzer <span class="version">v3.9.6</span></div>
     <label class="toolbar-drop" id="toolbarDrop" for="fileInput">
       <span class="drop-icon">📁</span>
       <span class="drop-text" id="toolbarDropText">Glissez un GPX n'importe où, ou <strong>cliquez ici</strong></span>
@@ -1224,15 +1229,7 @@
         </div>
 
         <div class="param-section">
-          <div class="param-section-title">Export & Debug</div>
-          <div class="param-row">
-            <label class="param-label" for="exportProfileStepM">Pas du profil exporté</label>
-            <div class="param-input-row">
-              <input type="number" id="exportProfileStepM" value="50" step="10" min="10" max="500">
-              <span class="status-dot grey" id="status-exportProfileStepM">●</span>
-            </div>
-            <span class="param-eff" id="eff-exportProfileStepM">50 m</span>
-          </div>
+          <div class="param-section-title">Debug</div>
           <div class="param-row">
             <label class="param-label" for="segmentLogM">Segments debug</label>
             <div class="param-input-row">
@@ -1296,14 +1293,10 @@
     const FENETRE_AFFICHAGE_M_DEFAULT = 500;
     const FENETRE_CAT_M_DEFAULT = 100;
     const RESAMPLE_AVG_MIN_M = 75;
-    const EXPORT_PROFILE_STEP_M_DEFAULT = 50;
-    const EXPORT_PROFILE_STEP_M_MIN = 10;
-    const EXPORT_PROFILE_STEP_M_MAX = 500;
 
-    // Échelles du widget profil — FIXES
-    const PROFILE_SCALE_X_FULL = 50;    // m/px pour le profil complet
-    const PROFILE_SCALE_X_CLIMB = 10;   // m/px pour le widget montée (nouvelle valeur)
-    const PROFILE_SCALE_Y = 10;         // m/px vertical
+    const PROFILE_SCALE_X_FULL = 50;
+    const PROFILE_SCALE_X_CLIMB = 10;
+    const PROFILE_SCALE_Y = 10;
     const PROFILE_MIN_HEIGHT = 110;
     const PROFILE_HANDLE_PAD = 200;
 
@@ -1857,7 +1850,7 @@
         refined.push({ startIdx: newStart, endIdx: newEnd, refineM: effectiveRefine, candidateLen, _merged: 0, _mergedParts: null });
         lastEnd = newEnd;
       }
-      if (mergeCount > 0) dbgInfo(`[v3.9.2] ${mergeCount} fusion(s)`);
+      if (mergeCount > 0) dbgInfo(`[v3.9.6] ${mergeCount} fusion(s)`);
       const eleDisplay = anchoredMovingAverage(eleRaw, anchors, stepM, fenetreAffichageM, gaussianSigmaM, params.smoothExtra);
       const autoClimbs = [];
       for (const c of refined) {
@@ -1932,7 +1925,6 @@
         gaussianSigmaM: Math.max(0, Math.min(500, parseFloat(document.getElementById('gaussianSigmaM').value) || 0)),
         plateauRun: Math.max(0, Math.min(20, parseInt(document.getElementById('plateauRun').value) || 0)),
         segmentLogM: Math.max(10, Math.min(2000, parseInt(document.getElementById('segmentLogM').value) || 100)),
-        exportProfileStepM: Math.max(EXPORT_PROFILE_STEP_M_MIN, Math.min(EXPORT_PROFILE_STEP_M_MAX, parseFloat(document.getElementById('exportProfileStepM').value) || EXPORT_PROFILE_STEP_M_DEFAULT)),
         smoothExtra: document.getElementById('smoothExtra').checked,
         segmentSmooth: document.getElementById('segmentSmooth').checked
       };
@@ -1987,7 +1979,9 @@
             altStart: eleDisplay[startIdx] || 0, altEnd: eleDisplay[endIdx] || 0,
             refineM: ref.refineM ?? null, candidateLen: ref.candidateLen ?? null,
             mergedCount: ref.mergedCount || 0, fallback: ref.fallback || false,
-            groupId: ref.groupId ?? null, subIndex: ref.subIndex ?? null
+            groupId: ref.groupId ?? null, subIndex: ref.subIndex ?? null,
+            originMergedCount: ref.originMergedCount ?? null,
+            isSeparated: !!ref.isSeparated
           };
         }
         let dPlus = 0;
@@ -2003,7 +1997,9 @@
           altStart: eleDisplay[startIdx], altEnd: eleDisplay[endIdx],
           refineM: ref.refineM ?? null, candidateLen: ref.candidateLen ?? null,
           mergedCount: ref.mergedCount || 0, fallback: ref.fallback || false,
-          groupId: ref.groupId ?? null, subIndex: ref.subIndex ?? null
+          groupId: ref.groupId ?? null, subIndex: ref.subIndex ?? null,
+          originMergedCount: ref.originMergedCount ?? null,
+          isSeparated: !!ref.isSeparated
         };
       });
 
@@ -2094,7 +2090,8 @@
 
         if (isGrouped && c.groupId !== lastGroupId) {
           const members = climbs.filter(x => x.groupId === c.groupId).length;
-          htmlParts.push(`<div class="group-brace" style="background:${gColor}" title="Groupe #${c.groupId} — ${members} montées">🔗 GROUPE #${c.groupId} · ${members} montées</div>`);
+          const fromMerge = c.originMergedCount != null ? ` (issu d'une fusion de ${c.originMergedCount})` : '';
+          htmlParts.push(`<div class="group-brace" style="background:${gColor}" title="Groupe #${c.groupId} — ${members} montées${fromMerge}">🔗 GROUPE #${c.groupId} · ${members} montées${fromMerge}</div>`);
         }
 
         let label;
@@ -2130,12 +2127,13 @@
           (Math.abs(ref.startKm - ref.autoStartKm) > 0.0005 || Math.abs(ref.endKm - ref.autoEndKm) > 0.0005);
         const canSplit = isMerged && Array.isArray(ref.mergedParts) && ref.mergedParts.length >= 2;
         const canRefuse = isGrouped;
+        const isFromMerge = c.originMergedCount != null;
 
         const badges = [
           isMerged ? `<span class="climb-badge merged" title="${c.mergedCount} fusion(s)">⊕ ${c.mergedCount}</span>` : '',
           isFallback ? `<span class="climb-badge fallback" title="Repli sur sous-segment valide">⤺</span>` : '',
           isModified ? `<span class="climb-badge modified" title="Modifiée manuellement">•</span>` : '',
-          isGrouped ? `<span class="climb-badge grouped" title="Membre du groupe #${c.groupId}">🔗 ${c.groupId}</span>` : ''
+          isGrouped ? `<span class="climb-badge grouped ${isFromMerge ? 'from-merge' : ''}" title="Membre du groupe #${c.groupId}${isFromMerge ? ' — provient d\'une fusion de ' + c.originMergedCount + ' montées' : ''}">🔗 ${c.groupId}${isFromMerge ? ' ⊕' : ''}</span>` : ''
         ].filter(Boolean).join('');
 
         const splitBtn = canSplit
@@ -2238,19 +2236,21 @@
 
       STATE.userClimbs.splice(idx, 1);
 
-      // Renuméroter les subIndex du groupe affecté (si applicable)
       if (removed.groupId != null) {
         const siblings = STATE.userClimbs
           .filter(c => c.groupId === removed.groupId)
           .sort((a, b) => a.startKm - b.startKm);
         siblings.forEach((c, k) => { c.subIndex = k + 1; });
-        // Si plus qu'un seul membre, dissoudre le groupe
         if (siblings.length < 2) {
-          for (const c of siblings) { c.groupId = null; c.subIndex = null; }
+          for (const c of siblings) {
+            c.groupId = null;
+            c.subIndex = null;
+            c.originMergedCount = null;
+            c.isSeparated = false;
+          }
         }
       }
 
-      // Ajuster la sélection
       if (STATE.selectedClimbIdx === idx) {
         STATE.selectedClimbIdx = null;
         STATE.profileMode = 'full';
@@ -2263,7 +2263,7 @@
     }
 
     /* =========================================================
-       11b. Séparation d'une montée fusionnée (avec groupId)
+       11b. Séparation d'une montée fusionnée
        ========================================================= */
     function splitMergedClimb(mergedIdx) {
       const merged = STATE.userClimbs[mergedIdx];
@@ -2274,7 +2274,8 @@
       }
 
       const gid = STATE.nextGroupId++;
-      dbgSplit(`Séparation montée #${mergedIdx + 1} → groupe #${gid} (${merged.mergedParts.length} sous-montées)`);
+      const originCount = merged.mergedCount + 1;
+      dbgSplit(`Séparation montée #${mergedIdx + 1} → groupe #${gid} (${merged.mergedParts.length} sous-montées, origine fusion de ${originCount})`);
 
       STATE.userClimbs.splice(mergedIdx, 1);
 
@@ -2289,7 +2290,9 @@
         mergedParts: null,
         fallback: false,
         groupId: gid,
-        subIndex: k + 1
+        subIndex: k + 1,
+        originMergedCount: originCount,
+        isSeparated: true
       }));
 
       for (const nc of newClimbs) STATE.userClimbs.push(nc);
@@ -2301,7 +2304,6 @@
 
       renderAll();
 
-      // Zoom carte couvrant l'ENSEMBLE du groupe
       if (MAP_STATE.ready) {
         zoomMapToGroup(gid);
       }
@@ -2340,7 +2342,9 @@
         mergedParts,
         fallback: false,
         groupId: null,
-        subIndex: null
+        subIndex: null,
+        originMergedCount: null,
+        isSeparated: false
       };
       STATE.userClimbs.push(merged);
       STATE.userClimbs.sort((a, b) => a.startKm - b.startKm);
@@ -2368,6 +2372,8 @@
         if (c.groupId != null && counts[c.groupId] < 2) {
           c.groupId = null;
           c.subIndex = null;
+          c.originMergedCount = null;
+          c.isSeparated = false;
         }
       }
     }
@@ -2413,7 +2419,6 @@
           STATE.__climbView = null;
           return renderProfile();
         }
-        // ── Mode montée : profil COMPLET à 10 m/px, scroll centré sur la montée
         viewStartM = 0;
         viewEndM = totalDist;
         scaleX = PROFILE_SCALE_X_CLIMB;
@@ -2605,14 +2610,12 @@
         viewStartM, viewEndM, scaleXActual, canvasWidth, canvasHeight, mode: STATE.profileMode
       };
 
-      // ── Scroll auto : centrer la montée sélectionnée dans la vue
       if (STATE.profileMode === 'climb' && STATE.selectedClimbIdx != null) {
         const c = climbs[STATE.selectedClimbIdx];
         if (c && !c.invalid) {
           const centerM = (c.startDist + c.endDist) / 2;
           const centerPx = (centerM - viewStartM) / scaleXActual;
           const targetScroll = Math.max(0, centerPx - scroll.clientWidth / 2);
-          // Ne pas re-scroller si on est déjà en train de dragger une poignée
           if (!STATE.__profileDragging) {
             requestAnimationFrame(() => {
               scroll.scrollLeft = targetScroll;
@@ -2620,7 +2623,6 @@
           }
         }
       } else if (STATE.profileMode === 'full' && !STATE.__profileDragging) {
-        // En mode full, revenir à gauche
         if (scroll.scrollLeft > 0) {
           requestAnimationFrame(() => { scroll.scrollLeft = 0; });
         }
@@ -2680,7 +2682,9 @@
         mergedParts: null,
         fallback: false,
         groupId: null,
-        subIndex: null
+        subIndex: null,
+        originMergedCount: null,
+        isSeparated: false
       };
       STATE.userClimbs.push(newClimb);
       STATE.userClimbs.sort((a, b) => a.startKm - b.startKm);
@@ -3102,22 +3106,9 @@
           type: 'circle',
           source: 'climb-markers',
           paint: {
-            'circle-radius': [
-              'match', ['get', 'role'],
-              'selected', 10,
-              8
-            ],
-            'circle-color': [
-              'match', ['get', 'kind'],
-              'valley', '#16a34a',
-              'summit', '#dc2626',
-              '#888'
-            ],
-            'circle-stroke-width': [
-              'match', ['get', 'role'],
-              'selected', 4,
-              2.5
-            ],
+            'circle-radius': ['match', ['get', 'role'], 'selected', 10, 8],
+            'circle-color': ['match', ['get', 'kind'], 'valley', '#16a34a', 'summit', '#dc2626', '#888'],
+            'circle-stroke-width': ['match', ['get', 'role'], 'selected', 4, 2.5],
             'circle-stroke-color': '#fff'
           }
         });
@@ -3177,28 +3168,17 @@
       }
     }
 
-    /**
-     * Construit la FeatureCollection de la trace colorée par catégorie.
-     * IMPORTANT : utilise les POINTS ORIGINAUX du fichier GPX (STATE.rawPoints),
-     * pas la grille rééchantillonnée — la carte doit refléter la trace réelle.
-     * La catégorie de chaque point brut est déterminée via sa distance cumulée
-     * (distRaw[i]) comparée aux bornes des catSegments.
-     */
     function buildTraceFeatures() {
       const data = STATE.__lastData;
-      if (!data || !STATE.rawPoints || !STATE.distRaw) {
-        return { type: 'FeatureCollection', features: [] };
-      }
+      if (!data || !STATE.rawPoints || !STATE.distRaw) return { type: 'FeatureCollection', features: [] };
       const catSegments = data.catSegments || [];
+      if (catSegments.length === 0) return { type: 'FeatureCollection', features: [] };
+
       const rawPts = STATE.rawPoints;
       const distRaw = STATE.distRaw;
       const n = rawPts.length;
-      if (catSegments.length === 0 || n < 2) {
-        return { type: 'FeatureCollection', features: [] };
-      }
+      if (n < 2) return { type: 'FeatureCollection', features: [] };
 
-      // Étape 1 : pour chaque point brut, déterminer sa catégorie.
-      // On avance de façon monotone dans catSegments (les deux tableaux sont ordonnés).
       const catOf = new Array(n);
       let segIdx = 0;
       for (let i = 0; i < n; i++) {
@@ -3208,9 +3188,6 @@
         catOf[i] = catSegments[segIdx].key;
       }
 
-      // Étape 2 : grouper les points consécutifs de même catégorie en LineStrings.
-      // Le point de transition est inclus dans les DEUX segments pour assurer
-      // la continuité visuelle (pas de trou entre couleurs).
       const features = [];
       let startIdx = 0;
       for (let i = 1; i <= n; i++) {
@@ -3244,27 +3221,18 @@
       if (src) src.setData(buildTraceFeatures());
     }
 
-    /**
-     * Marqueurs : 
-     * - Si montée sélectionnée appartient à un groupe → afficher TOUS les points vallée/sommet
-     *   des membres du groupe (permet de visualiser les frontières entre segments).
-     * - Sinon → afficher uniquement la montée sélectionnée.
-     */
     function updateMapMarkers() {
       const map = MAP_STATE.map;
       if (!map || !MAP_STATE.ready) return;
       const src = map.getSource('climb-markers');
       if (!src) return;
-
       const features = [];
       const idx = STATE.selectedClimbIdx;
-
       if (idx != null && STATE.userClimbs[idx]) {
         const selected = STATE.userClimbs[idx];
         const gid = selected.groupId;
 
         if (gid != null) {
-          // Afficher TOUS les membres du groupe
           const members = STATE.userClimbs.filter(c => c.groupId === gid);
           for (const m of members) {
             const isSelf = (m === selected);
@@ -3280,7 +3248,6 @@
             });
           }
         } else {
-          // Comportement normal : une seule montée
           features.push({
             type: 'Feature',
             geometry: { type: 'Point', coordinates: latLonAtDist(selected.startKm * 1000) },
@@ -3309,14 +3276,10 @@
       updateMapMarkers();
     }
 
-    /**
-     * Zoom sur une montée. Accepte { startKm, endKm } ou { startDist, endDist }.
-     */
     function zoomMapToClimb(climb, duration = 800) {
       const map = MAP_STATE.map;
       if (!map || !MAP_STATE.ready || !climb) return;
 
-      // Si la montée appartient à un groupe, zoomer sur l'ENSEMBLE du groupe
       if (climb.groupId != null) {
         return zoomMapToGroup(climb.groupId, duration);
       }
@@ -3426,7 +3389,7 @@
           STATE.totalDistRawM = distRaw[distRaw.length - 1];
 
           dbgRaw('──────────────────────────────────────────────────────────', 'dbg-resample');
-          dbgRaw('📐 PIPELINE v3.9.2', 'dbg-resample');
+          dbgRaw('📐 PIPELINE v3.9.6', 'dbg-resample');
           dbgRaw(`   Trace brute : ${rawStats.n} points · longueur ${(STATE.totalDistRawM / 1000).toFixed(3)} km`, 'dbg-resample');
 
           let eleForResample = eleRawOrig;
@@ -3465,7 +3428,9 @@
             mergedParts: c.mergedParts || null,
             fallback: c.fallback || false,
             groupId: null,
-            subIndex: null
+            subIndex: null,
+            originMergedCount: null,
+            isSeparated: false
           }));
           STATE.selectedClimbIdx = null;
           STATE.profileMode = 'full';
@@ -3545,8 +3510,7 @@
       const { stepM, despikeWindowM, despikeThresholdM,
         fenetreAffichageM, fenetrePenteM, fenetreCatM,
         seuilMontee, longueurMin, gapMinM, refinePct,
-        medianWindowM, gaussianSigmaM, plateauRun,
-        exportProfileStepM } = params;
+        medianWindowM, gaussianSigmaM, plateauRun } = params;
 
       const lissageAltPts = Math.max(1, Math.round(fenetreAffichageM / stepM));
       const lissagePentePts = Math.max(1, Math.round(fenetrePenteM / stepM));
@@ -3645,13 +3609,6 @@
         target: plateauUnused ? '0' : null,
         status: plateauRun === 0 ? 'grey' : plateauUnused ? 'orange' : 'green', msg: ''
       };
-      const profileStepGT = exportProfileStepM > longueurMin && longueurMin > 0;
-      diag.exportProfileStepM = {
-        label: 'Pas du profil exporté', effective: `${exportProfileStepM} m`,
-        optimal: `≤ ${longueurMin} m`,
-        target: profileStepGT ? `≤ ${longueurMin} m` : null,
-        status: profileStepGT ? 'orange' : 'green', msg: ''
-      };
 
       const warnings = [];
       if (lissageAltPts < 5) warnings.push({ level: 'red', msg: `Lissage altitude trop court (${lissageAltPts} pts, min 5).` });
@@ -3664,7 +3621,6 @@
       if (gapMinM > 0 && gapMinM < stepM) warnings.push({ level: 'orange', msg: `Écart min. entre montées < Pas.` });
       if (despikeActive && despikeWindowM < 2 * stepM) warnings.push({ level: 'orange', msg: `Anti-pic : fenêtre < 2 × Pas.` });
       if (despikeActive && despikeThresholdM < 5) warnings.push({ level: 'orange', msg: `Anti-pic : seuil < 5 m.` });
-      if (profileStepGT) warnings.push({ level: 'orange', msg: `Pas du profil exporté > Longueur min. pente.` });
 
       return { diag, warnings };
     }
@@ -3704,54 +3660,119 @@
     }
 
     /* =========================================================
-       17. Export JSON
+       17. Export JSON (v3.9.6 — consolidation des groupes)
+       =========================================================
+       RÈGLE : dans le JSON exporté, une montée fusionnée (séparée ou non)
+       apparaît comme UNE SEULE entrée dans climbs[], avec isMerged=true
+       et mergedParts (détail des sous-montées d'origine, bornes ACTUELLES).
+
+       Seul isSeparated diffère :
+       - false = fusionnée non séparée par l'utilisateur
+       - true  = fusionnée séparée par l'utilisateur (les sous-montées
+                 sont ré-agrégées dans mergedParts pour préserver les infos)
+
+       Les champs groupId / subIndex / originMergedCount sont INTERNES
+       (state UI) et ne sont PAS exportés.
        ========================================================= */
-    function buildClimbSlopeProfile(dist, eleDisplay, startIdx, endIdx, profileStepM, catSegments) {
-      const profile = [];
-      const climbStartDist = dist[startIdx];
-      const climbEndDist = dist[endIdx];
-      if (climbEndDist <= climbStartDist || profileStepM <= 0) return profile;
-      const relevantSegs = catSegments.filter(s => s.endDist > climbStartDist && s.startDist < climbEndDist);
-      for (const seg of relevantSegs) {
-        const segStart = Math.max(seg.startDist, climbStartDist);
-        const segEnd = Math.min(seg.endDist, climbEndDist);
-        const segLen = segEnd - segStart;
-        if (segLen <= 0) continue;
-        const nChunks = Math.max(1, Math.ceil(segLen / profileStepM));
-        const chunkLen = segLen / nChunks;
-        for (let c = 0; c < nChunks; c++) {
-          const chunkStartDist = segStart + c * chunkLen;
-          const chunkEndDist = (c === nChunks - 1) ? segEnd : segStart + (c + 1) * chunkLen;
-          const iStart = findIdxAtDist(dist, chunkStartDist);
-          const iEnd = findIdxAtDist(dist, chunkEndDist);
-          if (iEnd <= iStart) continue;
-          let dPlus = 0;
-          for (let k = iStart + 1; k <= iEnd; k++) {
-            const d = eleDisplay[k] - eleDisplay[k - 1];
-            if (d > 0) dPlus += d;
+    function consolidateClimbsForExport(data, totalDistRawM) {
+      const { dist, eleDisplay, climbs } = data;
+
+      function computeMetrics(startIdx, endIdx) {
+        let dPlus = 0;
+        for (let k = startIdx + 1; k <= endIdx; k++) {
+          const d = eleDisplay[k] - eleDisplay[k - 1];
+          if (d > 0) dPlus += d;
+        }
+        const length = dist[endIdx] - dist[startIdx];
+        const avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
+        return {
+          startKm: +(dist[startIdx] / 1000).toFixed(4),
+          endKm: +(dist[endIdx] / 1000).toFixed(4),
+          startProgress: +(dist[startIdx] / totalDistRawM).toFixed(5),
+          endProgress: +(dist[endIdx] / totalDistRawM).toFixed(5),
+          dPlusM: Math.round(dPlus),
+          avgSlopePct: +avgSlope.toFixed(2),
+          altStartM: +eleDisplay[startIdx].toFixed(1),
+          altEndM: +eleDisplay[endIdx].toFixed(1)
+        };
+      }
+
+      const result = [];
+      const seenGroups = new Set();
+
+      for (const c of climbs) {
+        if (c.invalid) continue;
+
+        if (c.groupId != null) {
+          // ─── Montée fusionnée SÉPARÉE (groupe) → consolider ───
+          if (seenGroups.has(c.groupId)) continue;
+          seenGroups.add(c.groupId);
+
+          const members = climbs
+            .filter(x => x.groupId === c.groupId && !x.invalid)
+            .sort((a, b) => a.startDist - b.startDist);
+
+          if (members.length === 0) continue;
+
+          const globalStartIdx = members[0].startIdx;
+          const globalEndIdx = members[members.length - 1].endIdx;
+          if (globalEndIdx <= globalStartIdx) continue;
+
+          const globalMetrics = computeMetrics(globalStartIdx, globalEndIdx);
+          const mergedParts = members.map((m, k) => ({
+            partIndex: k,
+            ...computeMetrics(m.startIdx, m.endIdx)
+          }));
+
+          result.push({
+            ...globalMetrics,
+            mergedCount: members.length - 1,
+            fallback: false,
+            isMerged: true,
+            isSeparated: true,
+            mergedParts
+          });
+        } else {
+          // ─── Montée autonome OU fusionnée non séparée ───
+          const metrics = computeMetrics(c.startIdx, c.endIdx);
+          const isMerged = (c.mergedCount || 0) > 0;
+
+          let mergedPartsArray = null;
+          if (isMerged && c.ref && Array.isArray(c.ref.mergedParts) && c.ref.mergedParts.length >= 2) {
+            mergedPartsArray = c.ref.mergedParts.map((part, k) => {
+              const startIdx = findIdxAtDist(dist, part.startKm * 1000);
+              const endIdx = findIdxAtDist(dist, part.endKm * 1000);
+              if (endIdx <= startIdx) return null;
+              return { partIndex: k, ...computeMetrics(startIdx, endIdx) };
+            }).filter(Boolean);
+            if (mergedPartsArray.length < 2) mergedPartsArray = null;
           }
-          const length = dist[iEnd] - dist[iStart];
-          const avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
-          profile.push({
-            kmStart: +(dist[iStart] / 1000).toFixed(4),
-            kmEnd: +(dist[iEnd] / 1000).toFixed(4),
-            eleStartM: +eleDisplay[iStart].toFixed(1),
-            eleEndM: +eleDisplay[iEnd].toFixed(1),
-            avgSlopePct: +avgSlope.toFixed(2),
-            categoryId: seg.key
+
+          if (isMerged && !mergedPartsArray) {
+            dbgWarn(`⚠ Export: montée fusionnée (mergedCount=${c.mergedCount}) sans mergedParts exploitables — exportée comme fusion sans détail`);
+          }
+
+          result.push({
+            ...metrics,
+            mergedCount: c.mergedCount || 0,
+            fallback: !!c.fallback,
+            isMerged,
+            isSeparated: false,
+            mergedParts: mergedPartsArray
           });
         }
       }
-      return profile;
+
+      result.sort((a, b) => a.startKm - b.startKm);
+      return result;
     }
 
     function buildExportData() {
       if (!STATE.dist || !STATE.rawPoints) return null;
       const data = rebuild();
       if (!data) return null;
-      const { dist, eleDisplay, catSegments, climbs } = data;
+      const { dist, catSegments } = data;
       const params = getParams();
-      const profileStepM = params.exportProfileStepM;
       const totalDistSampledM = dist[dist.length - 1];
       const totalDistRawM = STATE.totalDistRawM || totalDistSampledM;
       const trailingGapM = Math.max(0, Math.round(totalDistRawM - totalDistSampledM));
@@ -3767,25 +3788,27 @@
         dPlusM: Math.round(s.dPlus)
       }));
 
-      const climbFeatures = climbs.filter(c => !c.invalid).map((c, i) => {
-        const slopeProfile = buildClimbSlopeProfile(dist, eleDisplay, c.startIdx, c.endIdx, profileStepM, catSegments);
-        return {
-          index: i,
-          groupId: c.groupId ?? null,
-          subIndex: c.subIndex ?? null,
-          startKm: +(c.startDist / 1000).toFixed(4),
-          endKm: +(c.endDist / 1000).toFixed(4),
-          startProgress: +(c.startDist / totalDistRawM).toFixed(5),
-          endProgress: +(c.endDist / totalDistRawM).toFixed(5),
-          dPlusM: Math.round(c.dPlus),
-          avgSlopePct: +c.avgSlope.toFixed(2),
-          altStartM: +c.altStart.toFixed(1),
-          altEndM: +c.altEnd.toFixed(1),
-          mergedCount: c.mergedCount || 0,
-          fallback: !!c.fallback,
-          slopeProfile, slopeProfileStepM: profileStepM
-        };
-      });
+      const consolidated = consolidateClimbsForExport(data, totalDistRawM);
+
+      const climbFeatures = consolidated.map((c, i) => ({
+        index: i,
+        startKm: c.startKm,
+        endKm: c.endKm,
+        startProgress: c.startProgress,
+        endProgress: c.endProgress,
+        dPlusM: c.dPlusM,
+        avgSlopePct: c.avgSlopePct,
+        altStartM: c.altStartM,
+        altEndM: c.altEndM,
+        mergedCount: c.mergedCount,
+        fallback: c.fallback,
+        isMerged: c.isMerged,
+        isSeparated: c.isSeparated,
+        mergedParts: c.mergedParts
+      }));
+
+      const mergedClimbsCount = climbFeatures.filter(c => c.isMerged).length;
+      const separatedClimbsCount = climbFeatures.filter(c => c.isSeparated).length;
 
       const legendCategories = CATEGORIES.map(c => ({
         id: c.id, label: c.label,
@@ -3797,17 +3820,18 @@
         metadata: {
           file: STATE.fileName || 'trace.gpx',
           exportedAt: new Date().toISOString(),
-          version: '3.9.2',
+          version: '3.9.6',
           totalDistanceKm: +(totalDistRawM / 1000).toFixed(3),
           totalDistanceSampledKm: +(totalDistSampledM / 1000).toFixed(3),
           trailingGapM, stepM: STATE.stepM,
           totalPoints: dist.length,
           segmentsCount: segments.length,
           climbsCount: climbFeatures.length,
-          profileStepM
+          mergedClimbsCount,
+          separatedClimbsCount
         },
         legend: {
-          note: "Bornes hautes exclusives. startProgress/endProgress = fraction 0–1 de la longueur réelle.",
+          note: "Bornes hautes exclusives. startProgress/endProgress = fraction 0–1 de la longueur réelle. Chaque montée fusionnée (isMerged=true) apparaît comme une SEULE entrée dans climbs[], avec mergedParts détaillant les sous-montées d'origine. Le champ isSeparated indique si l'utilisateur a séparé cette fusion dans l'interface (true) ou non (false) — dans les deux cas, la structure et les valeurs restent strictement identiques. Les montées autonomes ont isMerged=false et mergedParts=null.",
           fenetreCatM: params.fenetreCatM,
           longueurMin: params.longueurMin,
           categories: legendCategories
@@ -3830,7 +3854,7 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      dbgInfo(`💾 Export : ${data.segments.length} seg · ${data.climbs.length} montées`);
+      dbgInfo(`💾 Export v3.9.6 : ${data.segments.length} seg · ${data.climbs.length} montées (${data.metadata.mergedClimbsCount} fusionnées dont ${data.metadata.separatedClimbsCount} séparées)`);
     }
 
     /* =========================================================
@@ -3898,7 +3922,9 @@
         mergedParts: c.mergedParts || null,
         fallback: c.fallback || false,
         groupId: null,
-        subIndex: null
+        subIndex: null,
+        originMergedCount: null,
+        isSeparated: false
       }));
       STATE.selectedClimbIdx = null;
       STATE.profileMode = 'full';
@@ -3908,7 +3934,6 @@
       renderAll();
     });
     document.getElementById('btnExportJson').addEventListener('click', exportJson);
-    document.getElementById('exportProfileStepM').addEventListener('input', () => updateDiagnostics());
 
     function updateToggleVisuality(toggleId, checkboxId) {
       const cb = document.getElementById(checkboxId);
@@ -3941,7 +3966,7 @@
     document.getElementById('segmentLogM').addEventListener('input', () => updateDiagnostics());
 
     /* =========================================================
-       20. Mapbox UI + chargement AUTO si token présent
+       20. Mapbox UI
        ========================================================= */
     (function initMapUI() {
       const saved = localStorage.getItem('mapboxToken') || '';
@@ -3985,7 +4010,6 @@
         });
       }
 
-      // ── Chargement automatique de la carte si un token est déjà présent
       if (saved) {
         setMapStatus('Chargement automatique…');
         initMapboxMap(saved)
@@ -4030,7 +4054,7 @@
     updateDiagnostics();
     renderProfile();
 
-    dbgInfo('v3.9.2 — échelle montée 10 m/px · auto-load carte · suppression montées · multi-marqueurs groupe · scroll centré.');
+    dbgInfo('v3.9.6 — export consolidé : une montée fusionnée (séparée ou non) = une seule entrée dans climbs[] avec mergedParts. groupId/subIndex/originMergedCount supprimés du JSON.');
   </script>
 </body>
 

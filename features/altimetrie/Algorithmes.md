@@ -1,7 +1,7 @@
 # Document Algorithmes — GPX Climb Analyzer
 
-**Version** : 3.9.2
-**Date** : 2026-10-17
+**Version** : 3.9.6
+**Date** : 2026-10-18
 **Public** : développeur, mainteneur, auditeur technique
 **Portée** : description exhaustive de tous les algorithmes utilisés dans l'application
 
@@ -45,11 +45,12 @@
 34. [Suppression d'une montée](#34-suppression-dune-montée)
 35. [Création manuelle](#35-création-manuelle)
 36. [Diagnostic de configuration](#36-diagnostic-de-configuration)
-37. [Export JSON](#37-export-json)
-38. [Pipeline complet](#38-pipeline-complet)
-39. [Pipeline de reconstruction](#39-pipeline-de-reconstruction)
-40. [Tableau récapitulatif des complexités](#40-tableau-récapitulatif-des-complexités)
-41. [Choix de conception et alternatives écartées](#41-choix-de-conception)
+37. [Consolidation des montées pour l'export](#37-consolidation-des-montées-pour-lexport)
+38. [Construction de l'export JSON](#38-construction-de-lexport-json)
+39. [Pipeline complet](#39-pipeline-complet)
+40. [Pipeline de reconstruction](#40-pipeline-de-reconstruction)
+41. [Tableau récapitulatif des complexités](#41-tableau-récapitulatif-des-complexités)
+42. [Choix de conception et alternatives écartées](#42-choix-de-conception)
 
 ---
 
@@ -223,13 +224,14 @@ Le pointeur `startPtr` est monotone (jamais décrémenté), donc le coût est li
 | Trace éditeur (MNT 30 m) | **50 m** |
 | Trace très longue (> 100 km) | 75–100 m |
 
-**Défaut v3.9.2** : **50 m**.
+**Défaut v3.9.6** : **50 m**.
 
 ### 2.7 Notes importantes
 
 - **`totalDistSampledM = dist[m−1]`** : longueur couverte par la grille
 - **`trailingGapM = totalDistRawM − totalDistSampledM`** : queue de trace ignorée (le dernier multiple de `stepM` peut être en deçà du dernier point)
 - **Depuis v3.9.2**, la trace affichée sur la carte utilise les **points bruts**, pas la grille. Le `trailingGapM` n'affecte donc plus la fidélité visuelle de la carte, seulement la longueur des analyses.
+- **Depuis v3.9.6**, `stepM` n'a plus qu'un rôle indirect dans l'export : il est présent dans `metadata.stepM`, mais le découpage du JSON n'utilise plus de `slopeProfile` ni de `exportProfileStepM`.
 
 ### 2.8 Avantages par rapport à l'interpolation
 
@@ -309,7 +311,7 @@ FONCTION plateauCorrect(ele, minRun, tolerance):
 
 - **S'applique avant le rééchantillonnage** (sur les données brutes)
 - Optionnel, contrôlé par `plateauRun` (0 = désactivé)
-- **Défaut v3.9.2** : `plateauRun = 6`, `tolerance = 1.0 m`
+- **Défaut v3.9.6** : `plateauRun = 6`, `tolerance = 1.0 m`
 - Après rééchantillonnage à 50 m, les marches MNT de 30 m sont diluées → la correction devient souvent inutile
 - **Risque sur les vrais arrêts GPS** : si l'altitude reste constante pendant un arrêt, le filtre va créer à tort une pente artificielle
 
@@ -765,7 +767,7 @@ FONCTION gaussianFilter(arr, sigma):
 
 - Appliqué **après le Savitzky-Golay, avant l'ancrage**
 - σ en mètres converti en σ en points : `sigmaPts = sigmaM / stepM`
-- Défaut v3.9.2 : σ = 75 m (≈ 1.5 point à stepM=50)
+- Défaut v3.9.6 : σ = 75 m (≈ 1.5 point à stepM=50)
 - **Inopérant si σM / stepM < 0.5** — d'où le warning diagnostic
 
 ### 8.6 Choix de conception
@@ -814,7 +816,7 @@ FONCTION medianFilter(arr, win):
 ### 9.4 Notes
 
 - **Première étape** du pipeline de filtrage (avant SG)
-- Défaut v3.9.2 : `medianWindowM = 0` (désactivé)
+- Défaut v3.9.6 : `medianWindowM = 0` (désactivé)
 - **Depuis v3.3, l'anti-pic Hampel rend le filtre médian largement redondant**. Recommandation : le désactiver si anti-pic actif.
 
 ### 9.5 Choix de conception
@@ -1417,7 +1419,12 @@ FONCTION mergeShortSegments(raw, dist, minLen):
 
 - La fusion « vers le voisin le plus long » évite de créer des déséquilibres (un segment de 10 m absorbé par un de 50 m plutôt que par un de 3000 m)
 - **Le point frontière** (là où la catégorie change) appartient aux deux segments adjacents — voir §21
-- **Défaut v3.9.2** : `longueurMin = 200 m`
+- **Défaut v3.9.6** : `longueurMin = 200 m`
+- **Depuis v3.9.4/v3.9.6** : ce paramètre n'a **plus d'impact sur l'export** (il n'y a plus de `slopeProfile` à découper). Il affecte uniquement la carte et le profil.
+
+### 20.7 Impact sur l'export v3.9.6
+
+`longueurMin` apparaît dans `legend.longueurMin`, mais n'influence que `segments[]` (fusion des micro-segments). Les `climbs[]` sont indépendants.
 
 ---
 
@@ -1462,6 +1469,7 @@ FONCTION segmentByCategory(slopeForCat, dist, ele, minLen):
 
 - La somme des longueurs des segments après fusion **égale exactement la distance totale**
 - C'est cette liste (`catSegments`) qui est utilisée à la fois par la carte et par le widget profil, garantissant leur **cohérence visuelle**
+- **Depuis v3.9.6**, `catSegments` alimente exclusivement `segments[]` dans l'export. Il n'y a plus de `slopeProfile` (retiré en v3.9.4).
 
 ### 21.6 Choix de conception
 
@@ -1729,10 +1737,11 @@ lastEnd ← newEnd
 ### 25.6 Notes
 
 - `gapMinM = 0` → désactive complètement
-- **Défaut v3.9.2** : 250 m
+- **Défaut v3.9.6** : 250 m
 - Le compteur `mergedCount` est affiché avec l'indicateur `⊕`
 - **Conséquence** : les bornes finales peuvent avoir une pente moyenne plus faible que la montée initiale → d'où la validation stricte (§26)
 - **`_mergedParts`** : le **mécanisme clé de la séparation** ultérieure (§31). Les bornes conservées sont celles **avant** extension par `argminRange`/`argmaxRange`, ce qui permet de retrouver les segments réels
+- **Impact sur l'export v3.9.6** : `mergedParts` est directement exporté dans `climbs[i].mergedParts` (voir §37)
 
 ### 25.7 Choix de conception
 
@@ -1827,6 +1836,7 @@ FONCTION validerEtReplier(refined, dist, eleDisplay):
 - Le log debug trace chaque repli en détail
 - Garantit l'invariant : **pour toute montée affichée, `avgSlope ≥ seuil(length)`**
 - **v3.9.0** : `_mergedParts` est préservé à travers la validation, pour permettre la séparation ultérieure
+- **v3.9.6** : `_mergedParts` est directement exporté dans `climbs[i].mergedParts` (voir §37)
 
 ### 26.7 Choix de conception
 
@@ -2152,7 +2162,9 @@ FONCTION splitMergedClimb(mergedIdx):
     mergedCount: 0, mergedParts: null,
     fallback: false,
     groupId: gid,
-    subIndex: k + 1
+    subIndex: k + 1,
+    originMergedCount: originCount,
+    isSeparated: true
   })
 
   POUR chaque nc: userClimbs.push(nc)
@@ -2179,6 +2191,7 @@ FONCTION splitMergedClimb(mergedIdx):
 - **Le zoom carte** couvre **l'ensemble du groupe** (pas seulement le premier membre)
 - **v3.9.0** : la séparation était locale (pas de groupe persistant)
 - **v3.9.1** : ajout de `groupId` + `subIndex` pour permettre la refusion
+- **v3.9.6** : `isSeparated` est positionné à `true` sur les sous-montées (cette info est utilisée par la consolidation d'export — voir §37)
 
 ### 31.6 Choix de conception
 
@@ -2223,7 +2236,9 @@ FONCTION refuseGroup(gid):
     mergedCount: members.length − 1,
     mergedParts,
     fallback: false,
-    groupId: null, subIndex: null
+    groupId: null, subIndex: null,
+    originMergedCount: null,
+    isSeparated: false
   }
 
   userClimbs.push(merged)
@@ -2245,14 +2260,15 @@ FONCTION refuseGroup(gid):
 - Le nouveau `mergedCount` = nombre de fusions = nombre de membres − 1
 - La montée redevient **séparable** avec ✂
 - **Le groupe `gid` est libéré** (pas réutilisable mais ne crée pas de conflit car `nextGroupId` est monotone)
+- **v3.9.6** : `isSeparated` repasse à `false` sur la montée refusionnée
 
 ### 32.6 Scénario complet
 
 ```
 1. Détection → montée #3 fusionnée (mergedCount=2, mergedParts conservés)
-2. Utilisateur clique ✂ Séparer → groupe #5 créé, #5.1 et #5.2
+2. Utilisateur clique ✂ Séparer → groupe #5 créé, #5.1 et #5.2 (isSeparated=true)
 3. Utilisateur édite les bornes de #5.2 (drag)
-4. Utilisateur clique 🔗 Refusionner → #3 reconstituée
+4. Utilisateur clique 🔗 Refusionner → #3 reconstituée (isSeparated=false)
    mergedParts = [
      { startKm: #5.1.startKm, endKm: #5.1.endKm },
      { startKm: #5.2.startKm_edité, endKm: #5.2.endKm_edité }
@@ -2291,6 +2307,8 @@ FONCTION normalizeGroups():
     SI c.groupId ≠ null ET counts[c.groupId] < 2:
       c.groupId ← null
       c.subIndex ← null
+      c.originMergedCount ← null
+      c.isSeparated ← false
 ```
 
 ### 33.4 Complexité
@@ -2309,6 +2327,7 @@ FONCTION normalizeGroups():
 - **Ne supprime jamais de montée** — elle retire juste le marqueur de groupe
 - La montée redevient **autonome** : numérotation `#N` normale, plus de bouton 🔗 Refusionner
 - Silencieux (pas de log debug sauf en cas de groupe effectivement dissous)
+- **v3.9.6** : `isSeparated` est remis à `false` pour que la consolidation d'export traite la montée comme une montée autonome
 
 ---
 
@@ -2341,6 +2360,8 @@ FONCTION deleteClimb(idx):
       POUR chaque c DANS siblings:
         c.groupId ← null
         c.subIndex ← null
+        c.originMergedCount ← null
+        c.isSeparated ← false
 
   // ─── Ajuster la sélection ───
   SI selectedClimbIdx === idx:
@@ -2366,6 +2387,10 @@ FONCTION deleteClimb(idx):
   - Si c'est la montée supprimée qui était sélectionnée → désélection
   - Si l'index sélectionné était **après** la montée supprimée → décrémente
   - Si l'index sélectionné était **avant** → inchangé
+- **Impact sur l'export v3.9.6** :
+  - Montée autonome supprimée → disparaît de `climbs[]`
+  - Membre de groupe supprimé → la montée consolidée reste, `mergedParts` est recalculé, `mergedCount` décrémenté
+  - Groupe dissous → la montée restante devient autonome (`isMerged: false`, `mergedParts: null`)
 
 ### 34.6 Cas d'usage
 
@@ -2452,7 +2477,8 @@ FONCTION addManualClimb(valleyKm, summitKm):
               autoStartKm: null, autoEndKm: null,
               refineM: null, candidateLen: null,
               mergedCount: 0, mergedParts: null,
-              fallback: false, groupId: null, subIndex: null}
+              fallback: false, groupId: null, subIndex: null,
+              originMergedCount: null, isSeparated: false}
 
   userClimbs.push(newClimb)
   userClimbs.sort(par startKm)
@@ -2483,6 +2509,7 @@ FONCTION addManualClimb(valleyKm, summitKm):
 - **`refineM` à `null`** : la colonne Extrema affiche `—` en gris italique
 - **La nouvelle montée est sélectionnée** automatiquement et la carte zoomée dessus
 - **`groupId` à `null`** : montée autonome (pas de groupe)
+- **v3.9.6** : `isSeparated` est positionné à `false` → la consolidation d'export traite la montée comme une montée autonome standard (`isMerged: false`, `mergedParts: null`)
 
 ### 35.10 Choix de conception
 
@@ -2536,10 +2563,11 @@ FONCTION computeDiagnostics(params):
   SI gapMinM > 0 ET gapMinM < stepM: warnings.push({level: 'orange', msg: '...'})
   SI despikeActive ET despikeWindowM < 2 × stepM: warnings.push({level: 'orange', msg: '...'})
   SI despikeActive ET despikeThresholdM < 5: warnings.push({level: 'orange', msg: '...'})
-  SI exportProfileStepM > longueurMin: warnings.push({level: 'orange', msg: '...'})
 
   RETOURNER { diag, warnings }
 ```
+
+**Note v3.9.4/v3.9.6** : le warning historique `SI exportProfileStepM > longueurMin` a été **retiré** avec la suppression du paramètre `exportProfileStepM`. Le nombre total de règles de cohérence passe de 9 à **8**.
 
 ### 36.3 Valeurs optimales
 
@@ -2564,7 +2592,7 @@ FONCTION computeDiagnostics(params):
 
 ### 36.5 Complexité
 
-- Temps : **O(1)** (calculs sur 15 paramètres)
+- Temps : **O(1)** (calculs sur 13 paramètres)
 - Espace : **O(1)**
 
 ### 36.6 Notes
@@ -2572,6 +2600,7 @@ FONCTION computeDiagnostics(params):
 - Le diagnostic est recalculé à chaque `input` sur un champ (debounce 250 ms)
 - Les warnings sont affichés dans un panneau dédié
 - Le statut global (🟢/🟠/🔴) résume l'état : rouge si au moins un rouge, orange si au moins un orange, vert sinon
+- **v3.9.4/v3.9.6** : 13 paramètres diagnostiqués au lieu de 14 (le paramètre `exportProfileStepM` a été retiré)
 
 ### 36.7 Choix de conception
 
@@ -2584,99 +2613,558 @@ FONCTION computeDiagnostics(params):
 
 ---
 
-## 37. Export JSON
+## 37. Consolidation des montées pour l'export
 
 ### 37.1 Objet
 
-Produire un fichier JSON contenant les segments de catégorie et les montées, pour consommation externe (affichage cartographique Mapbox, visuels de montée, etc.).
+Transformer `rebuild().climbs` (état UI avec groupes, sous-montées, `groupId`, `subIndex`) en une **liste plate de montées logiques** pour l'export JSON consolidé (v3.9.6).
 
-### 37.2 Structure
+### 37.2 Motivation
+
+**Problème** : depuis la v3.9.1, l'UI permet de séparer une montée fusionnée en sous-montées, de les éditer individuellement, puis de les refusionner. L'état interne est donc complexe :
+- Une montée fusionnée **séparée** est un groupe de N sous-montées avec `groupId`, `subIndex`, `originMergedCount`
+- Une montée fusionnée **non séparée** est une montée unique avec `mergedCount > 0` et `mergedParts[]`
+- Une montée **autonome** est une montée simple sans métadonnées de fusion
+
+**Un consommateur externe du JSON** n'a pas à connaître cette complexité UI. Il veut :
+- Une liste de montées **logiques** (pas de groupes)
+- Pour chaque montée, ses métriques globales (D+, pente moyenne)
+- Pour les montées fusionnées, le détail des sous-montées d'origine (`mergedParts`)
+- Un flag `isSeparated` s'il veut savoir si l'utilisateur a séparé dans l'UI
+
+**Solution** : la consolidation. Une montée fusionnée (séparée ou non) = **une seule entrée** dans `climbs[]`.
+
+### 37.3 Principe fondamental
+
+**Règle cardinale** : dans le JSON exporté, **une montée fusionnée (séparée ou non) apparaît comme UNE SEULE entrée dans `climbs[]`**.
+
+Corollaires :
+- Les champs `groupId`, `subIndex`, `originMergedCount` sont **internes à l'UI** et **ne sont pas exportés**
+- `isMerged` est `true` si la montée résulte d'une fusion
+- `isSeparated` est `true` si l'utilisateur a séparé cette fusion dans l'UI
+- `mergedParts` reflète les **bornes actuelles** des sous-montées (sync avec l'UI)
+- Si l'utilisateur a édité une sous-montée après séparation, `mergedParts` est **recalculé** avec les nouvelles bornes et la montée globale recalcule `dPlusM`/`avgSlopePct`/`altStartM`/`altEndM` en conséquence
+
+### 37.4 Algorithme
+
+```
+FONCTION consolidateClimbsForExport(data, totalDistRawM):
+  dist ← data.dist
+  eleDisplay ← data.eleDisplay
+  climbs ← data.climbs
+
+  result ← []
+  seenGroups ← Set()
+
+  POUR chaque c DANS climbs:
+    SI c.invalid: CONTINUER
+
+    SI c.groupId ≠ null:
+      // ─── Montée fusionnée SÉPARÉE (groupe UI) → consolider ───
+      SI seenGroups.has(c.groupId): CONTINUER
+      seenGroups.add(c.groupId)
+
+      members ← climbs
+        .filter(x → x.groupId = c.groupId ET NOT x.invalid)
+        .sort((a, b) → a.startDist − b.startDist)
+
+      SI |members| = 0: CONTINUER
+
+      globalStartIdx ← members[0].startIdx
+      globalEndIdx ← members[|members|−1].endIdx
+      SI globalEndIdx ≤ globalStartIdx: CONTINUER
+
+      globalMetrics ← computeMetrics(globalStartIdx, globalEndIdx)
+
+      mergedParts ← members.map((m, k) → {
+        partIndex: k,
+        ...computeMetrics(m.startIdx, m.endIdx)
+      })
+
+      result.push({
+        ...globalMetrics,
+        mergedCount: |members| − 1,
+        fallback: false,
+        isMerged: true,
+        isSeparated: true,
+        mergedParts
+      })
+
+    SINON:
+      // ─── Montée autonome OU fusion NON séparée ───
+      metrics ← computeMetrics(c.startIdx, c.endIdx)
+      isMerged ← (c.mergedCount || 0) > 0
+
+      mergedPartsArray ← null
+      SI isMerged ET c.ref.mergedParts EST un array ET |c.ref.mergedParts| ≥ 2:
+        mergedPartsArray ← c.ref.mergedParts
+          .map((part, k) → {
+            sIdx ← findIdxAtDist(dist, part.startKm × 1000)
+            eIdx ← findIdxAtDist(dist, part.endKm × 1000)
+            SI eIdx ≤ sIdx: RETOURNER null
+            RETOURNER {partIndex: k, ...computeMetrics(sIdx, eIdx)}
+          })
+          .filter(NOT null)
+        SI |mergedPartsArray| < 2: mergedPartsArray ← null
+
+      SI isMerged ET mergedPartsArray = null:
+        dbgWarn("Montée fusionnée sans mergedParts exploitables")
+
+      result.push({
+        ...metrics,
+        mergedCount: c.mergedCount || 0,
+        fallback: !!c.fallback,
+        isMerged,
+        isSeparated: false,
+        mergedParts: mergedPartsArray
+      })
+
+  // Tri par startKm croissant + réassignation des index
+  result.sort((a, b) → a.startKm − b.startKm)
+  result.forEach((c, i) → c.index ← i)
+
+  RETOURNER result
+```
+
+### 37.5 Fonction `computeMetrics`
+
+```
+FONCTION computeMetrics(startIdx, endIdx):
+  dPlus ← 0
+  POUR k DE startIdx+1 À endIdx:
+    d ← eleDisplay[k] − eleDisplay[k−1]
+    SI d > 0: dPlus ← dPlus + d
+
+  length ← dist[endIdx] − dist[startIdx]
+  avgSlope ← (length > 0) ? (dPlus / length) × 100 : 0
+
+  RETOURNER {
+    startKm:       +(dist[startIdx] / 1000).toFixed(4),
+    endKm:         +(dist[endIdx] / 1000).toFixed(4),
+    startProgress: +(dist[startIdx] / totalDistRawM).toFixed(5),
+    endProgress:   +(dist[endIdx] / totalDistRawM).toFixed(5),
+    dPlusM:        Math.round(dPlus),
+    avgSlopePct:   +avgSlope.toFixed(2),
+    altStartM:     +eleDisplay[startIdx].toFixed(1),
+    altEndM:       +eleDisplay[endIdx].toFixed(1)
+  }
+```
+
+### 37.6 Les 3 cas d'usage
+
+#### 37.6.1 Cas 1 — Montée autonome
+
+**État UI** :
+```
+#1  km 3.420
+Long. 4.7 km  D+ 385 m  8.2%
+mergedCount = 0, groupId = null
+```
+
+**Export** :
+```json
+{
+  "index": 0,
+  "startKm": 3.42,
+  "endKm": 8.12,
+  "dPlusM": 385,
+  "avgSlopePct": 8.2,
+  "mergedCount": 0,
+  "fallback": false,
+  "isMerged": false,
+  "isSeparated": false,
+  "mergedParts": null
+}
+```
+
+#### 37.6.2 Cas 2 — Fusion non séparée
+
+**État UI** :
+```
+#1 ⊕ 1  km 3.420  ✂ Séparer
+Long. 4.7 km  D+ 385 m  8.2%
+mergedCount = 1, mergedParts = [{startKm: 3.42, endKm: 5.65}, {startKm: 5.88, endKm: 8.12}]
+```
+
+**Export** :
+```json
+{
+  "index": 0,
+  "startKm": 3.42,
+  "endKm": 8.12,
+  "dPlusM": 385,
+  "avgSlopePct": 8.2,
+  "mergedCount": 1,
+  "fallback": false,
+  "isMerged": true,
+  "isSeparated": false,
+  "mergedParts": [
+    { "partIndex": 0, "startKm": 3.42, "endKm": 5.65, "dPlusM": 178, "avgSlopePct": 7.98, ... },
+    { "partIndex": 1, "startKm": 5.88, "endKm": 8.12, "dPlusM": 207, "avgSlopePct": 8.39, ... }
+  ]
+}
+```
+
+#### 37.6.3 Cas 3 — Fusion séparée (groupe UI)
+
+**État UI** :
+```
+🔗 GROUPE #3 · 2 montées (issu d'une fusion de 2)
+#3.1 🔗 3  km 3.420  🔗 Refusionner
+#3.2 🔗 3  km 5.880  🔗 Refusionner
+groupId = 3, subIndex = 1 ou 2, isSeparated = true
+```
+
+**Export** :
+```json
+{
+  "index": 0,
+  "startKm": 3.42,
+  "endKm": 8.12,
+  "dPlusM": 385,
+  "avgSlopePct": 8.2,
+  "mergedCount": 1,
+  "fallback": false,
+  "isMerged": true,
+  "isSeparated": true,
+  "mergedParts": [
+    { "partIndex": 0, "startKm": 3.42, "endKm": 5.65, "dPlusM": 178, "avgSlopePct": 7.98, ... },
+    { "partIndex": 1, "startKm": 5.88, "endKm": 8.12, "dPlusM": 207, "avgSlopePct": 8.39, ... }
+  ]
+}
+```
+
+**Différence avec le cas 2** : `isSeparated: true`. **Tous les autres champs sont identiques.**
+
+### 37.7 Cas d'usage avancé — édition + refusion
+
+L'utilisateur sépare, édite #3.2 (drag de 8.12 → 8.50), refusionne, exporte.
+
+**État UI final** :
+```
+#1 ⊕ 1  km 3.420  ✂ Séparer
+Long. 4.58 km  D+ 402 m  8.26%
+mergedCount = 1, mergedParts = [{startKm: 3.42, endKm: 5.65}, {startKm: 5.88, endKm: 8.50}]
+```
+
+**Export** :
+```json
+{
+  "index": 0,
+  "startKm": 3.42,
+  "endKm": 8.50,
+  "dPlusM": 402,
+  "avgSlopePct": 8.26,
+  "mergedCount": 1,
+  "fallback": false,
+  "isMerged": true,
+  "isSeparated": false,
+  "mergedParts": [
+    { "partIndex": 0, "startKm": 3.42, "endKm": 5.65, "dPlusM": 178, "avgSlopePct": 7.98, ... },
+    { "partIndex": 1, "startKm": 5.88, "endKm": 8.50, "dPlusM": 224, "avgSlopePct": 8.54, ... }
+  ]
+}
+```
+
+**Points clés** :
+- `isSeparated: false` (retour à l'état fusionné)
+- `mergedParts[1].endKm = 8.50` (l'édition a été **conservée**)
+- `endKm = 8.50` (borne globale cohérente)
+- `dPlusM = 402` (recalculé sur les nouvelles bornes)
+- `avgSlopePct = 8.26` (recalculé)
+- Les métriques globales sont **cohérentes** avec les bornes éditées
+
+### 37.8 Propriétés garanties
+
+Quel que soit le cheminement UI (fusion → séparation → édition → refusion → re-séparation → …), la consolidation garantit :
+
+1. **Une montée logique = une entrée** dans `climbs[]`
+2. **`isMerged` reflète l'origine** : `true` si la montée provient d'une fusion
+3. **`isSeparated` reflète l'état UI actuel** : `true` si l'utilisateur a séparé, `false` sinon
+4. **`mergedParts` est toujours présent** si `isMerged = true`, avec au moins 2 sous-montées
+5. **`mergedParts` reflète les bornes actuelles** (éditions incluses)
+6. **Les métriques globales sont cohérentes** avec les bornes globales
+7. **Aucun champ UI n'est exporté** : pas de `groupId`, `subIndex`, `originMergedCount`
+8. **Les `partIndex` sont séquentiels** : 0, 1, 2, … dans l'ordre des `startKm`
+
+### 37.9 Complexité
+
+- Temps : **O(m × k)** où m = nombre de montées, k = nombre moyen de membres par groupe
+- Espace : **O(m × k)** pour les `mergedParts` exportés
+
+En pratique : m ≈ 10, k ≈ 2–3 → ~30 opérations, négligeable.
+
+### 37.10 Notes
+
+- La fonction est appelée **une seule fois** par export, juste avant la sérialisation JSON
+- Elle opère sur `data = rebuild()` qui est **déjà à jour** (les éditions UI sont reflétées dans `userClimbs` avant l'appel)
+- Le tri final par `startKm` garantit que les `index` sont dans l'ordre géographique
+- **Cas dégénéré** : si `mergedParts` d'une fusion non séparée devient inexploitable (< 2 entrées après filtrage), un warning est loggé et la montée est exportée comme fusion **sans détail**
+
+### 37.11 Choix de conception
+
+| Critère | Export par sous-montée | **Export consolidé (retenu v3.9.6)** |
+|---|---|---|
+| Cohérence avec la logique métier | ❌ | ✅ |
+| Une montée fusionnée = une entrée | ❌ | ✅ |
+| `groupId`/`subIndex` exportés | ⚠️ | ❌ (internes) |
+| `isSeparated` explicite | ❌ | ✅ |
+| `mergedParts` toujours présent | ⚠️ | ✅ |
+| Taille du JSON | ⚠️ Plus grosse | ✅ Plus compacte |
+| **Retenu** | ❌ | ✅ |
+
+**Alternative écartée** : exporter chaque sous-montée séparément comme une entrée `climbs[]`. Rejeté car :
+- Un consommateur qui affiche `climbs[]` verrait 3 montées là où l'utilisateur en voit 1 dans l'UI
+- Le D+ total serait dupliqué (une fois par sous-montée + une fois en cumul si on ajoutait une entrée parent)
+- La sémantique métier est « une montée = un col » (ou un enchaînement cohérent), pas « une montée = chaque fragment »
+
+---
+
+## 38. Construction de l'export JSON
+
+### 38.1 Objet
+
+Produire le fichier JSON consolidé final à partir de l'état courant (`dist`, `eleDisplay`, `catSegments`, `climbs`), en utilisant la consolidation du §37.
+
+### 38.2 Structure complète
 
 ```json
 {
   "metadata": {
     "file": "trace.gpx",
-    "exportedAt": "ISO8601",
-    "version": "3.9.2",
-    "totalDistanceKm": 4.28,
-    "totalDistanceSampledKm": 4.25,
-    "trailingGapM": 30,
+    "exportedAt": "2026-10-18T14:32:15.123Z",
+    "version": "3.9.6",
+    "totalDistanceKm": 110.45,
+    "totalDistanceSampledKm": 110.40,
+    "trailingGapM": 50,
     "stepM": 50,
-    "totalPoints": 86,
-    "segmentsCount": 4,
-    "climbsCount": 1,
-    "profileStepM": 50
+    "totalPoints": 2209,
+    "segmentsCount": 47,
+    "climbsCount": 3,
+    "mergedClimbsCount": 1,
+    "separatedClimbsCount": 0
   },
-  "legend": {
-    "note": "...",
-    "fenetreCatM": 100,
-    "longueurMin": 200,
-    "categories": [...]
-  },
-  "segments": [...],
-  "climbs": [...]
+  "legend": { ... },
+  "segments": [ ... ],
+  "climbs": [ ... ]
 }
 ```
 
-### 37.3 Nouveautés v3.9.1
+### 38.3 Pseudocode
 
-Ajout des champs `groupId` et `subIndex` dans chaque `climb`.
+```
+FONCTION buildExportData():
+  SI !dist OU !rawPoints: RETOURNER null
 
-### 37.4 Découpage `slopeProfile`
+  data ← rebuild()
+  SI !data: RETOURNER null
 
-Pour chaque montée :
+  params ← getParams()
+  totalDistSampledM ← dist[|dist|−1]
+  totalDistRawM ← STATE.totalDistRawM || totalDistSampledM
+  trailingGapM ← max(0, round(totalDistRawM − totalDistSampledM))
 
-1. Identifier les segments globaux intersectant la montée
-2. Pour chaque segment intersectant :
-   - `segStart = max(seg.startDist, climbStartDist)`
-   - `segEnd = min(seg.endDist, climbEndDist)`
-   - `nChunks = max(1, ceil(segLen / profileStepM))`
-   - `chunkLen = segLen / nChunks`
-3. Pour chaque tranche :
-   - `kmStart`/`kmEnd` = bornes réelles
-   - `eleStartM`/`eleEndM` = altitudes lissées ancrées
-   - `avgSlopePct` = pente physique D+/longueur
-   - `categoryId` = **hérité du segment parent**
+  // ─── Segments (inchangé depuis v3.7) ───
+  segments ← data.catSegments.map((s, i) → ({
+    index: i,
+    startKm: +(s.startDist / 1000).toFixed(4),
+    endKm:   +(s.endDist   / 1000).toFixed(4),
+    startProgress: +(s.startDist / totalDistRawM).toFixed(5),
+    endProgress:   +(s.endDist   / totalDistRawM).toFixed(5),
+    categoryId: s.key,
+    avgSlopePct: +s.avgSlope.toFixed(2),
+    dPlusM: Math.round(s.dPlus)
+  }))
 
-**Propriété garantie** : aucune tranche ne traverse une frontière de segment.
+  // ─── Montées (CONSOLIDÉES — §37) ───
+  consolidated ← consolidateClimbsForExport(data, totalDistRawM)
 
-### 37.5 Contrat d'utilisation des progressions
+  climbFeatures ← consolidated.map((c, i) → ({
+    index: i,
+    startKm: c.startKm,
+    endKm: c.endKm,
+    startProgress: c.startProgress,
+    endProgress: c.endProgress,
+    dPlusM: c.dPlusM,
+    avgSlopePct: c.avgSlopePct,
+    altStartM: c.altStartM,
+    altEndM: c.altEndM,
+    mergedCount: c.mergedCount,
+    fallback: c.fallback,
+    isMerged: c.isMerged,
+    isSeparated: c.isSeparated,
+    mergedParts: c.mergedParts
+  }))
 
-`startProgress` et `endProgress` sont des fractions 0–1 de la **longueur réelle** de la trace (`metadata.totalDistanceKm`), directement utilisables pour construire un `line-gradient` Mapbox :
+  // ─── Compteurs metadata ───
+  mergedClimbsCount ← climbFeatures.filter(c → c.isMerged).length
+  separatedClimbsCount ← climbFeatures.filter(c → c.isSeparated).length
 
-```javascript
-map.addLayer({
-  id: 'trace-colored',
-  type: 'line',
-  source: 'trace',
-  paint: {
-    'line-width': 5,
-    'line-gradient': ['interpolate', ['linear'], ['line-progress'], ...stops]
+  // ─── Légende ───
+  legendCategories ← CATEGORIES.map(c → ({
+    id: c.id, label: c.label,
+    minPct: isFinite(c.min) ? c.min : null,
+    maxPct: isFinite(c.max) ? c.max : null
+  }))
+
+  RETOURNER {
+    metadata: {
+      file: STATE.fileName || 'trace.gpx',
+      exportedAt: new Date().toISOString(),
+      version: '3.9.6',
+      totalDistanceKm: +(totalDistRawM / 1000).toFixed(3),
+      totalDistanceSampledKm: +(totalDistSampledM / 1000).toFixed(3),
+      trailingGapM, stepM: STATE.stepM,
+      totalPoints: |dist|,
+      segmentsCount: |segments|,
+      climbsCount: |climbFeatures|,
+      mergedClimbsCount,
+      separatedClimbsCount
+    },
+    legend: {
+      note: "Bornes hautes exclusives. ...",
+      fenetreCatM: params.fenetreCatM,
+      longueurMin: params.longueurMin,
+      categories: legendCategories
+    },
+    segments,
+    climbs: climbFeatures
   }
-});
 ```
 
-Pour éviter les dégradés progressifs entre deux stops, répéter la même couleur au début et à la fin de chaque segment.
+### 38.4 Champs par section
 
-### 37.6 Complexité
+#### 38.4.1 `metadata`
 
-- Temps : **O(m)** pour les segments + **O(m × k)** pour les profils (k = tranches par montée)
-- Espace : **O(m × k)**
-
-### 37.7 Choix de conception
-
-| Critère | Format plat | FeatureCollection |
+| Champ | Type | Description |
 |---|---|---|
-| Taille | ✅ Compact | ❌ Verbeux |
-| Intégration Mapbox directe | ✅ | ⚠️ Nécessite transformation |
-| Lisibilité | ✅ | ⚠️ Imbriqué |
-| **Retenu (v3.7.2)** | ✅ | ❌ |
+| `file` | string | Nom du fichier GPX d'origine |
+| `exportedAt` | ISO8601 | Date/heure de l'export |
+| `version` | string | Version de l'application (`"3.9.6"`) |
+| `totalDistanceKm` | float | Longueur réelle de la trace (`totalDistRawM / 1000`) |
+| `totalDistanceSampledKm` | float | Longueur couverte par la grille resamplée |
+| `trailingGapM` | int | Queue de trace ignorée (mètres) |
+| `stepM` | float | Pas de rééchantillonnage utilisé |
+| `totalPoints` | int | Nombre de points dans la grille resamplée |
+| `segmentsCount` | int | Nombre de segments de catégorie |
+| `climbsCount` | int | Nombre de montées **logiques** (entrées dans `climbs[]`) |
+| 🆕 `mergedClimbsCount` | int | Nombre de montées avec `isMerged: true` |
+| 🆕 `separatedClimbsCount` | int | Nombre de montées avec `isSeparated: true` |
+
+**Note v3.9.4/v3.9.6** : le champ `profileStepM` (ancien) a été **supprimé** avec `slopeProfile`.
+
+#### 38.4.2 `legend`
+
+| Champ | Type | Description |
+|---|---|---|
+| `note` | string | Texte explicatif du contrat |
+| `fenetreCatM` | float | Valeur de `Fenêtre de calcul pente` |
+| `longueurMin` | float | Valeur de `Longueur min. pente` |
+| `categories` | array | Liste des 8 catégories avec bornes |
+
+**Note v3.9.4/v3.9.6** : le champ `exportProfileStepM` (ancien) a été **supprimé** de `legend`.
+
+#### 38.4.3 `segments[]` (inchangé depuis v3.7)
+
+| Champ | Type | Description |
+|---|---|---|
+| `index` | int | Index du segment (0-based) |
+| `startKm` | float | Début du segment (km) |
+| `endKm` | float | Fin du segment (km) |
+| `startProgress` | float | Fraction 0–1 de la longueur réelle |
+| `endProgress` | float | Fraction 0–1 de la longueur réelle |
+| `categoryId` | string | `dh3` / `dh2` / `dh1` / `pl` / `up1` / `up2` / `up3` / `up4` |
+| `avgSlopePct` | float | Pente moyenne pondérée par la distance |
+| `dPlusM` | int | D+ cumulé sur le segment |
+
+#### 38.4.4 `climbs[]` (v3.9.6)
+
+Voir §37 pour l'algorithme de production. Chaque entrée :
+
+| Champ | Type | Description |
+|---|---|---|
+| `index` | int | Index de la montée (0-based, trié par `startKm`) |
+| `startKm` | float | Début de la montée logique |
+| `endKm` | float | Fin de la montée logique |
+| `startProgress` | float | Fraction 0–1 |
+| `endProgress` | float | Fraction 0–1 |
+| `dPlusM` | int | D+ cumulé |
+| `avgSlopePct` | float | Pente moyenne |
+| `altStartM` | float | Altitude au début |
+| `altEndM` | float | Altitude à la fin |
+| `mergedCount` | int | Nombre de fusions contributrices (`0` si autonome) |
+| `fallback` | bool | `true` si repli `⤺` |
+| `isMerged` | bool | `true` si la montée résulte d'une fusion |
+| `isSeparated` | bool | `true` si l'utilisateur a séparé dans l'UI |
+| `mergedParts` | array \| null | `null` si `isMerged: false` ; sinon `≥ 2` sous-montées |
+
+#### 38.4.5 `mergedParts[]`
+
+| Champ | Type | Description |
+|---|---|---|
+| `partIndex` | int | Index dans la fusion (0-based, ordre `startKm`) |
+| `startKm` | float | Début de la sous-montée |
+| `endKm` | float | Fin de la sous-montée |
+| `startProgress` | float | Fraction 0–1 |
+| `endProgress` | float | Fraction 0–1 |
+| `dPlusM` | int | D+ cumulé sur la sous-montée |
+| `avgSlopePct` | float | Pente moyenne |
+| `altStartM` | float | Altitude au début |
+| `altEndM` | float | Altitude à la fin |
+
+### 38.5 Contrat d'utilisation
+
+**Pour une carte Mapbox `line-gradient`** : utiliser `segments[].startProgress` et `endProgress`.
+
+**Pour afficher une montée fusionnée** :
+- Vue d'ensemble : `climbs[i].startProgress` à `climbs[i].endProgress`
+- Détail : itérer sur `climbs[i].mergedParts` (bornes individuelles des sous-montées)
+
+**Pour distinguer fusion non séparée / séparée côté consommateur** : `isSeparated`. Le reste est identique.
+
+**Ne pas dépendre de** :
+- ❌ `groupId` (absent — ancien champ v3.9.1)
+- ❌ `subIndex` (absent — ancien champ v3.9.1)
+- ❌ `originMergedCount` (absent — ancien champ v3.9.1)
+- ❌ `slopeProfile` (absent — retiré en v3.9.4)
+- ❌ `slopeProfileStepM` (absent — retiré en v3.9.4)
+- ❌ `metadata.profileStepM` (absent — retiré en v3.9.4)
+- ❌ `legend.exportProfileStepM` (absent — retiré en v3.9.4)
+
+### 38.6 Complexité
+
+- Temps : **O(m × k + s)** où m = montées, k = membres de groupe, s = segments
+- Espace : **O(m × k + s)** pour la structure JSON
+
+### 38.7 Notes
+
+- La fonction `buildExportData()` appelle **systématiquement** `rebuild()` pour garantir que les données sont fraîches
+- Le tri final de `climbs[]` par `startKm` garantit un ordre stable pour le consommateur
+- Les `index` sont réassignés après tri
+- Les compteurs `mergedClimbsCount` et `separatedClimbsCount` sont calculés **après** consolidation, sur la liste finale
+- Le `legend.note` documente explicitement le contrat côté consommateur
+
+### 38.8 Choix de conception
+
+| Critère | Format imbriqué (ancien) | **Format plat (retenu v3.7.2+)** |
+|---|---|---|
+| Taille | ⚠️ Verbeux | ✅ Compact |
+| Intégration Mapbox directe | ⚠️ Nécessite transformation | ✅ Directe |
+| Lisibilité | ⚠️ Imbriqué | ✅ Plate |
+| **Retenu** | ❌ | ✅ |
+
+| Critère | `slopeProfile` par montée | **`segments[]` global (retenu v3.9.4+)** |
+|---|---|---|
+| Redondance | ⚠️ Élevée | ✅ Aucune |
+| Paramètre `exportProfileStepM` | ⚠️ Nécessaire | ✅ Retiré |
+| Taille du JSON | ⚠️ Plus gros | ✅ Plus compact |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
-## 38. Pipeline complet
+## 39. Pipeline complet
 
-### 38.1 Pseudocode
+### 39.1 Pseudocode (analyse initiale)
 
 ```
 FONCTION analyze(content, params):
@@ -2714,7 +3202,7 @@ FONCTION analyze(content, params):
               stepM, avgWinM, rawStats, autoClimbs, ... }
 ```
 
-### 38.2 Ordre des étapes dans `computeAuto`
+### 39.2 Ordre des étapes dans `computeAuto`
 
 1. Filtre médian (optionnel) — §9
 2. Savitzky-Golay (altitude de base) — §7
@@ -2726,7 +3214,37 @@ FONCTION analyze(content, params):
 8. Lissage ancré final — §10
 9. **Validation stricte + repli** — §26 (avec préservation de `mergedParts`)
 
-### 38.3 Complexité globale
+### 39.3 Pipeline complet incluant l'export
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. CHARGEMENT (analyze)                                     │
+│    Parse + Haversine + resample + anti-pic + computeAuto    │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 2. REBUILD (à chaque édition)                               │
+│    Contraintes + ancrage + pentes + catégorisation +        │
+│    segmentation + métriques par montée                       │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 3. RENDU                                                    │
+│    Liste + canvas + carte Mapbox                            │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 4. EXPORT (à la demande)                                    │
+│    a) rebuild() → data fraîche                              │
+│    b) segments[] ← data.catSegments                         │
+│    c) climbs[] ← consolidateClimbsForExport(data)           │
+│    d) metadata ← compteurs + totalDist*                     │
+│    e) legend ← catégories + params                          │
+│    f) JSON.stringify + Blob + download                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 39.4 Complexité globale
 
 Soit n = nombre de points, m = nombre de candidats.
 
@@ -2747,13 +3265,13 @@ En pratique, m ≈ 10 et 800² ≈ 640 000, donc ~6 millions d'opérations. Sur 
 
 ---
 
-## 39. Pipeline de reconstruction
+## 40. Pipeline de reconstruction
 
-### 39.1 Objet
+### 40.1 Objet
 
 Recalculer entièrement l'état affiché à partir de `STATE.userClimbs` (état éditable par l'utilisateur). Appelé après chaque édition, insertion, suppression, ou changement de paramètre.
 
-### 39.2 Pseudocode
+### 40.2 Pseudocode
 
 ```
 FONCTION rebuild():
@@ -2804,7 +3322,9 @@ FONCTION rebuild():
       climbs.push({ ..., length, dPlus, avgSlope,
                     mergedCount: ref.mergedCount || 0,
                     fallback: ref.fallback || false,
-                    groupId: ref.groupId, subIndex: ref.subIndex })
+                    groupId: ref.groupId, subIndex: ref.subIndex,
+                    originMergedCount: ref.originMergedCount,
+                    isSeparated: !!ref.isSeparated })
 
   // === ÉTAPE 7 : Segmentation ===
   catSegments ← segmentByCategory(slopeForCat, dist, eleDisplay, longueurMin)  // §21
@@ -2813,7 +3333,7 @@ FONCTION rebuild():
               slopeForCat, catSegments, climbs }
 ```
 
-### 39.3 Complexité
+### 40.3 Complexité
 
 | Étape | Complexité |
 |---|---|
@@ -2830,7 +3350,7 @@ Avec n=5 000 et w=100, ~500 000 opérations → **< 100 ms**.
 
 ---
 
-## 40. Tableau récapitulatif des complexités
+## 41. Tableau récapitulatif des complexités
 
 | Algorithme | Temps | Espace | Fréquence d'appel |
 |---|---|---|---|
@@ -2865,20 +3385,22 @@ Avec n=5 000 et w=100, ~500 000 opérations → **< 100 ms**.
 | **normalizeGroups** | **O(m)** | **O(m)** | **fin de drag** |
 | Diagnostic | O(1) | O(1) | à chaque input |
 | rebuild | O(n × w) | O(n) | après chaque édition |
+| 🆕 **consolidateClimbsForExport** | **O(m × k)** | **O(m × k)** | **1 fois par export** |
+| 🆕 **buildExportData** | **O(n × w + m × k + s)** | **O(n + m × k + s)** | **1 fois par export** |
 
 Légende :
 - n : nombre de points bruts
 - m : nombre de points après resampling
 - s : nombre de segments de catégorie
 - w : taille moyenne d'une fenêtre glissante
-- k : nombre d'événements
+- k : nombre d'événements ou de membres de groupe (selon contexte)
 - m_groupe : nombre de membres d'un groupe
 
 ---
 
-## 41. Choix de conception et alternatives écartées
+## 42. Choix de conception et alternatives écartées
 
-### 41.1 Haversine vs Vincenty
+### 42.1 Haversine vs Vincenty
 
 | Critère | Haversine | Vincenty |
 |---|---|---|
@@ -2887,7 +3409,7 @@ Légende :
 | Complexité | 5 lignes | 30+ lignes |
 | **Retenu** | ✅ | ❌ |
 
-### 41.2 Interpolation vs moyenne au resampling
+### 42.2 Interpolation vs moyenne au resampling
 
 | Critère | Interpolation | **Moyenne (v3.5)** |
 |---|---|---|
@@ -2898,7 +3420,7 @@ Légende :
 | Complexité | O(n + m) | O(n + m) |
 | **Retenu** | ❌ | ✅ |
 
-### 41.3 Différence centrée vs différence avant
+### 42.3 Différence centrée vs différence avant
 
 | Critère | **Centrée (retenu)** | Avant |
 |---|---|---|
@@ -2906,7 +3428,7 @@ Légende :
 | Lissage naturel | Oui (3 pts) | Non |
 | **Retenu** | ✅ | ❌ |
 
-### 41.4 Pente instantanée vs pente fenêtrée pour la catégorisation
+### 42.4 Pente instantanée vs pente fenêtrée pour la catégorisation
 
 | Critère | Instantanée | **Fenêtrée (retenu)** |
 |---|---|---|
@@ -2916,7 +3438,7 @@ Légende :
 | **Retenu couleur** | ❌ | ✅ |
 | **Retenu courbe** | ✅ | ❌ |
 
-### 41.5 Argmin/argmax vs marche avec tolérance
+### 42.5 Argmin/argmax vs marche avec tolérance
 
 | Critère | **Argmin/argmax (retenu)** | Marche tolérance |
 |---|---|---|
@@ -2924,7 +3446,7 @@ Légende :
 | Déterminisme | Toujours | Dépend de la tolérance |
 | **Retenu** | ✅ | ❌ |
 
-### 41.6 Garde-fou absolu vs pourcentage vs hybride
+### 42.6 Garde-fou absolu vs pourcentage vs hybride
 
 | Critère | Absolu | % pur | **Hybride (v2)** |
 |---|---|---|---|
@@ -2934,7 +3456,7 @@ Légende :
 | Robustesse cas extrêmes | ✅ | ❌ | ✅✅ |
 | **Retenu** | ❌ | ❌ | ✅ |
 
-### 41.7 Fusion par distance vs augmentation du seuil
+### 42.7 Fusion par distance vs augmentation du seuil
 
 | Critère | **gapMinM (retenu)** | Seuil élevé |
 |---|---|---|
@@ -2942,7 +3464,7 @@ Légende :
 | Prévisibilité | ✅ | ⚠️ Dépend de la trace |
 | **Retenu** | ✅ | ❌ |
 
-### 41.8 Validation finale : rejet vs repli
+### 42.8 Validation finale : rejet vs repli
 
 | Critère | Rejet sec | **Repli ⤺ (retenu)** |
 |---|---|---|
@@ -2950,7 +3472,7 @@ Légende :
 | Cohérence avec l'utilisateur | ⚠️ Difficile | ✅ Log détaillé |
 | **Retenu** | ❌ | ✅ |
 
-### 41.9 Anti-pic Hampel vs médian classique
+### 42.9 Anti-pic Hampel vs médian classique
 
 | Critère | Médian | **Hampel (retenu)** |
 |---|---|---|
@@ -2961,7 +3483,7 @@ Légende :
 | Effet d'écrêtage des bosses | Marqué | **Sélectif** |
 | **Retenu** | ❌ | ✅ |
 
-### 41.10 Anti-pic : seuil en mètres vs en %
+### 42.10 Anti-pic : seuil en mètres vs en %
 
 | Critère | **Seuil en mètres (retenu)** | Seuil en % |
 |---|---|---|
@@ -2969,7 +3491,7 @@ Légende :
 | Indépendance du relief | ✅ | ❌ |
 | **Retenu** | ✅ | ❌ |
 
-### 41.11 Anti-pic : position dans le pipeline
+### 42.11 Anti-pic : position dans le pipeline
 
 | Ordre | Efficacité |
 |---|---|
@@ -2977,7 +3499,7 @@ Légende :
 | **Après resampling (retenu)** | ✅ Fenêtre constante après conversion |
 | Après SG | ❌ SG a déjà ancré le glitch dans la courbe |
 
-### 41.12 Anti-pic : fenêtre en points vs en mètres
+### 42.12 Anti-pic : fenêtre en points vs en mètres
 
 | Critère | Points | **Mètres (v3.6)** |
 |---|---|---|
@@ -2987,7 +3509,7 @@ Légende :
 | Plage utile | 3–15 pts | **50–500 m** |
 | **Retenu** | ❌ | ✅ |
 
-### 41.13 Diagnostic visuel vs paramètres seuls
+### 42.13 Diagnostic visuel vs paramètres seuls
 
 | Critère | **Diagnostic (v3.2)** | Paramètres seuls |
 |---|---|---|
@@ -2996,7 +3518,7 @@ Légende :
 | Coût calcul | ✅ O(1) | — |
 | **Retenu** | ✅ | ❌ |
 
-### 41.14 Édition numérique vs drag & drop
+### 42.14 Édition numérique vs drag & drop
 
 | Critère | Champs km | **Drag & drop** |
 |---|---|---|
@@ -3008,7 +3530,7 @@ Légende :
 
 Les deux modes coexistent.
 
-### 41.15 Interception DOM vs hooks Chart.js
+### 42.15 Interception DOM vs hooks Chart.js
 
 | Critère | beforeEvent | **Capture window** |
 |---|---|---|
@@ -3017,7 +3539,7 @@ Les deux modes coexistent.
 | Complexité | ✅ | ⚠️ |
 | **Retenu** | ❌ | ✅ |
 
-### 41.16 Chart.js vs canvas 2D natif
+### 42.16 Chart.js vs canvas 2D natif
 
 | Critère | Chart.js | **Canvas 2D (v3.8)** |
 |---|---|---|
@@ -3027,7 +3549,7 @@ Les deux modes coexistent.
 | Échelles strictement fixes | ⚠️ | ✅ |
 | **Retenu** | ❌ | ✅ |
 
-### 41.17 Catégorisation sur altitude ancrée vs non ancrée
+### 42.17 Catégorisation sur altitude ancrée vs non ancrée
 
 | Critère | Ancré | **Non ancré (v3.8.1)** |
 |---|---|---|
@@ -3036,7 +3558,7 @@ Les deux modes coexistent.
 | Coût | ✅ | ⚠️ (+1 SG) |
 | **Retenu** | ❌ | ✅ |
 
-### 41.18 Filtrage des couleurs profil : point par point vs par `catSegments`
+### 42.18 Filtrage des couleurs profil : point par point vs par `catSegments`
 
 | Critère | Point par point | **Par `catSegments`** |
 |---|---|---|
@@ -3044,7 +3566,7 @@ Les deux modes coexistent.
 | Perf | ✅ | ✅ |
 | **Retenu** | ❌ | ✅ |
 
-### 41.19 Échelle X du profil : fixe vs adaptative au conteneur
+### 42.19 Échelle X du profil : fixe vs adaptative au conteneur
 
 | Critère | **Fixe (v3.8.3)** | Adaptative |
 |---|---|---|
@@ -3052,7 +3574,7 @@ Les deux modes coexistent.
 | Esthétique (canvas plein) | ❌ Vide à droite | ✅ |
 | **Retenu** | ✅ | ❌ |
 
-### 41.20 Trace carte : grille resamplée vs points bruts
+### 42.20 Trace carte : grille resamplée vs points bruts
 
 | Critère | **Points bruts (v3.9.2)** | Grille resamplée |
 |---|---|---|
@@ -3062,7 +3584,7 @@ Les deux modes coexistent.
 | Coût | O(n) | O(m) |
 | **Retenu** | ✅ | ❌ |
 
-### 41.21 Groupes : fusion destructive vs préservation des `mergedParts`
+### 42.21 Groupes : fusion destructive vs préservation des `mergedParts`
 
 | Critère | Fusion destructive | **Préservation (v3.9.0+)** |
 |---|---|---|
@@ -3071,7 +3593,7 @@ Les deux modes coexistent.
 | Mémoire | ✅ Faible | ⚠️ +tab par fusion |
 | **Retenu** | ❌ | ✅ |
 
-### 41.22 Groupes : séparation sans persistance vs avec `groupId`/`subIndex`
+### 42.22 Groupes : séparation sans persistance vs avec `groupId`/`subIndex`
 
 | Critère | Sans persistance (v3.9.0) | **Avec (v3.9.1)** |
 |---|---|---|
@@ -3080,7 +3602,7 @@ Les deux modes coexistent.
 | Coloration stable | ❌ | ✅ |
 | **Retenu** | ❌ | ✅ |
 
-### 41.23 Suppression : renumérotation vs laisser des trous
+### 42.23 Suppression : renumérotation vs laisser des trous
 
 | Critère | **Renumérotation (v3.9.2)** | Trous |
 |---|---|---|
@@ -3088,7 +3610,7 @@ Les deux modes coexistent.
 | Complexité | ⚠️ | ✅ |
 | **Retenu** | ✅ | ❌ |
 
-### 41.24 Création manuelle : bouton `+` vs double-clic + drag
+### 42.24 Création manuelle : bouton `+` vs double-clic + drag
 
 | Critère | Bouton `+` | **Double-clic + drag** |
 |---|---|---|
@@ -3097,7 +3619,7 @@ Les deux modes coexistent.
 | Découverte | ✅ | ⚠️ Hint nécessaire |
 | **Retenu** | ❌ | ✅ |
 
-### 41.25 Auto-load carte : sur présence de token en localStorage
+### 42.25 Auto-load carte : sur présence de token en localStorage
 
 | Critère | **Auto (v3.9.2)** | Manuel |
 |---|---|---|
@@ -3105,7 +3627,7 @@ Les deux modes coexistent.
 | Contrôle | ⚠️ | ✅ |
 | **Retenu** | ✅ | ❌ |
 
-### 41.26 Marqueurs : mono vs multi sur groupe
+### 42.26 Marqueurs : mono vs multi sur groupe
 
 | Critère | Mono | **Multi (v3.9.2)** |
 |---|---|---|
@@ -3114,7 +3636,7 @@ Les deux modes coexistent.
 | Charge visuelle | ✅ Faible | ⚠️ Plus élevée |
 | **Retenu** | ❌ | ✅ (pour groupes) |
 
-### 41.27 Zoom : montée vs groupe
+### 42.27 Zoom : montée vs groupe
 
 | Critère | **Dispatch (v3.9.2)** | Montée uniquement |
 |---|---|---|
@@ -3122,7 +3644,7 @@ Les deux modes coexistent.
 | Contexte du groupe | ✅ | ❌ |
 | **Retenu** | ✅ | ❌ |
 
-### 41.28 Profil montée : vue zoomée vs vue complète + scroll centré
+### 42.28 Profil montée : vue zoomée vs vue complète + scroll centré
 
 | Critère | Vue zoomée | **Complète + scroll (v3.9.2)** |
 |---|---|---|
@@ -3131,7 +3653,7 @@ Les deux modes coexistent.
 | Navigation manuelle | ❌ | ✅ |
 | **Retenu** | ❌ | ✅ |
 
-### 41.29 Échelle widget montée : 5 vs 10 m/px
+### 42.29 Échelle widget montée : 5 vs 10 m/px
 
 | Critère | 5 m/px (v3.8) | **10 m/px (v3.9.2)** |
 |---|---|---|
@@ -3139,8 +3661,45 @@ Les deux modes coexistent.
 | Vue d'ensemble | ❌ Étroite | ✅ Plus large |
 | **Retenu** | ❌ | ✅ |
 
-Le 10 m/px permet de voir la montée et son contexte immédiat (montées voisines) dans une largeur d'écran normale.
+### 42.30 Export : groupe UI vs consolidation 🆕
+
+| Critère | Export par sous-montée | **Export consolidé (retenu v3.9.6)** |
+|---|---|---|
+| Cohérence avec la logique métier | ❌ | ✅ |
+| Une montée fusionnée = une entrée | ❌ | ✅ |
+| `groupId`/`subIndex` exportés | ⚠️ | ❌ (internes) |
+| `isSeparated` explicite | ❌ | ✅ |
+| `mergedParts` toujours présent | ⚠️ | ✅ |
+| Taille du JSON | ⚠️ Plus grosse | ✅ Plus compacte |
+| **Retenu** | ❌ | ✅ |
+
+### 42.31 Suppression de `slopeProfile` 🆕
+
+| Critère | Avec `slopeProfile` | **Sans (retenu v3.9.4)** |
+|---|---|---|
+| Taille du JSON | ⚠️ Plus gros | ✅ Plus compact |
+| Redondance avec `segments` | ⚠️ Élevée | ✅ Aucune |
+| Paramètre `exportProfileStepM` | ⚠️ Nécessaire | ✅ Retiré |
+| **Retenu** | ❌ | ✅ |
+
+### 42.32 `isSeparated` comme discriminant 🆕
+
+| Critère | `groupId != null` exporté | **`isSeparated` (retenu v3.9.6)** |
+|---|---|---|
+| Sémantique claire | ⚠️ Couplé à l'UI | ✅ Booléen explicite |
+| Indépendance UI | ❌ | ✅ |
+| Facile à consommer | ⚠️ | ✅ |
+| **Retenu** | ❌ | ✅ |
+
+### 42.33 Format plat vs FeatureCollection 🆕
+
+| Critère | FeatureCollection | **Format plat (retenu v3.7.2+)** |
+|---|---|---|
+| Taille | ⚠️ Verbeux | ✅ Compact |
+| Intégration Mapbox directe | ⚠️ Transformation | ✅ Directe |
+| Lisibilité | ⚠️ Imbriqué | ✅ Plate |
+| **Retenu** | ❌ | ✅ |
 
 ---
 
-**Fin du document Algorithmes v3.9.2**
+**Fin du document Algorithmes v3.9.6**

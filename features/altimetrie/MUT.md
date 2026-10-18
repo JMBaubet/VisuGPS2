@@ -1,7 +1,7 @@
-# Manuel utilisateur — GPX Climb Analyzer v3.9.2
+# Manuel utilisateur — GPX Climb Analyzer v3.9.6
 
 **Public** : utilisateurs avancés, organisateurs d'événements, data analysts
-**Objet** : comprendre précisément l'effet de chaque paramètre et option sur la détection des pentes, sur la carte 3D et sur le widget profil
+**Objet** : comprendre précisément l'effet de chaque paramètre et option sur la détection des pentes, sur la carte 3D, sur le widget profil et sur l'export JSON consolidé
 
 > **Stabilité du vocabulaire.** Depuis la v3.5.2, les noms de paramètres sont figés et identiques dans l'interface et dans tous les documents (manuel, algorithmes, note technique, PRD).
 
@@ -12,7 +12,7 @@
 1. [Comment lire ce manuel](#1-comment-lire-ce-manuel)
 2. [Vue d'ensemble du pipeline](#2-vue-densemble-du-pipeline)
 3. [Interface 3 colonnes](#3-interface-3-colonnes)
-4. [Les 15 paramètres numériques](#4-les-15-paramètres-numériques)
+4. [Les 14 paramètres numériques](#4-les-14-paramètres-numériques)
    - [4.1 Pas de rééchantillonnage](#41-pas-de-rééchantillonnage)
    - [4.2 Anti-pic : fenêtre](#42-anti-pic--fenêtre)
    - [4.3 Anti-pic : seuil](#43-anti-pic--seuil)
@@ -27,20 +27,20 @@
    - [4.12 Lissage gaussien](#412-lissage-gaussien)
    - [4.13 Correction plateaux](#413-correction-plateaux)
    - [4.14 Segments debug](#414-segments-debug)
-   - [4.15 Pas du profil exporté](#415-pas-du-profil-exporté)
 5. [Les 2 options toggles](#5-les-2-options-toggles)
 6. [Interactions critiques](#6-interactions-critiques)
 7. [Recettes par type de trace](#7-recettes-par-type-de-trace)
 8. [Diagnostic de configuration](#8-diagnostic-de-configuration)
 9. [Carte Mapbox 3D](#9-carte-mapbox-3d)
 10. [Widget profil altimétrique](#10-widget-profil-altimétrique)
-11. [Groupes de montées (séparation / refusion)](#11-groupes-de-montées)
+11. [Groupes de montées et export consolidé](#11-groupes-de-montées-et-export-consolidé)
 12. [Création manuelle d'une montée](#12-création-manuelle-dune-montée)
 13. [Suppression d'une montée](#13-suppression-dune-montée)
-14. [Cas pratiques](#14-cas-pratiques)
-15. [Tableau de diagnostic rapide](#15-tableau-de-diagnostic-rapide)
-16. [Rappel des défauts](#16-rappel-des-défauts)
-17. [Glossaire](#17-glossaire)
+14. [Export JSON — structure et contrat](#14-export-json--structure-et-contrat)
+15. [Cas pratiques](#15-cas-pratiques)
+16. [Tableau de diagnostic rapide](#16-tableau-de-diagnostic-rapide)
+17. [Rappel des défauts](#17-rappel-des-défauts)
+18. [Glossaire](#18-glossaire)
 
 ---
 
@@ -61,7 +61,17 @@ Chaque paramètre est présenté avec la même structure :
 
 **Unités** : les valeurs sont suivies de leur unité (m, %, pts, px).
 
-**Nouveautés v3.9.2** (signalées par 🆕 dans le texte) :
+**Nouveautés v3.9.6** (signalées par 🆕 dans le texte) :
+- **Export JSON consolidé** : une montée fusionnée (séparée ou non) apparaît comme **une seule entrée** dans `climbs[]`, avec `isMerged`, `isSeparated` et `mergedParts`
+- Champs `groupId` / `subIndex` / `originMergedCount` **retirés de l'export** (état UI uniquement)
+- Nouveaux compteurs `metadata.mergedClimbsCount` et `metadata.separatedClimbsCount`
+
+**Nouveautés v3.9.4** (signalées par 🆕 dans le texte) :
+- **Suppression de `slopeProfile`** dans l'export JSON (redondant avec `segments`)
+- **Suppression du paramètre « Pas du profil exporté »** (15 → 14 paramètres numériques)
+- Suppression des champs `slopeProfileStepM`, `metadata.profileStepM` et `legend.exportProfileStepM`
+
+**Nouveautés v3.9.2** :
 - Échelle X du widget montée passée de 5 à **10 m/px**
 - Chargement automatique de la carte si un token existe
 - Suppression de montées individuelles via ✕
@@ -102,17 +112,20 @@ flowchart TD
     X --> Y[Carte Mapbox + widget profil]
     U --> Y
     Y --> Z[Carte : points bruts du GPX colorés<br/>Profil : catSegments]
+    U --> AA[Consolidation export<br/><b>v3.9.6</b><br/>1 entrée par montée logique]
+    AA --> AB[Export JSON<br/>climbs[] + segments[]]
 
     style E fill:#e0e7ff
     style I fill:#fce7f3
     style U fill:#dcfce7
     style X fill:#fef3c7
     style Y fill:#fef9c3
+    style AB fill:#fce7f3
 ```
 
 **Légende visuelle :**
 - 🟦 Bleu clair : statistiques indépendantes des paramètres
-- 🩷 Rose : filtre anti-pic
+- 🩷 Rose : filtre anti-pic et export
 - 🟩 Vert : résultat principal (montées)
 - 🟨 Jaune : résultat secondaire (segmentation pente)
 - 🟡 Jaune pâle : rendu (carte + profil)
@@ -126,6 +139,7 @@ flowchart TD
 - **Trace sur la carte = points bruts** (v3.9.2) : la trace colorée sur la carte suit les points **du fichier GPX d'origine**, pas la grille resamplée. La catégorie de chaque point brut est déterminée par sa distance cumulée.
 - **Fusion avec `mergedParts`** (v3.9.0) : quand deux montées sont fusionnées (écart < `gapMinM`), les bornes de chaque sous-montée d'origine sont **conservées** pour permettre la séparation ultérieure.
 - **Groupes persistants** (v3.9.1) : après séparation, les sous-montées portent un `groupId` et un `subIndex` (`#N.M`), ce qui permet de les refusionner.
+- **Export consolidé** (v3.9.6) 🆕 : dans le JSON exporté, une montée fusionnée (séparée ou non) apparaît comme **une seule entrée** dans `climbs[]`, avec `isMerged`, `isSeparated` et `mergedParts`. Les champs `groupId`, `subIndex`, `originMergedCount` sont **internes à l'UI** et **ne sont pas exportés**.
 
 **Trois groupes fonctionnels :**
 
@@ -133,7 +147,7 @@ flowchart TD
 |---|---|---|
 | **A. Préparation** | Pas, Plateaux, Anti-pic (×2) | Normalise la trace avant analyse |
 | **B. Détection** | Médiane, Lissage altitude, Lissage pente, Seuil, Recherche extrema, Écart min., Gaussien, Double SG | Identifie les montées |
-| **C. Présentation** | Fenêtre de calcul pente, Longueur min. pente, Segments debug, Pas du profil exporté, Lissage segments | N'affecte **PAS** la détection, seulement l'affichage ou l'export |
+| **C. Présentation** | Fenêtre de calcul pente, Longueur min. pente, Segments debug, Lissage segments | N'affecte **PAS** la détection, seulement l'affichage ou le log |
 
 ---
 
@@ -167,7 +181,7 @@ Largeur **320 px**. Liste verticale des montées, une carte par montée.
 
 **Bandeau de groupe** : un liseré coloré `🔗 GROUPE #N · X montées` apparaît avant la première carte d'un groupe. Les cartes du groupe ont une bordure gauche de la couleur du groupe (couleur stable par `groupId`).
 
-**Sélection** : un clic sélectionne la montée, passe en mode montée sur le widget profil, et zoome la carte. Si la montée appartient à un groupe, **le zoom couvre l'ensemble du groupe** 🆕.
+**Sélection** : un clic sélectionne la montée, passe en mode montée sur le widget profil, et zoome la carte. Si la montée appartient à un groupe, **le zoom couvre l'ensemble du groupe**.
 
 ### 3.3 Colonne centrale — Carte + Profil
 
@@ -181,14 +195,16 @@ Volet repliable (⚙️) de **340 px** contenant :
 - Champ **Token Mapbox** + bouton **OK**
 - Toggle **Courbes de niveau**
 - Bandeau d'avertissements (résumé diagnostic)
-- 15 paramètres numériques regroupés par thème
+- **14 paramètres numériques** regroupés par thème 🆕
 - 2 toggles (Lissage renforcé, Lissage segments)
 - Bouton **↺ Recharger depuis auto**
-- Bouton **💾 Exporter JSON**
+- Bouton **💾 Exporter JSON** 🆕 (produit un JSON consolidé — voir §14)
 
 ---
 
-## 4. Les 15 paramètres numériques
+## 4. Les 14 paramètres numériques
+
+> **Note v3.9.4/v3.9.6** : le paramètre **Pas du profil exporté** (`exportProfileStepM`) a été **supprimé** avec `slopeProfile`. Le nombre de paramètres numériques est passé de 15 à **14**.
 
 ### 4.1 Pas de rééchantillonnage
 
@@ -745,8 +761,8 @@ Recommandation : **garder un seuil bas** (0.5%) + **une fusion** (250 m) plutôt
 
 Le panneau Debug affiche le nombre de candidats et le résultat final :
 ```
-[v3.9.2] 2 fusion(s)
-[v3.9.2] 5 conservées, 1 replis
+[v3.9.6] 2 fusion(s)
+[v3.9.6] 5 conservées, 1 replis
 ```
 
 Comptez les montées dans la colonne gauche. Si vous en avez 15 avec beaucoup de `⊕`, le seuil est trop bas. Si vous en avez 1 et que vous savez qu'il y en a 5, il est trop haut.
@@ -859,11 +875,13 @@ C'est pour cette raison que la **validation stricte (v3.1)** intervient après :
 
 Le panneau Debug affiche :
 ```
-[v3.9.2] 2 fusion(s) — écart min. 250 m
+[v3.9.6] 2 fusion(s) — écart min. 250 m
 ⊕ Montée #6 étendue : écart 1 m < 250 m → km 71.750–75.750 (4.00 km)
 ```
 
 L'indicateur `⊕` apparaît sur les lignes fusionnées du tableau. Un bouton **✂ Séparer** apparaît sur la carte pour découper la montée en ses sous-montées d'origine.
+
+**Conséquence à l'export (v3.9.6)** : la montée fusionnée reste **une seule entrée** dans `climbs[]`, mais porte `isMerged: true` et un `mergedParts[]` détaillant les sous-montées. Voir §14.
 
 ---
 
@@ -963,7 +981,7 @@ Pour `Filtre médian = 200 m` : fenêtre de 4 points → commence à agir
 - Le diagnostic vous le signale 🟠 orange
 - Augmentez à 200 m ou désactivez
 
-**Recommandation v3.9.2** : préférez l'**anti-pic** au filtre médian. Gardez `Filtre médian = 0` si `Anti-pic : seuil > 0`.
+**Recommandation v3.9.6** : préférez l'**anti-pic** au filtre médian. Gardez `Filtre médian = 0` si `Anti-pic : seuil > 0`.
 
 #### Comment vérifier
 
@@ -1149,51 +1167,6 @@ N'affecte **rien** dans la détection ni dans l'affichage.
 
 ---
 
-### 4.15 Pas du profil exporté 🆕
-
-| | |
-|---|---|
-| **Nom UI** | Pas du profil exporté |
-| **Nom technique** | `exportProfileStepM` |
-| **Plage** | 10 – 500 m |
-| **Défaut** | **50 m** |
-| **Impact** | **Aucun** sur la détection — **export JSON uniquement** |
-| **Catégorie** | Export |
-
-#### Rôle
-
-Granularité cible (en mètres) des tranches de `slopeProfile` dans le JSON exporté. Chaque tranche appartient intégralement à un seul segment global.
-
-#### Effet sur l'export
-
-Un `slopeProfile` de pas 50 m découpe chaque montée en tranches de 50 m (ou moins si le segment global est plus court). Un pas de 20 m génère plus de tranches mais plus de détail.
-
-#### Contrainte
-
-`Pas du profil exporté ≤ Longueur min. pente` (sinon diagnostic 🟠). Si supérieur, les tranches sont raccourcies dynamiquement pour rester dans un seul segment.
-
-#### Recommandations
-
-| Usage | Valeur |
-|---|---|
-| Analyse détaillée | 20–30 m |
-| **Export standard** | **50 m** |
-| Export compact | 100 m |
-
-#### Comment vérifier
-
-Le panneau Diagnostic affiche :
-```
-● Pas du profil exporté  50 m   optimal ≤ 200 m
-```
-
-Un avertissement apparaît si `exportProfileStepM > longueurMin` :
-```
-⚠ Le Pas du profil exporté (300 m) est supérieur à Longueur min. pente (200 m).
-```
-
----
-
 ## 5. Les 2 options toggles
 
 ### 5.1 Lissage renforcé (double SG)
@@ -1251,11 +1224,6 @@ Dans le log détaillé par segments (panneau Debug), applique une **médiane mob
 
 **N'affecte PAS** la détection ni l'affichage. Seul le log Debug est modifié.
 
-#### Utilité
-
-- Affiche les segments lissés marqués `·lissé`
-- Rend le log plus lisible
-
 ---
 
 ## 6. Interactions critiques
@@ -1271,8 +1239,9 @@ Dans le log détaillé par segments (panneau Debug), applique une **médiane mob
 6. Longueur min. pente ≥ Pas (ou 0)
 7. Anti-pic : fenêtre ≥ 2 × Pas (ou seuil = 0)
 8. Anti-pic : seuil ≥ 5 m (ou 0)
-9. Pas du profil exporté ≤ Longueur min. pente
 ```
+
+**Note v3.9.4/v3.9.6** 🆕 : la 9ᵉ règle historique (`Pas du profil exporté ≤ Longueur min. pente`) a été **retirée** avec la suppression du paramètre `exportProfileStepM`. Le nombre de règles est passé de 9 à **8**.
 
 ### 6.2 Matrice d'interactions
 
@@ -1294,15 +1263,17 @@ flowchart TD
     F[Anti-pic : fenêtre] --> L
     M[Fenêtre de calcul pente] -.->|indépendant| N[Segments pente]
     O[Longueur min. pente] -.->|indépendant| N
+    L --> P[Export consolidé<br/>v3.9.6]
 
     style A fill:#fca5a5
     style H fill:#fca5a5
     style J fill:#fca5a5
     style K fill:#fca5a5
     style F fill:#f9a8d4
+    style P fill:#f9a8d4
 ```
 
-Les paramètres en **rouge** ont un impact direct sur la détection. Le paramètre **rose** est l'anti-pic.
+Les paramètres en **rouge** ont un impact direct sur la détection. Le paramètre **rose** est l'anti-pic ou l'export.
 
 ### 6.3 Chaîne de la fragmentation
 
@@ -1317,6 +1288,7 @@ flowchart TD
     G -->|Oui| H[Repli ⤺<br/>v3.1]
     G -->|Non| I[✓ Montée correcte]
     H --> I
+    I --> J[Consolidation export<br/>1 entrée = 1 montée logique]
 ```
 
 **Conclusion** : une chaîne bien configurée est :
@@ -1325,6 +1297,7 @@ Seuil détection = 0.5%
 + Lissage pente = 150 m
 + Écart min. entre montées = 250 m
 + Validation stricte activée (v3.1)
++ Export consolidé (v3.9.6)
 ```
 
 ### 6.4 Chaîne de la sur-correction anti-pic
@@ -1369,6 +1342,7 @@ flowchart TD
     L --> M[Recherche extrema]
     M --> N[Écart min. entre montées]
     N --> O[Montées finales]
+    O --> Q[Export consolidé]
 
     G[Anti-pic : fenêtre] -.->|indépendant du Pas| O
 
@@ -1390,6 +1364,8 @@ flowchart TD
 | R6 | `Longueur min. pente ≥ Pas` (ou 0) | Sinon un segment fait moins d'1 point | diagnostic 🟠 |
 | R7 | `Écart min. entre montées ≥ Pas` (ou 0) | Sinon la fusion n'a aucun candidat à fusionner | diagnostic 🟠 |
 | R8 | `Anti-pic : fenêtre ≥ 2 × Pas` (si seuil > 0) | Sinon l'arrondi force une fenêtre > demandée | diagnostic 🟠 |
+
+**Rappel v3.9.4/v3.9.6** : la règle R9 (`Pas du profil exporté ≤ Longueur min. pente`) a été **supprimée**.
 
 #### 6.5.3 Chaîne de dépendance de second ordre
 
@@ -1478,7 +1454,7 @@ Trois outils, dans l'ordre :
 | Seuil détection | 0.5 % |
 | Fenêtre de calcul pente | 100 – 200 m |
 
-Après détection, les montées fusionnées peuvent être **séparées** (✂) si l'utilisateur veut voir les sous-cols individuellement.
+Après détection, les montées fusionnées peuvent être **séparées** (✂) si l'utilisateur veut voir les sous-cols individuellement. **À l'export (v3.9.6)**, la montée redevient une **seule entrée** avec `isMerged: true`, `isSeparated: true` et `mergedParts[]` détaillant chaque sous-col — voir §14.
 
 ### 7.4 Gravel / VTT nerveux
 
@@ -1537,11 +1513,12 @@ Le panneau **Diagnostic de configuration** (en haut du volet de droite) affiche 
 │ ● Filtre médian .......... désactivé                    │
 │ ● Lissage gaussien ....... σ ≈ 1.5 point                │
 │ ● Correction plateaux .... 6 points                     │
-│ ● Pas du profil exporté .. 50 m                         │
 │                                                         │
 │ Aucun problème détecté. Configuration cohérente.        │
 └─────────────────────────────────────────────────────────┘
 ```
+
+> **Note v3.9.4/v3.9.6** : la ligne `● Pas du profil exporté .. 50 m` a été retirée du diagnostic avec la suppression du paramètre.
 
 ### 8.3 Comment utiliser le diagnostic
 
@@ -1565,7 +1542,7 @@ Le panneau **Diagnostic de configuration** (en haut du volet de droite) affiche 
 
 ### 9.1 Activation
 
-- **Chargement automatique** 🆕 (v3.9.2) : si un token Mapbox (`pk.*`) est présent dans `localStorage`, la carte se charge automatiquement au démarrage de l'application. Le statut affiche « Carte OK (auto) ».
+- **Chargement automatique** (v3.9.2) : si un token Mapbox (`pk.*`) est présent dans `localStorage`, la carte se charge automatiquement au démarrage de l'application. Le statut affiche « Carte OK (auto) ».
 - **Chargement manuel** : saisir le token dans le volet Paramètres et cliquer **OK**. Le token est persisté dans `localStorage.mapboxToken`.
 
 Un token public (`pk.*`) gratuit est requis. Vous pouvez en créer un sur mapbox.com.
@@ -1665,7 +1642,7 @@ En mode montée, un bouton **✕** apparaît dans le header. Un clic désélecti
 
 ---
 
-## 11. Groupes de montées
+## 11. Groupes de montées et export consolidé
 
 ### 11.1 Séparation d'une montée fusionnée
 
@@ -1713,9 +1690,166 @@ Si, après une suppression ou une édition, un groupe ne contient plus qu'un seu
 
 Le drag modifie les bornes de la montée **individuelle** (pas du groupe). Les autres membres du groupe ne bougent pas. Les marqueurs de la carte se mettent à jour en temps réel.
 
-### 11.6 Export JSON
+### 11.6 🆕 Export JSON consolidé (v3.9.6)
 
-Les champs `groupId` et `subIndex` sont présents dans chaque `climb` exporté. Un consommateur externe peut reconstituer les groupes.
+**Point crucial à comprendre** : dans le JSON exporté, **l'état UI des groupes est masqué**. Une montée fusionnée (séparée ou non) apparaît comme **une seule entrée** dans `climbs[]`.
+
+Les champs `groupId`, `subIndex` et `originMergedCount` sont **internes à l'UI** et **ne sont PAS exportés**. Le consommateur du JSON n'a donc jamais à gérer la logique de groupe.
+
+#### 11.6.1 Cas d'usage : fusion NON séparée
+
+Avant l'export, l'utilisateur a une montée fusionnée détectée par `gapMinM`. Dans la liste, elle apparaît comme :
+
+```
+#1 ⊕ 1  km 3.420  ✂ Séparer
+Long. 4.7 km  D+ 385 m  8.2%
+```
+
+**Ce que produit l'export** — une entrée `climbs[]` :
+
+```json
+{
+  "index": 0,
+  "startKm": 3.42,
+  "endKm": 8.12,
+  "startProgress": 0.0311,
+  "endProgress": 0.0739,
+  "dPlusM": 385,
+  "avgSlopePct": 8.2,
+  "altStartM": 1245.0,
+  "altEndM": 1630.0,
+  "mergedCount": 1,
+  "fallback": false,
+  "isMerged": true,
+  "isSeparated": false,
+  "mergedParts": [
+    {
+      "partIndex": 0,
+      "startKm": 3.42,
+      "endKm": 5.65,
+      "startProgress": 0.0311,
+      "endProgress": 0.0514,
+      "dPlusM": 178,
+      "avgSlopePct": 7.98,
+      "altStartM": 1245.0,
+      "altEndM": 1423.0
+    },
+    {
+      "partIndex": 1,
+      "startKm": 5.88,
+      "endKm": 8.12,
+      "startProgress": 0.0535,
+      "endProgress": 0.0739,
+      "dPlusM": 207,
+      "avgSlopePct": 8.39,
+      "altStartM": 1440.0,
+      "altEndM": 1630.0
+    }
+  ]
+}
+```
+
+**Points clés** :
+- `isMerged: true` (la montée résulte d'une fusion)
+- `isSeparated: false` (l'utilisateur n'a pas cliqué sur ✂)
+- `mergedParts` contient **2 sous-montées** avec leurs bornes **d'origine** (avant extension par `gapMinM`)
+- `mergedCount: 1` = nombre de fusions ayant contribué
+
+#### 11.6.2 Cas d'usage : fusion SÉPARÉE (puis exportée)
+
+L'utilisateur a cliqué sur **✂ Séparer**. Dans la liste, le groupe apparaît :
+
+```
+🔗 GROUPE #3 · 2 montées (issu d'une fusion de 2)
+#3.1 🔗 3  km 3.420
+Long. 2.23 km  D+ 178 m  7.98%
+#3.2 🔗 3  km 5.880
+Long. 2.24 km  D+ 207 m  8.39%
+```
+
+**Ce que produit l'export** — toujours **UNE SEULE** entrée `climbs[]` :
+
+```json
+{
+  "index": 0,
+  "startKm": 3.42,
+  "endKm": 8.12,
+  "startProgress": 0.0311,
+  "endProgress": 0.0739,
+  "dPlusM": 385,
+  "avgSlopePct": 8.2,
+  "altStartM": 1245.0,
+  "altEndM": 1630.0,
+  "mergedCount": 1,
+  "fallback": false,
+  "isMerged": true,
+  "isSeparated": true,
+  "mergedParts": [
+    { "partIndex": 0, "startKm": 3.42, "endKm": 5.65, "dPlusM": 178, "avgSlopePct": 7.98, ... },
+    { "partIndex": 1, "startKm": 5.88, "endKm": 8.12, "dPlusM": 207, "avgSlopePct": 8.39, ... }
+  ]
+}
+```
+
+**Comparaison avec le cas précédent** :
+
+| Champ | Fusion non séparée | Fusion séparée |
+|---|---|---|
+| `startKm`, `endKm` | 3.42 → 8.12 | **3.42 → 8.12 (identique)** |
+| `dPlusM`, `avgSlopePct` | 385, 8.2 | **385, 8.2 (identique)** |
+| `mergedCount` | 1 | **1 (identique)** |
+| `isMerged` | true | **true (identique)** |
+| **`isSeparated`** | **false** | **true (seul champ qui diffère)** |
+| `mergedParts` | 2 parts | **2 parts (identique)** |
+
+🆕 **Seul `isSeparated` change**. La structure et les valeurs de tous les autres champs sont **strictement identiques**.
+
+#### 11.6.3 Cas d'usage : édition d'une sous-montée séparée
+
+L'utilisateur a séparé, puis **édité les bornes** de la sous-montée #3.2 (drag de la poignée sommet de 8.12 à 8.50 km). L'utilisateur clique **🔗 Refusionner**, puis exporte.
+
+L'export produit :
+
+```json
+{
+  "index": 0,
+  "startKm": 3.42,
+  "endKm": 8.50,
+  "startProgress": 0.0311,
+  "endProgress": 0.0773,
+  "dPlusM": 402,
+  "avgSlopePct": 8.26,
+  "altStartM": 1245.0,
+  "altEndM": 1647.0,
+  "mergedCount": 1,
+  "fallback": false,
+  "isMerged": true,
+  "isSeparated": false,
+  "mergedParts": [
+    { "partIndex": 0, "startKm": 3.42, "endKm": 5.65, "dPlusM": 178, "avgSlopePct": 7.98, ... },
+    { "partIndex": 1, "startKm": 5.88, "endKm": 8.50, "dPlusM": 224, "avgSlopePct": 8.54, ... }
+  ]
+}
+```
+
+**Points clés** :
+- `isSeparated: false` (retour à l'état fusionné après refusion)
+- `mergedParts[1].endKm = 8.50` (l'édition a été **conservée** dans la refusion)
+- `endKm = 8.50` (borne globale cohérente)
+- `dPlusM = 402` (recalculé sur les nouvelles bornes)
+- Les métriques globales (`dPlusM`, `avgSlopePct`, `altEndM`) sont **recalculées** à partir des nouvelles bornes
+
+#### 11.6.4 Invariants de l'export consolidé
+
+Quel que soit le cheminement UI (fusion → séparation → édition → refusion → re-séparation → …), l'export garantit :
+
+1. **Une montée logique = une entrée** dans `climbs[]`
+2. **`isMerged` reflète l'origine** : `true` si la montée provient d'une fusion de sous-montées
+3. **`isSeparated` reflète l'état UI actuel** : `true` si l'utilisateur a séparé, `false` sinon
+4. **`mergedParts` est toujours présent** si `isMerged = true`, avec au moins 2 sous-montées
+5. **`mergedParts` reflète les bornes actuelles** (éditions incluses)
+6. **Les métriques globales sont cohérentes** avec les bornes globales
+7. **Aucun champ UI n'est exporté** : pas de `groupId`, `subIndex`, `originMergedCount`
 
 ### 11.7 Comment vérifier
 
@@ -1723,6 +1857,7 @@ Les champs `groupId` et `subIndex` sont présents dans chaque `climb` exporté. 
 - **Refusion** : après 🔗, la montée redevient un seul élément avec `⊕ N`
 - **Multi-marqueurs** : sélectionner un membre d'un groupe doit afficher tous les marqueurs du groupe sur la carte
 - **Édition préservée** : après édition + séparation + refusion, les bornes éditées doivent être conservées
+- 🆕 **Export consolidé** : cliquer sur 💾 Exporter JSON, ouvrir le fichier, vérifier qu'il y a **une seule entrée** dans `climbs[]` pour la montée fusionnée, avec `isMerged: true` et `mergedParts` détaillé
 
 ---
 
@@ -1757,9 +1892,15 @@ Dans le widget profil **en mode full uniquement**, on peut créer une nouvelle m
 
 Après validation, la nouvelle montée est insérée dans `STATE.userClimbs` (triée par `startKm`), automatiquement sélectionnée, et la carte est zoomée dessus.
 
-### 12.5 Export
+### 12.5 Export 🆕 (v3.9.6)
 
-La nouvelle montée porte `groupId: null` et `subIndex: null`. Elle apparaît dans le JSON comme une montée standard.
+La nouvelle montée porte les attributs suivants à l'export :
+- `isMerged: false`
+- `isSeparated: false`
+- `mergedCount: 0`
+- `mergedParts: null`
+
+Elle apparaît dans le JSON comme une **montée autonome standard**, sans aucune logique de groupe.
 
 ### 12.6 Comment vérifier
 
@@ -1767,6 +1908,7 @@ La nouvelle montée porte `groupId: null` et `subIndex: null`. Elle apparaît da
 - **Création acceptée** : zone verte pendant le drag, ligne vallée verte et sommet rouge
 - **Insertion correcte** : la nouvelle montée apparaît à la bonne place dans la liste (triée par km)
 - **Annulation** : Échap pendant le drag → pas de création
+- 🆕 **Export** : la nouvelle montée apparaît avec `isMerged: false`, `mergedParts: null`
 
 ---
 
@@ -1798,17 +1940,346 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 | Groupe à 2 membres, supprimer #5.1 | #5.1, #5.2 | #N (dissolution) |
 | Montée autonome, supprimer #2 | #1, #2, #3 | #1, #2 (ex-#3, renuméroté) |
 
-### 13.5 Comment vérifier
+### 13.5 Impact sur l'export 🆕 (v3.9.6)
+
+Après suppression :
+- Si la montée supprimée était **autonome** → elle disparaît simplement de `climbs[]`
+- Si la montée supprimée était **membre d'un groupe** → **la montée consolidée reste** dans `climbs[]`, mais `mergedParts` est recalculé et `mergedCount` est décrémenté
+- Si le groupe **tombe à 1 membre** → dissolution → la montée redevient **autonome** dans l'export (`isMerged: false`, `mergedParts: null`)
+
+### 13.6 Comment vérifier
 
 - **Suppression d'une montée autonome** : la liste doit passer de N à N−1 éléments
 - **Suppression d'un membre de groupe** : les autres membres doivent être renumérotés
 - **Dissolution** : un groupe à 2 membres qui perd un membre doit voir l'autre redevenir autonome (plus de bandeau, plus de badge `🔗`)
+- 🆕 **Export** : vérifier que `climbs[]` contient bien le bon nombre de montées logiques, et que `mergedParts` reflète les bornes restantes
 
 ---
 
-## 14. Cas pratiques
+## 14. Export JSON — structure et contrat
 
-### 14.1 « Un pic aigu apparaît sur la carte »
+### 14.1 Objet
+
+Le bouton **💾 Exporter JSON** produit un fichier `nom_trace_analysis.json` contenant :
+
+- `metadata` : informations globales sur la trace et l'export
+- `legend` : description des catégories de pente
+- `segments` : liste plate des segments de catégorie
+- `climbs` : liste **consolidée** des montées logiques
+
+**Version v3.9.6** : le format est **plat** (pas de FeatureCollection), **compact** (pas de `slopeProfile`, pas de géométrie), et **consolidé** (une entrée par montée logique).
+
+### 14.2 Structure complète
+
+```json
+{
+  "metadata": {
+    "file": "bormio-mortirolo-2025.gpx",
+    "exportedAt": "2026-10-18T14:32:15.123Z",
+    "version": "3.9.6",
+    "totalDistanceKm": 110.45,
+    "totalDistanceSampledKm": 110.40,
+    "trailingGapM": 50,
+    "stepM": 50,
+    "totalPoints": 2209,
+    "segmentsCount": 47,
+    "climbsCount": 3,
+    "mergedClimbsCount": 1,
+    "separatedClimbsCount": 0
+  },
+  "legend": {
+    "note": "Bornes hautes exclusives. startProgress/endProgress = fraction 0–1 de la longueur réelle. Chaque montée fusionnée (isMerged=true) apparaît comme une SEULE entrée dans climbs[], avec mergedParts détaillant les sous-montées d'origine. Le champ isSeparated indique si l'utilisateur a séparé cette fusion dans l'interface (true) ou non (false) — dans les deux cas, la structure et les valeurs restent strictement identiques. Les montées autonomes ont isMerged=false et mergedParts=null.",
+    "fenetreCatM": 100,
+    "longueurMin": 200,
+    "categories": [
+      { "id": "dh3", "label": "Descente raide", "minPct": null, "maxPct": -7 },
+      { "id": "dh2", "label": "Descente", "minPct": -7, "maxPct": -3 },
+      { "id": "dh1", "label": "Faux plat descendant", "minPct": -3, "maxPct": -1 },
+      { "id": "pl",  "label": "Plat", "minPct": -1, "maxPct": 1 },
+      { "id": "up1", "label": "Faux plat montant", "minPct": 1, "maxPct": 3 },
+      { "id": "up2", "label": "Montée", "minPct": 3, "maxPct": 7 },
+      { "id": "up3", "label": "Montée raide", "minPct": 7, "maxPct": 10 },
+      { "id": "up4", "label": "Montée très raide", "minPct": 10, "maxPct": null }
+    ]
+  },
+  "segments": [
+    {
+      "index": 0,
+      "startKm": 0.0,
+      "endKm": 0.3,
+      "startProgress": 0.0,
+      "endProgress": 0.00272,
+      "categoryId": "pl",
+      "avgSlopePct": 0.5,
+      "dPlusM": 2
+    }
+  ],
+  "climbs": [
+    {
+      "index": 0,
+      "startKm": 12.45,
+      "endKm": 16.89,
+      "startProgress": 0.11270,
+      "endProgress": 0.15289,
+      "dPlusM": 312,
+      "avgSlopePct": 7.03,
+      "altStartM": 1245.0,
+      "altEndM": 1557.0,
+      "mergedCount": 0,
+      "fallback": false,
+      "isMerged": false,
+      "isSeparated": false,
+      "mergedParts": null
+    },
+    {
+      "index": 1,
+      "startKm": 44.75,
+      "endKm": 65.90,
+      "startProgress": 0.40515,
+      "endProgress": 0.59665,
+      "dPlusM": 1213,
+      "avgSlopePct": 5.74,
+      "altStartM": 405.4,
+      "altEndM": 1615.4,
+      "mergedCount": 1,
+      "fallback": false,
+      "isMerged": true,
+      "isSeparated": false,
+      "mergedParts": [
+        {
+          "partIndex": 0,
+          "startKm": 44.75,
+          "endKm": 48.90,
+          "startProgress": 0.40515,
+          "endProgress": 0.44274,
+          "dPlusM": 210,
+          "avgSlopePct": 5.05,
+          "altStartM": 405.4,
+          "altEndM": 615.1
+        },
+        {
+          "partIndex": 1,
+          "startKm": 47.80,
+          "endKm": 65.95,
+          "startProgress": 0.43276,
+          "endProgress": 0.59710,
+          "dPlusM": 1049,
+          "avgSlopePct": 5.78,
+          "altStartM": 569.9,
+          "altEndM": 1614.7
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "startKm": 88.20,
+      "endKm": 91.50,
+      "startProgress": 0.79855,
+      "endProgress": 0.82843,
+      "dPlusM": 245,
+      "avgSlopePct": 7.42,
+      "altStartM": 820.0,
+      "altEndM": 1065.0,
+      "mergedCount": 0,
+      "fallback": false,
+      "isMerged": false,
+      "isSeparated": false,
+      "mergedParts": null
+    }
+  ]
+}
+```
+
+### 14.3 Champs par section
+
+#### 14.3.1 `metadata`
+
+| Champ | Type | Description |
+|---|---|---|
+| `file` | string | Nom du fichier GPX d'origine |
+| `exportedAt` | ISO8601 | Date/heure de l'export |
+| `version` | string | Version de l'application (`"3.9.6"`) |
+| `totalDistanceKm` | float | Longueur réelle de la trace (`totalDistRawM / 1000`) |
+| `totalDistanceSampledKm` | float | Longueur couverte par la grille resamplée |
+| `trailingGapM` | int | Queue de trace ignorée (mètres) |
+| `stepM` | float | Pas de rééchantillonnage utilisé |
+| `totalPoints` | int | Nombre de points dans la grille resamplée |
+| `segmentsCount` | int | Nombre de segments de catégorie |
+| `climbsCount` | int | Nombre de montées **logiques** (entrées dans `climbs[]`) |
+| 🆕 `mergedClimbsCount` | int | Nombre de montées avec `isMerged: true` |
+| 🆕 `separatedClimbsCount` | int | Nombre de montées avec `isSeparated: true` |
+
+**Note v3.9.4/v3.9.6** : le champ `profileStepM` a été **supprimé** avec `slopeProfile`.
+
+#### 14.3.2 `legend`
+
+| Champ | Type | Description |
+|---|---|---|
+| `note` | string | Texte explicatif du contrat |
+| `fenetreCatM` | float | Valeur de `Fenêtre de calcul pente` |
+| `longueurMin` | float | Valeur de `Longueur min. pente` |
+| `categories` | array | Liste des 8 catégories avec bornes |
+
+**Note v3.9.4/v3.9.6** : le champ `exportProfileStepM` a été **supprimé** de `legend`.
+
+#### 14.3.3 `segments[]`
+
+Un objet par segment de catégorie contigu (après fusion `longueurMin`).
+
+| Champ | Type | Description |
+|---|---|---|
+| `index` | int | Index du segment (0-based) |
+| `startKm` | float | Début du segment (km) |
+| `endKm` | float | Fin du segment (km) |
+| `startProgress` | float | Fraction 0–1 de la longueur réelle |
+| `endProgress` | float | Fraction 0–1 de la longueur réelle |
+| `categoryId` | string | `dh3` / `dh2` / `dh1` / `pl` / `up1` / `up2` / `up3` / `up4` |
+| `avgSlopePct` | float | Pente moyenne pondérée par la distance |
+| `dPlusM` | int | D+ cumulé sur le segment |
+
+#### 14.3.4 `climbs[]` — montée autonome
+
+| Champ | Type | Description |
+|---|---|---|
+| `index` | int | Index de la montée (0-based, trié par `startKm`) |
+| `startKm` | float | Début de la montée |
+| `endKm` | float | Fin de la montée |
+| `startProgress` | float | Fraction 0–1 de la longueur réelle |
+| `endProgress` | float | Fraction 0–1 de la longueur réelle |
+| `dPlusM` | int | D+ cumulé |
+| `avgSlopePct` | float | Pente moyenne |
+| `altStartM` | float | Altitude au début |
+| `altEndM` | float | Altitude à la fin |
+| `mergedCount` | int | `0` |
+| `fallback` | bool | `true` si repli `⤺` |
+| `isMerged` | bool | `false` |
+| `isSeparated` | bool | `false` |
+| `mergedParts` | null | `null` |
+
+#### 14.3.5 `climbs[]` — montée fusionnée (séparée ou non)
+
+| Champ | Type | Description |
+|---|---|---|
+| `index` | int | Index de la montée |
+| `startKm` | float | Début de la fusion |
+| `endKm` | float | Fin de la fusion |
+| `startProgress` | float | Fraction 0–1 |
+| `endProgress` | float | Fraction 0–1 |
+| `dPlusM` | int | D+ cumulé sur toute la fusion |
+| `avgSlopePct` | float | Pente moyenne sur toute la fusion |
+| `altStartM` | float | Altitude au début |
+| `altEndM` | float | Altitude à la fin |
+| `mergedCount` | int | Nombre de fusions contributrices (`> 0`) |
+| `fallback` | bool | `true` si repli |
+| `isMerged` | bool | **`true`** |
+| `isSeparated` | bool | **`true` ou `false`** (seul discriminant UI) |
+| `mergedParts` | array | **`≥ 2` sous-montées** (voir ci-dessous) |
+
+#### 14.3.6 `mergedParts[]` — détail d'une sous-montée
+
+| Champ | Type | Description |
+|---|---|---|
+| `partIndex` | int | Index dans la fusion (0-based) |
+| `startKm` | float | Début de la sous-montée |
+| `endKm` | float | Fin de la sous-montée |
+| `startProgress` | float | Fraction 0–1 |
+| `endProgress` | float | Fraction 0–1 |
+| `dPlusM` | int | D+ cumulé sur la sous-montée |
+| `avgSlopePct` | float | Pente moyenne |
+| `altStartM` | float | Altitude au début |
+| `altEndM` | float | Altitude à la fin |
+
+**Important** : les `startKm`/`endKm` des `mergedParts` reflètent les bornes **actuelles** (après éventuelle édition + refusion). Ils peuvent donc **chevaucher** légèrement (ex. part 0 se termine à 48.90, part 1 commence à 47.80).
+
+### 14.4 Contrat d'utilisation des progressions
+
+`startProgress` et `endProgress` sont des fractions 0–1 de la **longueur réelle** de la trace (`metadata.totalDistanceKm`), directement utilisables pour construire un `line-gradient` Mapbox :
+
+```javascript
+map.addLayer({
+  id: 'trace-colored',
+  type: 'line',
+  source: 'trace',
+  paint: {
+    'line-width': 5,
+    'line-gradient': ['interpolate', ['linear'], ['line-progress'], ...stops]
+  }
+});
+```
+
+Pour éviter les dégradés progressifs entre deux stops, répéter la même couleur au début et à la fin de chaque segment.
+
+### 14.5 Contrat pour l'affichage des montées fusionnées
+
+**Vue d'ensemble** : itérer sur `climbs[]`, utiliser `startKm`/`endKm` comme bornes globales. Pour distinguer une fusion, regarder `isMerged`.
+
+**Vue détaillée d'une fusion** : itérer sur `mergedParts[]` pour obtenir chaque sous-montée avec ses propres métriques.
+
+**Indication visuelle pour l'utilisateur** :
+- `isMerged: false` → montée simple
+- `isMerged: true && isSeparated: false` → fusion « compacte »
+- `isMerged: true && isSeparated: true` → fusion « dépliée »
+
+**Ne PAS dépendre de** :
+- ❌ `groupId` (absent — ancien champ v3.9.1)
+- ❌ `subIndex` (absent — ancien champ v3.9.1)
+- ❌ `originMergedCount` (absent — ancien champ v3.9.1)
+- ❌ `slopeProfile` (absent — retiré en v3.9.4)
+- ❌ `slopeProfileStepM` (absent — retiré en v3.9.4)
+
+### 14.6 Champs supprimés depuis la v3.9.1
+
+| Champ | Version de suppression | Raison |
+|---|---|---|
+| `climb.groupId` | v3.9.6 | Interne UI — masqué par `isMerged`/`isSeparated` |
+| `climb.subIndex` | v3.9.6 | Interne UI — masqué par `mergedParts` |
+| `climb.originMergedCount` | v3.9.6 | Interne UI — masqué par `mergedCount` |
+| `climb.slopeProfile` | v3.9.4 | Redondant avec `segments` |
+| `climb.slopeProfileStepM` | v3.9.4 | Redondant avec `metadata.stepM` |
+| `metadata.profileStepM` | v3.9.4 | Plus de `slopeProfile` |
+| `legend.exportProfileStepM` | v3.9.4 | Plus de `slopeProfile` |
+
+**Migration** : pour un consommateur qui utilisait `groupId`/`subIndex` en v3.9.1, la logique à adopter est :
+- `climb.isMerged` remplace la détection `groupId != null`
+- `climb.mergedParts[]` remplace la subdivision par `subIndex`
+- `climb.isSeparated` remplace l'information « UI a séparé ou non »
+
+### 14.7 Exemple de script de consommation
+
+```javascript
+function displayClimbs(json) {
+  for (const climb of json.climbs) {
+    console.log(`Montée #${climb.index} : ${climb.startKm} km → ${climb.endKm} km`);
+    console.log(`  D+ ${climb.dPlusM} m · pente moy. ${climb.avgSlopePct} %`);
+
+    if (climb.isMerged) {
+      console.log(`  [Fusion ${climb.isSeparated ? 'séparée' : 'compacte'}]`);
+      for (const part of climb.mergedParts) {
+        console.log(`    - part ${part.partIndex} : ${part.startKm} → ${part.endKm} km (${part.dPlusM} m D+, ${part.avgSlopePct} %)`);
+      }
+    }
+  }
+}
+```
+
+### 14.8 Comment vérifier l'export
+
+1. Charger un GPX avec au moins une fusion (`gapMinM > 0`)
+2. Cliquer sur **💾 Exporter JSON**
+3. Ouvrir le fichier dans un éditeur JSON
+4. Vérifier :
+   - `metadata.version` = `"3.9.6"`
+   - `metadata.climbsCount` = nombre de montées logiques
+   - `metadata.mergedClimbsCount` = nombre de montées avec `isMerged: true`
+   - `metadata.separatedClimbsCount` = nombre de montées avec `isSeparated: true`
+   - Aucun champ `groupId`, `subIndex`, `originMergedCount`, `slopeProfile`, `slopeProfileStepM`
+   - Chaque `climb` avec `isMerged: true` a bien un `mergedParts` array ≥ 2 entrées
+
+---
+
+## 15. Cas pratiques
+
+### 15.1 « Un pic aigu apparaît sur la carte »
 
 **Symptôme** : pic vertical sur la trace colorée, alors que la courbe d'altitude ne montre presque rien.
 
@@ -1820,7 +2291,7 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 3. Si le pic persiste, réduire le seuil à 10 m
 4. Si le pic fait plus de 3 points de large, augmenter la fenêtre à 300 m
 
-### 14.2 « Les montées sont fragmentées en 5–10 micro-montées »
+### 15.2 « Les montées sont fragmentées en 5–10 micro-montées »
 
 **Symptôme** : le tableau affiche beaucoup de montées très courtes, souvent collées.
 
@@ -1831,7 +2302,7 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 2. Vérifier que `Lissage pente ≥ 150 m`
 3. Ne PAS augmenter le seuil détection (risque de rater des montées douces)
 
-### 14.3 « Une vraie bosse a disparu »
+### 15.3 « Une vraie bosse a disparu »
 
 **Symptôme** : une bosse visible sur la trace n'apparaît pas dans le tableau.
 
@@ -1841,7 +2312,7 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 
 **Cause possible 3** : lissage altitude trop long → réduire à 300–400 m
 
-### 14.4 « Le profil est complètement écrasé »
+### 15.4 « Le profil est complètement écrasé »
 
 **Symptôme** : la courbe d'altitude est trop lisse, plus de détail.
 
@@ -1852,7 +2323,7 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 2. Désactiver `Double SG`
 3. Réduire `Lissage altitude` à 300 m
 
-### 14.5 « Aucune montée détectée »
+### 15.5 « Aucune montée détectée »
 
 **Symptôme** : trace plate ou montées très douces.
 
@@ -1862,7 +2333,7 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 3. `Seuil détection` à 0.5 % ou moins
 4. `Lissage altitude` cohérent avec `Pas`
 
-### 14.6 « Le D+ affiché est différent de la réalité »
+### 15.6 « Le D+ affiché est différent de la réalité »
 
 **Symptôme** : D+ brut ne correspond pas à la réalité.
 
@@ -1872,30 +2343,32 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 
 **Vérification** : comparer avec un autre outil (Strava, Garmin) qui utilise la même méthode.
 
-### 14.7 « La trace sur la carte ne ressemble pas au tracé GPX »
+### 15.7 « La trace sur la carte ne ressemble pas au tracé GPX »
 
 🆕 **Ce problème a été corrigé en v3.9.2**. La trace sur la carte utilise désormais les points bruts du fichier GPX. Si le problème persiste, vérifier que le fichier a bien été rechargé après la mise à jour.
 
-### 14.8 « Je veux séparer une montée fusionnée »
+### 15.8 « Je veux séparer une montée fusionnée »
 
 **Solution** :
 1. Localiser la montée avec badge `⊕ N`
 2. Cliquer sur **✂ Séparer**
 3. Les sous-montées apparaissent groupées (`#N.1`, `#N.2`…) avec la carte zoomée sur tout le groupe
 4. Les marqueurs de la carte montrent tous les points vallée/sommet du groupe
+5. 🆕 **À l'export** : la montée reste une **seule entrée** avec `isSeparated: true` et `mergedParts[]` détaillé
 
-### 14.9 « Je veux refusionner un groupe que j'avais séparé »
+### 15.9 « Je veux refusionner un groupe que j'avais séparé »
 
 **Solution** :
 1. Repérer un membre du groupe (badge `🔗 N`)
 2. Cliquer sur **🔗 Refusionner**
 3. La montée fusionnée réapparaît, séparable à nouveau
+4. 🆕 **À l'export** : `isSeparated` repasse à `false`, `mergedParts` reflète les bornes actuelles
 
-### 14.10 « Je veux supprimer une montée qui n'aurait pas dû être détectée »
+### 15.10 « Je veux supprimer une montée qui n'aurait pas dû être détectée »
 
 **Solution** : cliquer sur le **✕** en haut à droite de la carte de montée. Si elle appartenait à un groupe, les `subIndex` restants sont renumérotés et le groupe est dissous s'il ne reste qu'un membre.
 
-### 14.11 « Je veux ajouter une montée manuellement »
+### 15.11 « Je veux ajouter une montée manuellement »
 
 **Solution** :
 1. S'assurer d'être en mode **profil complet** (pas de montée sélectionnée)
@@ -1904,30 +2377,74 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 4. Relâcher → montée créée et sélectionnée
 5. Si erreur : `Échap` annule
 
-### 14.12 « Le profil montée est vide ou ne se centre pas »
+### 15.12 « Le profil montée est vide ou ne se centre pas »
 
 🆕 **v3.9.2** : en mode montée, le canvas affiche **toute la trace** à 10 m/px et scrolle pour centrer la montée. Vérifier :
 1. Que la montée est bien sélectionnée (bordure bleue dans la liste)
 2. Que le scroll horizontal n'a pas été déplacé manuellement
 3. Si le scroll n'est pas centré après re-sélection, cliquer à nouveau sur la carte de montée
 
-### 14.13 « Les couleurs sur la carte et le profil ne sont pas identiques »
+### 15.13 « Les couleurs sur la carte et le profil ne sont pas identiques »
 
 🆕 **v3.8.1** : ce problème a été corrigé. Les deux utilisent `catSegments`. Si vous voyez encore une divergence :
 1. Vérifier que la trace a bien été rechargée après la mise à jour
 2. Comparer visuellement : le changement de couleur entre deux segments doit être au même km près sur les deux affichages
 
-### 14.14 « L'échelle du profil change quand je déplace une poignée »
+### 15.14 « L'échelle du profil change quand je déplace une poignée »
 
 🆕 **v3.8.3** : ce problème a été corrigé. L'échelle X est **strictement fixe** (50 m/px full, 10 m/px montée). Si vous voyez encore un changement :
 1. Vérifier que vous êtes sur la dernière version
 2. L'échelle ne change que si vous changez de mode (full ↔ montée) ou de montée sélectionnée
 
+### 15.15 🆕 « L'export JSON ne contient qu'une seule entrée alors que j'ai séparé en 3 »
+
+**C'est le comportement attendu depuis la v3.9.6.** L'export consolide :
+- La montée fusionnée apparaît comme **une seule entrée** dans `climbs[]`
+- `isMerged: true`, `isSeparated: true`
+- `mergedParts[]` contient les **3 sous-montées** avec leurs bornes actuelles
+
+**Pour afficher chaque sous-montée individuellement** : itérer sur `climb.mergedParts`.
+
+### 15.16 🆕 « Les champs groupId / subIndex ont disparu du JSON »
+
+**C'est le comportement attendu depuis la v3.9.6.** Ces champs étaient internes à l'UI. L'export utilise maintenant :
+- `isMerged` (booléen)
+- `isSeparated` (booléen)
+- `mergedParts` (tableau détaillé)
+
+**Migration recommandée** :
+```javascript
+// AVANT (v3.9.1)
+const groups = climbs.filter(c => c.groupId != null);
+
+// APRÈS (v3.9.6)
+const mergedClimbs = climbs.filter(c => c.isMerged);
+const separatedClimbs = climbs.filter(c => c.isSeparated);
+```
+
+### 15.17 🆕 « Le champ slopeProfile a disparu du JSON »
+
+**C'est le comportement attendu depuis la v3.9.4.** `slopeProfile` était redondant avec `segments[]`. Pour reconstituer l'équivalent :
+
+```javascript
+// AVANT : iterer sur climb.slopeProfile
+// APRÈS : filtrer segments[] sur les bornes de la montée
+const climbSegments = json.segments.filter(s =>
+  s.endKm > climb.startKm && s.startKm < climb.endKm
+);
+```
+
+### 15.18 🆕 « Le paramètre Pas du profil exporté a disparu »
+
+**C'est le comportement attendu depuis la v3.9.4.** Le paramètre `exportProfileStepM` a été supprimé avec `slopeProfile`. Le nombre de paramètres numériques est passé de 15 à **14**.
+
+Le `stepM` (Pas de rééchantillonnage) reste exporté dans `metadata.stepM`, mais il n'a plus de rôle dans le découpage du JSON.
+
 ---
 
-## 15. Tableau de diagnostic rapide
+## 16. Tableau de diagnostic rapide
 
-### 15.1 Symptômes → Actions
+### 16.1 Symptômes → Actions
 
 | Symptôme observé | Paramètre à ajuster | Action |
 |---|---|---|
@@ -1957,8 +2474,11 @@ La suppression n'affecte pas les autres montées, ni les paramètres, ni le fich
 | **Contours invisibles** | **v3.8.5 corrigé** | **Vérifier version** |
 | **Clic sur montée ne zoome pas** | **v3.8.2 corrigé** | **Vérifier version** |
 | **Séparation sans refusion possible** | **v3.9.1 corrigé** | **Vérifier version** |
+| 🆕 **Export : 1 entrée pour 3 séparations** | **v3.9.6 comportement attendu** | **Voir §15.15** |
+| 🆕 **Export : groupId absent** | **v3.9.6 comportement attendu** | **Voir §15.16** |
+| 🆕 **Export : slopeProfile absent** | **v3.9.4 comportement attendu** | **Voir §15.17** |
 
-### 15.2 Arbre de décision
+### 16.2 Arbre de décision
 
 ```mermaid
 flowchart TD
@@ -1974,7 +2494,7 @@ flowchart TD
     B -->|Profil écrasé| K[Lissage altitude ↓]
 ```
 
-### 15.3 Vérification rapide après modification
+### 16.3 Vérification rapide après modification
 
 Après modification d'un paramètre :
 
@@ -1983,12 +2503,13 @@ Après modification d'un paramètre :
 3. Vérifier les **indicateurs `⊕` et `⤺`** dans le tableau
 4. Ouvrir le **log Debug d'une montée** (clic sur la ligne) pour voir la pente segment par segment
 5. Vérifier que la carte ne montre pas de pics aigus
+6. 🆕 **Exporter le JSON** et vérifier `metadata.climbsCount` et `metadata.mergedClimbsCount`
 
 ---
 
-## 16. Rappel des défauts
+## 17. Rappel des défauts
 
-### 16.1 Valeurs par défaut v3.9.2
+### 17.1 Valeurs par défaut v3.9.6
 
 | Paramètre | Défaut | Catégorie |
 |---|---|---|
@@ -2006,11 +2527,12 @@ Après modification d'un paramètre :
 | Lissage gaussien | **75 m** | Avancé |
 | Correction plateaux | **6 pts** | Avancé |
 | Segments debug | **100 m** | Debug |
-| Pas du profil exporté | **50 m** | Export |
 | Double SG | **ON** | Toggle |
 | Lissage segments | **ON** | Toggle |
 
-### 16.2 Configuration cohérente recommandée
+**Note v3.9.4/v3.9.6** : le paramètre `Pas du profil exporté` (`exportProfileStepM`) a été **supprimé**. Le nombre de paramètres numériques est passé de 15 à **14**.
+
+### 17.2 Configuration cohérente recommandée
 
 **Avec ces défauts**, le diagnostic affiche :
 
@@ -2024,7 +2546,6 @@ Après modification d'un paramètre :
 - Écart min. : 250 m ≥ Pas 🟢
 - Filtre médian : désactivé ⚪
 - Lissage gaussien : σ ≈ 1.5 pts 🟢
-- Pas du profil exporté : 50 m 🟢
 
 **Recommandation** : la configuration par défaut est cohérente. Voici deux profils types :
 
@@ -2056,7 +2577,7 @@ Après modification d'un paramètre :
 
 → Fenêtres SG : 10 pts, pente : 3 pts, σ : 1.5 pts → tous 🟢
 
-### 16.3 Recommandation globale v3.9.2
+### 17.3 Recommandation globale v3.9.6
 
 Pour une trace éditeur Openrunner standard :
 
@@ -2075,16 +2596,15 @@ Filtre médian ................... 0
 Lissage gaussien ................ 75 m
 Correction plateaux ............. 6 pts
 Segments debug .................. 100 m
-Pas du profil exporté ........... 50 m
 Double SG ....................... ON
 Lissage segments ................ ON
 ```
 
-Cette configuration donne un diagnostic 🟢 **Cohérent** et exploite correctement le moyennage v3.5, l'anti-pic v3.6, la validation stricte v3.1, les groupes v3.9.1 et la trace brute sur carte v3.9.2.
+Cette configuration donne un diagnostic 🟢 **Cohérent** et exploite correctement le moyennage v3.5, l'anti-pic v3.6, la validation stricte v3.1, les groupes v3.9.1, la trace brute sur carte v3.9.2 et **l'export consolidé v3.9.6**.
 
 ---
 
-## 17. Glossaire
+## 18. Glossaire
 
 | Terme | Définition |
 |---|---|
@@ -2120,14 +2640,20 @@ Cette configuration donne un diagnostic 🟢 **Cohérent** et exploite correctem
 | **`totalDistSampledM`** | Longueur couverte par la grille resamplée (multiple de `stepM`) |
 | **`trailingGapM`** | Queue de trace au-delà du dernier multiple de `stepM`, ignorée par le resampling |
 | **`startProgress` / `endProgress`** | Fractions 0–1 de la longueur totale, compatibles `line-gradient` Mapbox |
-| **`slopeProfile`** | Sous-profil de pente d'une montée, découpé en tranches alignées sur les segments globaux |
 | **`catSegments`** | Liste des segments de catégorie fusionnés (utilisée par la carte ET le profil) |
 | **`eleDisplay`** | Altitude lissée **ancrée** sur les bornes des montées (courbe affichée) |
 | **`eleBaseCat`** | Altitude lissée **non ancrée** (utilisée pour la catégorisation des couleurs) |
-| **`groupId`** | Identifiant entier du groupe de montées (null si autonome) |
-| **`subIndex`** | Position d'un membre dans son groupe (1, 2, 3…) |
-| **`mergedParts`** | Tableau des bornes des sous-montées d'origine (permet la séparation) |
-| **`mergedCount`** | Nombre de fusions ayant contribué à une montée |
+| **`groupId`** | Identifiant entier du groupe UI (interne, **non exporté** depuis v3.9.6) |
+| **`subIndex`** | Position d'un membre dans son groupe UI (interne, **non exporté** depuis v3.9.6) |
+| **`originMergedCount`** | Nombre de montées dans la fusion d'origine UI (interne, **non exporté** depuis v3.9.6) |
+| **`mergedParts`** | Tableau des bornes des sous-montées d'origine (UI et **export**) |
+| **`mergedCount`** | Nombre de fusions ayant contribué à une montée (UI et **export**) |
+| **`isMerged`** 🆕 | Booléen export (v3.9.6) : la montée résulte d'une fusion |
+| **`isSeparated`** 🆕 | Booléen export (v3.9.6) : la fusion a été séparée dans l'UI |
+| **`mergedClimbsCount`** 🆕 | Compteur metadata (v3.9.6) : nombre de montées avec `isMerged=true` |
+| **`separatedClimbsCount`** 🆕 | Compteur metadata (v3.9.6) : nombre de montées avec `isSeparated=true` |
+| **`slopeProfile`** ❌ | Champ retiré en v3.9.4 (redondant avec `segments[]`) |
+| **`exportProfileStepM`** ❌ | Paramètre retiré en v3.9.4 (plus de `slopeProfile`) |
 | **Mapbox GL JS** | Bibliothèque de cartographie vectorielle 3D (Mapbox) |
 | **`mapbox-terrain-v2`** | Source vectorielle Mapbox pour les courbes de niveau (10 m d'intervalle) |
 | **`mapbox-dem`** | Source raster-dem Mapbox pour le terrain 3D |
@@ -2137,7 +2663,8 @@ Cette configuration donne un diagnostic 🟢 **Cohérent** et exploite correctem
 | **Refusion (`🔗`)** | Reconstitution d'une montée fusionnée à partir de ses sous-montées |
 | **Normalisation** | Dissolution automatique des groupes à 1 membre |
 | **Suppression (`✕`)** | Retrait d'une montée de la liste |
+| **Export consolidé** 🆕 | (v3.9.6) Format JSON où une montée fusionnée = une seule entrée |
 
 ---
 
-**Fin du manuel utilisateur v3.9.2**
+**Fin du manuel utilisateur v3.9.6**

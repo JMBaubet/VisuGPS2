@@ -1,8 +1,8 @@
 # Documentation Technique — Intégration GPX Climb Analyzer
 
 **Cible** : application Tauri + Node.js + Vue 3 + Vuetify, ou intégration standalone web
-**Version** : 3.9.2
-**Date** : 2026-10-17
+**Version** : 3.9.6
+**Date** : 2026-10-18
 **Public** : développeur full-stack intégrant la fonctionnalité
 
 ---
@@ -22,12 +22,12 @@
 11. [Intégration Mapbox GL JS](#11-intégration-mapbox-gl-js)
 12. [Widget profil (canvas)](#12-widget-profil-canvas)
 13. [Drag & drop sur le profil](#13-drag--drop-sur-le-profil)
-14. [Groupes de montées](#14-groupes-de-montées)
+14. [Groupes de montées (état UI)](#14-groupes-de-montées)
 15. [Création manuelle](#15-création-manuelle)
 16. [Suppression de montées](#16-suppression-de-montées)
 17. [Pipeline complet de détection](#17-pipeline-complet-de-détection)
 18. [Diagnostic de configuration](#18-diagnostic-de-configuration)
-19. [Export JSON](#19-export-json)
+19. [Export JSON (consolidé)](#19-export-json-consolidé)
 20. [Tests et validation](#20-tests-et-validation)
 21. [Migration depuis le prototype HTML](#21-migration-depuis-le-prototype-html)
 22. [Annexes](#22-annexes)
@@ -38,7 +38,7 @@
 
 ### 1.1 Objectif
 
-Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la fonctionnalité complète d'analyse de profil altimétrique GPX, dans sa version **v3.9.2**, incluant :
+Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la fonctionnalité complète d'analyse de profil altimétrique GPX, dans sa version **v3.9.6**, incluant :
 
 - **Filtre anti-pic Hampel** avec fenêtre en **mètres** (v3.6)
 - **Rééchantillonnage par moyenne** (fenêtre minimale 75 m, v3.5)
@@ -48,18 +48,18 @@ Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la foncti
 - **Fusion automatique** des montées trop proches (`gapMinM`) avec **conservation des `mergedParts`** (v3.9.0)
 - **Validation finale stricte** avec repli sur sous-segment (`fallback`)
 - **Carte Mapbox 3D** avec terrain DEM, courbes de niveau optionnelles, et **trace colorée par catégorie** (v3.8)
-- **Trace sur la carte = points bruts du GPX** (v3.9.2), pas la grille resamplée
+- **Trace sur la carte = points bruts du GPX** (v3.9.2)
 - **Widget profil en canvas 2D natif** avec échelles fixes (50 m/px full, 10 m/px montée) (v3.8.3)
 - **Catégorisation non ancrée** pour éviter les changements de couleur pendant le drag (v3.8.1)
-- **Widget montée avec profil complet + scroll centré** sur la montée sélectionnée (v3.9.2)
-- **Séparation des montées fusionnées** en leurs sous-montées d'origine (`✂`), avec persistance du groupe via `groupId`/`subIndex` (v3.9.0/v3.9.1)
-- **Refusion d'un groupe** (`🔗`), en préservant les bornes éditées (v3.9.1)
-- **Suppression** de montées individuelles avec renumérotation (v3.9.2)
-- **Création manuelle** par double-clic + drag (v3.9.0)
-- **Multi-marqueurs sur la carte** pour les montées groupées (v3.9.2)
-- **Chargement automatique de la carte** si token présent (v3.9.2)
+- **Widget montée avec profil complet + scroll centré** (v3.9.2)
+- **Séparation des montées fusionnées** en sous-montées UI (avec persistance du groupe via `groupId`/`subIndex`)
+- **Refusion d'un groupe** en préservant les bornes éditées
+- **Suppression** de montées individuelles avec renumérotation
+- **Création manuelle** par double-clic + drag
+- **Multi-marqueurs sur la carte** pour les montées groupées
+- **Chargement automatique de la carte** si token présent
 - **Diagnostic de configuration visuel**
-- **Export JSON** avec `groupId`/`subIndex`
+- **Export JSON consolidé** (v3.9.6) : une seule entrée par montée logique, avec `mergedParts` toujours présent pour les fusions, `isSeparated` pour l'état UI
 
 ### 1.2 Contraintes de la cible
 
@@ -88,7 +88,7 @@ Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la foncti
 | **Séparation/refusion/suppression** | **Front** | Mutation locale + rebuild |
 | **Création manuelle** | **Front** | Interaction temps réel |
 | Diagnostic | **Front** | O(1), à chaque input |
-| Export JSON | **Front** | Blob natif |
+| **Export JSON (consolidation)** | **Front** | Blob natif |
 
 ---
 
@@ -109,7 +109,7 @@ Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la foncti
 │  │  │  │   ├── <AppToolbar />           (drop, debug, params)    │  │  │  │
 │  │  │  │   ├── <ClimbsPanel />          (colonne gauche)         │  │  │  │
 │  │  │  │   │    ├── <StatsMini />                               │  │  │  │
-│  │  │  │   │    ├── <ClimbCard />       (par montée, groupée ?) │  │  │  │
+│  │  │  │   │    ├── <ClimbCard />       (par montée UI)          │  │  │  │
 │  │  │  │   │    └── <GroupBrace />                              │  │  │  │
 │  │  │  │   ├── <CenterPanel />          (carte + profil)        │  │  │  │
 │  │  │  │   │    ├── <MapPanel />        (Mapbox GL JS)          │  │  │  │
@@ -122,19 +122,20 @@ Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la foncti
 │  │  │                                                              │  │  │
 │  │  │  Stores Pinia                                                │  │  │
 │  │  │   ├── useGpxStore          (points bruts + resamplés)         │  │  │
-│  │  │   ├── useClimbsStore       (montées + groupes)                │  │  │
-│  │  │   ├── useParametersStore   (15 params + 2 toggles)            │  │  │
+│  │  │   ├── useClimbsStore       (montées UI + groupes)             │  │  │
+│  │  │   ├── useParametersStore   (14 params + 2 toggles)            │  │  │
 │  │  │   └── useMapStore          (token, basemap, ready)            │  │  │
 │  │  │                                                              │  │  │
 │  │  │  Composables                                                  │  │  │
 │  │  │   ├── useGpxParser                                            │  │  │
 │  │  │   ├── useSlopeCalculations                                    │  │  │
 │  │  │   ├── useClimbDetection                                       │  │  │
-│  │  │   ├── useClimbGroups       (split/refuse/normalize)           │  │  │
+│  │  │   ├── useClimbGroups       (split/refuse/normalize UI)        │  │  │
 │  │  │   ├── useManualClimb       (création double-clic + drag)      │  │  │
 │  │  │   ├── useMarkerDrag         (drag poignées canvas)            │  │  │
 │  │  │   ├── useMapbox             (init, layers, trace, markers)    │  │  │
 │  │  │   ├── useProfileCanvas      (rendu canvas, scroll centré)     │  │  │
+│  │  │   ├── useExport             (consolidation + blob)            │  │  │
 │  │  │   └── useDiagnostics                                        │  │  │
 │  │  └──────────────────────────────────────────────────────────────┘  │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
@@ -144,7 +145,7 @@ Intégrer dans une application Tauri/Vue 3/Vuetify (ou standalone web) la foncti
 │  │              Backend (Rust + Node.js sidecar)                      │  │
 │  │  ┌──────────────────────────────────────────────────────────────┐  │  │
 │  │  │  Node.js sidecar                                             │  │  │
-│  │  │   ├── /parse-and-analyze    (pipeline v3.9.2)                │  │  │
+│  │  │   ├── /parse-and-analyze    (pipeline v3.9.6)                │  │  │
 │  │  │   ├── /rebuild              (optionnel)                      │  │  │
 │  │  │   └── /despike              (isolé si besoin)                │  │  │
 │  │  └──────────────────────────────────────────────────────────────┘  │  │
@@ -166,7 +167,7 @@ src-tauri/
 │   │   ├── gpx.rs                # read_gpx_file
 │   │   └── analyzer.rs           # analyze_gpx
 │   └── sidecar/
-│       └── analyzer.js           # Script Node.js pipeline v3.9.2
+│       └── analyzer.js           # Script Node.js pipeline v3.9.6
 └── Cargo.toml
 
 src/
@@ -178,7 +179,8 @@ src/
 │   ├── category.ts
 │   ├── parameters.ts
 │   ├── diagnostics.ts
-│   └── mapbox.ts                 # MAP_STATE, basemap
+│   ├── mapbox.ts                 # MAP_STATE, basemap
+│   └── export.ts                 # ExportClimb, ExportMergedPart, ExportData
 ├── services/
 │   ├── gpxApi.ts                 # Wrapper invoke Tauri
 │   └── mapboxLoader.ts           # Chargement paresseux de Mapbox GL JS
@@ -191,11 +193,12 @@ src/
 │   ├── useGpxParser.ts
 │   ├── useSlopeCalculations.ts
 │   ├── useClimbDetection.ts
-│   ├── useClimbGroups.ts         # split, refuse, normalize
+│   ├── useClimbGroups.ts         # split, refuse, normalize (UI)
 │   ├── useManualClimb.ts         # double-clic + drag
 │   ├── useMarkerDrag.ts          # drag poignées
 │   ├── useMapbox.ts              # init, layers, trace, markers, zoom
 │   ├── useProfileCanvas.ts       # rendu canvas, scroll centré
+│   ├── useExport.ts              # consolidation + blob + download
 │   └── useDiagnostics.ts
 ├── utils/
 │   ├── haversine.ts
@@ -218,7 +221,8 @@ src/
 │   ├── buildTraceFeatures.ts     # carte : points bruts
 │   ├── buildMapMarkers.ts        # mono/groupe
 │   ├── zoomHelpers.ts            # fitBounds, _computeBounds
-│   └── groupHelpers.ts           # groupColor, normalizeGroups
+│   ├── groupHelpers.ts           # groupColor, normalizeGroups
+│   └── consolidateClimbs.ts      # v3.9.6 : consolidation export
 ├── components/
 │   └── gpx-analyzer/
 │       ├── GpxAnalyzer.vue
@@ -309,10 +313,6 @@ export interface AnalyzerParameters {
   /** Segments debug (m) — défaut 100 */
   segmentLogM: number;
 
-  // --- Export ---
-  /** Pas du profil exporté (m) — 10 à 500, défaut 50 */
-  exportProfileStepM: number;
-
   // --- Toggles ---
   /** Lissage renforcé (double SG) — défaut true */
   smoothExtra: boolean;
@@ -321,7 +321,9 @@ export interface AnalyzerParameters {
 }
 ```
 
-### 3.2 Types TypeScript — Montées (avec groupes)
+**Note importante v3.9.6** : le paramètre `exportProfileStepM` **n'existe plus**. Il a été retiré en v3.9.4 quand `slopeProfile` a été supprimé (redondant avec `segments`).
+
+### 3.2 Types TypeScript — Montées (état UI)
 
 ```typescript
 // ============================================================
@@ -348,7 +350,7 @@ export interface AutoClimb {
   fallback: boolean;
 }
 
-/** Montée éditable par l'utilisateur. */
+/** Montée éditable par l'utilisateur (état UI interne). */
 export interface UserClimb {
   startKm: number;
   endKm: number;
@@ -359,10 +361,14 @@ export interface UserClimb {
   mergedCount: number;
   mergedParts: MergedPart[] | null;
   fallback: boolean;
-  /** Identifiant entier du groupe (null si autonome). */
+  /** Identifiant entier du groupe UI (null si autonome). */
   groupId: number | null;
-  /** Position dans le groupe (1, 2, 3…). */
+  /** Position dans le groupe UI (1, 2, 3…). */
   subIndex: number | null;
+  /** Nombre de montées dans la fusion d'origine (si séparée). */
+  originMergedCount: number | null;
+  /** Vrai si l'utilisateur a cliqué sur ✂ (état UI). */
+  isSeparated: boolean;
   /** Appliqué par rebuild() lors des contraintes anti-chevauchement. */
   _constrainedStart?: boolean;
   _constrainedEnd?: boolean;
@@ -389,6 +395,8 @@ export interface Climb {
   fallback: boolean;
   groupId: number | null;
   subIndex: number | null;
+  originMergedCount: number | null;
+  isSeparated: boolean;
 }
 
 // ============================================================
@@ -426,7 +434,8 @@ export interface CatSegment {
 // ============================================================
 
 import type { GpxPoint } from './gpx';
-import type { AutoClimb, UserClimb } from './climb';
+import type { AutoClimb, UserClimb, Climb } from './climb';
+import type { CatSegment } from './category';
 
 export interface RawStats {
   n: number;
@@ -477,7 +486,7 @@ export interface AppState {
   pendingNewClimb: { valleyKm: number; summitKm: number } | null;
   newClimbDragging: boolean;
 
-  // Groupes
+  // Groupes UI
   nextGroupId: number;
 
   // Cache de rendu
@@ -518,44 +527,25 @@ export interface AnalyzerResult {
   avgWinM: number;
   rawStats: RawStats;
   autoClimbs: AutoClimb[];
-  /** Nombre de points effectifs corrigés par l'anti-pic (v3.6). */
   despikeCount: number;
-  /** Nombre de points effectifs dans la fenêtre Hampel. */
   despikeWinPtsEffective: number;
 }
 ```
 
-### 3.5 Types TypeScript — Diagnostic et export
+### 3.5 Types TypeScript — Export consolidé (v3.9.6)
 
 ```typescript
 // ============================================================
-// src/types/diagnostics.ts
-// ============================================================
-
-export type DiagStatus = 'green' | 'orange' | 'red' | 'grey';
-
-export interface DiagEntry {
-  key: string;
-  label: string;
-  effective: string;
-  optimal: string;
-  target: string | null;
-  status: DiagStatus;
-  msg: string;
-}
-
-export interface DiagWarning {
-  level: 'red' | 'orange';
-  msg: string;
-}
-
-export interface DiagResult {
-  diag: Record<string, DiagEntry>;
-  warnings: DiagWarning[];
-}
-
-// ============================================================
 // src/types/export.ts
+// ============================================================
+//
+// v3.9.6 : structure CONSOLIDÉE
+// - Chaque entrée `climbs[]` correspond à UNE montée LOGIQUE
+// - Une fusion séparée (groupe UI) est ré-agrégée en une seule entrée
+// - `mergedParts` est TOUJOURS présent si isMerged=true
+// - `isSeparated` est le seul champ qui diffère entre une fusion
+//   non séparée (false) et séparée (true)
+// - groupId, subIndex, originMergedCount NE SONT PAS exportés
 // ============================================================
 
 export interface ExportSegment {
@@ -569,19 +559,22 @@ export interface ExportSegment {
   dPlusM: number;
 }
 
-export interface ExportSlopeProfileEntry {
-  kmStart: number;
-  kmEnd: number;
-  eleStartM: number;
-  eleEndM: number;
+/** Détail d'une sous-montée d'une fusion (bornes ACTUELLES). */
+export interface ExportMergedPart {
+  partIndex: number;
+  startKm: number;
+  endKm: number;
+  startProgress: number;
+  endProgress: number;
+  dPlusM: number;
   avgSlopePct: number;
-  categoryId: string;
+  altStartM: number;
+  altEndM: number;
 }
 
+/** Entrée consolidée d'une montée logique dans l'export. */
 export interface ExportClimb {
   index: number;
-  groupId: number | null;
-  subIndex: number | null;
   startKm: number;
   endKm: number;
   startProgress: number;
@@ -592,8 +585,10 @@ export interface ExportClimb {
   altEndM: number;
   mergedCount: number;
   fallback: boolean;
-  slopeProfile: ExportSlopeProfileEntry[];
-  slopeProfileStepM: number;
+  isMerged: boolean;
+  isSeparated: boolean;
+  /** Null si isMerged=false ; array ≥ 2 sinon. */
+  mergedParts: ExportMergedPart[] | null;
 }
 
 export interface ExportData {
@@ -608,7 +603,8 @@ export interface ExportData {
     totalPoints: number;
     segmentsCount: number;
     climbsCount: number;
-    profileStepM: number;
+    mergedClimbsCount: number;
+    separatedClimbsCount: number;
   };
   legend: {
     note: string;
@@ -625,7 +621,7 @@ export interface ExportData {
 
 ## 4. Inventaire complet des paramètres
 
-### 4.1 Paramètres utilisateur (15 numériques + 2 toggles)
+### 4.1 Paramètres utilisateur (14 numériques + 2 toggles)
 
 | Nom UI | Nom technique | Type | Plage | Défaut | Impact |
 |---|---|---|---|---|---|
@@ -643,11 +639,10 @@ export interface ExportData {
 | Lissage gaussien | `gaussianSigmaM` | float | 0–500 | **75** | Adoucissement |
 | Correction plateaux | `plateauRun` | int | 0–20 | **6** | Détection plateaux |
 | Segments debug | `segmentLogM` | int | 10–2000 | **100** | Granularité log |
-| Pas du profil exporté | `exportProfileStepM` | float | 10–500 | **50** | Granularité JSON |
 | Double SG | `smoothExtra` | bool | — | **ON** | Second passage SG |
 | Lissage segments | `segmentSmooth` | bool | — | **ON** | Médiane mobile 3 sur logs |
 
-**Note importante** : les clés techniques sont **stables** entre versions. Seuls les libellés UI changent.
+**Note importante v3.9.4** : le paramètre `exportProfileStepM` (15ᵉ paramètre numérique de la v3.9.3) a été **supprimé** avec la fonctionnalité `slopeProfile`. Le nombre de paramètres numériques est passé de 15 à **14**.
 
 ### 4.2 Constantes internes (non exposées)
 
@@ -666,9 +661,6 @@ export interface ExportData {
 | `DESPIKE_WINDOW_M_MAX` | 500 | Plafond fenêtre |
 | `DESPIKE_THRESHOLD_M_DEFAULT` | 15 | Seuil Hampel |
 | `RESAMPLE_AVG_MIN_M` | 75 | Fenêtre minimale de moyennage |
-| `EXPORT_PROFILE_STEP_M_DEFAULT` | 50 | Granularité profil |
-| `EXPORT_PROFILE_STEP_M_MIN` | 10 | Plancher |
-| `EXPORT_PROFILE_STEP_M_MAX` | 500 | Plafond |
 | `INSERT_EDGE_MIN_KM` | 1.0 | Espace avant/après |
 | `INSERT_BETWEEN_MIN_KM` | 0.2 | Espace entre montées |
 | `MANUAL_MIN_LEN_KM` | 0.05 | Longueur min. création |
@@ -687,6 +679,8 @@ export interface ExportData {
 | `_minSegmentLength` | 300 | Longueur min absolue |
 | `DRAG_MIN_LEN_KM` | 0.05 | Longueur min drag |
 | `DRAG_MIN_GAP_KM` | 0.001 | Gap min drag |
+
+**Constantes supprimées en v3.9.4** : `EXPORT_PROFILE_STEP_M_DEFAULT`, `EXPORT_PROFILE_STEP_M_MIN`, `EXPORT_PROFILE_STEP_M_MAX`.
 
 ### 4.3 Critères de validation
 
@@ -713,7 +707,8 @@ export const CLIMB_CRITERIA = [
 | Écart min. ≥ Pas | `gapMinM ≥ stepM` (ou 0) | 🟠 |
 | Anti-pic fenêtre ≥ 2 × Pas | `despikeWindowM ≥ 2 × stepM` (ou seuil = 0) | 🟠 |
 | Anti-pic seuil ≥ 5 m | `despikeThresholdM ≥ 5` (ou 0) | 🟠 |
-| Pas du profil exporté ≤ Longueur min. pente | `exportProfileStepM ≤ longueurMin` | 🟠 |
+
+**Règle supprimée en v3.9.4** : `Pas du profil exporté ≤ Longueur min. pente` (paramètre retiré).
 
 ### 4.5 Validation des paramètres
 
@@ -736,7 +731,6 @@ export function validateParameters(p: AnalyzerParameters): AnalyzerParameters {
     gaussianSigmaM: Math.max(0, Math.min(500, p.gaussianSigmaM)),
     plateauRun: Math.max(0, Math.min(20, p.plateauRun)),
     segmentLogM: Math.max(10, Math.min(2000, p.segmentLogM)),
-    exportProfileStepM: Math.max(10, Math.min(500, p.exportProfileStepM)),
     smoothExtra: !!p.smoothExtra,
     segmentSmooth: !!p.segmentSmooth,
   };
@@ -801,10 +795,13 @@ export function colorForSlope(slope: number): string {
 - La **borne haute est exclusive** : une pente de +3 % exactement tombe dans `up1`
 - La catégorisation est **symétrique** pour les faux plats, **asymétrique** pour les raides
 
-### 5.3 Groupes de montées — helpers
+### 5.3 Groupes UI — helpers
 
 ```typescript
 // src/utils/groupHelpers.ts
+//
+// Ces helpers gèrent l'état UI des groupes (séparation/refusion).
+// Ils ne concernent PAS l'export consolidé (v3.9.6).
 
 /**
  * Couleur stable pour un groupe (angle d'or → teinte bien répartie).
@@ -815,10 +812,12 @@ export function groupColor(gid: number): string {
 }
 
 /**
- * Numérotation d'affichage : "#N" (autonome) ou "#N.M" (groupé).
+ * Numérotation d'affichage UI : "#N" (autonome) ou "#N.M" (groupé UI).
  * Calculée à partir du tableau trié de montées.
  */
-export function computeClimbLabels(climbs: { groupId: number | null; subIndex: number | null }[]): string[] {
+export function computeClimbLabels(
+  climbs: { groupId: number | null; subIndex: number | null }[],
+): string[] {
   let mainCounter = 0;
   const groupCounters: Record<number, number> = {};
   const labels: string[] = [];
@@ -920,7 +919,6 @@ export function resampleUniform(
     if (count > 0) {
       ele[k] = sumEle / count;
     } else {
-      // Fallback : interpolation linéaire
       let jj = 0;
       while (jj < n - 2 && distRaw[jj + 1] < dCenter) jj++;
       const d0 = distRaw[jj];
@@ -1023,9 +1021,6 @@ export function despikeAltitude(
   return { out, count };
 }
 
-/**
- * Wrapper : convertit mètres → points puis applique Hampel.
- */
 export function applyDespike(
   ele: Float64Array,
   windowM: number,
@@ -1270,7 +1265,7 @@ export function clipSlope(slope: Float64Array, maxPct = 25): Float64Array {
 }
 ```
 
-### 6.9 Détection (hystérésis, candidats, subClimb, computeAuto)
+### 6.9 Détection
 
 ```typescript
 // src/utils/detection.ts
@@ -1278,6 +1273,9 @@ export function clipSlope(slope: Float64Array, maxPct = 25): Float64Array {
 import type { AnalyzerParameters } from '../types/parameters';
 import type { AutoClimb } from '../types/climb';
 import { CLIMB_CRITERIA } from './categorization';
+import { savitzkyGolay, movingAverage, medianFilter } from './smoothing';
+import { anchoredMovingAverage } from './anchoredSmoothing';
+import { computeSlope, clipSlope } from './slope';
 
 const REFINE_MIN_M = 1500;
 const REFINE_MAX_M = 8000;
@@ -1347,7 +1345,6 @@ export function findBestSubClimb(
   return best;
 }
 
-// Helpers inline (dupliqués pour éviter la dépendance circulaire)
 function findIdxAtDist(dist: Float64Array, targetM: number): number {
   let lo = 0, hi = dist.length - 1;
   while (lo < hi) {
@@ -1439,7 +1436,6 @@ export function computeAuto(
       const prev = refined[refined.length - 1];
       const gapM = dist[newStart] - dist[prev.endIdx];
       if (gapM < gapMinM) {
-        // Conservation des bornes de la sous-montée initiale
         if (!prev._mergedParts) {
           prev._mergedParts = [{
             startKm: dist[prev.startIdx] / 1000,
@@ -1453,7 +1449,6 @@ export function computeAuto(
           newPrevStart = midValley;
           anchors[anchors.length - 2] = midValley;
         }
-        // Ajouter la nouvelle sous-montée
         prev._mergedParts.push({
           startKm: dist[newStart] / 1000,
           endKm: dist[newEnd] / 1000,
@@ -1521,8 +1516,6 @@ export function computeAuto(
 }
 ```
 
-**Note** : les fonctions `medianFilter`, `savitzkyGolay`, `movingAverage`, `computeSlope`, `clipSlope`, `anchoredMovingAverage` doivent être importées depuis leurs modules respectifs.
-
 ### 6.10 Contraintes anti-chevauchement
 
 ```typescript
@@ -1579,10 +1572,13 @@ export function applyDragConstraint(
 }
 ```
 
-### 6.11 Groupes — séparation, refusion, normalisation
+### 6.11 Groupes UI — séparation, refusion, normalisation
 
 ```typescript
 // src/utils/climbGroups.ts
+//
+// Ces fonctions gèrent l'ÉTAT UI des groupes.
+// L'export consolidé (v3.9.6) est géré séparément dans consolidateClimbs.ts.
 
 import type { UserClimb } from '../types/climb';
 
@@ -1603,11 +1599,10 @@ export function splitMergedClimb(
   }
 
   const gid = nextGroupId;
+  const originCount = (merged.mergedCount || 0) + 1;
 
-  // Retirer la montée fusionnée
   userClimbs.splice(mergedIdx, 1);
 
-  // Créer les sous-montées
   const newClimbs: UserClimb[] = merged.mergedParts.map((part, k) => ({
     startKm: part.startKm,
     endKm: part.endKm,
@@ -1620,6 +1615,8 @@ export function splitMergedClimb(
     fallback: false,
     groupId: gid,
     subIndex: k + 1,
+    originMergedCount: originCount,
+    isSeparated: true,
   }));
 
   for (const nc of newClimbs) userClimbs.push(nc);
@@ -1646,12 +1643,10 @@ export function refuseGroup(
   const endKm = members[members.length - 1].endKm;
   const mergedParts = members.map(m => ({ startKm: m.startKm, endKm: m.endKm }));
 
-  // Retirer les membres
   for (let i = userClimbs.length - 1; i >= 0; i--) {
     if (userClimbs[i].groupId === gid) userClimbs.splice(i, 1);
   }
 
-  // Créer la montée fusionnée
   const merged: UserClimb = {
     startKm,
     endKm,
@@ -1664,6 +1659,8 @@ export function refuseGroup(
     fallback: false,
     groupId: null,
     subIndex: null,
+    originMergedCount: null,
+    isSeparated: false,
   };
   userClimbs.push(merged);
   userClimbs.sort((a, b) => a.startKm - b.startKm);
@@ -1683,6 +1680,8 @@ export function normalizeGroups(userClimbs: UserClimb[]): void {
     if (c.groupId != null && counts[c.groupId] < 2) {
       c.groupId = null;
       c.subIndex = null;
+      c.originMergedCount = null;
+      c.isSeparated = false;
     }
   }
 }
@@ -1695,14 +1694,6 @@ export function normalizeGroups(userClimbs: UserClimb[]): void {
 
 import type { UserClimb } from '../types/climb';
 
-/**
- * Supprime une montée de la liste, en gérant :
- * - la renumérotation des subIndex du groupe affecté
- * - la dissolution du groupe si < 2 membres restants
- * - l'ajustement de la sélection (si applicable)
- *
- * Le caller doit ajuster `selectedClimbIdx` après l'appel.
- */
 export function deleteClimbFromList(
   idx: number,
   userClimbs: UserClimb[],
@@ -1720,14 +1711,14 @@ export function deleteClimbFromList(
       .filter(c => c.groupId === removed.groupId)
       .sort((a, b) => a.startKm - b.startKm);
 
-    // Renuméroter les subIndex
     siblings.forEach((c, k) => { c.subIndex = k + 1; });
 
-    // Dissoudre si < 2 membres
     if (siblings.length < 2) {
       for (const c of siblings) {
         c.groupId = null;
         c.subIndex = null;
+        c.originMergedCount = null;
+        c.isSeparated = false;
       }
       dissolved = true;
     }
@@ -1746,9 +1737,6 @@ import type { UserClimb } from '../types/climb';
 
 const MANUAL_MIN_LEN_KM = 0.05;
 
-/**
- * Vérifie qu'une plage [a, b] ne chevauche aucune montée existante.
- */
 export function isFreeRange(aKm: number, bKm: number, userClimbs: UserClimb[]): boolean {
   const lo = Math.min(aKm, bKm);
   const hi = Math.max(aKm, bKm);
@@ -1758,9 +1746,6 @@ export function isFreeRange(aKm: number, bKm: number, userClimbs: UserClimb[]): 
   return true;
 }
 
-/**
- * Vérifie qu'un point n'est pas dans une montée existante.
- */
 export function isFreeKm(km: number, userClimbs: UserClimb[]): boolean {
   for (const c of userClimbs) {
     if (km >= c.startKm && km <= c.endKm) return false;
@@ -1768,10 +1753,6 @@ export function isFreeKm(km: number, userClimbs: UserClimb[]): boolean {
   return true;
 }
 
-/**
- * Crée une nouvelle montée manuelle.
- * Retourne la montée créée ou null si refusée.
- */
 export function createManualClimb(
   valleyKm: number,
   summitKm: number,
@@ -1792,6 +1773,8 @@ export function createManualClimb(
     fallback: false,
     groupId: null,
     subIndex: null,
+    originMergedCount: null,
+    isSeparated: false,
   };
 
   userClimbs.push(newClimb);
@@ -1840,7 +1823,6 @@ export function buildTraceFeatures(
 
   const n = rawPoints.length;
 
-  // 1. Catégoriser chaque point brut par distance cumulée
   const catOf = new Array<string>(n);
   let segIdx = 0;
   for (let i = 0; i < n; i++) {
@@ -1850,8 +1832,6 @@ export function buildTraceFeatures(
     catOf[i] = catSegments[segIdx].key;
   }
 
-  // 2. Grouper les points consécutifs de même catégorie
-  //    (le point de transition est inclus dans les deux LineStrings)
   const features: TraceFeature[] = [];
   let startIdx = 0;
   for (let i = 1; i <= n; i++) {
@@ -1886,7 +1866,6 @@ export function buildTraceFeatures(
 // src/utils/buildMapMarkers.ts
 
 import type { UserClimb } from '../types/climb';
-import type { GpxPoint } from '../types/gpx';
 
 export interface MarkerFeature {
   type: 'Feature';
@@ -1991,70 +1970,37 @@ export function computeBounds(
 }
 ```
 
-### 6.17 Export JSON
+### 6.17 Consolidation des montées pour l'export (v3.9.6)
 
 ```typescript
-// src/utils/exportData.ts
+// src/utils/consolidateClimbs.ts
+//
+// v3.9.6 — CONSOLIDATION POUR L'EXPORT
+//
+// RÈGLE : dans le JSON exporté, une montée fusionnée (séparée ou non)
+// apparaît comme UNE SEULE entrée dans climbs[], avec isMerged=true
+// et mergedParts (détail des sous-montées d'origine, bornes ACTUELLES).
+//
+// Seul isSeparated diffère :
+// - false = fusionnée non séparée par l'utilisateur
+// - true  = fusionnée séparée par l'utilisateur (les sous-montées
+//           sont ré-agrégées dans mergedParts pour préserver les infos)
+//
+// Les champs groupId / subIndex / originMergedCount sont INTERNES
+// (state UI) et ne sont PAS exportés.
 
 import type { RebuildResult } from '../types/state';
-import type { UserClimb } from '../types/climb';
-import type { ExportData, ExportSegment, ExportClimb, ExportSlopeProfileEntry } from '../types/export';
-import type { AnalyzerParameters } from '../types/parameters';
-import { SLOPE_CATEGORIES } from './categorization';
+import type { ExportClimb, ExportMergedPart } from '../types/export';
 
-function buildClimbSlopeProfile(
-  dist: number[],
-  eleDisplay: number[],
-  startIdx: number,
-  endIdx: number,
-  profileStepM: number,
-  catSegments: RebuildResult['catSegments'],
-): ExportSlopeProfileEntry[] {
-  const profile: ExportSlopeProfileEntry[] = [];
-  const climbStartDist = dist[startIdx];
-  const climbEndDist = dist[endIdx];
-  if (climbEndDist <= climbStartDist || profileStepM <= 0) return profile;
-
-  const relevantSegs = catSegments.filter(
-    s => s.endDist > climbStartDist && s.startDist < climbEndDist,
-  );
-
-  for (const seg of relevantSegs) {
-    const segStart = Math.max(seg.startDist, climbStartDist);
-    const segEnd = Math.min(seg.endDist, climbEndDist);
-    const segLen = segEnd - segStart;
-    if (segLen <= 0) continue;
-
-    const nChunks = Math.max(1, Math.ceil(segLen / profileStepM));
-    const chunkLen = segLen / nChunks;
-
-    for (let c = 0; c < nChunks; c++) {
-      const chunkStartDist = segStart + c * chunkLen;
-      const chunkEndDist = (c === nChunks - 1) ? segEnd : segStart + (c + 1) * chunkLen;
-
-      const iStart = findIdxAtDist(dist, chunkStartDist);
-      const iEnd = findIdxAtDist(dist, chunkEndDist);
-      if (iEnd <= iStart) continue;
-
-      let dPlus = 0;
-      for (let k = iStart + 1; k <= iEnd; k++) {
-        const d = eleDisplay[k] - eleDisplay[k - 1];
-        if (d > 0) dPlus += d;
-      }
-      const length = dist[iEnd] - dist[iStart];
-      const avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
-
-      profile.push({
-        kmStart: +(dist[iStart] / 1000).toFixed(4),
-        kmEnd: +(dist[iEnd] / 1000).toFixed(4),
-        eleStartM: +eleDisplay[iStart].toFixed(1),
-        eleEndM: +eleDisplay[iEnd].toFixed(1),
-        avgSlopePct: +avgSlope.toFixed(2),
-        categoryId: seg.key,
-      });
-    }
-  }
-  return profile;
+interface Metrics {
+  startKm: number;
+  endKm: number;
+  startProgress: number;
+  endProgress: number;
+  dPlusM: number;
+  avgSlopePct: number;
+  altStartM: number;
+  altEndM: number;
 }
 
 function findIdxAtDist(dist: number[], targetM: number): number {
@@ -2066,6 +2012,136 @@ function findIdxAtDist(dist: number[], targetM: number): number {
   return lo;
 }
 
+function computeMetrics(
+  dist: number[],
+  eleDisplay: number[],
+  totalDistRawM: number,
+  startIdx: number,
+  endIdx: number,
+): Metrics {
+  let dPlus = 0;
+  for (let k = startIdx + 1; k <= endIdx; k++) {
+    const d = eleDisplay[k] - eleDisplay[k - 1];
+    if (d > 0) dPlus += d;
+  }
+  const length = dist[endIdx] - dist[startIdx];
+  const avgSlope = length > 0 ? (dPlus / length) * 100 : 0;
+  return {
+    startKm: +(dist[startIdx] / 1000).toFixed(4),
+    endKm: +(dist[endIdx] / 1000).toFixed(4),
+    startProgress: +(dist[startIdx] / totalDistRawM).toFixed(5),
+    endProgress: +(dist[endIdx] / totalDistRawM).toFixed(5),
+    dPlusM: Math.round(dPlus),
+    avgSlopePct: +avgSlope.toFixed(2),
+    altStartM: +eleDisplay[startIdx].toFixed(1),
+    altEndM: +eleDisplay[endIdx].toFixed(1),
+  };
+}
+
+/**
+ * Transforme `rebuild().climbs` (état UI avec groupes) en liste
+ * de montées LOGIQUES pour l'export JSON consolidé.
+ */
+export function consolidateClimbsForExport(
+  data: RebuildResult,
+  totalDistRawM: number,
+): ExportClimb[] {
+  const { dist, eleDisplay, climbs } = data;
+
+  const result: ExportClimb[] = [];
+  const seenGroups = new Set<number>();
+
+  for (const c of climbs) {
+    if (c.invalid) continue;
+
+    if (c.groupId != null) {
+      // ─── Fusion SÉPARÉE (groupe UI) → consolider en une seule entrée ───
+      if (seenGroups.has(c.groupId)) continue;
+      seenGroups.add(c.groupId);
+
+      const members = climbs
+        .filter(x => x.groupId === c.groupId && !x.invalid)
+        .sort((a, b) => a.startDist - b.startDist);
+
+      if (members.length === 0) continue;
+
+      const globalStartIdx = members[0].startIdx;
+      const globalEndIdx = members[members.length - 1].endIdx;
+      if (globalEndIdx <= globalStartIdx) continue;
+
+      const globalMetrics = computeMetrics(
+        dist, eleDisplay, totalDistRawM, globalStartIdx, globalEndIdx,
+      );
+
+      const mergedParts: ExportMergedPart[] = members.map((m, k) => {
+        const partMetrics = computeMetrics(
+          dist, eleDisplay, totalDistRawM, m.startIdx, m.endIdx,
+        );
+        return { partIndex: k, ...partMetrics };
+      });
+
+      result.push({
+        index: 0, // assigné après tri
+        ...globalMetrics,
+        mergedCount: members.length - 1,
+        fallback: false,
+        isMerged: true,
+        isSeparated: true,
+        mergedParts,
+      });
+    } else {
+      // ─── Montée autonome OU fusion NON séparée ───
+      const metrics = computeMetrics(
+        dist, eleDisplay, totalDistRawM, c.startIdx, c.endIdx,
+      );
+      const isMerged = (c.mergedCount || 0) > 0;
+
+      let mergedPartsArray: ExportMergedPart[] | null = null;
+      if (isMerged && c.ref && Array.isArray(c.ref.mergedParts) && c.ref.mergedParts.length >= 2) {
+        mergedPartsArray = c.ref.mergedParts
+          .map((part, k) => {
+            const sIdx = findIdxAtDist(dist, part.startKm * 1000);
+            const eIdx = findIdxAtDist(dist, part.endKm * 1000);
+            if (eIdx <= sIdx) return null;
+            const partMetrics = computeMetrics(dist, eleDisplay, totalDistRawM, sIdx, eIdx);
+            return { partIndex: k, ...partMetrics };
+          })
+          .filter((x): x is ExportMergedPart => x !== null);
+
+        if (mergedPartsArray.length < 2) mergedPartsArray = null;
+      }
+
+      result.push({
+        index: 0,
+        ...metrics,
+        mergedCount: c.mergedCount || 0,
+        fallback: !!c.fallback,
+        isMerged,
+        isSeparated: false,
+        mergedParts: mergedPartsArray,
+      });
+    }
+  }
+
+  // Tri par startKm croissant, puis assignation des index
+  result.sort((a, b) => a.startKm - b.startKm);
+  result.forEach((c, i) => { c.index = i; });
+
+  return result;
+}
+```
+
+### 6.18 Construction des données d'export
+
+```typescript
+// src/utils/exportData.ts
+
+import type { RebuildResult } from '../types/state';
+import type { ExportData, ExportSegment } from '../types/export';
+import type { AnalyzerParameters } from '../types/parameters';
+import { SLOPE_CATEGORIES } from './categorization';
+import { consolidateClimbsForExport } from './consolidateClimbs';
+
 export function buildExportData(
   fileName: string,
   stepM: number,
@@ -2073,10 +2149,9 @@ export function buildExportData(
   params: AnalyzerParameters,
   data: RebuildResult,
 ): ExportData {
-  const { dist, eleDisplay, catSegments, climbs } = data;
+  const { dist, catSegments } = data;
   const totalDistSampledM = dist[dist.length - 1];
   const trailingGapM = Math.max(0, Math.round(totalDistRawM - totalDistSampledM));
-  const profileStepM = params.exportProfileStepM;
 
   const segments: ExportSegment[] = catSegments.map((s, i) => ({
     index: i,
@@ -2089,28 +2164,11 @@ export function buildExportData(
     dPlusM: Math.round(s.dPlus),
   }));
 
-  const climbFeatures: ExportClimb[] = climbs.filter(c => !c.invalid).map((c, i) => {
-    const slopeProfile = buildClimbSlopeProfile(
-      dist, eleDisplay, c.startIdx, c.endIdx, profileStepM, catSegments,
-    );
-    return {
-      index: i,
-      groupId: c.groupId,
-      subIndex: c.subIndex,
-      startKm: +(c.startDist / 1000).toFixed(4),
-      endKm: +(c.endDist / 1000).toFixed(4),
-      startProgress: +(c.startDist / totalDistRawM).toFixed(5),
-      endProgress: +(c.endDist / totalDistRawM).toFixed(5),
-      dPlusM: Math.round(c.dPlus),
-      avgSlopePct: +c.avgSlope.toFixed(2),
-      altStartM: +c.altStart.toFixed(1),
-      altEndM: +c.altEnd.toFixed(1),
-      mergedCount: c.mergedCount || 0,
-      fallback: !!c.fallback,
-      slopeProfile,
-      slopeProfileStepM: profileStepM,
-    };
-  });
+  // ─── v3.9.6 : consolidation ───
+  const climbFeatures = consolidateClimbsForExport(data, totalDistRawM);
+
+  const mergedClimbsCount = climbFeatures.filter(c => c.isMerged).length;
+  const separatedClimbsCount = climbFeatures.filter(c => c.isSeparated).length;
 
   const legendCategories = SLOPE_CATEGORIES.map(c => ({
     id: c.id,
@@ -2123,7 +2181,7 @@ export function buildExportData(
     metadata: {
       file: fileName || 'trace.gpx',
       exportedAt: new Date().toISOString(),
-      version: '3.9.2',
+      version: '3.9.6',
       totalDistanceKm: +(totalDistRawM / 1000).toFixed(3),
       totalDistanceSampledKm: +(totalDistSampledM / 1000).toFixed(3),
       trailingGapM,
@@ -2131,10 +2189,11 @@ export function buildExportData(
       totalPoints: dist.length,
       segmentsCount: segments.length,
       climbsCount: climbFeatures.length,
-      profileStepM,
+      mergedClimbsCount,
+      separatedClimbsCount,
     },
     legend: {
-      note: "Bornes hautes exclusives. startProgress/endProgress = fraction 0–1 de la longueur réelle.",
+      note: "Bornes hautes exclusives. startProgress/endProgress = fraction 0–1 de la longueur réelle. Chaque montée fusionnée (isMerged=true) apparaît comme une SEULE entrée dans climbs[], avec mergedParts détaillant les sous-montées d'origine. Le champ isSeparated indique si l'utilisateur a séparé cette fusion dans l'interface (true) ou non (false) — dans les deux cas, la structure et les valeurs restent strictement identiques. Les montées autonomes ont isMerged=false et mergedParts=null.",
       fenetreCatM: params.fenetreCatM,
       longueurMin: params.longueurMin,
       categories: legendCategories,
@@ -2195,6 +2254,8 @@ export function useGpxAnalyzer() {
         fallback: a.fallback,
         groupId: null,
         subIndex: null,
+        originMergedCount: null,
+        isSeparated: false,
       } as UserClimb)));
       climbsStore.resetGroups();
       climbsStore.rebuild();
@@ -2217,7 +2278,9 @@ export function useGpxAnalyzer() {
 import { useClimbsStore } from '@/stores/climbsStore';
 
 /**
- * Expose les actions de gestion des groupes de montées.
+ * Expose les actions UI de gestion des groupes (séparation/refusion).
+ * Note : l'export JSON v3.9.6 consolide les groupes en une seule entrée,
+ * cette logique est indépendante.
  */
 export function useClimbGroups() {
   const store = useClimbsStore();
@@ -2262,10 +2325,6 @@ export function useManualClimb() {
   const pendingNewClimb = ref<{ valleyKm: number; summitKm: number } | null>(null);
   const newClimbDragging = ref(false);
 
-  /**
-   * Démarre la création par double-clic. Refuse si la vallée tombe
-   * dans une montée existante.
-   */
   function startCreation(km: number): boolean {
     if (!store.isFreeKm(km)) {
       store.flashInvalidPosition(km);
@@ -2276,9 +2335,6 @@ export function useManualClimb() {
     return true;
   }
 
-  /**
-   * Met à jour le sommet pendant le drag.
-   */
   function updateSummit(km: number): void {
     if (!pendingNewClimb.value) return;
     pendingNewClimb.value.summitKm = Math.max(
@@ -2288,13 +2344,9 @@ export function useManualClimb() {
     profile.requestRedraw();
   }
 
-  /**
-   * Valide ou annule la création au relâchement.
-   */
   function finish(): void {
     if (!pendingNewClimb.value) return;
     const { valleyKm, summitKm } = pendingNewClimb.value;
-    const pending = pendingNewClimb.value;
     pendingNewClimb.value = null;
     newClimbDragging.value = false;
 
@@ -2305,9 +2357,6 @@ export function useManualClimb() {
     }
   }
 
-  /**
-   * Annule la création (Échap).
-   */
   function cancel(): void {
     if (!pendingNewClimb.value) return;
     pendingNewClimb.value = null;
@@ -2341,7 +2390,6 @@ export const PROFILE_SCALE_X_FULL = 50;
 export const PROFILE_SCALE_X_CLIMB = 10;
 export const PROFILE_SCALE_Y = 10;
 export const PROFILE_MIN_HEIGHT = 110;
-export const PROFILE_HANDLE_PAD = 200;
 
 export function useProfileCanvas() {
   const gpxStore = useGpxStore();
@@ -2380,13 +2428,11 @@ export function useProfileCanvas() {
     let viewStartM: number, viewEndM: number, scaleX: number, showHandles: boolean;
 
     if (climbsStore.profileMode === 'climb' && climbsStore.selectedClimbIdx != null) {
-      // Mode montée : trace COMPLÈTE à 10 m/px
       viewStartM = 0;
       viewEndM = totalDist;
       scaleX = PROFILE_SCALE_X_CLIMB;
       showHandles = true;
     } else {
-      // Mode full : 50 m/px
       viewStartM = 0;
       viewEndM = totalDist;
       scaleX = PROFILE_SCALE_X_FULL;
@@ -2425,7 +2471,7 @@ export function useProfileCanvas() {
     ctx.fillStyle = '#fafbfc';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // Fills colorés par catégorie — via catSegments
+    // Fills colorés par catégorie
     ctx.globalAlpha = 0.55;
     for (const seg of data.catSegments) {
       if (seg.endDist < viewStartM - 100 || seg.startDist > viewEndM + 100) continue;
@@ -2527,7 +2573,7 @@ export function useProfileCanvas() {
       mode: climbsStore.profileMode,
     };
 
-    // Scroll centré (mode montée, hors drag)
+    // Scroll centré
     if (climbsStore.profileMode === 'climb' && !climbsStore.__profileDragging && climbsStore.selectedClimbIdx != null) {
       const c = data.climbs[climbsStore.selectedClimbIdx];
       if (c && !c.invalid) {
@@ -2579,7 +2625,6 @@ export function useProfileCanvas() {
     return lo;
   }
 
-  // Re-render sur changement de sélection ou de données
   watch(() => [climbsStore.__lastData, climbsStore.selectedClimbIdx, climbsStore.profileMode], () => {
     requestRedraw();
   });
@@ -2872,6 +2917,64 @@ export function useMapbox() {
     fitMapToTrace,
     setMapBasemap,
   };
+}
+```
+
+### 7.6 `useExport`
+
+```typescript
+// src/composables/useExport.ts
+
+import { useGpxStore } from '@/stores/gpxStore';
+import { useClimbsStore } from '@/stores/climbsStore';
+import { useParametersStore } from '@/stores/parametersStore';
+import { buildExportData } from '@/utils/exportData';
+
+/**
+ * Gère l'export JSON v3.9.6 :
+ * - Consolidation des groupes UI en une seule entrée par montée logique
+ * - isSeparated = seul champ qui diffère entre fusion non séparée et séparée
+ * - mergedParts toujours présent (bornes actuelles) si isMerged
+ */
+export function useExport() {
+  const gpxStore = useGpxStore();
+  const climbsStore = useClimbsStore();
+  const paramsStore = useParametersStore();
+
+  function exportJson(): void {
+    const data = climbsStore.__lastData;
+    if (!gpxStore.dist || !gpxStore.rawPoints || !data) {
+      alert('Aucune trace chargée.');
+      return;
+    }
+
+    const exportData = buildExportData(
+      gpxStore.fileName || 'trace.gpx',
+      gpxStore.stepM,
+      gpxStore.totalDistRawM,
+      paramsStore.parameters,
+      data,
+    );
+
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const baseName = (gpxStore.fileName || 'trace').replace(/\.[^.]+$/, '');
+    a.href = url;
+    a.download = `${baseName}_analysis.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    console.info(
+      `Export v3.9.6 : ${exportData.segments.length} seg · ${exportData.climbs.length} montées ` +
+      `(${exportData.metadata.mergedClimbsCount} fusionnées dont ${exportData.metadata.separatedClimbsCount} séparées)`
+    );
+  }
+
+  return { exportJson };
 }
 ```
 
@@ -3200,9 +3303,8 @@ function dotColor(status: string): string {
     <v-text-field v-model.number="params.gapMinM" label="Écart min. entre montées" type="number" suffix="m" density="compact" />
     <v-text-field v-model.number="params.refinePct" label="Recherche extrema" type="number" suffix="%" density="compact" />
 
-    <!-- Export & Debug -->
-    <div class="section-title">Export & Debug</div>
-    <v-text-field v-model.number="params.exportProfileStepM" label="Pas du profil exporté" type="number" suffix="m" density="compact" />
+    <!-- Debug -->
+    <div class="section-title">Debug</div>
     <v-text-field v-model.number="params.segmentLogM" label="Segments debug" type="number" suffix="m" density="compact" />
 
     <!-- Options -->
@@ -3254,11 +3356,13 @@ function onToggleContours(v: boolean | null): void {
 </script>
 ```
 
+**Note v3.9.4** : le champ `exportProfileStepM` a été retiré de `ParametersForm.vue` (plus d'utilité).
+
 ---
 
 ## 9. Communication avec le backend Node.js
 
-### 9.1 Sidecar Node.js — pipeline complet v3.9.2
+### 9.1 Sidecar Node.js — pipeline complet v3.9.6
 
 ```javascript
 // src-tauri/sidecar/analyzer.js
@@ -3271,7 +3375,6 @@ const PLATEAU_TOLERANCE_M = 1.0;
 const RAW_DOUBLON_MIN_M = 1.0;
 const RESAMPLE_AVG_MIN_M = 75;
 
-// ---------- Parse GPX ----------
 function parseGpx(xmlContent) {
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
   const doc = parser.parse(xmlContent);
@@ -3287,7 +3390,6 @@ function parseGpx(xmlContent) {
   return { name: doc?.gpx?.trk?.name ?? 'Trace sans nom', points };
 }
 
-// ---------- Haversine ----------
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const phi1 = lat1 * Math.PI / 180, phi2 = lat2 * Math.PI / 180;
@@ -3297,7 +3399,6 @@ function haversine(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ---------- Rééchantillonnage par moyenne ----------
 function resampleUniform(distRaw, eleRaw, stepM) {
   const n = distRaw.length;
   const totalM = distRaw[n - 1];
@@ -3340,7 +3441,6 @@ function resampleUniform(distRaw, eleRaw, stepM) {
   return { dist, ele, stepM, avgWinM: avgWin };
 }
 
-// ---------- Plateaux ----------
 function plateauCorrect(ele, minRun, tolerance) {
   const n = ele.length;
   if (n < 3 || minRun < 2) return { out: ele.slice(), count: 0 };
@@ -3365,7 +3465,6 @@ function plateauCorrect(ele, minRun, tolerance) {
   return { out, count };
 }
 
-// ---------- Anti-pic Hampel ----------
 function despikeWindowMToPts(windowM, stepM) {
   return Math.max(3, Math.round(windowM / stepM) | 1);
 }
@@ -3395,7 +3494,6 @@ function despikeAltitude(ele, winPts, thresholdM) {
   return { out, count };
 }
 
-// ---------- Stats brutes ----------
 function computeRawStats(distRaw, eleRawOrig) {
   const n = distRaw.length;
   let dPlus = 0, dMoins = 0;
@@ -3421,7 +3519,6 @@ function computeRawStats(distRaw, eleRawOrig) {
            eleMin, eleMax, doublons: n - gaps.length };
 }
 
-// ---------- Lissages ----------
 function movingAverage(arr, win) {
   const n = arr.length;
   if (win < 2 || n < 2) return arr.slice();
@@ -3504,7 +3601,6 @@ function medianFilter(arr, win) {
   return out;
 }
 
-// ---------- Pentes ----------
 function computeSlope(ele, dist, minD = 0.05) {
   const n = ele.length, s = new Array(n).fill(0);
   for (let i = 0; i < n; i++) {
@@ -3524,7 +3620,6 @@ function clipSlope(slope, maxPct) {
   return out;
 }
 
-// ---------- Ancrage ----------
 function anchoredMovingAverage(raw, anchorIdxs, stepM, fenetreAffichageM, sigmaM, doubleSG) {
   const n = raw.length;
   if (n < 2) return raw.slice();
@@ -3556,7 +3651,6 @@ function anchoredMovingAverage(raw, anchorIdxs, stepM, fenetreAffichageM, sigmaM
   return final;
 }
 
-// ---------- Helpers ----------
 function findIdxAtDist(dist, targetM) {
   let lo = 0, hi = dist.length - 1;
   while (lo < hi) {
@@ -3578,7 +3672,6 @@ function argmaxRange(arr, lo, hi) {
   return best;
 }
 
-// ---------- Hystérésis ----------
 const CLIMB_CRITERIA = [
   { minLen: 1000, minSlope: 3 }, { minLen: 750, minSlope: 4 },
   { minLen: 500, minSlope: 5 }, { minLen: 400, minSlope: 6 },
@@ -3638,7 +3731,6 @@ function findBestSubClimb(dist, eleMetric, startIdx, endIdx) {
   return best;
 }
 
-// ---------- computeAuto (avec mergedParts) ----------
 function computeAuto(dist, eleRaw, params) {
   const { stepM, fenetreAffichageM, fenetrePenteM, seuilMontee, refinePct,
           medianWindowM, gaussianSigmaM, gapMinM } = params;
@@ -3688,7 +3780,6 @@ function computeAuto(dist, eleRaw, params) {
     const newStart = (loIdx < c.startIdx) ? argminRange(eleBase, loIdx, c.startIdx) : c.startIdx;
     if (newStart >= newEnd) continue;
 
-    // Fusion avec conservation des mergedParts
     if (refined.length > 0 && gapMinM > 0) {
       const prev = refined[refined.length - 1];
       const gapM = dist[newStart] - dist[prev.endIdx];
@@ -3770,7 +3861,6 @@ function computeAuto(dist, eleRaw, params) {
   return { autoClimbs };
 }
 
-// ---------- analyze ----------
 function analyze(content, parameters) {
   const track = parseGpx(content);
   const n = track.points.length;
@@ -3850,7 +3940,6 @@ pub struct AnalyzerParameters {
     pub gaussian_sigma_m: f64,
     pub plateau_run: u32,
     pub segment_log_m: u32,
-    pub export_profile_step_m: f64,
     pub smooth_extra: bool,
     pub segment_smooth: bool,
 }
@@ -3886,6 +3975,8 @@ pub async fn analyze_gpx(
     serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
 }
 ```
+
+**Note v3.9.4** : le champ `export_profile_step_m` a été retiré de `AnalyzerParameters`.
 
 ---
 
@@ -3940,12 +4031,6 @@ pub async fn read_gpx_file(path: String) -> Result<String, String> {
 }
 ```
 
-### 10.4 Intégration Mapbox dans Tauri
-
-- Mapbox GL JS est chargé **paresseusement** via `loadMapboxGL()` (CDN).
-- Le token est stocké dans `localStorage` (persiste entre sessions).
-- Aucune configuration Tauri supplémentaire n'est nécessaire pour Mapbox.
-
 ---
 
 ## 11. Intégration Mapbox GL JS
@@ -3964,7 +4049,7 @@ Voir section 7.5 (`useMapbox`) pour l'implémentation complète du composable.
 
 **Ne pas inverser** : les contours utilisent `'trace-line-layer'` comme `beforeId`. Si la trace n'existe pas encore, `addLayer` échoue silencieusement et les contours n'apparaissent jamais (bug corrigé en v3.8.5).
 
-### 11.2 Chargement automatique au démarrage (v3.9.2)
+### 11.2 Chargement automatique au démarrage
 
 ```typescript
 // À l'init de l'app
@@ -3978,7 +4063,7 @@ if (saved) {
 
 ### 11.3 Trace colorée par catégorie (points bruts)
 
-Voir section 6.14 (`buildTraceFeatures`). Point clé : **utiliser `rawPoints`, pas `dist`** (grille resamplée). La catégorie de chaque point brut est déterminée par sa distance cumulée (`distRaw[i]`), avec un parcours monotone de `catSegments`.
+Voir section 6.14 (`buildTraceFeatures`). Point clé : **utiliser `rawPoints`, pas `dist`** (grille resamplée).
 
 ---
 
@@ -3986,7 +4071,7 @@ Voir section 6.14 (`buildTraceFeatures`). Point clé : **utiliser `rawPoints`, p
 
 Voir section 7.4 (`useProfileCanvas`) pour l'implémentation complète.
 
-### 12.1 Échelles FIXES (v3.8.3 + v3.9.2)
+### 12.1 Échelles FIXES
 
 ```typescript
 export const PROFILE_SCALE_X_FULL = 50;    // m/px
@@ -3996,20 +4081,9 @@ export const PROFILE_SCALE_Y = 10;         // m/px
 
 La largeur du canvas est **strictement** `plageVisibleM / scaleX`. Ne JAMAIS agrandir à la largeur du conteneur (bug v3.8.3).
 
-### 12.2 Scroll centré (v3.9.2)
+### 12.2 Scroll centré
 
-En mode montée, le profil affiche **toute la trace** à 10 m/px. Le canvas est donc plus large que le conteneur. Après chaque rendu, on ajuste `scrollLeft` pour centrer la montée sélectionnée :
-
-```typescript
-if (profileMode === 'climb' && !dragging && selectedClimbIdx != null) {
-  const centerM = (c.startDist + c.endDist) / 2;
-  const centerPx = (centerM - viewStartM) / scaleXActual;
-  const targetScroll = Math.max(0, centerPx - scroll.clientWidth / 2);
-  requestAnimationFrame(() => { scroll.scrollLeft = targetScroll; });
-}
-```
-
-**Ne pas re-scroller** pendant un drag (état `__profileDragging`).
+En mode montée, le profil affiche **toute la trace** à 10 m/px. Le canvas est donc plus large que le conteneur. Après chaque rendu, on ajuste `scrollLeft` pour centrer la montée sélectionnée. Ne pas re-scroller pendant un drag.
 
 ---
 
@@ -4026,7 +4100,7 @@ function handleAt(cx: number, cy: number): 'valley' | 'summit' | null {
 
   const xV = (c.startDist - viewStartM) / scaleXActual;
   const xS = (c.endDist - viewStartM) / scaleXActual;
-  const th = 14;   // Seuil de clic ±14 px
+  const th = 14;
   const dV = Math.abs(cx - xV);
   const dS = Math.abs(cx - xS);
   if (dV < th && dV <= dS) return 'valley';
@@ -4038,29 +4112,12 @@ function handleAt(cx: number, cy: number): 'valley' | 'summit' | null {
 ### 13.2 Cycle de drag
 
 ```
-mousedown sur poignée
-  → __profileDragging = 'valley' | 'summit'
-  → cursor = 'ew-resize'
-
-mousemove
-  → km = viewStartM/1000 + (canvasX - rect.left) * scaleXActual / 1000
-  → km = applyDragConstraint(handle, km, climb)
-  → climb.startKm ou climb.endKm = km
-  → rebuild() + renderProfile() + renderClimbsList()
-  → updateMapMarkers()
-
-mouseup
-  → __profileDragging = null
-  → normalizeGroups()
-  → renderAll()
+mousedown sur poignée → __profileDragging = 'valley' | 'summit'
+mousemove → km = ... → applyDragConstraint → climb.startKm/endKm → rebuild() + render
+mouseup → __profileDragging = null → normalizeGroups() → renderAll()
 ```
 
 ### 13.3 Clamp à la vue
-
-```typescript
-const marginM = scaleXActual * 14;
-distM = Math.max(viewStartM + marginM, Math.min(viewEndM - marginM, distM));
-```
 
 Empêche de perdre la poignée si l'utilisateur tire au-delà du bord.
 
@@ -4070,32 +4127,35 @@ Empêche de perdre la poignée si l'utilisateur tire au-delà du bord.
 
 Voir section 6.11 (`climbGroups.ts`) pour l'implémentation.
 
-### 14.1 Flux complet
+### 14.1 Flux complet UI
 
 ```
 Détection avec fusion (computeAuto)
   → mergedParts conservés
   → mergedCount > 0
 
-Clic sur ✂ Séparer
+Clic sur ✂ Séparer (UI)
   → groupId = nextGroupId++
-  → userClimbs = [...sub-montées avec subIndex=1,2,3...]
+  → userClimbs = [...sous-montées avec subIndex=1,2,3..., isSeparated=true]
   → zoomMapToGroup(gid)
   → sélection = première sous-montée
 
-Clic sur 🔗 Refusionner
+Clic sur 🔗 Refusionner (UI)
   → members = userClimbs.filter(c => c.groupId === gid)
   → mergedParts = members.map(m => ({startKm, endKm}))
   → userClimbs = [...autres montées, merged]
   → merged.groupId = null
   → merged.mergedParts = mergedParts
+  → merged.isSeparated = false
 
 Édition d'une sous-montée (drag)
   → si groupe reste avec 1 seul membre après édition :
     normalizeGroups() dissout le groupe
 ```
 
-### 14.2 Numérotation `#N.M`
+**Note v3.9.6** : les groupes UI **n'existent plus dans l'export JSON**. La consolidation (section 19) ré-agrège les groupes en une seule entrée par montée logique.
+
+### 14.2 Numérotation `#N.M` (affichage UI)
 
 ```typescript
 let mainCounter = 0;
@@ -4122,9 +4182,9 @@ function groupColor(gid: number): string {
 }
 ```
 
-### 14.4 Multi-marqueurs sur la carte (v3.9.2)
+### 14.4 Multi-marqueurs sur la carte
 
-Voir section 6.15 (`buildMapMarkers`). Si la montée sélectionnée est groupée, on affiche **tous** les points vallée/sommet de **tous** les membres du groupe, avec `role='selected'` pour le membre actif (rayon 10, contour 4) et `role='member'` pour les autres (rayon 8, contour 2.5).
+Voir section 6.15 (`buildMapMarkers`). Si la montée sélectionnée est groupée, on affiche **tous** les points vallée/sommet de **tous** les membres du groupe.
 
 ---
 
@@ -4156,11 +4216,7 @@ pending / dragging
   → annulation (retour à idle)
 ```
 
-### 15.2 Composables Vue
-
-Voir section 7.3 (`useManualClimb`).
-
-### 15.3 Validation des chevauchements
+### 15.2 Validation des chevauchements
 
 ```typescript
 export function isFreeRange(aKm: number, bKm: number, userClimbs: UserClimb[]): boolean {
@@ -4173,7 +4229,7 @@ export function isFreeRange(aKm: number, bKm: number, userClimbs: UserClimb[]): 
 }
 ```
 
-### 15.4 Indicateurs visuels
+### 15.3 Indicateurs visuels
 
 - Zone colorée : verte si valide, rouge si chevauchement
 - Ligne vallée verte, ligne sommet rouge pointillée (ou rouge vif si invalide)
@@ -4194,26 +4250,9 @@ Positionné en `position: absolute; top: 8px; right: 8px` sur chaque carte de mo
 
 1. Retire la montée de `userClimbs`
 2. **Renumérote les `subIndex`** du groupe affecté
-3. **Dissout le groupe** s'il ne reste qu'un membre
-4. **Ajuste `selectedClimbIdx`** :
-   - Si c'était la montée supprimée → désélectionne, mode full
-   - Si l'index était supérieur → décrémente
+3. **Dissout le groupe** s'il ne reste qu'un membre (avec `isSeparated = false`)
+4. **Ajuste `selectedClimbIdx`**
 5. `renderAll()`
-
-### 16.3 Exemple
-
-```typescript
-function deleteClimb(idx: number): void {
-  const { deletedGroupId, dissolved } = deleteClimbFromList(idx, userClimbs);
-  if (selectedClimbIdx === idx) {
-    selectedClimbIdx = null;
-    profileMode = 'full';
-  } else if (selectedClimbIdx != null && selectedClimbIdx > idx) {
-    selectedClimbIdx -= 1;
-  }
-  renderAll();
-}
-```
 
 ---
 
@@ -4223,26 +4262,18 @@ function deleteClimb(idx: number): void {
 
 ```typescript
 function analyze(content: string, params: AnalyzerParameters): AnalyzerResult {
-  // 1. Parse GPX
   const track = parseGpx(content);
-
-  // 2. Distances cumulées
   const distRaw = computeCumulativeDistances(track.points);
-
-  // 3. Altitudes d'origine + stats
   const eleRawOrig = Float64Array.from(track.points.map(p => p.ele));
   const rawStats = computeRawStats(distRaw, eleRawOrig);
 
-  // 4. Correction plateaux (optionnelle)
   let eleForResample = eleRawOrig;
   if (params.plateauRun > 0) {
     eleForResample = plateauCorrect(eleRawOrig, params.plateauRun, PLATEAU_TOLERANCE_M).out;
   }
 
-  // 5. Rééchantillonnage par moyenne
   const { dist, ele, avgWinM } = resampleUniform(distRaw, eleForResample, params.stepM);
 
-  // 6. Anti-pic Hampel
   let eleFinal = ele;
   let despikeCount = 0;
   const despikeWinPts = despikeWindowMToPts(params.despikeWindowM, params.stepM);
@@ -4252,7 +4283,6 @@ function analyze(content: string, params: AnalyzerParameters): AnalyzerResult {
     despikeCount = spikeRes.count;
   }
 
-  // 7. Détection complète
   const { autoClimbs } = computeAuto(dist, eleFinal, params);
 
   return {
@@ -4283,32 +4313,15 @@ function analyze(content: string, params: AnalyzerParameters): AnalyzerResult {
 8. Lissage ancré final (`anchoredMovingAverage`)
 9. Validation stricte + repli (`⤺`, avec préservation `mergedParts`)
 
-### 17.3 Log debug
-
-Le pipeline émet des logs dans le panneau debug :
-
-```
-📐 PIPELINE v3.9.2
-   Trace brute : 3312 points · longueur 110.245 km
-   Pas brut : min 0.3 m · médian 22.4 m · moy 33.1 m · max 892.5 m
-   D+ brut (doublons ignorés) : 2874 m
-📐 Rééchantillonnage (moyenne) : 2190 pts à pas 50 m · fenêtre 75 m
-🩹 Anti-pic (fenêtre=200 m → 5 pts ≈ 250 m, seuil=15 m) : 2 point(s) corrigé(s) sur 2190
-[v3.9.2] 2 fusion(s)
-[v3.9.2] 3 conservées, 1 replis
-```
-
-### 17.4 Pipeline de reconstruction (`rebuild`)
+### 17.3 Pipeline de reconstruction (`rebuild`)
 
 ```typescript
 function rebuild(): RebuildResult | null {
   if (!dist || !eleRaw) return null;
   const params = getParams();
 
-  // 1. Contraintes anti-chevauchement
   const sorted = applyConstraints(userClimbs);
 
-  // 2. Ancrage
   const anchors: number[] = [];
   const resolved = sorted.map(c => {
     const startIdx = findIdxAtDist(dist, c.startKm * 1000);
@@ -4320,46 +4333,23 @@ function rebuild(): RebuildResult | null {
     return { startIdx, endIdx, ref: c, invalid: false, constrainedStart: c._constrainedStart, constrainedEnd: c._constrainedEnd };
   });
 
-  // 3. Courbe affichée (ancrée)
   const eleDisplay = anchoredMovingAverage(
     eleRaw, anchors, stepM,
     params.fenetreAffichageM, params.gaussianSigmaM, params.smoothExtra,
   );
 
-  // 4. Pentes pour l'affichage
   const slopeRaw = clipSlope(computeSlope(movingAverage(eleRaw, 5), dist), SLOPE_DISPLAY_MAX_PCT);
   const slopeSemi = computeSlope(eleDisplay, dist);
   const winSlopePts = Math.max(1, Math.round(params.fenetrePenteM / stepM));
   const slopeDisplay = clipSlope(movingAverage(slopeSemi, winSlopePts), SLOPE_DISPLAY_MAX_PCT);
 
-  // 5. Catégorisation NON ancrée (v3.8.1)
+  // Catégorisation NON ancrée (v3.8.1)
   const winSGCatPts = Math.max(5, Math.round(params.fenetreAffichageM / stepM) | 1);
   const eleBaseCat = savitzkyGolay(eleRaw, winSGCatPts, 2);
   const slopeForCat = computeSlopeWindow(eleBaseCat, dist, params.fenetreCatM);
 
-  // 6. Métriques par montée
-  const climbs = resolved.map(r => {
-    if (r.invalid) {
-      return { ...r, length: 0, dPlus: 0, avgSlope: 0, altStart: 0, altEnd: 0,
-               mergedCount: r.ref.mergedCount || 0, fallback: r.ref.fallback || false,
-               groupId: r.ref.groupId, subIndex: r.ref.subIndex };
-    }
-    let dPlus = 0;
-    for (let k = r.startIdx + 1; k <= r.endIdx; k++) {
-      const d = eleDisplay[k] - eleDisplay[k - 1];
-      if (d > 0) dPlus += d;
-    }
-    const length = dist[r.endIdx] - dist[r.startIdx];
-    return {
-      ...r, length, dPlus,
-      avgSlope: length > 0 ? (dPlus / length) * 100 : 0,
-      altStart: eleDisplay[r.startIdx], altEnd: eleDisplay[r.endIdx],
-      mergedCount: r.ref.mergedCount || 0, fallback: r.ref.fallback || false,
-      groupId: r.ref.groupId, subIndex: r.ref.subIndex,
-    };
-  });
+  const climbs = resolved.map(r => { /* ... */ });
 
-  // 7. Segmentation
   const catSegments = segmentByCategory(slopeForCat, dist, eleDisplay, params.longueurMin);
 
   return { dist, eleRaw, eleDisplay, slopeRaw, slopeDisplay, slopeForCat, catSegments, climbs };
@@ -4370,119 +4360,145 @@ function rebuild(): RebuildResult | null {
 
 ## 18. Diagnostic de configuration
 
-Voir section 7.4 pour le composant Vue.
+Voir section 8.3 pour le composant Vue.
 
-### 18.1 Fonction `computeDiagnostics`
+### 18.1 Règles de cohérence (v3.9.6)
 
-```typescript
-export function computeDiagnostics(params: AnalyzerParameters): DiagResult {
-  const {
-    stepM, despikeWindowM, despikeThresholdM,
-    fenetreAffichageM, fenetrePenteM, fenetreCatM,
-    seuilMontee, longueurMin, gapMinM, refinePct,
-    medianWindowM, gaussianSigmaM, plateauRun,
-    exportProfileStepM,
-  } = params;
+Les 8 règles actives (le paramètre `exportProfileStepM` ayant été retiré) :
 
-  // Valeurs effectives
-  const lissageAltPts = Math.max(1, Math.round(fenetreAffichageM / stepM));
-  const lissagePentePts = Math.max(1, Math.round(fenetrePenteM / stepM));
-  const couleurPts = Math.max(1, Math.round(fenetreCatM / stepM));
-  const medianPts = medianWindowM > 0 ? Math.max(1, Math.round(medianWindowM / stepM)) : 0;
-  const gaussianPts = gaussianSigmaM > 0 ? gaussianSigmaM / stepM : 0;
-  const despikeActive = despikeThresholdM > 0;
-  const despikeWinPtsEffective = despikeActive
-    ? Math.max(3, Math.round(despikeWindowM / stepM) | 1)
-    : 0;
-  const despikeCovM = despikeWinPtsEffective * stepM;
-  const despikeExpandRatio = despikeActive && despikeWindowM > 0
-    ? despikeCovM / despikeWindowM
-    : 1;
-  const ratioAltPente = fenetrePenteM > 0 ? fenetreAffichageM / fenetrePenteM : 0;
-  const retardM = fenetrePenteM / 2;
-
-  const diag: Record<string, DiagEntry> = {};
-
-  // ... (chaque paramètre avec status green/orange/red/grey)
-
-  const warnings: DiagWarning[] = [];
-  if (lissageAltPts < 5) warnings.push({ level: 'red', msg: '...' });
-  else if (lissageAltPts < 10) warnings.push({ level: 'orange', msg: '...' });
-
-  // ... (toutes les règles)
-
-  return { diag, warnings };
-}
-```
-
-### 18.2 Statuts
-
-| Statut | Signification |
+| Règle | Niveau |
 |---|---|
-| 🟢 green | Optimal |
-| 🟠 orange | Limite / avertissement |
-| 🔴 red | Incohérence critique |
-| ⚪ grey | Désactivé / non applicable |
+| `Lissage altitude ≥ 5 × Pas` | 🔴 si < 5, 🟠 si < 10 |
+| `Ratio altitude/pente ≥ 2` | 🔴 si < 1.5, 🟠 si < 2 |
+| `Filtre médian ≥ 3 pts` (ou 0) | 🟠 |
+| `Gaussien ≥ 0.5 pt` (ou 0) | 🟠 |
+| `Longueur min. pente ≥ Pas` (ou 0) | 🟠 |
+| `Écart min. ≥ Pas` (ou 0) | 🟠 |
+| `Anti-pic fenêtre ≥ 2 × Pas` (ou seuil = 0) | 🟠 |
+| `Anti-pic seuil ≥ 5 m` (ou 0) | 🟠 |
 
 ---
 
-## 19. Export JSON
+## 19. Export JSON (consolidé)
 
-Voir section 6.17 (`exportData.ts`) pour l'implémentation complète.
+Voir sections 6.17 (`consolidateClimbs.ts`) et 6.18 (`exportData.ts`) pour l'implémentation.
 
-### 19.1 Structure
+### 19.1 Principe de consolidation (v3.9.6)
+
+**Règle cardinale** : dans le JSON exporté, **une montée fusionnée (séparée ou non) apparaît comme UNE SEULE entrée dans `climbs[]`**.
+
+- Les groupes UI (`groupId`, `subIndex`, `originMergedCount`) **ne sont pas exportés**.
+- `isSeparated` est le **seul champ** qui diffère entre une fusion non séparée et une fusion séparée.
+- `mergedParts` reflète les **bornes actuelles** des sous-montées (sync avec l'UI).
+- Si l'utilisateur a édité une sous-montée après séparation, `mergedParts` est **recalculé** avec les nouvelles bornes et la montée globale recalcule `dPlusM`/`avgSlopePct`/`altStartM`/`altEndM` en conséquence.
+
+### 19.2 Structure d'une entrée `climbs[]`
 
 ```json
 {
-  "metadata": {
-    "file": "trace.gpx",
-    "exportedAt": "ISO8601",
-    "version": "3.9.2",
-    "totalDistanceKm": 4.28,
-    "totalDistanceSampledKm": 4.25,
-    "trailingGapM": 30,
-    "stepM": 50,
-    "totalPoints": 86,
-    "segmentsCount": 4,
-    "climbsCount": 1,
-    "profileStepM": 50
-  },
-  "legend": {
-    "note": "...",
-    "fenetreCatM": 100,
-    "longueurMin": 200,
-    "categories": [...]
-  },
-  "segments": [...],
-  "climbs": [
+  "index": 3,
+  "startKm": 44.75,
+  "endKm": 65.9,
+  "startProgress": 0.32264,
+  "endProgress": 0.47513,
+  "dPlusM": 1213,
+  "avgSlopePct": 5.74,
+  "altStartM": 405.4,
+  "altEndM": 1615.4,
+  "mergedCount": 1,
+  "fallback": false,
+  "isMerged": true,
+  "isSeparated": false,
+  "mergedParts": [
     {
-      "index": 0,
-      "groupId": null,
-      "subIndex": null,
-      "startKm": 0,
-      "endKm": 3.95,
-      "startProgress": 0,
-      "endProgress": 0.91933,
-      "dPlusM": 284,
-      "avgSlopePct": 7.67,
-      "altStartM": 503.1,
-      "altEndM": 786.9,
-      "mergedCount": 0,
-      "fallback": false,
-      "slopeProfile": [...],
-      "slopeProfileStepM": 50
+      "partIndex": 0,
+      "startKm": 44.75,
+      "endKm": 48.9,
+      "startProgress": 0.32264,
+      "endProgress": 0.35256,
+      "dPlusM": 210,
+      "avgSlopePct": 5.05,
+      "altStartM": 405.4,
+      "altEndM": 615.1
+    },
+    {
+      "partIndex": 1,
+      "startKm": 47.8,
+      "endKm": 65.95,
+      "startProgress": 0.34463,
+      "endProgress": 0.47549,
+      "dPlusM": 1049,
+      "avgSlopePct": 5.78,
+      "altStartM": 569.9,
+      "altEndM": 1614.7
     }
   ]
 }
 ```
 
-### 19.2 Nouveautés v3.9.1
+### 19.3 Différence entre fusion non séparée et séparée
 
-Ajout de `groupId` et `subIndex` dans chaque `climb`.
+**Non séparée** : `"isSeparated": false`
 
-### 19.3 Contrat d'alignement
+**Séparée** : `"isSeparated": true`
 
-Chaque tranche de `slopeProfile` appartient **intégralement** à un seul segment global. Sa `categoryId` est **strictement identique** à celle du segment qui la contient.
+Tous les autres champs sont **strictement identiques**.
+
+### 19.4 Montée autonome
+
+```json
+{
+  "index": 0,
+  "startKm": 0.5,
+  "endKm": 3.2,
+  "startProgress": 0.00453,
+  "endProgress": 0.02902,
+  "dPlusM": 145,
+  "avgSlopePct": 5.37,
+  "altStartM": 245.3,
+  "altEndM": 390.3,
+  "mergedCount": 0,
+  "fallback": false,
+  "isMerged": false,
+  "isSeparated": false,
+  "mergedParts": null
+}
+```
+
+### 19.5 Métadonnées
+
+```json
+"metadata": {
+  "file": "trace.gpx",
+  "exportedAt": "ISO8601",
+  "version": "3.9.6",
+  "totalDistanceKm": 4.28,
+  "totalDistanceSampledKm": 4.25,
+  "trailingGapM": 30,
+  "stepM": 50,
+  "totalPoints": 86,
+  "segmentsCount": 4,
+  "climbsCount": 1,
+  "mergedClimbsCount": 1,
+  "separatedClimbsCount": 0
+}
+```
+
+Nouveaux compteurs v3.9.5+ :
+- `mergedClimbsCount` : nombre total de montées avec `isMerged=true`
+- `separatedClimbsCount` : nombre total de montées avec `isSeparated=true`
+
+### 19.6 Contrat d'utilisation
+
+**Pour une carte Mapbox `line-gradient`** : utiliser `segments[].startProgress` et `endProgress`.
+
+**Pour afficher une montée fusionnée** :
+- Vue d'ensemble : `climbs[i].startProgress` à `climbs[i].endProgress`
+- Détail : itérer sur `climbs[i].mergedParts` (bornes individuelles des sous-montées)
+
+**Pour distinguer fusion non séparée / séparée côté consommateur** : `isSeparated`. Le reste est identique.
+
+**Ne pas dépendre de** : `groupId`, `subIndex`, `originMergedCount` (supprimés en v3.9.6).
 
 ---
 
@@ -4495,7 +4511,7 @@ Chaque tranche de `slopeProfile` appartient **intégralement** à un seul segmen
 import { describe, it, expect } from 'vitest';
 import { despikeAltitude, despikeWindowMToPts } from '@/utils/despike';
 
-describe('despikeWindowMToPts (v3.6)', () => {
+describe('despikeWindowMToPts', () => {
   it('convertit mètres → points', () => {
     expect(despikeWindowMToPts(200, 50)).toBe(5);
     expect(despikeWindowMToPts(100, 50)).toBe(3);
@@ -4503,45 +4519,8 @@ describe('despikeWindowMToPts (v3.6)', () => {
   });
 });
 
-describe('despikeAltitude (Hampel)', () => {
-  it('corrige un pic isolé', () => {
-    const ele = Float64Array.from([1180, 1182, 1183, 1250, 1185, 1186, 1187]);
-    const { out, count } = despikeAltitude(ele, 5, 15);
-    expect(count).toBe(1);
-    expect(out[3]).toBe(1183);
-  });
-
-  it('ne modifie pas une progression régulière', () => {
-    const ele = Float64Array.from([1180, 1182, 1183, 1190, 1198, 1205, 1210]);
-    const { count } = despikeAltitude(ele, 5, 15);
-    expect(count).toBe(0);
-  });
-});
-
-// tests/unit/resample.test.ts
-describe('resampleUniform (moyenne)', () => {
-  it('produit un pas constant', () => {
-    const distRaw = new Float64Array([0, 5, 12, 25, 40]);
-    const eleRaw = new Float64Array([100, 101, 102, 103, 104]);
-    const { dist } = resampleUniform(distRaw, eleRaw, 10);
-    expect(dist[0]).toBe(0);
-    expect(dist[1]).toBe(10);
-  });
-
-  it('moyenne les points dans la fenêtre', () => {
-    const distRaw = new Float64Array(20);
-    const eleRaw = new Float64Array(20);
-    for (let i = 0; i < 20; i++) {
-      distRaw[i] = i * 10;
-      eleRaw[i] = (i % 2 === 0) ? 100 : 200;
-    }
-    const { ele, avgWinM } = resampleUniform(distRaw, eleRaw, 25);
-    expect(avgWinM).toBe(75);
-  });
-});
-
 // tests/unit/groups.test.ts
-describe('Groupes (v3.9.1)', () => {
+describe('Groupes UI (v3.9.1)', () => {
   it('splitMergedClimb crée groupId + subIndex', () => {
     const userClimbs: UserClimb[] = [{
       startKm: 1, endKm: 5,
@@ -4552,75 +4531,51 @@ describe('Groupes (v3.9.1)', () => {
         { startKm: 3, endKm: 5 },
       ],
       fallback: false, groupId: null, subIndex: null,
+      originMergedCount: null, isSeparated: false,
     }];
     const res = splitMergedClimb(0, userClimbs, 1);
     expect(res).not.toBeNull();
     expect(userClimbs.length).toBe(2);
     expect(userClimbs[0].groupId).toBe(1);
-    expect(userClimbs[0].subIndex).toBe(1);
-    expect(userClimbs[1].subIndex).toBe(2);
-  });
-
-  it('refuseGroup reconstruit mergedParts', () => {
-    const userClimbs: UserClimb[] = [
-      { startKm: 1, endKm: 2, autoStartKm: null, autoEndKm: null,
-        refineM: null, candidateLen: null, mergedCount: 0, mergedParts: null,
-        fallback: false, groupId: 1, subIndex: 1 },
-      { startKm: 3, endKm: 5, autoStartKm: null, autoEndKm: null,
-        refineM: null, candidateLen: null, mergedCount: 0, mergedParts: null,
-        fallback: false, groupId: 1, subIndex: 2 },
-    ];
-    const res = refuseGroup(1, userClimbs);
-    expect(res).not.toBeNull();
-    expect(userClimbs.length).toBe(1);
-    expect(userClimbs[0].mergedParts).toEqual([
-      { startKm: 1, endKm: 2 },
-      { startKm: 3, endKm: 5 },
-    ]);
-  });
-
-  it('normalizeGroups dissout les groupes à 1 membre', () => {
-    const userClimbs: UserClimb[] = [
-      { startKm: 1, endKm: 2, autoStartKm: null, autoEndKm: null,
-        refineM: null, candidateLen: null, mergedCount: 0, mergedParts: null,
-        fallback: false, groupId: 1, subIndex: 1 },
-    ];
-    normalizeGroups(userClimbs);
-    expect(userClimbs[0].groupId).toBeNull();
+    expect(userClimbs[0].isSeparated).toBe(true);
   });
 });
 
-// tests/unit/buildTraceFeatures.test.ts
-describe('buildTraceFeatures (v3.9.2)', () => {
-  it('utilise les points bruts, pas la grille resamplée', () => {
-    const rawPoints = [
-      { lat: 45, lon: 6, ele: 100 },
-      { lat: 45, lon: 6.001, ele: 105 },
-      { lat: 45, lon: 6.002, ele: 110 },
-    ];
-    const distRaw = [0, 100, 200];
-    const catSegments = [
-      { startIdx: 0, endIdx: 1, startDist: 0, endDist: 100,
-        length: 100, dPlus: 5, avgSlope: 5, altStart: 100, altEnd: 105, key: 'up2' },
-      { startIdx: 2, endIdx: 2, startDist: 100, endDist: 200,
-        length: 100, dPlus: 5, avgSlope: 5, altStart: 105, altEnd: 110, key: 'up2' },
-    ];
-    const fc = buildTraceFeatures(rawPoints, distRaw, catSegments);
-    expect(fc.features.length).toBeGreaterThan(0);
-    expect(fc.features[0].geometry.type).toBe('LineString');
+// tests/unit/consolidateClimbs.test.ts
+describe('Consolidation export (v3.9.6)', () => {
+  it('ré-agrège les groupes UI en une seule entrée', () => {
+    const data = {
+      dist: [0, 100, 200, 300, 400, 500],
+      eleDisplay: [100, 105, 110, 115, 120, 125],
+      climbs: [
+        { /* sub #5.1 */ groupId: 5, subIndex: 1, startIdx: 0, endIdx: 2, mergedCount: 0,
+          startDist: 0, endDist: 200, invalid: false,
+          ref: { mergedParts: null } },
+        { /* sub #5.2 */ groupId: 5, subIndex: 2, startIdx: 3, endIdx: 5, mergedCount: 0,
+          startDist: 300, endDist: 500, invalid: false,
+          ref: { mergedParts: null } },
+      ],
+    } as any;
+    const result = consolidateClimbsForExport(data, 500);
+    expect(result.length).toBe(1);
+    expect(result[0].isMerged).toBe(true);
+    expect(result[0].isSeparated).toBe(true);
+    expect(result[0].mergedParts).toHaveLength(2);
+  });
+
+  it('préserve les bornes éditées des sous-montées', () => {
+    // ... : après édition de sub #5.1.endKm, vérifier que mergedParts[0].endKm reflète l'édition
   });
 });
 ```
 
 ### 20.2 Tests d'intégration
 
-- **Pipeline complet** : charger un GPX, vérifier le nombre de montées, les D+, les catégories
-- **Fusion + séparation** : vérifier que les `mergedParts` sont bien transmis
-- **Refusion** : vérifier que les bornes éditées sont conservées
-- **Suppression** : vérifier la renumérotation
-- **Création manuelle** : vérifier le refus en cas de chevauchement
-- **Trace carte** : vérifier que `buildTraceFeatures` utilise `rawPoints`
-- **Multi-marqueurs** : vérifier que la sélection d'un membre de groupe affiche tous les marqueurs
+- **Pipeline complet** : charger un GPX, vérifier le nombre de montées
+- **Fusion + séparation + refusion** : vérifier que `mergedParts` est conservé à travers les cycles
+- **Export consolidé** : après séparation, vérifier `climbs[]` contient **une seule** entrée
+- **Édition puis export** : éditer une sous-montée, vérifier que `mergedParts` reflète les bornes actuelles
+- **Multi-marqueurs** : sélectionner un membre de groupe, vérifier tous les marqueurs
 
 ### 20.3 Jeu de tests de référence
 
@@ -4630,8 +4585,6 @@ describe('buildTraceFeatures (v3.9.2)', () => {
 | `gps-dense.gpx` | ~10000 | GPS haute fréquence |
 | `glitch.gpx` | ~2000 | 1–2 pts aberrants |
 | `fragments.gpx` | ~2000 | Faux-plats multiples |
-| `sous-seuil.gpx` | ~1500 | Fragments + pente faible |
-| `plat.gpx` | ~1000 | Aucune montée |
 
 ---
 
@@ -4639,71 +4592,37 @@ describe('buildTraceFeatures (v3.9.2)', () => {
 
 ### 21.1 Correspondances
 
-| Prototype HTML (v3.7.2) | v3.9.2 |
+| Prototype HTML (v3.7.2) | v3.9.6 |
 |---|---|
 | `<script>` global | Modules TS + composables Vue |
 | `STATE` objet global | Stores Pinia |
 | `renderAll()` | Watchers Vue + composables |
 | Plugin `segmentationPlugin` | Intégré dans `useProfileCanvas` |
 | Plugin `markerDragPlugin` | Intégré dans `useProfileCanvas` |
-| Interception window pointerdown | Idem, dans le composable |
 | `document.getElementById` | `ref` Vue |
-| Drag & drop DOM | `<FileDropZone />` |
-| `alert()` | `<v-snackbar>` |
-| Diagnostic | `<DiagnosticPanel />` + `useDiagnostics` |
 | **Chart.js profil** | **Canvas 2D natif (`useProfileCanvas`)** |
 | **Pas de carte** | **Mapbox GL JS (`useMapbox`)** |
-| **Pas de groupes** | **`groupId` + `subIndex` + `mergedParts`** |
-| **Pas de séparation** | **✂ Séparer** |
-| **Pas de refusion** | **🔗 Refusionner** |
-| **Pas de suppression** | **✕** |
-| **Pas de création manuelle** | **Double-clic + drag** |
+| **Pas de groupes** | **`groupId` + `subIndex` (UI) + `isSeparated`** |
+| **Export `slopeProfile`** | **Export consolidé (v3.9.6)** |
 
-### 21.2 Ordre de migration recommandé
-
-1. **Port des utilitaires purs** (§6) avec tests unitaires
-2. **Types TypeScript** (§3) — en premier pour typer le reste
-3. **Stores Pinia** (paramètres, données, montées, map)
-4. **Composables de données** (`useGpxAnalyzer`, `useDiagnostics`)
-5. **Composant `<FileDropZone>`**
-6. **Composant `<DiagnosticPanel>`**
-7. **Composant `<ParametersForm>`**
-8. **Composant `<ClimbsPanel>`** avec `<ClimbCard>`
-9. **Composable `useMapbox`**
-10. **Composant `<MapPanel>`**
-11. **Composable `useProfileCanvas`**
-12. **Composant `<ProfilePanel>`**
-13. **Composable `useMarkerDrag`** (drag poignées)
-14. **Composable `useManualClimb`** (création)
-15. **Composable `useClimbGroups`** (séparation/refusion)
-16. **Suppression** (bouton ✕)
-17. **Tests d'intégration** sur traces de référence
-
-### 21.3 Points d'attention
+### 21.2 Points d'attention critiques
 
 | Point | Risque | Mitigation |
 |---|---|---|
-| Performance stores Pinia | Recalcul à chaque mutation | `watch` + debounce |
-| Réactivité Float64Array | Non réactive | Convertir en `number[]` ou `shallowRef` |
-| Mapbox GL JS | Fuite mémoire | `map.remove()` dans `onBeforeUnmount` |
-| Sync zoom | Boucle infinie | Flag `syncing` |
-| **Ordre couches Mapbox** | **Contours invisibles** | **Trace avant contours** |
-| **Échelle X profil** | **Étirement trace** | **`canvasWidth = viewWidthM / scaleX`** |
-| **Coloration profil** | **Divergence avec carte** | **`catSegments`, pas point-par-point** |
-| **Catégorisation** | **Changement de couleur au drag** | **`eleBaseCat` (non ancrée)** |
-| **Trace carte** | **Grille resamplée** | **`rawPoints`, pas `dist`** |
-| Anti-pic sur 100k points | Latence | Worker ou Node.js |
-| Diagnostic recalculé trop souvent | Perf | Debounce 250 ms |
-| **Dissolution groupe** | **Référence orpheline** | **`normalizeGroups()` après chaque opération** |
-| **SubIndex orphelins** | **Numérotation incohérente** | **Renuméroter après suppression** |
+| **Ordre couches Mapbox** | Contours invisibles | Trace avant contours |
+| **Échelle X profil** | Étirement trace | `canvasWidth = viewWidthM / scaleX` |
+| **Coloration profil** | Divergence avec carte | `catSegments` |
+| **Catégorisation** | Changement de couleur au drag | `eleBaseCat` (non ancrée) |
+| **Trace carte** | Grille resamplée | `rawPoints` |
+| **Consolidation export** | Champs obsolètes | Ne pas exporter `groupId`/`subIndex`/`originMergedCount` |
 
 ---
 
 ## 22. Annexes
 
-### 22.1 Résumé des paramètres UI (15 + 2 toggles)
+### 22.1 Résumé des paramètres UI (14 + 2 toggles)
 
-| Nom UI | Type | Défaut v3.9.2 | Plage |
+| Nom UI | Type | Défaut v3.9.6 | Plage |
 |---|---|---|---|
 | Pas de rééchantillonnage | float | **50** | 2–200 |
 | Anti-pic : fenêtre | float | **200** | 50–500 |
@@ -4719,44 +4638,12 @@ describe('buildTraceFeatures (v3.9.2)', () => {
 | Lissage gaussien | float | 75 | 0–500 |
 | Correction plateaux | int | 6 | 0–20 |
 | Segments debug | int | 100 | 10–2000 |
-| Pas du profil exporté | float | 50 | 10–500 |
 | Lissage renforcé (double SG) | bool | ON | — |
 | Lissage segments | bool | ON | — |
 
-### 22.2 Constantes internes
+### 22.2 Constantes internes (inchangées)
 
-| Nom | Valeur |
-|---|---|
-| `REFINE_MIN_M` | 1500 |
-| `REFINE_MAX_M` | 8000 |
-| `STEP_M_MIN` / `STEP_M_MAX` | 2 / 200 |
-| `SLOPE_DISPLAY_MAX_PCT` | 25 |
-| `PLATEAU_TOLERANCE_M` | 1.0 |
-| `RAW_DOUBLON_MIN_M` | 1.0 |
-| `DESPIKE_WINDOW_M_DEFAULT` | 200 |
-| `DESPIKE_WINDOW_M_MIN/MAX` | 50/500 |
-| `DESPIKE_THRESHOLD_M_DEFAULT` | 15 |
-| `RESAMPLE_AVG_MIN_M` | 75 |
-| `EXPORT_PROFILE_STEP_M_DEFAULT` | 50 |
-| `EXPORT_PROFILE_STEP_M_MIN/MAX` | 10/500 |
-| `INSERT_EDGE_MIN_KM` | 1.0 |
-| `INSERT_BETWEEN_MIN_KM` | 0.2 |
-| `MANUAL_MIN_LEN_KM` | 0.05 |
-| `PROFILE_SCALE_X_FULL` | **50** |
-| `PROFILE_SCALE_X_CLIMB` | **10** |
-| `PROFILE_SCALE_Y` | 10 |
-| `PROFILE_MIN_HEIGHT` | 110 |
-| `PROFILE_HANDLE_PAD` | 200 |
-| `MAP_TERRAIN_EXAGGERATION` | 1 |
-| `MAP_CLIMB_MARGIN` | 0.20 |
-| `MAP_MIN_SPAN_DEG` | 0.0014 |
-| `CONTOUR_BASE_COLOR` | `#7a5733` |
-| `CONTOUR_INDEX_COLOR` | `#5e3f1d` |
-| `_maxChartPoints` | 4000 |
-| `_maxSearchSteps` | 800 |
-| `_minSegmentLength` | 300 |
-| `DRAG_MIN_LEN_KM` | 0.05 |
-| `DRAG_MIN_GAP_KM` | 0.001 |
+Voir section 4.2.
 
 ### 22.3 Critères de validation
 
@@ -4769,67 +4656,56 @@ describe('buildTraceFeatures (v3.9.2)', () => {
 | 300–400 m | 7 % |
 | < 300 m | rejeté |
 
-### 22.4 Catégories de pente
-
-Voir §5.1.
-
-### 22.5 Checklist d'intégration v3.9.2
+### 22.4 Checklist d'intégration v3.9.6
 
 - [ ] Utilitaires TS portés (haversine, resample, plateau, rawStats, smoothing, slope)
-- [ ] `resample.ts` avec **moyennage** + constante `RESAMPLE_AVG_MIN_M = 75`
 - [ ] `despike.ts` avec `despikeWindowMToPts` + `applyDespike`
 - [ ] `detection.ts` avec `computeAuto` + `mergedParts` préservés
 - [ ] `climbConstraints.ts` avec `applyConstraints` + `applyDragConstraint`
-- [ ] `insertion.ts` avec `computeInsertionSlots` + `computeInsertionBounds`
-- [ ] **`climbGroups.ts`** avec `splitMergedClimb`, `refuseGroup`, `normalizeGroups`
-- [ ] **`deleteClimb.ts`** avec `deleteClimbFromList`
-- [ ] **`manualClimb.ts`** avec `isFreeRange`, `isFreeKm`, `createManualClimb`
-- [ ] **`buildTraceFeatures.ts`** utilisant `rawPoints`
-- [ ] **`buildMapMarkers.ts`** gérant mono + groupe
-- [ ] **`zoomHelpers.ts`** avec `computeBounds`
-- [ ] Store Pinia paramètres (15 + 2 toggles)
-- [ ] Store Pinia données GPX (raw + resampled + eleFinal + avgWinM + despikeWinPtsEffective)
-- [ ] Store Pinia montées (avec `mergedCount`, `mergedParts`, `fallback`, `groupId`, `subIndex`)
-- [ ] Store Pinia map (token, basemap, ready, loading)
-- [ ] Composable `useDiagnostics` avec règles v3.9.2
+- [ ] `climbGroups.ts` avec `splitMergedClimb`, `refuseGroup`, `normalizeGroups`
+- [ ] `deleteClimb.ts` avec `deleteClimbFromList`
+- [ ] `manualClimb.ts` avec `isFreeRange`, `isFreeKm`, `createManualClimb`
+- [ ] `buildTraceFeatures.ts` utilisant `rawPoints`
+- [ ] `buildMapMarkers.ts` gérant mono + groupe
+- [ ] `zoomHelpers.ts` avec `computeBounds`
+- [ ] **`consolidateClimbs.ts` avec `consolidateClimbsForExport` (v3.9.6)**
+- [ ] **`exportData.ts` avec `buildExportData` retournant `ExportData` (v3.9.6)**
+- [ ] Store Pinia paramètres (14 + 2 toggles, sans `exportProfileStepM`)
+- [ ] Store Pinia données GPX
+- [ ] Store Pinia montées (avec `isSeparated`, sans `exportProfileStepM`)
+- [ ] Store Pinia map
+- [ ] Composable `useDiagnostics` avec règles v3.9.6 (8 règles)
 - [ ] Composable `useMapbox` avec auto-load token
 - [ ] Composable `useProfileCanvas` avec échelles fixes + scroll centré
 - [ ] Composable `useMarkerDrag` avec clamp à la vue
-- [ ] Composable `useManualClimb` (double-clic + drag)
-- [ ] Composable `useClimbGroups` (split/refuse)
+- [ ] Composable `useManualClimb`
+- [ ] Composable `useClimbGroups`
+- [ ] **Composable `useExport` (v3.9.6)**
 - [ ] Commande Tauri `read_gpx_file`
-- [ ] Commande Tauri `analyze_gpx` (sidecar Node.js v3.9.2)
-- [ ] Composant `<FileDropZone>` avec info conversion points
-- [ ] Composant `<DiagnosticPanel>`
-- [ ] Composant `<ParametersForm>` (15 + 2 toggles)
-- [ ] Composant `<ClimbsPanel>` avec `<ClimbCard>` et `<GroupBrace>`
-- [ ] Composant `<MapPanel>` (init + layers)
-- [ ] Composant `<ProfilePanel>` (canvas + scroll)
+- [ ] Commande Tauri `analyze_gpx` (sidecar Node.js v3.9.6, sans `export_profile_step_m`)
+- [ ] Composants UI (toolbar, panels, cards)
 - [ ] **Ordre couches Mapbox** : trace → contours (beforeId)
 - [ ] **Échelles profil fixes** : 50 / 10 m/px
 - [ ] **Trace carte sur points bruts**
 - [ ] **Multi-marqueurs sur groupe**
-- [ ] **Bouton ✂ Séparer**
-- [ ] **Bouton 🔗 Refusionner**
+- [ ] **Bouton ✂ Séparer** (UI)
+- [ ] **Bouton 🔗 Refusionner** (UI)
 - [ ] **Bouton ✕ Supprimer**
 - [ ] **Double-clic + drag pour créer**
 - [ ] **Annulation création par Échap**
 - [ ] **Auto-load carte si token présent**
 - [ ] **Courbes de niveau optionnelles**
-- [ ] **Refus création si chevauchement**
-- [ ] **Normalisation des groupes orphelins**
-- [ ] Tests unitaires sur 6 traces de référence
-- [ ] Test d'invariant : aucune montée affichée sous son seuil
-- [ ] Test d'invariant : `mergedParts` conservés après fusion
-- [ ] Test d'invariant : échelles profil strictement constantes
-- [ ] Test d'invariant : `buildTraceFeatures` utilise `rawPoints`
+- [ ] **Export JSON consolidé : `climbs[]` contient une entrée par montée logique**
+- [ ] **`isSeparated` correctement positionné (false/true)**
+- [ ] **`mergedParts` toujours présent si `isMerged=true`**
+- [ ] **`groupId`/`subIndex`/`originMergedCount` absents du JSON**
+- [ ] Tests unitaires sur 4 traces de référence
+- [ ] Test d'invariant : `mergedParts` reflète les bornes **actuelles**
 
-### 22.6 Ressources
+### 22.5 Ressources
 
 - **GPX format** : https://www.topografix.com/GPX/1/1/
 - **Mapbox GL JS** : https://docs.mapbox.com/mapbox-gl-js/
-- **Mapbox terrain source** : https://docs.mapbox.com/mapbox-gl-js/example/3d-terrain/
-- **Mapbox contours** : https://docs.mapbox.com/mapbox-gl-js/example/vector-source/
 - **Vuetify 3** : https://vuetifyjs.com/en/
 - **Tauri v2** : https://v2.tauri.app/
 - **Pinia** : https://pinia.vuejs.org/
@@ -4837,4 +4713,4 @@ Voir §5.1.
 
 ---
 
-**Fin du document d'intégration technique v3.9.2**
+**Fin du document d'intégration technique v3.9.6**
