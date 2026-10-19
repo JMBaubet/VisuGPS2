@@ -17,7 +17,7 @@
         color="success"
         variant="tonal"
         prepend-icon="mdi-content-save"
-        :disabled="!dirty"
+        :disabled="!dirty || saving"
         :loading="saving"
         :title="
           dirty

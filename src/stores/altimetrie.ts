@@ -1,6 +1,11 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
+import {
+  climbToEdit,
+  constrainClimbBound,
+  type ClimbHandle,
+} from '../utils/altimetrieClimbs'
 
 /** Paramètres du pipeline, miroir de `AltimetrieParams` côté Rust. */
 export interface AltimetrieParams {
@@ -178,6 +183,93 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     }
   }
 
+  /**
+   * Reconstruit l'analyse avec des montées éditées, sans écrire le fichier.
+   *
+   * Le backend reprend les paramètres et l'horodatage du fichier existant. En
+   * cas d'échec, l'état précédent est restauré : le widget ne conserve pas une
+   * borne que le backend a refusée.
+   */
+  async function preview(
+    traceId: string,
+    climbs: AltimetrieClimbEdit[],
+  ): Promise<void> {
+    const snapshot = file.value
+    try {
+      file.value = await invoke<AltimetrieFile>('altimetrie_preview', {
+        traceId,
+        climbs,
+      })
+      dirty.value = true
+    } catch (error) {
+      file.value = snapshot
+      throw error
+    }
+  }
+
+  /**
+   * Déplace une borne de montée et reconstruit l'aperçu.
+   *
+   * Les contraintes de voisinage et de longueur minimale sont appliquées ici,
+   * puis revalidées par le backend. Un déplacement nul ne déclenche pas
+   * d'appel IPC ni ne marque l'état modifié.
+   */
+  async function updateClimbBound(
+    traceId: string,
+    climbId: number,
+    handle: ClimbHandle,
+    km: number,
+  ): Promise<void> {
+    const current = file.value
+    if (!current) return
+
+    const climb = current.climbs.find(entry => entry.id === climbId)
+    if (!climb) return
+
+    const lastProfilePoint = current.profile[current.profile.length - 1]
+    const totalKm = lastProfilePoint
+      ? lastProfilePoint.d / 1000
+      : current.trace.totalDistanceM / 1000
+    const constrained = constrainClimbBound(
+      current.climbs,
+      climbId,
+      handle,
+      km,
+      totalKm,
+    )
+    const original = handle === 'valley' ? climb.startKm : climb.endKm
+    if (Math.abs(constrained - original) < 1e-4) return
+
+    const edits = current.climbs.map(entry => {
+      const edit = climbToEdit(entry)
+      if (entry.id === climbId) {
+        if (handle === 'valley') edit.startKm = constrained
+        else edit.endKm = constrained
+      }
+      return edit
+    })
+
+    await preview(traceId, edits)
+  }
+
+  /** Enregistre les montées courantes ; le backend met à jour `updatedAt`. */
+  async function save(traceId: string): Promise<void> {
+    const current = file.value
+    if (!current) return
+
+    saving.value = true
+    try {
+      const climbs = current.climbs.map(climbToEdit)
+      file.value = await invoke<AltimetrieFile>('altimetrie_save', {
+        traceId,
+        climbs,
+      })
+      dirty.value = false
+    } finally {
+      saving.value = false
+    }
+  }
+
   /** Sélectionne une montée (ou désélectionne avec `null`). */
   function selectClimb(id: number | null): void {
     selectedClimbId.value = id
@@ -205,6 +297,9 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     // Actions
     loadOrDetect,
     detect,
+    preview,
+    updateClimbBound,
+    save,
     selectClimb,
     reset,
   }

@@ -6,6 +6,7 @@
         :dirty="altimetrieStore.dirty"
         :saving="altimetrieStore.saving"
         @back="onBackClicked"
+        @save="onSaveClicked"
         @open-settings="toggleSettings"
       />
 
@@ -42,6 +43,15 @@
             :file="altimetrieStore.file"
             :trace-geometry="traceGeometry"
             :selected-climb-id="altimetrieStore.selectedClimbId"
+          />
+
+          <AltimetrieProfileWidget
+            v-if="altimetrieStore.file"
+            :file="altimetrieStore.file"
+            :selected-climb-id="altimetrieStore.selectedClimbId"
+            @select-climb="altimetrieStore.selectClimb"
+            @recenter="onRecenter"
+            @edit-bounds="onEditBounds"
           />
         </div>
       </v-main>
@@ -81,6 +91,7 @@ import { useUiStore } from '../stores/ui'
 import AltimetrieToolbar from '../components/Altimetrie/AltimetrieToolbar.vue'
 import AltimetrieClimbsPanel from '../components/Altimetrie/AltimetrieClimbsPanel.vue'
 import AltimetrieMap from '../components/Altimetrie/AltimetrieMap.vue'
+import AltimetrieProfileWidget from '../components/Altimetrie/AltimetrieProfileWidget.vue'
 import ConfirmExitDialog from '../components/Altimetrie/dialogs/ConfirmExitDialog.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 
@@ -171,6 +182,49 @@ function onBackClicked(): void {
   router.push({ name: 'accueil' })
 }
 
+/** Recentre la carte sur un point du profil (clic dans le widget). */
+function onRecenter(distanceM: number): void {
+  mapRef.value?.centerOnDistance(distanceM)
+}
+
+/** Applique une borne déplacée dans le widget, via un aperçu backend. */
+async function onEditBounds(payload: {
+  climbId: number
+  handle: 'valley' | 'summit'
+  km: number
+}): Promise<void> {
+  if (!traceId.value) return
+  try {
+    await altimetrieStore.updateClimbBound(
+      traceId.value,
+      payload.climbId,
+      payload.handle,
+      payload.km,
+    )
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : "Modification de la montée impossible."
+    ui.showError(message)
+  }
+}
+
+/** Enregistre les modifications de montées. */
+async function onSaveClicked(): Promise<void> {
+  if (!traceId.value) return
+  try {
+    await altimetrieStore.save(traceId.value)
+    ui.showSuccess('Altimétrie enregistrée.')
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : "Enregistrement de l'altimétrie impossible."
+    ui.showError(message)
+  }
+}
+
 function onExitConfirmed(): void {
   dialogExitOpen.value = false
   altimetrieStore.reset()
@@ -239,6 +293,7 @@ onBeforeRouteLeave(() => {
 
 <style scoped>
 .altimetrie-center {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
