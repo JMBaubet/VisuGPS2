@@ -35,6 +35,13 @@ const router = createRouter({
       component: () => import('../views/Multiride.vue')
     },
     {
+      // Analyse altimétrique — lazy loading pour ne pas embarquer Mapbox dans
+      // le bundle principal.
+      path: '/altimetrie',
+      name: 'altimetrie',
+      component: () => import('../views/Altimetrie.vue')
+    },
+    {
       path: '/screen-bis',
       name: 'screenBis',
       component: ScreenBis

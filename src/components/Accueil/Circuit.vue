@@ -159,18 +159,19 @@
         />
         <!--
           Terrain : icône mdi-terrain, affichée sur la seconde rangée.
-          Fonction à câbler ultérieurement. Visible au survol uniquement,
-          en blanc (couleur neutre du thème).
+          Ouvre la vue Altimétrie d'une trace nettoyée ; grise et inactive
+          tant que l'audit n'est pas appliqué. Visible au survol uniquement.
         -->
         <v-btn
           class="action-btn"
           :class="{ 'action-btn--hidden': !isHovering }"
           icon="mdi-terrain"
+          :color="needsAudit ? 'grey' : undefined"
           variant="text"
           density="comfortable"
           size="small"
-          title="Altimétrie"
-          @click=""
+          :title="needsAudit ? 'Altimétrie — nettoyage requis' : 'Altimétrie'"
+          @click="ouvrirAltimetrie"
         />
         <!--
           Communes traversées (mdi-city) : état de la détection, seconde rangée.
@@ -332,6 +333,7 @@ import { useCommunesStore } from '../../stores/communes'
 import { useEditionStore } from '../../stores/edition'
 import { useSettingsStore } from '../../stores/settings'
 import { useKeyframesStore } from '../../stores/keyframes'
+import { useUiStore } from '../../stores/ui'
 import type { ViewportAspect } from '../../algorithms/keyframeGenerator'
 import { formatDistance, formatElevation } from '../../utils/format'
 
@@ -358,6 +360,7 @@ const communesStore = useCommunesStore()
 const editionStore = useEditionStore()
 const settingsStore = useSettingsStore()
 const keyframesStore = useKeyframesStore()
+const ui = useUiStore()
 
 /** État d'ouverture de la section info déroulante. */
 const infoExpanded = ref(false)
@@ -720,6 +723,23 @@ function voirAnomaliesSource() {
  */
 function voirMultiride() {
   router.push({ name: 'multiride', query: { traceId: props.trace.id } })
+}
+
+/**
+ * Ouvre la vue Altimétrie.
+ *
+ * L'analyse suit le nettoyage de la trace : une trace non « clean » est
+ * refusée, avec un message qui renvoie vers l'audit. Le multiride n'est pas
+ * une barrière : l'altimétrie est une analyse indépendante.
+ */
+function ouvrirAltimetrie() {
+  if (needsAudit.value) {
+    ui.showWarning(
+      "L'altimétrie n'est disponible qu'après nettoyage de la trace.",
+    )
+    return
+  }
+  router.push({ name: 'altimetrie', query: { traceId: props.trace.id } })
 }
 
 /** Lance la visualisation 3D du circuit. */
