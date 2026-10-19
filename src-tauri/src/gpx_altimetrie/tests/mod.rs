@@ -1,5 +1,6 @@
 //! Tests du module Altimétrie.
 
+mod commands_test;
 mod file_test;
 mod params_test;
 mod pipeline_test;

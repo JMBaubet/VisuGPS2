@@ -987,6 +987,20 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         None
     };
 
+    // 8quater. Analyse altimétrique d'une trace déjà propre. Best-effort : un
+    //          échec (absence d'altitude, trace dégénérée) ne bloque jamais
+    //          l'import ; la vue relancera la détection à l'ouverture si le
+    //          fichier manque.
+    if audit_status == "clean" {
+        crate::gpx_altimetrie::commands::generate_status(
+            &mode_dir,
+            &id,
+            &dest_path,
+            &stored_filename,
+            crate::gpx_altimetrie::commands::read_params(&app),
+        );
+    }
+
     let metadata = TraceMetadata {
         id,
         name,

@@ -6,10 +6,6 @@ mod import_gpx;
 mod gpx_audit;
 mod gpx_multiride;
 mod gpx_communes;
-// Socle du module Altimétrie : le pipeline et les commandes sont branchés aux
-// sous-étapes suivantes. L'attribut évite des avertissements de code mort
-// transitoires, il sera retiré quand les commandes seront enregistrées.
-#[allow(dead_code)]
 mod gpx_altimetrie;
 
 use display::{get_displays, open_second_window, close_second_window};
@@ -82,7 +78,11 @@ pub fn run() {
             gpx_multiride::commands::multiride_reset,
             gpx_communes::commands::communes_detect,
             gpx_communes::commands::communes_load,
-            gpx_communes::commands::communes_reset
+            gpx_communes::commands::communes_reset,
+            gpx_altimetrie::commands::altimetrie_detect,
+            gpx_altimetrie::commands::altimetrie_load,
+            gpx_altimetrie::commands::altimetrie_preview,
+            gpx_altimetrie::commands::altimetrie_save
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

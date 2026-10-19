@@ -9,6 +9,7 @@
 //! - `file` — lecture/écriture atomique et tolérante ;
 //! - `commands` — adaptateurs Tauri et génération automatique.
 
+pub mod commands;
 pub mod file;
 pub mod params;
 pub mod pipeline;

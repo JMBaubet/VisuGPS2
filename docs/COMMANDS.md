@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (47 commandes)
+## Catalogue (51 commandes)
 
 ### Application
 
@@ -341,6 +341,89 @@ pub struct CommunePassage {
 > `Communes.Overpass.delaiSec` (délai d'attente par miroir, 60 s par défaut). Les
 > deux groupes sont rattachés à la vue `accueil` : la détection se déclenche
 > depuis la carte d'un circuit, elle n'a pas de vue dédiée.
+
+### Altimétrie (`gpx_altimetrie/commands.rs`)
+
+> Le module Altimétrie produit **un seul fichier** :
+> `traces/{trace_id}/altimetrie.json` — paramètres utilisés, profil lissé,
+> segments de pente et montées. Il est généré **automatiquement après
+> nettoyage** (import d'une trace déjà `clean`, ou validation d'audit), en
+> best-effort : un échec ne bloque jamais l'import ni l'audit, et la vue relance
+> la détection si le fichier manque.
+>
+> Le fichier est aussi l'**état éditable** de la vue `/altimetrie`. `preview`
+> reconstruit le profil, les segments et les métriques avec les bornes de
+> montées fournies, **sans écrire** ; `save` fait la même reconstruction puis
+> écrit atomiquement. Les deux utilisent les paramètres **du fichier** : un
+> changement de réglages ne s'applique qu'après un recalcul explicite
+> (`altimetrie_detect`).
+>
+> Aucun champ n'est ajouté au registre : l'absence de fichier est détectée à
+> l'ouverture de la vue, qui régénère l'analyse.
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `altimetrie_load` | `async (app, trace_id: String) -> Result<Option<AltimetrieFile>, String>` | Relit `altimetrie.json`. `null` si le fichier est absent, illisible, d'une version inconnue ou rattaché à une autre trace — la vue relance alors la détection. |
+| `altimetrie_detect` | `async (app, trace_id: String, params: AltimetrieParams) -> Result<AltimetrieFile, String>` | Lit le GPX, exécute le pipeline complet (prétraitement, lissage, segments, détection des montées) et réécrit le fichier. Utilisée à l'ouverture quand le fichier manque et par « Recalculer ». |
+| `altimetrie_preview` | `async (app, trace_id: String, climbs: Vec<AltimetrieClimbEdit>) -> Result<AltimetrieFile, String>` | Rejoue la reconstruction avec les montées éditées, en reprenant les paramètres et l'horodatage du fichier existant, **sans écrire**. Utilisée à chaque fin de geste (drag, création, split, merge). |
+| `altimetrie_save` | `async (app, trace_id: String, climbs: Vec<AltimetrieClimbEdit>) -> Result<AltimetrieFile, String>` | Même reconstruction, puis écriture atomique et nouvel `updatedAt`. Utilisée par le bouton « Sauvegarder ». |
+
+**Type `AltimetrieParams`** (miroir TS dans `src/stores/altimetrie.ts`) — les 14 réglages `Altimetrie.*` :
+```rust
+pub struct AltimetrieParams {
+    pub pas_echantillonnage: f64,
+    pub correction_plateaux: i32,
+    pub fenetre_anti_pic: f64,
+    pub seuil_anti_pic: f64,
+    pub fenetre_altitude: f64,
+    pub fenetre_pente: f64,
+    pub sigma_gaussien: f64,
+    pub fenetre_mediane: f64,
+    pub lissage_renforce: bool,
+    pub seuil_montee: f64,
+    pub ecart_fusion: f64,
+    pub recherche_extrema: f64,
+    pub fenetre_calcul: f64,
+    pub longueur_min: f64,
+}
+```
+
+**Type `AltimetrieFile`** — contenu de `traces/{trace_id}/altimetrie.json` :
+```rust
+pub struct AltimetrieFile {
+    pub version: u32,                 // 1
+    pub trace_id: String,
+    pub source: String,               // nom du GPX
+    pub updated_at: String,           // ISO 8601
+    pub params: AltimetrieParams,
+    pub trace: AltimetrieTrace,       // distances, pas, nombre de points
+    pub profile: Vec<AltimetrieProfilePoint>, // { d, ele, lat, lon }
+    pub segments: Vec<AltimetrieSegment>,     // catégorie de pente, métriques
+    pub climbs: Vec<AltimetrieClimb>,         // montées, sous-montées, groupes
+    pub legend: AltimetrieLegend,             // 8 catégories de pente
+}
+```
+
+**Type `AltimetrieClimbEdit`** — forme éditable envoyée par le frontend :
+```rust
+pub struct AltimetrieClimbEdit {
+    pub id: u32,
+    pub start_km: f64,
+    pub end_km: f64,
+    pub is_merged: bool,
+    pub is_separated: bool,
+    pub group_id: Option<u32>,
+    pub merged_parts: Option<Vec<AltimetrieMergedPartEdit>>,
+    pub fallback: bool,
+}
+```
+
+> **Montées fusionnées et groupes** : une montée fusionnée non séparée est une
+> entrée `isMerged = true` avec `mergedParts` (bornes + métriques). Après
+> séparation, chaque sous-montée est une entrée distincte partageant le même
+> `groupId` et portant `isSeparated = true` ; leur fusion reconstruit une entrée
+> unique. Le backend recalcule toutes les métriques et ne fait jamais confiance
+> aux valeurs dérivées.
 
 ### Paramètres / Settings (`settings.rs`)
 

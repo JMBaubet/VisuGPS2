@@ -354,6 +354,18 @@ pub async fn audit_validate(
         multiride_params,
     )?;
 
+    // 8quater. Analyse altimétrique du GPX corrigé. Best-effort : l'audit est
+    //          déjà appliqué, une défaillance de l'analyse ne le remet pas en
+    //          cause. Le fichier périmé est supprimé par `generate_status`.
+    let gpx_path = get_trace_gpx_path(&mode_dir, &trace_id, &updated.filename);
+    crate::gpx_altimetrie::commands::generate_status(
+        &mode_dir,
+        &trace_id,
+        &gpx_path,
+        &updated.filename,
+        crate::gpx_altimetrie::commands::read_params(&app),
+    );
+
     println!(
         "[audit] validate trace={} points={} findings={} ({} FP)",
         trace_id,

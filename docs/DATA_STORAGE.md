@@ -34,6 +34,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │           ├── audit.json              # archive de l'audit (anomalies + traitements)
 │           ├── multiride.json          # description des passages multiples (contrat)
 │           ├── communes.json           # communes traversées (module Communes)
+│           ├── altimetrie.json         # profil, segments et montées (module Altimétrie)
 │           ├── trace.geojson           # LineString GeoJSON
 │           ├── keyframes_169.json      # keyframes ratio 16:9
 │           └── keyframes_43.json       # keyframes ratio 4:3
@@ -47,6 +48,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
         ├── audit.json
         ├── multiride.json
         ├── communes.json
+        ├── altimetrie.json
         ├── trace.geojson
         └── keyframes_169.json / keyframes_43.json
 ```
@@ -398,6 +400,86 @@ administratives d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
 > (icône `mdi-city` verte) relit ce fichier par la commande `communes_load` —
 > résumé et tableau chronologique des passages. En **mode debug**, la même
 > fenêtre peut le supprimer (`communes_reset`) : la détection est alors rejouée.
+
+### `traces/{trace_id}/altimetrie.json` — Profil, segments et montées
+
+Analyse altimétrique d'une trace propre, produite par le module
+`gpx_altimetrie` (commandes `altimetrie_detect` / `altimetrie_save`) et générée
+automatiquement après nettoyage. **Un seul fichier** porte tout l'état
+restaurable de la vue `/altimetrie`.
+
+```json
+{
+  "version": 1,
+  "traceId": "…",
+  "source": "trace.gpx",
+  "updatedAt": "2026-10-19T12:00:00Z",
+  "params": { "pasEchantillonnage": 50, "…": "…" },
+  "trace": {
+    "totalDistanceM": 12450.3,
+    "totalDistanceSampledM": 12400.0,
+    "trailingGapM": 50.3,
+    "stepM": 50.0,
+    "totalPoints": 249
+  },
+  "profile": [
+    { "d": 0.0, "ele": 1000.0, "lat": 45.0, "lon": 6.0 }
+  ],
+  "segments": [
+    {
+      "index": 0, "startKm": 0.0, "endKm": 0.3,
+      "startProgress": 0.0, "endProgress": 0.0241,
+      "categoryId": "pl", "avgSlopePct": 0.5, "dPlusM": 2
+    }
+  ],
+  "climbs": [
+    {
+      "id": 1, "index": 0, "startKm": 2.45, "endKm": 6.89,
+      "startProgress": 0.1968, "endProgress": 0.5534,
+      "dPlusM": 312, "avgSlopePct": 7.03,
+      "altStartM": 1245.0, "altEndM": 1557.0,
+      "mergedCount": 0, "fallback": false,
+      "isMerged": false, "isSeparated": false,
+      "groupId": null, "mergedParts": null
+    }
+  ],
+  "legend": {
+    "note": "Bornes hautes exclusives. […]",
+    "fenetreCalcul": 100.0,
+    "longueurMin": 200.0,
+    "categories": [
+      { "id": "pl", "label": "Plat", "minPct": -1.0, "maxPct": 1.0 }
+    ]
+  }
+}
+```
+
+- `profile` : profil affiché (altitude lissée ancrée) échantillonné au pas
+  `params.pasEchantillonnage`, avec la position interpolée (`lat`/`lon`). Le
+  graphe et la carte n'ont pas besoin de relire le GPX.
+- `segments` : segmentation par catégorie de pente (8 catégories, bornes hautes
+  exclusives), couvrant la trace sans trou. `startProgress` / `endProgress` sont
+  normalisés par la longueur **réelle** ; les distances sont **2D** (Haversine),
+  indépendantes de la distance 3D de `TraceStats`.
+- `climbs` : montées triées par `startKm`. Montée simple :
+  `isMerged = false`, `isSeparated = false`. Montée fusionnée non séparée : une
+  entrée `isMerged = true` avec `mergedParts` (bornes et métriques). Groupe
+  séparé : **une entrée par membre**, même `groupId`, `isSeparated = true` ; la
+  fusion du groupe reconstruit une entrée unique. C'est ce qui rend le fichier
+  restaurable, contrairement à un export consolidé.
+- `params` : les 14 réglages `Altimetrie.*` ayant produit l'analyse. `preview` et
+  `save` les reprennent ; un changement de réglages exige un recalcul explicite.
+- Nom **uniforme** `altimetrie.json` ; écriture **atomique** (`.tmp` puis
+  `rename`). Lecture **tolérante** (`altimetrie_load`) : absent, illisible,
+  version inconnue ou autre `traceId` → `null`, et la vue relance la détection.
+- **Invalidation** : `audit_validate` réécrit le GPX ; la génération automatique
+  supprime l'ancien fichier puis le régénère. Un échec laisse le fichier absent —
+  jamais périmé — et la vue réessaie à l'ouverture.
+- **Suppression** : le fichier disparaît avec le dossier de la trace
+  (`delete_trace`), comme les autres artefacts.
+
+> Les paramètres et commandes sont décrits dans
+> [COMMANDS.md](./COMMANDS.md#altimétrie-gpx_altimetriecommandsrs).
 
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
