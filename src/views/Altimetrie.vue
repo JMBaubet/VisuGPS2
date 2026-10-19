@@ -19,7 +19,7 @@
         @select="altimetrieStore.selectClimb"
       />
 
-      <v-main class="altimetrie-main">
+      <v-main>
         <div class="altimetrie-center">
           <v-progress-circular
             v-if="isLoading"
@@ -36,10 +36,13 @@
             :text="errorMessage"
           />
 
-          <div v-else class="altimetrie-placeholder">
-            <v-icon icon="mdi-map" size="64" />
-            <p class="mt-3">La carte 3D sera intégrée à l'étape suivante.</p>
-          </div>
+          <AltimetrieMap
+            v-else
+            ref="mapRef"
+            :file="altimetrieStore.file"
+            :trace-geometry="traceGeometry"
+            :selected-climb-id="altimetrieStore.selectedClimbId"
+          />
         </div>
       </v-main>
 
@@ -77,6 +80,7 @@ import { useTracesStore } from '../stores/traces'
 import { useUiStore } from '../stores/ui'
 import AltimetrieToolbar from '../components/Altimetrie/AltimetrieToolbar.vue'
 import AltimetrieClimbsPanel from '../components/Altimetrie/AltimetrieClimbsPanel.vue'
+import AltimetrieMap from '../components/Altimetrie/AltimetrieMap.vue'
 import ConfirmExitDialog from '../components/Altimetrie/dialogs/ConfirmExitDialog.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 
@@ -94,6 +98,10 @@ const initializing = ref(true)
 const errorMessage = ref<string | null>(null)
 /** Confirmation de sortie avec des modifications non enregistrées. */
 const dialogExitOpen = ref(false)
+/** Géométrie complète de la trace, pour le trait neutre de la carte. */
+const traceGeometry = ref<GeoJSON.Feature | null>(null)
+/** Instance de la carte, exposée pour le widget de profil. */
+const mapRef = ref<InstanceType<typeof AltimetrieMap> | null>(null)
 
 const traceId = computed(() => (route.query.traceId as string | null) ?? null)
 const traceName = computed(
@@ -195,6 +203,15 @@ onMounted(async () => {
       return
     }
 
+    try {
+      traceGeometry.value = await tracesStore.getTraceGeometry(traceId.value)
+    } catch (error) {
+      console.warn(
+        `[Altimetrie] Géométrie indisponible pour ${traceId.value} :`,
+        error,
+      )
+    }
+
     await altimetrieStore.loadOrDetect(traceId.value, buildParams())
   } catch (error) {
     const message =
@@ -221,22 +238,10 @@ onBeforeRouteLeave(() => {
 </script>
 
 <style scoped>
-.altimetrie-main {
-  height: 100vh;
-}
-
 .altimetrie-center {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
-}
-
-.altimetrie-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  color: rgba(var(--v-theme-on-surface), 0.55);
-  font-size: 0.9rem;
 }
 </style>

@@ -1,0 +1,339 @@
+<template>
+  <div class="alt-map">
+    <div ref="mapContainer" class="alt-map__canvas" />
+
+    <v-progress-circular
+      v-if="mapLoading"
+      class="alt-map__loading"
+      :size="48"
+      :width="6"
+      color="primary"
+      indeterminate
+    />
+
+    <v-empty-state
+      v-if="!hasMapboxKey"
+      class="alt-map__placeholder"
+      icon="mdi-map-outline"
+      title="Clé Mapbox requise"
+      text="Renseignez la clé dans les paramètres (Systeme.Key.mapBox) pour afficher la carte."
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+/**
+ * Carte 3D de la vue Altimétrie.
+ *
+ * Elle superpose :
+ * - la trace complète, en trait neutre, pour conserver la géométrie exacte ;
+ * - les segments de pente colorés, reconstruits depuis le profil du fichier ;
+ * - les bornes vallée/sommet des montées ;
+ * - la montée sélectionnée, en surépaisseur.
+ *
+ * Le terrain Mapbox est activé (relief, pitch 60) et les couches sont drapées
+ * sur le relief. Le composant ne connaît ni le store ni la vue : il reçoit ses
+ * données en props et expose `centerOnDistance` au widget de profil.
+ */
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import mapboxgl from 'mapbox-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
+import type { AltimetrieFile } from '../../stores/altimetrie'
+import { useSettingsStore } from '../../stores/settings'
+import {
+  ALTIMETRIE_MAP_STYLE,
+  ALTIMETRIE_SOURCE_IDS,
+  ALTIMETRIE_TERRAIN_SOURCE,
+  addAltimetrieLayers,
+  buildMarkerFeatures,
+  buildSegmentFeatures,
+  buildSelectedClimbFeature,
+  emptyFC,
+  geojsonSource,
+  profilePointAt,
+  sliceProfileCoordinates,
+} from './altimetrieMapLayers'
+
+const props = defineProps<{
+  file: AltimetrieFile | null
+  /** Géométrie complète de la trace (`trace.geojson`). */
+  traceGeometry: GeoJSON.Feature | null
+  selectedClimbId: number | null
+}>()
+
+const settingsStore = useSettingsStore()
+
+const mapContainer = ref<HTMLDivElement | null>(null)
+const map = shallowRef<mapboxgl.Map | null>(null)
+const mapReady = ref(false)
+const hasMapboxKey = ref(false)
+
+/** File d'attente des rendus demandés avant que la carte soit prête. */
+const readyQueue: Array<() => void> = []
+
+let resizeObserver: ResizeObserver | null = null
+/** Premier cadrage : la carte s'ouvre sur la trace entière, une seule fois. */
+let framed = false
+
+const mapLoading = computed(() => hasMapboxKey.value && !mapReady.value)
+
+function whenMapReady(fn: () => void): void {
+  if (mapReady.value && map.value) fn()
+  else readyQueue.push(fn)
+}
+
+/** Pousse les données courantes dans les sources de la carte. */
+function render(fit = false): void {
+  whenMapReady(() => {
+    const instance = map.value
+    if (!instance) return
+
+    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.trace)?.setData(
+      props.traceGeometry ?? emptyFC(),
+    )
+    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.segments)?.setData(
+      props.file ? buildSegmentFeatures(props.file) : emptyFC(),
+    )
+    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.markers)?.setData(
+      props.file
+        ? buildMarkerFeatures(props.file, props.selectedClimbId)
+        : emptyFC(),
+    )
+    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.selected)?.setData(
+      props.file
+        ? buildSelectedClimbFeature(props.file, props.selectedClimbId)
+        : emptyFC(),
+    )
+
+    if (fit && !framed && fitTrace()) {
+      framed = true
+    }
+  })
+}
+
+/** Coordonnées de la trace : géométrie complète, sinon profil échantillonné. */
+function traceCoordinates(): [number, number][] {
+  const geometry = props.traceGeometry?.geometry
+  if (geometry?.type === 'LineString') {
+    return geometry.coordinates as [number, number][]
+  }
+  if (geometry?.type === 'MultiLineString') {
+    return geometry.coordinates.flat() as [number, number][]
+  }
+  return (
+    props.file?.profile.map(
+      point => [point.lon, point.lat] as [number, number],
+    ) ?? []
+  )
+}
+
+/** Cadre la carte sur la trace entière. Retourne `true` si un cadrage a eu lieu. */
+function fitTrace(): boolean {
+  const instance = map.value
+  if (!instance) return false
+
+  const coordinates = traceCoordinates()
+  const first = coordinates[0]
+  if (!first || coordinates.length < 2) return false
+
+  const bounds = new mapboxgl.LngLatBounds(first, first)
+  for (const coordinate of coordinates) bounds.extend(coordinate)
+  instance.fitBounds(bounds, {
+    padding: { top: 40, bottom: 300, left: 40, right: 40 },
+    duration: 0,
+    maxZoom: 14,
+  })
+  return true
+}
+
+/** Cadre la carte sur la montée sélectionnée. */
+function fitSelectedClimb(id: number): void {
+  whenMapReady(() => {
+    const instance = map.value
+    if (!instance || !props.file || props.selectedClimbId !== id) return
+
+    const climb = props.file.climbs.find(entry => entry.id === id)
+    if (!climb) return
+
+    const coordinates = sliceProfileCoordinates(
+      props.file.profile,
+      climb.startKm * 1000,
+      climb.endKm * 1000,
+    )
+    const first = coordinates[0]
+    if (!first || coordinates.length < 2) return
+
+    const bounds = new mapboxgl.LngLatBounds(first, first)
+    for (const coordinate of coordinates) bounds.extend(coordinate)
+    instance.fitBounds(bounds, {
+      padding: { top: 60, bottom: 320, left: 60, right: 60 },
+      duration: 600,
+      maxZoom: 15,
+    })
+  })
+}
+
+/** Recentre la carte sur un point du profil (clic dans le widget). */
+function centerOnDistance(distanceM: number): void {
+  const instance = map.value
+  if (!instance || !props.file) return
+  const point = profilePointAt(props.file.profile, distanceM)
+  if (!point) return
+  instance.easeTo({ center: [point.lon, point.lat], duration: 500 })
+}
+
+async function initializeMap(token: string): Promise<void> {
+  if (!mapContainer.value) return
+
+  mapboxgl.accessToken = token
+  const firstProfilePoint = props.file?.profile[0]
+  const center: [number, number] = firstProfilePoint
+    ? [firstProfilePoint.lon, firstProfilePoint.lat]
+    : [2.6, 46.6]
+
+  const instance = new mapboxgl.Map({
+    container: mapContainer.value,
+    style: ALTIMETRIE_MAP_STYLE,
+    center,
+    zoom: 11,
+    pitch: 60,
+    bearing: 0,
+    antialias: true,
+  })
+  map.value = instance
+
+  instance.addControl(
+    new mapboxgl.NavigationControl({ showCompass: true, visualizePitch: true }),
+    'top-right',
+  )
+
+  instance.on('error', event => {
+    const message = event?.error?.message ?? ''
+    if (/access token|401|403|token/i.test(message)) {
+      console.warn('[Altimetrie] clé Mapbox refusée :', message)
+    } else if (message) {
+      console.warn('[Mapbox]', message)
+    }
+  })
+
+  instance.on('load', () => {
+    mapReady.value = true
+
+    if (!instance.getSource(ALTIMETRIE_TERRAIN_SOURCE)) {
+      instance.addSource(ALTIMETRIE_TERRAIN_SOURCE, {
+        type: 'raster-dem',
+        url: 'mapbox://mapbox.terrain-rgb',
+        tileSize: 512,
+        maxzoom: 14,
+      })
+    }
+    instance.setTerrain({
+      source: ALTIMETRIE_TERRAIN_SOURCE,
+      exaggeration: 1.5,
+    })
+
+    addAltimetrieLayers(instance)
+
+    const queue = readyQueue.splice(0)
+    for (const fn of queue) {
+      try {
+        fn()
+      } catch (error) {
+        console.error(error)
+      }
+    }
+    render(true)
+  })
+}
+
+function destroyMap(): void {
+  framed = false
+  readyQueue.length = 0
+  if (map.value) {
+    try {
+      map.value.remove()
+    } catch {
+      /* destruction best-effort */
+    }
+  }
+  map.value = null
+  mapReady.value = false
+}
+
+onMounted(async () => {
+  let token = ''
+  try {
+    token = String(
+      (await settingsStore.getSettingValue('Systeme.Key.mapBox')) ?? '',
+    )
+  } catch {
+    token = ''
+  }
+  hasMapboxKey.value = !!token
+  if (!hasMapboxKey.value) return
+
+  await initializeMap(token)
+
+  if (mapContainer.value) {
+    resizeObserver = new ResizeObserver(() => {
+      map.value?.resize()
+    })
+    resizeObserver.observe(mapContainer.value)
+  }
+})
+
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  destroyMap()
+})
+
+watch(
+  () => props.file,
+  () => render(false),
+)
+
+watch(
+  () => props.traceGeometry,
+  () => render(!framed),
+)
+
+watch(
+  () => props.selectedClimbId,
+  id => {
+    render(false)
+    if (id !== null) fitSelectedClimb(id)
+  },
+)
+
+defineExpose({
+  centerOnDistance,
+  fitTrace,
+})
+</script>
+
+<style scoped>
+.alt-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.alt-map__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.alt-map__loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.alt-map__placeholder {
+  position: absolute;
+  inset: 0;
+  background: rgb(var(--v-theme-surface));
+}
+</style>

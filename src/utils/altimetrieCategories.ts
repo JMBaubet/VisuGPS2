@@ -51,3 +51,10 @@ export function colorForSlope(slope: number): string {
 export function labelForSlope(slope: number): string {
   return categorizeSlope(slope).label
 }
+
+/** Couleur d'une catégorie par son identifiant (`dh3`…`up4`). */
+export function colorForCategoryId(id: string): string {
+  return (
+    ALTIMETRIE_CATEGORIES.find(category => category.id === id)?.color ?? '#64748b'
+  )
+}
