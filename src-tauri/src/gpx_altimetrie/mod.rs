@@ -11,6 +11,7 @@
 
 pub mod file;
 pub mod params;
+pub mod pipeline;
 pub mod types;
 
 #[cfg(test)]

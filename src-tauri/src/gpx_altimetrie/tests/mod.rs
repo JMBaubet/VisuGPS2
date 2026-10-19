@@ -2,6 +2,7 @@
 
 mod file_test;
 mod params_test;
+mod pipeline_test;
 
 use super::types::{
     AltimetrieCategoryDef, AltimetrieClimb, AltimetrieFile, AltimetrieLegend,
