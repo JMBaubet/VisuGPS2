@@ -9,7 +9,9 @@ use crate::gpx_altimetrie::commands::{
     detect_impl, generate_status, read_raw_points, rebuild_impl,
 };
 use crate::gpx_altimetrie::file;
-use crate::gpx_altimetrie::types::{AltimetrieClimbEdit, AltimetrieParams};
+use crate::gpx_altimetrie::types::{
+    AltimetrieClimbEdit, AltimetrieMergedPartEdit, AltimetrieParams,
+};
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -141,6 +143,109 @@ fn preview_does_not_write_and_save_writes() {
     assert_eq!(reloaded.updated_at, "2026-10-19T13:00:00Z");
     assert_eq!(reloaded.climbs.len(), 1);
     assert!(reloaded.climbs[0].end_km > reloaded.climbs[0].start_km);
+
+    cleanup(&mode_dir);
+}
+
+#[test]
+fn separated_group_and_merged_edits_are_projected() {
+    let mode_dir = temp_mode_dir();
+    let trace_id = "trace-groups";
+    let gpx_path = copy_fixture(&mode_dir, trace_id);
+    let params = AltimetrieParams::default();
+
+    let detected = detect_impl(
+        &mode_dir,
+        trace_id,
+        &gpx_path,
+        "poggio.gpx",
+        &params,
+        "2026-10-19T12:00:00Z",
+    )
+    .expect("détection");
+    let total_km = detected.trace.total_distance_m / 1_000.0;
+
+    let member_a = AltimetrieClimbEdit {
+        id: 101,
+        start_km: total_km * 0.1,
+        end_km: total_km * 0.2,
+        is_merged: false,
+        is_separated: true,
+        group_id: Some(7),
+        merged_parts: None,
+        fallback: false,
+    };
+    let member_b = AltimetrieClimbEdit {
+        id: 102,
+        start_km: total_km * 0.3,
+        end_km: total_km * 0.4,
+        is_merged: false,
+        is_separated: true,
+        group_id: Some(7),
+        merged_parts: None,
+        fallback: false,
+    };
+
+    let separated = rebuild_impl(
+        &mode_dir,
+        trace_id,
+        &gpx_path,
+        "poggio.gpx",
+        &detected.params,
+        &detected.updated_at,
+        &[member_a, member_b],
+        false,
+    )
+    .expect("aperçu du groupe séparé");
+
+    assert_eq!(separated.climbs.len(), 2);
+    assert!(separated
+        .climbs
+        .iter()
+        .all(|climb| climb.is_separated
+            && !climb.is_merged
+            && climb.group_id == Some(7)));
+
+    let merged_edit = AltimetrieClimbEdit {
+        id: 101,
+        start_km: total_km * 0.1,
+        end_km: total_km * 0.4,
+        is_merged: true,
+        is_separated: false,
+        group_id: None,
+        merged_parts: Some(vec![
+            AltimetrieMergedPartEdit {
+                start_km: total_km * 0.1,
+                end_km: total_km * 0.2,
+            },
+            AltimetrieMergedPartEdit {
+                start_km: total_km * 0.3,
+                end_km: total_km * 0.4,
+            },
+        ]),
+        fallback: false,
+    };
+
+    let merged = rebuild_impl(
+        &mode_dir,
+        trace_id,
+        &gpx_path,
+        "poggio.gpx",
+        &detected.params,
+        &detected.updated_at,
+        &[merged_edit],
+        false,
+    )
+    .expect("aperçu de la fusion");
+
+    assert_eq!(merged.climbs.len(), 1);
+    let climb = &merged.climbs[0];
+    assert!(climb.is_merged);
+    assert!(!climb.is_separated);
+    assert_eq!(climb.group_id, None);
+    assert_eq!(climb.merged_count, 1);
+    let parts = climb.merged_parts.as_ref().expect("sous-montées");
+    assert_eq!(parts.len(), 2);
 
     cleanup(&mode_dir);
 }

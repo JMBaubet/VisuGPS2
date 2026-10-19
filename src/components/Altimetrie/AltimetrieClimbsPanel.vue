@@ -23,6 +23,9 @@
             :total-distance-m="totalDistanceM"
             :selected="climb.id === selectedId"
             @click="emit('select', climb.id)"
+            @delete="emit('delete', climb.id)"
+            @split="emit('split', climb.id)"
+            @merge="emit('merge', climb.id)"
           />
         </template>
 
@@ -32,6 +35,21 @@
           title="Aucune montée détectée"
           text="La trace ne présente pas de montée selon les paramètres actuels."
         />
+      </div>
+
+      <v-divider />
+
+      <div class="alt-panel__footer">
+        <v-btn
+          block
+          color="primary"
+          variant="tonal"
+          prepend-icon="mdi-plus"
+          :disabled="creating"
+          @click="emit('create')"
+        >
+          Créer une montée
+        </v-btn>
       </div>
     </div>
   </v-navigation-drawer>
@@ -53,10 +71,16 @@ defineProps<{
   altMax: number
   totalDistanceM: number
   selectedId: number | null
+  /** Une création manuelle est en cours : le bouton est verrouillé. */
+  creating: boolean
 }>()
 
 const emit = defineEmits<{
   select: [id: number]
+  delete: [id: number]
+  split: [id: number]
+  merge: [id: number]
+  create: []
 }>()
 </script>
 
@@ -87,6 +111,11 @@ const emit = defineEmits<{
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  padding: 12px;
+}
+
+.alt-panel__footer {
+  flex: 0 0 auto;
   padding: 12px;
 }
 </style>

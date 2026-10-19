@@ -270,6 +270,173 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     }
   }
 
+  /** Prochain identifiant de montée disponible. */
+  function nextClimbId(climbs: AltimetrieClimb[]): number {
+    return climbs.reduce((max, climb) => Math.max(max, climb.id), 0) + 1
+  }
+
+  /** Prochain identifiant de groupe séparé disponible. */
+  function nextGroupId(climbs: AltimetrieClimb[]): number {
+    return (
+      climbs.reduce((max, climb) => Math.max(max, climb.groupId ?? 0), 0) + 1
+    )
+  }
+
+  /**
+   * Supprime une montée.
+   *
+   * Un membre d'un groupe séparé est retiré seul ; si le groupe tombe sous deux
+   * membres, le dernier membre redevient une montée simple.
+   */
+  async function deleteClimb(
+    traceId: string,
+    climbId: number,
+  ): Promise<void> {
+    const current = file.value
+    if (!current) return
+
+    const target = current.climbs.find(climb => climb.id === climbId)
+    if (!target) return
+
+    const remaining = current.climbs
+      .filter(climb => climb.id !== climbId)
+      .map(climbToEdit)
+
+    if (target.groupId != null) {
+      const siblings = remaining.filter(
+        climb => climb.groupId === target.groupId,
+      )
+      if (siblings.length < 2) {
+        for (const sibling of siblings) {
+          sibling.groupId = null
+          sibling.isSeparated = false
+        }
+      }
+    }
+
+    await preview(traceId, remaining)
+    if (selectedClimbId.value === climbId) {
+      selectedClimbId.value = null
+    }
+  }
+
+  /**
+   * Sépare une montée fusionnée en ses sous-montées.
+   *
+   * Les membres partagent un nouveau `groupId` et portent `isSeparated` ;
+   * leurs bornes sont celles des `mergedParts` conservées par le backend.
+   */
+  async function splitClimb(
+    traceId: string,
+    climbId: number,
+  ): Promise<void> {
+    const current = file.value
+    if (!current) return
+
+    const target = current.climbs.find(climb => climb.id === climbId)
+    if (!target || !target.isMerged || !target.mergedParts) return
+
+    const parts = target.mergedParts.filter(
+      part => part.endKm > part.startKm,
+    )
+    if (parts.length < 2) return
+
+    const groupId = nextGroupId(current.climbs)
+    let nextId = nextClimbId(current.climbs)
+    const members: AltimetrieClimbEdit[] = parts.map(part => ({
+      id: nextId++,
+      startKm: part.startKm,
+      endKm: part.endKm,
+      isMerged: false,
+      isSeparated: true,
+      groupId,
+      mergedParts: null,
+      fallback: false,
+    }))
+
+    const edits = current.climbs
+      .filter(climb => climb.id !== climbId)
+      .map(climbToEdit)
+    edits.push(...members)
+
+    await preview(traceId, edits)
+    selectedClimbId.value = members[0].id
+  }
+
+  /**
+   * Refusionne les membres d'un groupe séparé en une montée fusionnée.
+   *
+   * L'identifiant du premier membre est conservé ; les bornes courantes de
+   * chaque membre deviennent les `mergedParts` de l'entrée fusionnée.
+   */
+  async function mergeClimb(
+    traceId: string,
+    climbId: number,
+  ): Promise<void> {
+    const current = file.value
+    if (!current) return
+
+    const target = current.climbs.find(climb => climb.id === climbId)
+    if (!target || !target.isSeparated || target.groupId == null) return
+
+    const groupId = target.groupId
+    const members = current.climbs
+      .filter(climb => climb.groupId === groupId)
+      .sort((a, b) => a.startKm - b.startKm)
+    if (members.length < 2) return
+
+    const mergedId = members[0].id
+    const merged: AltimetrieClimbEdit = {
+      id: mergedId,
+      startKm: members[0].startKm,
+      endKm: members[members.length - 1].endKm,
+      isMerged: true,
+      isSeparated: false,
+      groupId: null,
+      mergedParts: members.map(member => ({
+        startKm: member.startKm,
+        endKm: member.endKm,
+      })),
+      fallback: false,
+    }
+
+    const edits = current.climbs
+      .filter(climb => climb.groupId !== groupId)
+      .map(climbToEdit)
+    edits.push(merged)
+
+    await preview(traceId, edits)
+    selectedClimbId.value = mergedId
+  }
+
+  /** Crée une montée manuelle entre deux kilomètres. */
+  async function createClimb(
+    traceId: string,
+    startKm: number,
+    endKm: number,
+  ): Promise<void> {
+    const current = file.value
+    if (!current) return
+
+    const id = nextClimbId(current.climbs)
+    const edit: AltimetrieClimbEdit = {
+      id,
+      startKm,
+      endKm,
+      isMerged: false,
+      isSeparated: false,
+      groupId: null,
+      mergedParts: null,
+      fallback: false,
+    }
+
+    const edits = current.climbs.map(climbToEdit)
+    edits.push(edit)
+
+    await preview(traceId, edits)
+    selectedClimbId.value = id
+  }
+
   /** Sélectionne une montée (ou désélectionne avec `null`). */
   function selectClimb(id: number | null): void {
     selectedClimbId.value = id
@@ -300,6 +467,10 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     preview,
     updateClimbBound,
     save,
+    deleteClimb,
+    splitClimb,
+    mergeClimb,
+    createClimb,
     selectClimb,
     reset,
   }

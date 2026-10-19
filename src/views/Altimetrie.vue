@@ -5,8 +5,12 @@
         :trace-name="traceName"
         :dirty="altimetrieStore.dirty"
         :saving="altimetrieStore.saving"
+        :settings-status="settingsStatus"
+        :settings-causes="settingsCauses"
+        :params-outdated="paramsOutdated"
         @back="onBackClicked"
         @save="onSaveClicked"
+        @recalculate="onRecalculateClicked"
         @open-settings="toggleSettings"
       />
 
@@ -17,7 +21,12 @@
         :alt-max="altBounds.max"
         :total-distance-m="totalDistanceM"
         :selected-id="altimetrieStore.selectedClimbId"
+        :creating="creating"
         @select="altimetrieStore.selectClimb"
+        @delete="onDeleteClimb"
+        @split="onSplitClimb"
+        @merge="onMergeClimb"
+        @create="onCreateRequested"
       />
 
       <v-main>
@@ -49,9 +58,13 @@
             v-if="altimetrieStore.file"
             :file="altimetrieStore.file"
             :selected-climb-id="altimetrieStore.selectedClimbId"
+            :creating="creating"
             @select-climb="altimetrieStore.selectClimb"
             @recenter="onRecenter"
             @edit-bounds="onEditBounds"
+            @create-climb="onCreateClimb"
+            @cancel-create="onCancelCreation"
+            @create-error="onCreateError"
           />
         </div>
       </v-main>
@@ -63,6 +76,18 @@
         v-model="dialogExitOpen"
         @confirm="onExitConfirmed"
         @cancel="dialogExitOpen = false"
+      />
+
+      <CreateClimbDialog
+        v-model="createHelpOpen"
+        @start="onStartCreation"
+        @cancel="createHelpOpen = false"
+      />
+
+      <ConfirmRecalcDialog
+        v-model="dialogRecalcOpen"
+        @confirm="runRecalculation"
+        @cancel="dialogRecalcOpen = false"
       />
     </v-layout>
   </v-app>
@@ -93,7 +118,13 @@ import AltimetrieClimbsPanel from '../components/Altimetrie/AltimetrieClimbsPane
 import AltimetrieMap from '../components/Altimetrie/AltimetrieMap.vue'
 import AltimetrieProfileWidget from '../components/Altimetrie/AltimetrieProfileWidget.vue'
 import ConfirmExitDialog from '../components/Altimetrie/dialogs/ConfirmExitDialog.vue'
+import CreateClimbDialog from '../components/Altimetrie/dialogs/CreateClimbDialog.vue'
+import ConfirmRecalcDialog from '../components/Altimetrie/dialogs/ConfirmRecalcDialog.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
+import {
+  computeAltimetrieDiagnostics,
+  type AltimetrieStatus,
+} from '../utils/altimetrieDiagnostics'
 
 const route = useRoute()
 const router = useRouter()
@@ -109,6 +140,12 @@ const initializing = ref(true)
 const errorMessage = ref<string | null>(null)
 /** Confirmation de sortie avec des modifications non enregistrées. */
 const dialogExitOpen = ref(false)
+/** Création manuelle en cours (deux clics dans le widget). */
+const creating = ref(false)
+/** Dialogue d'aide de création ouvert. */
+const createHelpOpen = ref(false)
+/** Confirmation du recalcul lorsque des éditions sont en cours. */
+const dialogRecalcOpen = ref(false)
 /** Géométrie complète de la trace, pour le trait neutre de la carte. */
 const traceGeometry = ref<GeoJSON.Feature | null>(null)
 /** Instance de la carte, exposée pour le widget de profil. */
@@ -138,6 +175,37 @@ const altBounds = computed(() => {
     if (point.ele > max) max = point.ele
   }
   return { min, max }
+})
+
+/** Paramètres courants, recomposés à chaque changement du drawer. */
+const currentParams = computed<AltimetrieParams>(() => buildParams())
+
+/** Diagnostic de cohérence des paramètres courants. */
+const diagnostics = computed(() =>
+  computeAltimetrieDiagnostics(currentParams.value),
+)
+
+/** Le fichier a été généré avec d'autres paramètres que les réglages courants. */
+const paramsOutdated = computed(() => {
+  const file = altimetrieStore.file
+  if (!file) return false
+  return paramsKey(file.params) !== paramsKey(currentParams.value)
+})
+
+/** Statut global affiché dans la toolbar : un fichier périmé est au moins orange. */
+const settingsStatus = computed<AltimetrieStatus>(() =>
+  paramsOutdated.value && diagnostics.value.status === 'success'
+    ? 'warning'
+    : diagnostics.value.status,
+)
+
+/** Causes du statut, complétées par l'écart entre fichier et réglages. */
+const settingsCauses = computed(() => {
+  const causes = [...diagnostics.value.causes]
+  if (paramsOutdated.value) {
+    causes.push('Paramètres modifiés depuis la génération')
+  }
+  return causes
 })
 
 /** Valeur d'un paramètre numérique, avec repli sur la valeur par défaut. */
@@ -225,8 +293,152 @@ async function onSaveClicked(): Promise<void> {
   }
 }
 
+/** Clé comparable des 14 paramètres, dans un ordre stable. */
+function paramsKey(params: AltimetrieParams): string {
+  return [
+    params.pasEchantillonnage,
+    params.correctionPlateaux,
+    params.fenetreAntiPic,
+    params.seuilAntiPic,
+    params.fenetreAltitude,
+    params.fenetrePente,
+    params.sigmaGaussien,
+    params.fenetreMediane,
+    params.lissageRenforce ? 1 : 0,
+    params.seuilMontee,
+    params.ecartFusion,
+    params.rechercheExtrema,
+    params.fenetreCalcul,
+    params.longueurMin,
+  ].join('|')
+}
+
+/** Ouvre la confirmation de recalcul si des éditions sont en cours. */
+function onRecalculateClicked(): void {
+  if (creating.value) {
+    ui.showWarning(
+      "Terminez ou annulez la création de montée avant de recalculer.",
+    )
+    return
+  }
+  if (altimetrieStore.dirty) {
+    dialogRecalcOpen.value = true
+    return
+  }
+  void runRecalculation()
+}
+
+/** Rejoue la détection avec les paramètres courants (action explicite). */
+async function runRecalculation(): Promise<void> {
+  if (!traceId.value) return
+  dialogRecalcOpen.value = false
+  try {
+    await altimetrieStore.detect(traceId.value, currentParams.value)
+    ui.showSuccess('Détection altimétrique recalculée.')
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : 'Recalcul de la détection impossible.'
+    ui.showError(message)
+  }
+}
+
+function onCreateRequested(): void {
+  createHelpOpen.value = true
+}
+
+function onStartCreation(): void {
+  createHelpOpen.value = false
+  creating.value = true
+}
+
+function onCancelCreation(): void {
+  creating.value = false
+}
+
+function onCreateError(message: string): void {
+  ui.showWarning(message)
+}
+
+async function onCreateClimb(payload: {
+  startKm: number
+  endKm: number
+}): Promise<void> {
+  if (!traceId.value) return
+  try {
+    await altimetrieStore.createClimb(
+      traceId.value,
+      payload.startKm,
+      payload.endKm,
+    )
+    creating.value = false
+    ui.showSuccess("Montée ajoutée. Sauvegardez pour l'enregistrer.")
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : 'Création de la montée impossible.'
+    ui.showError(message)
+  }
+}
+
+async function onDeleteClimb(id: number): Promise<void> {
+  if (!traceId.value) return
+  if (creating.value) {
+    ui.showWarning(
+      "Terminez ou annulez la création de montée avant de modifier la liste.",
+    )
+    return
+  }
+  try {
+    await altimetrieStore.deleteClimb(traceId.value, id)
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : 'Suppression de la montée impossible.'
+    ui.showError(message)
+  }
+}
+
+async function onSplitClimb(id: number): Promise<void> {
+  if (!traceId.value) return
+  if (creating.value) {
+    ui.showWarning(
+      "Terminez ou annulez la création de montée avant de modifier la liste.",
+    )
+    return
+  }
+  try {
+    await altimetrieStore.splitClimb(traceId.value, id)
+  } catch (error) {
+    const message =
+      typeof error === 'string' ? error : 'Séparation de la montée impossible.'
+    ui.showError(message)
+  }
+}
+
+async function onMergeClimb(id: number): Promise<void> {
+  if (!traceId.value) return
+  if (creating.value) {
+    ui.showWarning(
+      "Terminez ou annulez la création de montée avant de modifier la liste.",
+    )
+    return
+  }
+  try {
+    await altimetrieStore.mergeClimb(traceId.value, id)
+  } catch (error) {
+    const message =
+      typeof error === 'string' ? error : 'Fusion des montées impossible.'
+    ui.showError(message)
+  }
+}
+
 function onExitConfirmed(): void {
   dialogExitOpen.value = false
+  creating.value = false
   altimetrieStore.reset()
   router.push({ name: 'accueil' })
 }
@@ -278,7 +490,7 @@ onMounted(async () => {
 })
 
 onBeforeRouteLeave(() => {
-  if (!altimetrieStore.dirty) {
+  if (!altimetrieStore.dirty && !creating.value) {
     altimetrieStore.reset()
     return true
   }
@@ -286,6 +498,7 @@ onBeforeRouteLeave(() => {
     dialogExitOpen.value = true
     return false
   }
+  creating.value = false
   altimetrieStore.reset()
   return true
 })

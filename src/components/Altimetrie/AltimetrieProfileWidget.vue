@@ -26,7 +26,16 @@
           class="alt-profile__scale"
         />
         <v-btn
-          v-if="mode === 'climb'"
+          v-if="creating"
+          variant="text"
+          size="small"
+          color="warning"
+          @click="emit('cancel-create')"
+        >
+          Annuler
+        </v-btn>
+        <v-btn
+          v-else-if="mode === 'climb'"
           icon="mdi-close"
           variant="text"
           size="small"
@@ -78,6 +87,7 @@ import type {
 import { colorForCategoryId, colorForSlope } from '../../utils/altimetrieCategories'
 import {
   constrainClimbBound,
+  MIN_CLIMB_LENGTH_KM,
   type ClimbHandle,
 } from '../../utils/altimetrieClimbs'
 import { formatDistance } from '../../utils/format'
@@ -85,6 +95,8 @@ import { formatDistance } from '../../utils/format'
 const props = defineProps<{
   file: AltimetrieFile | null
   selectedClimbId: number | null
+  /** Mode création manuelle : le prochain clic pose la vallée, le suivant le sommet. */
+  creating: boolean
 }>()
 
 const emit = defineEmits<{
@@ -93,6 +105,9 @@ const emit = defineEmits<{
   'edit-bounds': [
     payload: { climbId: number; handle: ClimbHandle; km: number },
   ]
+  'create-climb': [payload: { startKm: number; endKm: number }]
+  'cancel-create': []
+  'create-error': [message: string]
 }>()
 
 const LEFT_PAD = 46
@@ -128,6 +143,8 @@ const mode = ref<'full' | 'climb'>('full')
 const xScale = ref(50)
 const yScale = ref(10)
 const dragState = ref<DragState | null>(null)
+/** Création manuelle en cours : bornes de vallée et aperçu de sommet. */
+const creation = ref<{ valleyKm: number; summitKm: number } | null>(null)
 
 let currentView: WidgetView | null = null
 let drawFrame = 0
@@ -171,17 +188,27 @@ const xScaleItems = computed(() =>
 
 const yScaleItems = scaleValues(2.5, 50, 2.5)
 
-const title = computed(() =>
-  mode.value === 'climb' && selectedClimb.value
+const title = computed(() => {
+  if (props.creating) {
+    return creation.value
+      ? 'Créer une montée — poser le sommet'
+      : 'Créer une montée — poser la vallée'
+  }
+  return mode.value === 'climb' && selectedClimb.value
     ? `Montée #${selectedClimb.value.index + 1} — ajuster les bornes`
-    : 'Profil altimétrique complet',
-)
+    : 'Profil altimétrique complet'
+})
 
-const hint = computed(() =>
-  mode.value === 'climb'
+const hint = computed(() => {
+  if (props.creating) {
+    return creation.value
+      ? 'Cliquez sur le profil pour poser le sommet · Échap pour annuler'
+      : "Cliquez sur le profil pour poser la vallée, en dehors d'une montée existante"
+  }
+  return mode.value === 'climb'
     ? 'Glissez les triangles pour ajuster les bornes · molette : défilement horizontal'
-    : 'Cliquez pour recentrer la carte · cliquez un triangle pour ajuster une montée',
-)
+    : 'Cliquez pour recentrer la carte · cliquez un triangle pour ajuster une montée'
+})
 
 function scaleValues(min: number, max: number, step: number): number[] {
   const values: number[] = []
@@ -216,6 +243,27 @@ function xOfDistance(distanceM: number, view: WidgetView): number {
 
 function distanceAtX(x: number, view: WidgetView): number {
   return (x - view.leftPad) * view.xScale
+}
+
+function isInsideClimb(km: number): boolean {
+  return climbs.value.some(
+    climb => km >= climb.startKm && km <= climb.endKm,
+  )
+}
+
+function isFreeRange(startKm: number, endKm: number): boolean {
+  const lo = Math.min(startKm, endKm)
+  const hi = Math.max(startKm, endKm)
+  return !climbs.value.some(
+    climb => lo < climb.endKm && hi > climb.startKm,
+  )
+}
+
+function creationValid(valleyKm: number, summitKm: number): boolean {
+  return (
+    summitKm > valleyKm + MIN_CLIMB_LENGTH_KM &&
+    isFreeRange(valleyKm, summitKm)
+  )
 }
 
 function requestDraw(): void {
@@ -441,6 +489,32 @@ function draw(): void {
     )
   }
 
+  // Aperçu de la création manuelle
+  const creating = creation.value
+  if (creating) {
+    const valid = creationValid(creating.valleyKm, creating.summitKm)
+    const valleyX = xOf(creating.valleyKm * 1000)
+    const summitX = xOf(creating.summitKm * 1000)
+    ctx.fillStyle = valid
+      ? 'rgba(34,197,94,0.14)'
+      : 'rgba(239,68,68,0.16)'
+    ctx.fillRect(
+      Math.min(valleyX, summitX),
+      TOP_PAD,
+      Math.max(1, Math.abs(summitX - valleyX)),
+      axisY - TOP_PAD,
+    )
+    drawProfileHandle(ctx, valleyX, '#16a34a', true, axisY, dark)
+    drawProfileHandle(
+      ctx,
+      summitX,
+      valid ? '#dc2626' : '#ef4444',
+      true,
+      axisY,
+      dark,
+    )
+  }
+
   // Centrage automatique sur la montée sélectionnée, hors drag.
   if (
     mode.value === 'climb' &&
@@ -538,6 +612,44 @@ function hitBar(x: number, y: number): AltimetrieClimb | null {
   return null
 }
 
+function handleCreationClick(x: number, y: number): void {
+  if (!currentView || y < TOP_PAD || y > currentView.axisY) return
+
+  const km = distanceAtX(x, currentView) / 1000
+  if (km < 0 || km > totalKm.value) return
+
+  if (!creation.value) {
+    if (isInsideClimb(km)) {
+      emit(
+        'create-error',
+        "Le point de vallée doit être en dehors d'une montée existante.",
+      )
+      return
+    }
+    creation.value = {
+      valleyKm: km,
+      summitKm: Math.min(totalKm.value, km + MIN_CLIMB_LENGTH_KM),
+    }
+    requestDraw()
+    return
+  }
+
+  const valleyKm = creation.value.valleyKm
+  if (km <= valleyKm + MIN_CLIMB_LENGTH_KM) {
+    emit(
+      'create-error',
+      'Le sommet doit être placé après la vallée (50 m minimum).',
+    )
+    return
+  }
+  if (!isFreeRange(valleyKm, km)) {
+    emit('create-error', 'La montée chevauche une montée existante.')
+    return
+  }
+
+  emit('create-climb', { startKm: valleyKm, endKm: km })
+}
+
 function onPointerDown(event: PointerEvent): void {
   const canvas = canvasRef.value
   if (!canvas || !currentView) return
@@ -545,6 +657,11 @@ function onPointerDown(event: PointerEvent): void {
   const rect = canvas.getBoundingClientRect()
   const x = event.clientX - rect.left
   const y = event.clientY - rect.top
+
+  if (props.creating) {
+    handleCreationClick(x, y)
+    return
+  }
 
   const handleHit = hitHandle(x, y)
   if (handleHit) {
@@ -586,6 +703,22 @@ function onPointerDown(event: PointerEvent): void {
 
 function onPointerMove(event: PointerEvent): void {
   const canvas = canvasRef.value
+  if (canvas && props.creating && creation.value && currentView) {
+    const rect = canvas.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const distanceM = distanceAtX(x, currentView)
+    if (distanceM >= 0 && distanceM <= totalDistanceM.value) {
+      const valleyKm = creation.value.valleyKm
+      const summitKm = Math.max(
+        valleyKm + MIN_CLIMB_LENGTH_KM,
+        Math.min(totalKm.value, distanceM / 1000),
+      )
+      creation.value = { valleyKm, summitKm }
+      requestDraw()
+    }
+    return
+  }
+
   const drag = dragState.value
   if (
     !canvas ||
@@ -668,11 +801,19 @@ function returnToFull(): void {
   requestDraw()
 }
 
+function onKeyDown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && props.creating) {
+    emit('cancel-create')
+  }
+}
+
 onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
   requestDraw()
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onKeyDown)
   if (drawFrame) cancelAnimationFrame(drawFrame)
   drawFrame = 0
 })
@@ -690,6 +831,22 @@ watch(
       xScale.value = 50
       const container = scrollContainer.value
       if (container) container.scrollLeft = 0
+    }
+    requestDraw()
+  },
+)
+
+watch(
+  () => props.creating,
+  creating => {
+    if (creating) {
+      mode.value = 'full'
+      xScale.value = 50
+      const container = scrollContainer.value
+      if (container) container.scrollLeft = 0
+      creation.value = null
+    } else {
+      creation.value = null
     }
     requestDraw()
   },

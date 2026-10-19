@@ -100,6 +100,34 @@
         </span>
       </div>
     </div>
+
+    <div class="alt-climb-card__actions">
+      <v-btn
+        v-if="canSplit"
+        icon="mdi-call-split"
+        size="x-small"
+        variant="text"
+        title="Séparer les sous-montées"
+        @click.stop="emit('split')"
+      />
+      <v-btn
+        v-if="canMerge"
+        icon="mdi-call-merge"
+        size="x-small"
+        variant="text"
+        title="Fusionner les montées séparées"
+        @click.stop="emit('merge')"
+      />
+      <v-spacer />
+      <v-btn
+        icon="mdi-delete-outline"
+        size="x-small"
+        variant="text"
+        color="error"
+        title="Supprimer la montée"
+        @click.stop="emit('delete')"
+      />
+    </div>
   </v-card>
 </template>
 
@@ -127,6 +155,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   click: []
+  delete: []
+  split: []
+  merge: []
 }>()
 
 /** Distance totale du profil, jamais nulle (protection du ratio). */
@@ -136,6 +167,17 @@ const totalDistance = computed(() =>
 
 const categoryColor = computed(() => colorForSlope(props.climb.avgSlopePct))
 const categoryLabel = computed(() => labelForSlope(props.climb.avgSlopePct))
+
+/** Une montée fusionnée non séparée peut être scindée en ses sous-montées. */
+const canSplit = computed(
+  () =>
+    props.climb.isMerged && (props.climb.mergedParts?.length ?? 0) >= 2,
+)
+
+/** Un membre d'un groupe séparé peut être refusionné avec ses voisins. */
+const canMerge = computed(
+  () => props.climb.isSeparated && props.climb.groupId != null,
+)
 
 /** Trace complète sous-échantillonnée, en coordonnées du viewBox 100×26. */
 const sparkline = computed(() => {
@@ -252,5 +294,12 @@ const highlightWidth = computed(() => {
   font-size: 0.83rem;
   font-weight: 600;
   color: rgba(var(--v-theme-on-surface), 0.92);
+}
+
+.alt-climb-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 6px;
 }
 </style>
