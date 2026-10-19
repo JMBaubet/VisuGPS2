@@ -6,6 +6,11 @@ mod import_gpx;
 mod gpx_audit;
 mod gpx_multiride;
 mod gpx_communes;
+// Socle du module Altimétrie : le pipeline et les commandes sont branchés aux
+// sous-étapes suivantes. L'attribut évite des avertissements de code mort
+// transitoires, il sera retiré quand les commandes seront enregistrées.
+#[allow(dead_code)]
+mod gpx_altimetrie;
 
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;

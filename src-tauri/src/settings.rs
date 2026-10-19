@@ -925,6 +925,97 @@ mod tests {
         );
     }
 
+    /// Le namespace `Altimetrie.*` est déclaré et cohérent avec sa vue `_meta`.
+    ///
+    /// La vue `/altimetrie` porte ses quatre groupes ; chaque paramètre doit
+    /// être rattaché à l'un d'eux, sans quoi il serait invisible dans le drawer.
+    #[test]
+    fn altimetrie_namespace_is_declared_and_consistent() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        let meta = extract_meta(&table);
+
+        // 1. La vue `/altimetrie` est déclarée, avec son libellé.
+        let altimetrie = meta
+            .views
+            .get("altimetrie")
+            .expect("vue `altimetrie` déclarée");
+        assert_eq!(altimetrie.label, "Altimétrie");
+
+        // 2. Chaque groupe de la vue a sa métadonnée d'affichage.
+        for group in &altimetrie.groups {
+            let g = meta.groups.get(group).unwrap_or_else(|| {
+                panic!("groupe `{}` déclaré dans la vue altimetrie sans métadonnée", group)
+            });
+            assert!(g.label.is_some(), "groupe `{}` sans libellé", group);
+        }
+
+        // 3. Les 14 paramètres du pipeline, tous rattachés à un groupe affiché.
+        let altimetrie_defs: Vec<_> = defs
+            .iter()
+            .filter(|d| d.path.starts_with("Altimetrie."))
+            .collect();
+        assert_eq!(
+            altimetrie_defs.len(),
+            14,
+            "14 paramètres `Altimetrie.*` attendus : {:?}",
+            altimetrie_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
+        );
+        for def in &altimetrie_defs {
+            let group = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
+            assert!(
+                altimetrie.groups.contains(&group),
+                "paramètre `{}` rattaché au groupe `{}`, absent de la vue altimetrie",
+                def.path,
+                group
+            );
+        }
+
+        // 4. Types et défauts structurants.
+        let step = altimetrie_defs
+            .iter()
+            .find(|d| d.path == "Altimetrie.Preparation.pasEchantillonnage")
+            .expect("paramètre `pasEchantillonnage` déclaré");
+        assert_eq!(step.setting_type, "int");
+        assert_eq!(step.default.as_i64(), Some(50));
+        assert_eq!(step.min, Some(2.0));
+        assert_eq!(step.max, Some(200.0));
+        assert_eq!(step.unit.as_deref(), Some("m"));
+
+        let seuil = altimetrie_defs
+            .iter()
+            .find(|d| d.path == "Altimetrie.Detection.seuilMontee")
+            .expect("paramètre `seuilMontee` déclaré");
+        assert_eq!(seuil.setting_type, "float");
+        assert_eq!(seuil.default.as_f64(), Some(0.5));
+
+        let renforce = altimetrie_defs
+            .iter()
+            .find(|d| d.path == "Altimetrie.Lissage.lissageRenforce")
+            .expect("paramètre `lissageRenforce` déclaré");
+        assert_eq!(renforce.setting_type, "bool");
+        assert_eq!(renforce.default.as_bool(), Some(true));
+
+        // 5. Les valeurs 0 qui désactivent une étape sont admises.
+        for path in [
+            "Altimetrie.Preparation.seuilAntiPic",
+            "Altimetrie.Detection.ecartFusion",
+            "Altimetrie.Segments.longueurMin",
+        ] {
+            let def = altimetrie_defs
+                .iter()
+                .find(|d| d.path == path)
+                .unwrap_or_else(|| panic!("paramètre `{path}` déclaré"));
+            assert_eq!(def.min, Some(0.0), "`{path}` doit admettre 0");
+        }
+    }
+
     /// Le namespace `Communes.*` est déclaré et cohérent avec `_meta`.
     ///
     /// La détection des communes n'a **pas de vue dédiée** : elle se déclenche

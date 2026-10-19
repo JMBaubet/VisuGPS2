@@ -68,6 +68,16 @@ label = "Passages multiples"
 icon = "mdi-repeat"
 groups = ["Multiride.Detection"]
 
+[_meta.views.altimetrie]
+label = "Altimétrie"
+icon = "mdi-terrain"
+groups = [
+  "Altimetrie.Preparation",
+  "Altimetrie.Lissage",
+  "Altimetrie.Detection",
+  "Altimetrie.Segments",
+]
+
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
 # Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
 [_meta.groups."Systeme.Key"]
@@ -137,6 +147,22 @@ icon = "mdi-application"
 [_meta.groups."Multiride.Detection"]
 label = "Multiride — Détection"
 icon = "mdi-repeat"
+
+[_meta.groups."Altimetrie.Preparation"]
+label = "Altimétrie — Préparation"
+icon = "mdi-chart-bell-curve-cumulative"
+
+[_meta.groups."Altimetrie.Lissage"]
+label = "Altimétrie — Lissage"
+icon = "mdi-chart-areaspline"
+
+[_meta.groups."Altimetrie.Detection"]
+label = "Altimétrie — Détection"
+icon = "mdi-image-filter-hdr"
+
+[_meta.groups."Altimetrie.Segments"]
+label = "Altimétrie — Segments de pente"
+icon = "mdi-chart-timeline-variant"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -835,6 +861,274 @@ max = 500
 step = 5
 unit = "m"
 icon = "mdi-call-merge"
+
+# ---------------------------------------------------------------------------
+# ALTIMÉTRIE — Profil, segments de pente et montées
+# ---------------------------------------------------------------------------
+#
+# Ce namespace pilote l'analyse altimétrique d'une trace propre. Le pipeline
+# est porté du prototype validé (features/altimetrie/) et produit un unique
+# fichier `traces/{trace_id}/altimetrie.json`, relu par la vue /altimetrie.
+#
+# La génération suit le nettoyage (import d'une trace propre ou validation
+# d'audit). Enregistrer un paramètre ne relance pas la détection : la vue
+# signale l'écart et propose un recalcul explicite.
+# ---------------------------------------------------------------------------
+
+[Altimetrie.Preparation.pasEchantillonnage]
+description = "Pas de rééchantillonnage (m)"
+documentation = """
+Granularité de la grille altimétrique après moyennage. Un pas constant rend
+les segments et les montées comparables, quelle que soit la densité du GPX.
+
+- **Trop bas** (< 25 m) : calcul plus lourd, sans gain visible sur une trace
+  GPS courante.
+- **Trop haut** (> 100 m) : les montées courtes et les ruptures de pente
+  s'effacent.
+
+Valeur par défaut : 50 m.
+"""
+type = "int"
+default = 50
+min = 2
+max = 200
+step = 5
+unit = "m"
+icon = "mdi-dots-grid"
+
+[Altimetrie.Preparation.correctionPlateaux]
+description = "Correction des plateaux GPS (points)"
+documentation = """
+Les séries d'au moins N points à altitude constante (±1 m) sont remplacées par
+une interpolation entre les points qui les encadrent. Corrige les plateaux
+artificiels des GPS et des MNT.
+
+- **0 ou 1** : correction désactivée.
+- **Trop haut** (> 12 points) : des portions réellement plates peuvent être
+  inclinées artificiellement.
+
+Valeur par défaut : 6 points.
+"""
+type = "int"
+default = 6
+min = 0
+max = 20
+step = 1
+unit = "points"
+icon = "mdi-table-row-height"
+
+[Altimetrie.Preparation.fenetreAntiPic]
+description = "Fenêtre anti-pic (m)"
+documentation = """
+Fenêtre du filtre de Hampel qui remplace une altitude aberrante par la médiane
+locale. La fenêtre est convertie en un nombre impair de points.
+
+- **Trop petite** (< 2 × pas) : les pics isolés ne sont pas couverts.
+- **Trop grande** (> 400 m) : les sommets réels sont adoucis.
+
+Valeur par défaut : 200 m.
+"""
+type = "int"
+default = 200
+min = 50
+max = 500
+step = 25
+unit = "m"
+icon = "mdi-filter-variant"
+
+[Altimetrie.Preparation.seuilAntiPic]
+description = "Seuil anti-pic (m)"
+documentation = """
+Écart maximal à la médiane locale avant remplacement. Un point dont l'altitude
+s'écarte de plus de ce seuil est corrigé.
+
+Valeur 0 : filtre anti-pic désactivé.
+
+Valeur par défaut : 15 m.
+"""
+type = "float"
+default = 15
+min = 0
+max = 100
+step = 5
+unit = "m"
+icon = "mdi-filter-remove-outline"
+
+[Altimetrie.Lissage.fenetreAltitude]
+description = "Fenêtre de lissage d'altitude (m)"
+documentation = """
+Fenêtre du Savitzky-Golay appliqué au profil affiché, avant ancrage aux bornes
+des montées. C'est le réglage principal de la douceur du profil.
+
+- **Trop petite** (< 5 × pas) : le profil reste bruité.
+- **Trop grande** : les ruptures de pente et les sommets s'émoussent.
+
+Valeur par défaut : 500 m.
+"""
+type = "int"
+default = 500
+min = 20
+max = 5000
+step = 25
+unit = "m"
+icon = "mdi-arrow-expand-horizontal"
+
+[Altimetrie.Lissage.fenetrePente]
+description = "Fenêtre de lissage de pente (m)"
+documentation = """
+Fenêtre de la moyenne mobile appliquée à la pente instantanée. Elle sert à la
+détection des montées et au tracé, pas à la catégorisation des segments.
+
+- **Trop petite** (< 3 × pas) : la détection réagit au bruit.
+- **Trop grande** : les montées courtes sont lissées et peuvent disparaître.
+
+Valeur par défaut : 150 m.
+"""
+type = "int"
+default = 150
+min = 10
+max = 2000
+step = 25
+unit = "m"
+icon = "mdi-chart-line"
+
+[Altimetrie.Lissage.sigmaGaussien]
+description = "Sigma du filtre gaussien (m)"
+documentation = """
+Second lissage appliqué après le Savitzky-Golay, avant l'ancrage. Il arrondit
+les micro-reliefs sans déplacer les extrema ancrés.
+
+Valeur 0 : filtre désactivé.
+
+Valeur par défaut : 75 m.
+"""
+type = "float"
+default = 75
+min = 0
+max = 500
+step = 5
+unit = "m"
+icon = "mdi-chart-bell-curve"
+
+[Altimetrie.Lissage.fenetreMediane]
+description = "Filtre médian (m)"
+documentation = """
+Filtre médian optionnel appliqué avant la détection automatique, pour retirer
+les pics isolés résistant à l'anti-pic.
+
+Valeur 0 : filtre désactivé (défaut).
+"""
+type = "int"
+default = 0
+min = 0
+max = 300
+step = 5
+unit = "m"
+icon = "mdi-chart-bar"
+
+[Altimetrie.Lissage.lissageRenforce]
+description = "Lissage renforcé (double Savitzky-Golay)"
+documentation = """
+Ajoute un second passage Savitzky-Golay après l'ancrage aux bornes des
+montées, puis restaure les altitudes exactes aux ancres. Produit un profil
+plus lisse sans déplacer les vallées et sommets.
+
+Désactivé : un seul passage, profil plus proche des altitudes brutes.
+"""
+type = "bool"
+default = true
+icon = "mdi-layers-outline"
+
+[Altimetrie.Detection.seuilMontee]
+description = "Seuil de détection des montées (%)"
+documentation = """
+Seuil d'hystérésis : une montée démarre quand la pente lissée dépasse +seuil
+et se termine quand elle descend sous −seuil.
+
+- **Trop bas** (< 0,3 %) : les faux plats montants deviennent des montées.
+- **Trop haut** (> 2 %) : les montées douces sont ignorées.
+
+Valeur par défaut : 0,5 %.
+"""
+type = "float"
+default = 0.5
+min = 0.1
+max = 20
+step = 0.1
+unit = "%"
+icon = "mdi-arrow-up-bold"
+
+[Altimetrie.Detection.ecartFusion]
+description = "Écart de fusion des montées (m)"
+documentation = """
+Deux montées séparées par moins que cet écart sont fusionnées en une seule
+montée, avec leurs sous-montées conservées pour la séparation.
+
+Valeur 0 : fusion automatique désactivée.
+
+Valeur par défaut : 250 m.
+"""
+type = "int"
+default = 250
+min = 0
+max = 5000
+step = 50
+unit = "m"
+icon = "mdi-call-merge"
+
+[Altimetrie.Detection.rechercheExtrema]
+description = "Recherche des extrema (%)"
+documentation = """
+Rayon de recherche des vrais extrema autour d'une montée candidate, exprimé en
+pourcentage de sa longueur. Borné par le pipeline entre 1 500 et 8 000 m.
+
+Valeur par défaut : 60 %.
+"""
+type = "int"
+default = 60
+min = 1
+max = 500
+step = 5
+unit = "%"
+icon = "mdi-magnify"
+
+[Altimetrie.Segments.fenetreCalcul]
+description = "Fenêtre de calcul de pente (m)"
+documentation = """
+Largeur de la fenêtre centrée utilisée pour calculer la pente de coloration des
+segments. La fenêtre effective peut atteindre le double de cette valeur.
+
+- **Trop petite** (< 50 m) : la coloration scintille.
+- **Trop grande** (> 300 m) : les changements de pente sont retardés.
+
+Valeur par défaut : 100 m.
+"""
+type = "int"
+default = 100
+min = 50
+max = 2000
+step = 25
+unit = "m"
+icon = "mdi-arrow-expand-horizontal"
+
+[Altimetrie.Segments.longueurMin]
+description = "Longueur minimale d'un segment (m)"
+documentation = """
+Les segments de catégorie plus courts que cette longueur sont absorbés par le
+voisin le plus long, puis les segments adjacents de même catégorie sont
+réunis.
+
+Valeur 0 : fusion des micro-segments désactivée.
+
+Valeur par défaut : 200 m.
+"""
+type = "int"
+default = 200
+min = 0
+max = 2000
+step = 10
+unit = "m"
+icon = "mdi-ruler"
 
 # ---------------------------------------------------------------------------
 # Détection des communes traversées (module Communes).

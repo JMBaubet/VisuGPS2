@@ -169,7 +169,7 @@
           variant="text"
           density="comfortable"
           size="small"
-          title="Terrain"
+          title="Altimétrie"
           @click=""
         />
         <!--
