@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import {
+  applyClimbBounds,
   climbToEdit,
   constrainClimbBound,
   type ClimbHandle,
@@ -135,6 +136,13 @@ export interface AltimetrieClimbEdit {
   fallback: boolean
 }
 
+/** Bornes d'une montée en cours de glissement, avant validation backend. */
+interface BoundsDraft {
+  climbId: number
+  startKm: number
+  endKm: number
+}
+
 export const useAltimetrieStore = defineStore('altimetrie', () => {
   // ─── État ──────────────────────────────────────────────────────────
   const file = ref<AltimetrieFile | null>(null)
@@ -143,9 +151,36 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
   /** Des montées ont été éditées et ne sont pas encore enregistrées. */
   const dirty = ref(false)
   const selectedClimbId = ref<number | null>(null)
+  /** Aperçu local d'une borne déplacée, affiché sans attendre le backend. */
+  const boundsDraft = ref<BoundsDraft | null>(null)
 
   // ─── Getters ───────────────────────────────────────────────────────
-  const climbs = computed(() => file.value?.climbs ?? [])
+  /**
+   * Fichier affiché : l'état persisté, avec la borne en cours de glissement
+   * appliquée. La carte, le widget et les cartes de montée lisent cette
+   * projection pour réagir en temps réel, sans appel IPC pendant le drag.
+   */
+  const displayFile = computed<AltimetrieFile | null>(() => {
+    const current = file.value
+    const draft = boundsDraft.value
+    if (!current || !draft) return current
+
+    return {
+      ...current,
+      climbs: current.climbs.map(climb =>
+        climb.id === draft.climbId
+          ? applyClimbBounds(
+              climb,
+              draft.startKm,
+              draft.endKm,
+              current.profile,
+              current.trace.totalDistanceM,
+            )
+          : climb,
+      ),
+    }
+  })
+  const climbs = computed(() => displayFile.value?.climbs ?? [])
   const selectedClimb = computed(
     () => climbs.value.find(climb => climb.id === selectedClimbId.value) ?? null,
   )
@@ -166,6 +201,7 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
         existing ?? (await invoke<AltimetrieFile>('altimetrie_detect', { traceId, params }))
       dirty.value = false
       selectedClimbId.value = null
+      boundsDraft.value = null
     } finally {
       loading.value = false
     }
@@ -178,6 +214,7 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
       file.value = await invoke<AltimetrieFile>('altimetrie_detect', { traceId, params })
       dirty.value = false
       selectedClimbId.value = null
+      boundsDraft.value = null
     } finally {
       loading.value = false
     }
@@ -204,6 +241,8 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     } catch (error) {
       file.value = snapshot
       throw error
+    } finally {
+      boundsDraft.value = null
     }
   }
 
@@ -221,10 +260,16 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     km: number,
   ): Promise<void> {
     const current = file.value
-    if (!current) return
+    if (!current) {
+      boundsDraft.value = null
+      return
+    }
 
     const climb = current.climbs.find(entry => entry.id === climbId)
-    if (!climb) return
+    if (!climb) {
+      boundsDraft.value = null
+      return
+    }
 
     const lastProfilePoint = current.profile[current.profile.length - 1]
     const totalKm = lastProfilePoint
@@ -238,7 +283,10 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
       totalKm,
     )
     const original = handle === 'valley' ? climb.startKm : climb.endKm
-    if (Math.abs(constrained - original) < 1e-4) return
+    if (Math.abs(constrained - original) < 1e-4) {
+      boundsDraft.value = null
+      return
+    }
 
     const edits = current.climbs.map(entry => {
       const edit = climbToEdit(entry)
@@ -250,6 +298,48 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     })
 
     await preview(traceId, edits)
+  }
+
+  /**
+   * Applique localement une borne déplacée, sans appel backend.
+   *
+   * Appelée à chaque déplacement du pointeur : la carte et les cartes de
+   * montée suivent immédiatement, avec les métriques recalculées depuis le
+   * profil courant. Le backend reprend la main au relâchement.
+   */
+  function draftClimbBound(
+    climbId: number,
+    handle: ClimbHandle,
+    km: number,
+  ): void {
+    const current = file.value
+    if (!current) return
+
+    const climb = current.climbs.find(entry => entry.id === climbId)
+    if (!climb) return
+
+    const lastPoint = current.profile[current.profile.length - 1]
+    const totalKm = lastPoint
+      ? lastPoint.d / 1000
+      : current.trace.totalDistanceM / 1000
+    const constrained = constrainClimbBound(
+      current.climbs,
+      climbId,
+      handle,
+      km,
+      totalKm,
+    )
+
+    boundsDraft.value = {
+      climbId,
+      startKm: handle === 'valley' ? constrained : climb.startKm,
+      endKm: handle === 'summit' ? constrained : climb.endKm,
+    }
+  }
+
+  /** Abandonne l'aperçu local (relâchement sans modification, annulation). */
+  function clearClimbDraft(): void {
+    boundsDraft.value = null
   }
 
   /** Enregistre les montées courantes ; le backend met à jour `updatedAt`. */
@@ -449,6 +539,7 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     saving.value = false
     dirty.value = false
     selectedClimbId.value = null
+    boundsDraft.value = null
   }
 
   return {
@@ -459,6 +550,7 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     dirty,
     selectedClimbId,
     // Getters
+    displayFile,
     climbs,
     selectedClimb,
     // Actions
@@ -466,6 +558,8 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     detect,
     preview,
     updateClimbBound,
+    draftClimbBound,
+    clearClimbDraft,
     save,
     deleteClimb,
     splitClimb,

@@ -49,19 +49,21 @@
           <AltimetrieMap
             v-else
             ref="mapRef"
-            :file="altimetrieStore.file"
+            :file="altimetrieStore.displayFile"
             :trace-geometry="traceGeometry"
             :selected-climb-id="altimetrieStore.selectedClimbId"
           />
 
           <AltimetrieProfileWidget
-            v-if="altimetrieStore.file"
-            :file="altimetrieStore.file"
+            v-if="altimetrieStore.displayFile"
+            :file="altimetrieStore.displayFile"
             :selected-climb-id="altimetrieStore.selectedClimbId"
             :creating="creating"
             @select-climb="altimetrieStore.selectClimb"
             @recenter="onRecenter"
             @edit-bounds="onEditBounds"
+            @draft-bounds="onDraftBounds"
+            @cancel-bounds="altimetrieStore.clearClimbDraft"
             @create-climb="onCreateClimb"
             @cancel-create="onCancelCreation"
             @create-error="onCreateError"
@@ -125,6 +127,7 @@ import {
   computeAltimetrieDiagnostics,
   type AltimetrieStatus,
 } from '../utils/altimetrieDiagnostics'
+import type { ClimbHandle } from '../utils/altimetrieClimbs'
 
 const route = useRoute()
 const router = useRouter()
@@ -255,10 +258,23 @@ function onRecenter(distanceM: number): void {
   mapRef.value?.centerOnDistance(distanceM)
 }
 
+/** Projette la borne en cours de glissement, sans appel backend. */
+function onDraftBounds(payload: {
+  climbId: number
+  handle: ClimbHandle
+  km: number
+}): void {
+  altimetrieStore.draftClimbBound(
+    payload.climbId,
+    payload.handle,
+    payload.km,
+  )
+}
+
 /** Applique une borne déplacée dans le widget, via un aperçu backend. */
 async function onEditBounds(payload: {
   climbId: number
-  handle: 'valley' | 'summit'
+  handle: ClimbHandle
   km: number
 }): Promise<void> {
   if (!traceId.value) return
@@ -470,6 +486,10 @@ onMounted(async () => {
     }
 
     try {
+      // Le cache a pu être rempli avant un nettoyage qui réécrit le GPX et
+      // `trace.geojson` : on force une relecture pour colorer les segments
+      // sur la géométrie réellement nettoyée.
+      tracesStore.invalidateGeometry(traceId.value)
       traceGeometry.value = await tracesStore.getTraceGeometry(traceId.value)
     } catch (error) {
       console.warn(

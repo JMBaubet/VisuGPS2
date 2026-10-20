@@ -8,7 +8,11 @@
  *   métriques et ne fait jamais confiance aux valeurs dérivées.
  */
 
-import type { AltimetrieClimb, AltimetrieClimbEdit } from '../stores/altimetrie'
+import type {
+  AltimetrieClimb,
+  AltimetrieClimbEdit,
+  AltimetrieProfilePoint,
+} from '../stores/altimetrie'
 
 export type ClimbHandle = 'valley' | 'summit'
 
@@ -46,6 +50,114 @@ export function constrainClimbBound(
     return Math.max(minKm, Math.min(climb.endKm - MIN_CLIMB_LENGTH_KM, km))
   }
   return Math.max(climb.startKm + MIN_CLIMB_LENGTH_KM, Math.min(maxKm, km))
+}
+
+/**
+ * Applique une borne déplacée à une montée, pour l'aperçu pendant le glissement.
+ *
+ * Les métriques sont recalculées depuis le profil affiché : longueur, D+
+ * (somme des dénivelées positives), pentes et altitudes de début/fin. Le
+ * backend revalide et arrondit les bornes au relâchement ; cet aperçu ne sert
+ * qu'à faire réagir la carte et la liste en temps réel.
+ */
+export function applyClimbBounds(
+  climb: AltimetrieClimb,
+  startKm: number,
+  endKm: number,
+  profile: AltimetrieProfilePoint[],
+  totalDistanceM: number,
+): AltimetrieClimb {
+  const first = profile[0]
+  const last = profile[profile.length - 1]
+  if (!first || !last) return climb
+
+  const minKm = first.d / 1000
+  const maxKm = last.d / 1000
+  const start = Math.max(minKm, Math.min(maxKm, Math.min(startKm, endKm)))
+  const end = Math.max(minKm, Math.min(maxKm, Math.max(startKm, endKm)))
+  const lengthM = (end - start) * 1000
+  if (lengthM <= 0) return climb
+
+  const startM = start * 1000
+  const endM = end * 1000
+  const dPlus = positiveElevationGain(profile, startM, endM)
+  const totalM = totalDistanceM > 0 ? totalDistanceM : last.d
+
+  return {
+    ...climb,
+    startKm: round(start, 4),
+    endKm: round(end, 4),
+    startProgress: round(startM / totalM, 5),
+    endProgress: round(endM / totalM, 5),
+    dPlusM: Math.round(dPlus),
+    avgSlopePct: round((dPlus / lengthM) * 100, 2),
+    altStartM: round(elevationAt(profile, startM), 1),
+    altEndM: round(elevationAt(profile, endM), 1),
+  }
+}
+
+/** Altitude interpolée du profil à une distance donnée (m). */
+function elevationAt(
+  profile: AltimetrieProfilePoint[],
+  targetM: number,
+): number {
+  const first = profile[0]
+  const last = profile[profile.length - 1]
+  if (!first || !last) return 0
+  if (targetM <= first.d) return first.ele
+  if (targetM >= last.d) return last.ele
+
+  const index = lowerBound(profile, targetM)
+  const previous = profile[index - 1]
+  const next = profile[index]
+  if (!previous || !next) return last.ele
+  const span = next.d - previous.d
+  const ratio = span > 0 ? (targetM - previous.d) / span : 0
+  return previous.ele + (next.ele - previous.ele) * ratio
+}
+
+/** Somme des dénivelées positives du profil entre deux distances (m). */
+function positiveElevationGain(
+  profile: AltimetrieProfilePoint[],
+  startM: number,
+  endM: number,
+): number {
+  if (endM <= startM) return 0
+
+  let total = 0
+  let previous = elevationAt(profile, startM)
+  let index = lowerBound(profile, startM)
+
+  while (index < profile.length && profile[index].d < endM) {
+    const elevation = profile[index].ele
+    if (elevation > previous) total += elevation - previous
+    previous = elevation
+    index++
+  }
+
+  const final = elevationAt(profile, endM)
+  if (final > previous) total += final - previous
+  return total
+}
+
+/** Premier point du profil dont la distance est ≥ `targetM`. */
+function lowerBound(
+  profile: AltimetrieProfilePoint[],
+  targetM: number,
+): number {
+  let lo = 0
+  let hi = profile.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (profile[mid].d < targetM) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function round(value: number, decimals: number): number {
+  const factor = 10 ** decimals
+  return Math.round(value * factor) / factor
 }
 
 /** Projette une montée persistée vers la forme éditable attendue par le backend. */

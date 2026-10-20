@@ -9,6 +9,7 @@
       <span class="alt-climb-card__index">#{{ climb.index + 1 }}</span>
       <span class="alt-climb-card__category-dot" :style="{ background: categoryColor }" />
       <span class="alt-climb-card__category-label">{{ categoryLabel }}</span>
+
       <v-chip
         v-if="climb.isMerged"
         size="x-small"
@@ -18,15 +19,46 @@
       >
         fusionnée
       </v-chip>
+      <v-btn
+        v-if="canSplit"
+        icon="mdi-call-merge"
+        size="x-small"
+        variant="text"
+        color="info"
+        class="ml-1"
+        title="Séparer les montées séparées"
+        @click.stop="emit('split')"
+      />
+
       <v-chip
         v-if="climb.isSeparated"
         size="x-small"
         variant="tonal"
-        color="secondary"
+        color="orange"
         class="ml-1"
       >
         séparée
       </v-chip>
+      <v-btn
+        v-if="canMerge"
+        icon="mdi-call-split"
+        size="x-small"
+        variant="text"
+        color="orange"
+        class="ml-1"
+        title="Fusionner les sous-montées"
+        @click.stop="emit('merge')"
+      />
+
+      <v-spacer />
+      <v-btn
+        icon="mdi-delete-outline"
+        size="x-small"
+        variant="text"
+        color="error"
+        title="Supprimer la montée"
+        @click.stop="emit('delete')"
+      />
     </div>
 
     <!-- Position de la montée sur la trace complète : profil miniature,
@@ -76,57 +108,29 @@
 
     <div class="alt-climb-card__metrics">
       <div class="alt-climb-card__metric">
-        <span class="alt-climb-card__metric-label">Vallée</span>
+        <span class="alt-climb-card__metric-label">Vallée :</span>
         <span class="alt-climb-card__metric-value">
           {{ formatDistance(climb.startKm * 1000) }}
         </span>
       </div>
       <div class="alt-climb-card__metric">
-        <span class="alt-climb-card__metric-label">Longueur</span>
+        <span class="alt-climb-card__metric-label">Longueur :</span>
         <span class="alt-climb-card__metric-value">
           {{ formatDistance((climb.endKm - climb.startKm) * 1000) }}
         </span>
       </div>
       <div class="alt-climb-card__metric">
-        <span class="alt-climb-card__metric-label">Dénivelé</span>
+        <span class="alt-climb-card__metric-label">Dénivelé :</span>
         <span class="alt-climb-card__metric-value">
           {{ formatElevation(climb.dPlusM) }}
         </span>
       </div>
       <div class="alt-climb-card__metric">
-        <span class="alt-climb-card__metric-label">Pente moy.</span>
+        <span class="alt-climb-card__metric-label">Pente moy. :</span>
         <span class="alt-climb-card__metric-value">
           {{ climb.avgSlopePct.toFixed(1) }} %
         </span>
       </div>
-    </div>
-
-    <div class="alt-climb-card__actions">
-      <v-btn
-        v-if="canSplit"
-        icon="mdi-call-split"
-        size="x-small"
-        variant="text"
-        title="Séparer les sous-montées"
-        @click.stop="emit('split')"
-      />
-      <v-btn
-        v-if="canMerge"
-        icon="mdi-call-merge"
-        size="x-small"
-        variant="text"
-        title="Fusionner les montées séparées"
-        @click.stop="emit('merge')"
-      />
-      <v-spacer />
-      <v-btn
-        icon="mdi-delete-outline"
-        size="x-small"
-        variant="text"
-        color="error"
-        title="Supprimer la montée"
-        @click.stop="emit('delete')"
-      />
     </div>
   </v-card>
 </template>
@@ -240,7 +244,7 @@ const highlightWidth = computed(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 12px 6px;
+  padding: 2px 12px 2px 12px;
 }
 
 .alt-climb-card__index {
@@ -273,14 +277,15 @@ const highlightWidth = computed(() => {
 .alt-climb-card__metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-  padding: 6px 12px 12px;
+  gap: 4px 12px;
+  padding: 2px 12px 4px;
 }
 
 .alt-climb-card__metric {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
 }
 
 .alt-climb-card__metric-label {
@@ -288,18 +293,13 @@ const highlightWidth = computed(() => {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-on-surface), 0.55);
+  white-space: nowrap;
 }
 
 .alt-climb-card__metric-value {
   font-size: 0.83rem;
   font-weight: 600;
   color: rgba(var(--v-theme-on-surface), 0.92);
-}
-
-.alt-climb-card__actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px 6px;
+  white-space: nowrap;
 }
 </style>

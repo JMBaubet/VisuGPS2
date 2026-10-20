@@ -105,6 +105,12 @@ const emit = defineEmits<{
   'edit-bounds': [
     payload: { climbId: number; handle: ClimbHandle; km: number },
   ]
+  /** Borne en cours de glissement : aperçu local sans appel backend. */
+  'draft-bounds': [
+    payload: { climbId: number; handle: ClimbHandle; km: number },
+  ]
+  /** Glissement abandonné : l'aperçu local doit être retiré. */
+  'cancel-bounds': []
   'create-climb': [payload: { startKm: number; endKm: number }]
   'cancel-create': []
   'create-error': [message: string]
@@ -149,6 +155,8 @@ const creation = ref<{ valleyKm: number; summitKm: number } | null>(null)
 let currentView: WidgetView | null = null
 let drawFrame = 0
 let dragPointerId: number | null = null
+/** Dernière borne transmise pendant le drag, pour éviter les doublons. */
+let lastDraftKm: number | null = null
 
 const profile = computed(() => props.file?.profile ?? [])
 const climbs = computed(() => props.file?.climbs ?? [])
@@ -682,6 +690,7 @@ function onPointerDown(event: PointerEvent): void {
           ? handleHit.climb.startKm
           : handleHit.climb.endKm,
     }
+    lastDraftKm = null
     dragPointerId = event.pointerId
     canvas.setPointerCapture(event.pointerId)
     event.preventDefault()
@@ -743,6 +752,14 @@ function onPointerMove(event: PointerEvent): void {
     totalKm.value,
   )
   dragState.value = { ...drag, km }
+
+  // Aperçu temps réel : le parent projette la nouvelle borne sur la carte et
+  // dans les cartes de montée, sans attendre le backend.
+  if (lastDraftKm === null || Math.abs(lastDraftKm - km) > 1e-6) {
+    lastDraftKm = km
+    emit('draft-bounds', { climbId: drag.climbId, handle: drag.handle, km })
+  }
+
   event.preventDefault()
   requestDraw()
 }
@@ -754,21 +771,22 @@ function onPointerUp(event: PointerEvent): void {
 
   dragState.value = null
   dragPointerId = null
+  lastDraftKm = null
   if (canvas.hasPointerCapture(event.pointerId)) {
     canvas.releasePointerCapture(event.pointerId)
   }
 
   const climb = climbs.value.find(entry => entry.id === drag.climbId)
   if (climb) {
-    const original =
-      drag.handle === 'valley' ? climb.startKm : climb.endKm
-    if (Math.abs(drag.km - original) > 0.0005) {
-      emit('edit-bounds', {
-        climbId: climb.id,
-        handle: drag.handle,
-        km: drag.km,
-      })
-    }
+    // Le fichier affiché porte déjà la borne provisoire : on transmet toujours
+    // la position finale, le store ignore un déplacement nul.
+    emit('edit-bounds', {
+      climbId: climb.id,
+      handle: drag.handle,
+      km: drag.km,
+    })
+  } else {
+    emit('cancel-bounds')
   }
   requestDraw()
 }
@@ -782,8 +800,10 @@ function onPointerCancel(event: PointerEvent): void {
   ) {
     canvas.releasePointerCapture(event.pointerId)
   }
+  if (dragState.value) emit('cancel-bounds')
   dragState.value = null
   dragPointerId = null
+  lastDraftKm = null
   requestDraw()
 }
 

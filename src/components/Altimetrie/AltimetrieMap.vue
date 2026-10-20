@@ -26,10 +26,10 @@
  * Carte 3D de la vue Altimétrie.
  *
  * Elle superpose :
- * - la trace complète, en trait neutre, pour conserver la géométrie exacte ;
- * - les segments de pente colorés, reconstruits depuis le profil du fichier ;
+ * - les segments de pente colorés, découpés sur la géométrie d'origine de la
+ *   trace nettoyée (`trace.geojson`) ;
  * - les bornes vallée/sommet des montées ;
- * - la montée sélectionnée, en surépaisseur.
+ * - la montée sélectionnée, en halo sous les segments.
  *
  * Le terrain Mapbox est activé (relief, pitch 60) et les couches sont drapées
  * sur le relief. Le composant ne connaît ni le store ni la vue : il reçoit ses
@@ -48,10 +48,14 @@ import {
   buildMarkerFeatures,
   buildSegmentFeatures,
   buildSelectedClimbFeature,
+  buildTracePath,
+  coordinateAtDistance,
   emptyFC,
   geojsonSource,
   profilePointAt,
+  slicePathCoordinates,
   sliceProfileCoordinates,
+  type TracePath,
 } from './altimetrieMapLayers'
 
 const props = defineProps<{
@@ -77,9 +81,35 @@ let framed = false
 
 const mapLoading = computed(() => hasMapboxKey.value && !mapReady.value)
 
+/** Chemin d'origine de la trace, avec distances cumulées 2D. */
+const tracePath = computed(() => buildTracePath(props.traceGeometry))
+
+/** Dernier contenu poussé dans la source des segments. */
+let lastSegmentsSource: AltimetrieFile['segments'] | null = null
+let lastSegmentsPath: TracePath | null = null
+
 function whenMapReady(fn: () => void): void {
   if (mapReady.value && map.value) fn()
   else readyQueue.push(fn)
+}
+
+/**
+ * Chemin utilisable pour le découpage.
+ *
+ * La géométrie d'origine et le profil partagent la même base de distances 2D.
+ * Un écart trop important (points sans altitude ignorés par l'analyse) ferait
+ * glisser les segments : on retombe alors sur le profil échantillonné.
+ */
+function usableTracePath(): TracePath | null {
+  const file = props.file
+  const path = tracePath.value
+  if (!file || !path) return null
+
+  const expected = file.trace.totalDistanceM
+  if (expected > 0 && Math.abs(path.totalM - expected) / expected > 0.02) {
+    return null
+  }
+  return path
 }
 
 /** Pousse les données courantes dans les sources de la carte. */
@@ -88,22 +118,41 @@ function render(fit = false): void {
     const instance = map.value
     if (!instance) return
 
-    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.trace)?.setData(
-      props.traceGeometry ?? emptyFC(),
+    const file = props.file
+    const path = usableTracePath()
+    const segmentsSource = geojsonSource(
+      instance,
+      ALTIMETRIE_SOURCE_IDS.segments,
     )
-    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.segments)?.setData(
-      props.file ? buildSegmentFeatures(props.file) : emptyFC(),
-    )
-    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.markers)?.setData(
-      props.file
-        ? buildMarkerFeatures(props.file, props.selectedClimbId)
-        : emptyFC(),
-    )
-    geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.selected)?.setData(
-      props.file
-        ? buildSelectedClimbFeature(props.file, props.selectedClimbId)
-        : emptyFC(),
-    )
+    const markersSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.markers)
+    const selectedSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.selected)
+
+    // Les segments ne changent pas pendant un glissement : on ne reconstruit
+    // la géométrie complète que lorsque le fichier ou le chemin change.
+    if (
+      file &&
+      (file.segments !== lastSegmentsSource || path !== lastSegmentsPath)
+    ) {
+      segmentsSource?.setData(buildSegmentFeatures(file, path))
+      lastSegmentsSource = file.segments
+      lastSegmentsPath = path
+    } else if (!file) {
+      segmentsSource?.setData(emptyFC())
+      lastSegmentsSource = null
+      lastSegmentsPath = null
+    }
+
+    if (file) {
+      markersSource?.setData(
+        buildMarkerFeatures(file, props.selectedClimbId, path),
+      )
+      selectedSource?.setData(
+        buildSelectedClimbFeature(file, props.selectedClimbId, path),
+      )
+    } else {
+      markersSource?.setData(emptyFC())
+      selectedSource?.setData(emptyFC())
+    }
 
     if (fit && !framed && fitTrace()) {
       framed = true
@@ -113,13 +162,8 @@ function render(fit = false): void {
 
 /** Coordonnées de la trace : géométrie complète, sinon profil échantillonné. */
 function traceCoordinates(): [number, number][] {
-  const geometry = props.traceGeometry?.geometry
-  if (geometry?.type === 'LineString') {
-    return geometry.coordinates as [number, number][]
-  }
-  if (geometry?.type === 'MultiLineString') {
-    return geometry.coordinates.flat() as [number, number][]
-  }
+  const path = tracePath.value
+  if (path) return path.coordinates
   return (
     props.file?.profile.map(
       point => [point.lon, point.lat] as [number, number],
@@ -155,11 +199,14 @@ function fitSelectedClimb(id: number): void {
     const climb = props.file.climbs.find(entry => entry.id === id)
     if (!climb) return
 
-    const coordinates = sliceProfileCoordinates(
-      props.file.profile,
-      climb.startKm * 1000,
-      climb.endKm * 1000,
-    )
+    const path = usableTracePath()
+    const coordinates = path
+      ? slicePathCoordinates(path, climb.startKm * 1000, climb.endKm * 1000)
+      : sliceProfileCoordinates(
+          props.file.profile,
+          climb.startKm * 1000,
+          climb.endKm * 1000,
+        )
     const first = coordinates[0]
     if (!first || coordinates.length < 2) return
 
@@ -177,6 +224,16 @@ function fitSelectedClimb(id: number): void {
 function centerOnDistance(distanceM: number): void {
   const instance = map.value
   if (!instance || !props.file) return
+
+  const path = usableTracePath()
+  if (path) {
+    instance.easeTo({
+      center: coordinateAtDistance(path, distanceM),
+      duration: 500,
+    })
+    return
+  }
+
   const point = profilePointAt(props.file.profile, distanceM)
   if (!point) return
   instance.easeTo({ center: [point.lon, point.lat], duration: 500 })
@@ -248,6 +305,8 @@ async function initializeMap(token: string): Promise<void> {
 
 function destroyMap(): void {
   framed = false
+  lastSegmentsSource = null
+  lastSegmentsPath = null
   readyQueue.length = 0
   if (map.value) {
     try {
