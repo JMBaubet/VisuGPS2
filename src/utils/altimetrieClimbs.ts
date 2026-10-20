@@ -133,6 +133,49 @@ export function minimalSegmentAt(
   }
 }
 
+/**
+ * Pente maximale d'une montée, calculée sur les segments minimaux du profil.
+ *
+ * Les bornes de la montée sont interpolées pour inclure les intervalles
+ * partiels ; seules les pentes positives sont retenues.
+ */
+export function maxMinimalSlopeForClimb(
+  climb: AltimetrieClimb,
+  profile: AltimetrieProfilePoint[],
+): number {
+  const first = profile[0]
+  const last = profile[profile.length - 1]
+  if (!first || !last || profile.length < 2) return 0
+
+  const startM = Math.max(first.d, climb.startKm * 1000)
+  const endM = Math.min(last.d, climb.endKm * 1000)
+  if (endM <= startM) return 0
+
+  const points: { d: number; ele: number }[] = [
+    { d: startM, ele: elevationAt(profile, startM) },
+  ]
+  const startIndex = lowerBound(profile, startM)
+  const endIndex = lowerBound(profile, endM)
+
+  for (let index = startIndex; index <= endIndex; index++) {
+    const point = profile[index]
+    if (!point || point.d <= startM || point.d >= endM) continue
+    points.push({ d: point.d, ele: point.ele })
+  }
+
+  points.push({ d: endM, ele: elevationAt(profile, endM) })
+
+  let max = 0
+  for (let index = 1; index < points.length; index++) {
+    const previous = points[index - 1]
+    const next = points[index]
+    if (!previous || !next || next.d <= previous.d) continue
+    const slope = ((next.ele - previous.ele) / (next.d - previous.d)) * 100
+    if (slope > max) max = slope
+  }
+  return max
+}
+
 /** Altitude interpolée du profil à une distance donnée (m). */
 function elevationAt(
   profile: AltimetrieProfilePoint[],

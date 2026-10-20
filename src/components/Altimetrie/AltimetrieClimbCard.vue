@@ -119,16 +119,21 @@
           {{ formatDistance((climb.endKm - climb.startKm) * 1000) }}
         </span>
       </div>
+    </div>
+
+    <div class="alt-climb-card__summary">
       <div class="alt-climb-card__metric">
-        <span class="alt-climb-card__metric-label">Dénivelé :</span>
+        <span class="alt-climb-card__metric-label">D + :</span>
         <span class="alt-climb-card__metric-value">
           {{ formatElevation(climb.dPlusM) }}
         </span>
       </div>
-      <div class="alt-climb-card__metric">
-        <span class="alt-climb-card__metric-label">Pente moy. :</span>
+      <div class="alt-climb-card__metric alt-climb-card__metric--right">
+        <span class="alt-climb-card__metric-label">Pente - moy :</span>
         <span class="alt-climb-card__metric-value">
-          {{ climb.avgSlopePct.toFixed(1) }} %
+          {{ climb.avgSlopePct.toFixed(1) }} %<span
+            class="alt-climb-card__metric-label alt-climb-card__metric-label--literal"
+          >, Max :</span> {{ maxSlopePct.toFixed(1) }} %
         </span>
       </div>
     </div>
@@ -138,7 +143,8 @@
 <script setup lang="ts">
 /**
  * Carte d'une montée : mini-profil de la trace complète, bornes surlignées et
- * métriques essentielles (vallée, longueur, dénivelé, pente moyenne).
+ * métriques essentielles (vallée, longueur, dénivelé, pente moyenne et pente
+ * maximale relevée sur les segments minimaux du profil).
  *
  * La représentation graphique est un SVG léger : la trace est sous-échantillonnée
  * à ~90 points, la montée est peinte dans la couleur de sa catégorie de pente.
@@ -146,6 +152,7 @@
 import { computed } from 'vue'
 import type { AltimetrieClimb, AltimetrieProfilePoint } from '../../stores/altimetrie'
 import { colorForSlope, labelForSlope } from '../../utils/altimetrieCategories'
+import { maxMinimalSlopeForClimb } from '../../utils/altimetrieClimbs'
 import { formatDistance, formatElevation } from '../../utils/format'
 
 const props = defineProps<{
@@ -171,6 +178,11 @@ const totalDistance = computed(() =>
 
 const categoryColor = computed(() => colorForSlope(props.climb.avgSlopePct))
 const categoryLabel = computed(() => labelForSlope(props.climb.avgSlopePct))
+
+/** Maximum des pentes des segments minimaux (points consécutifs du profil). */
+const maxSlopePct = computed(() =>
+  maxMinimalSlopeForClimb(props.climb, props.profile),
+)
 
 /** Une montée fusionnée non séparée peut être scindée en ses sous-montées. */
 const canSplit = computed(
@@ -281,6 +293,15 @@ const highlightWidth = computed(() => {
   padding: 2px 12px 4px;
 }
 
+.alt-climb-card__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 12px 8px;
+}
+
 .alt-climb-card__metric {
   display: flex;
   align-items: baseline;
@@ -288,12 +309,23 @@ const highlightWidth = computed(() => {
   min-width: 0;
 }
 
+.alt-climb-card__metric--right {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
 .alt-climb-card__metric-label {
   font-size: 0.65rem;
+  font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: rgba(var(--v-theme-on-surface), 0.55);
   white-space: nowrap;
+}
+
+/* « Max : » garde la casse demandée, dans le style des libellés. */
+.alt-climb-card__metric-label--literal {
+  text-transform: none;
 }
 
 .alt-climb-card__metric-value {
