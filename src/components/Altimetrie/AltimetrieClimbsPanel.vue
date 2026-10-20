@@ -11,11 +11,12 @@
 
       <v-divider />
 
-      <div class="alt-panel__list">
+      <div ref="listRef" class="alt-panel__list">
         <template v-if="climbs.length > 0">
           <AltimetrieClimbCard
             v-for="climb in climbs"
             :key="climb.id"
+            :data-climb-id="climb.id"
             :climb="climb"
             :profile="profile"
             :alt-min="altMin"
@@ -61,10 +62,11 @@
  * position sur la trace complète et leurs métriques. Une carte sélectionnée est
  * synchronisée avec la carte centrale et le widget de profil.
  */
+import { nextTick, ref, watch } from 'vue'
 import AltimetrieClimbCard from './AltimetrieClimbCard.vue'
 import type { AltimetrieClimb, AltimetrieProfilePoint } from '../../stores/altimetrie'
 
-defineProps<{
+const props = defineProps<{
   climbs: AltimetrieClimb[]
   profile: AltimetrieProfilePoint[]
   altMin: number
@@ -82,6 +84,53 @@ const emit = defineEmits<{
   merge: [id: number]
   create: []
 }>()
+
+const listRef = ref<HTMLDivElement | null>(null)
+
+/**
+ * Fait défiler la liste jusqu'à la carte sélectionnée.
+ *
+ * Appelé quand la sélection vient du graphe ou de la carte : la carte peut être
+ * hors de la zone visible si la liste déborde. Le défilement est limité à la
+ * liste, pour ne pas déplacer l'en-tête ni le pied du panneau.
+ */
+async function revealSelected(id: number | null): Promise<void> {
+  if (id === null) return
+
+  await nextTick()
+  const list = listRef.value
+  if (!list) return
+
+  const card = list.querySelector<HTMLElement>(
+    `[data-climb-id="${id}"]`,
+  )
+  if (!card) return
+
+  const listRect = list.getBoundingClientRect()
+  const cardRect = card.getBoundingClientRect()
+  const cardTop = cardRect.top - listRect.top + list.scrollTop
+  const cardBottom = cardTop + cardRect.height
+  const viewTop = list.scrollTop
+  const viewBottom = viewTop + list.clientHeight
+  const margin = 8
+
+  if (cardTop < viewTop) {
+    list.scrollTo({ top: Math.max(0, cardTop - margin), behavior: 'smooth' })
+  } else if (cardBottom > viewBottom) {
+    list.scrollTo({
+      top: cardBottom - list.clientHeight + margin,
+      behavior: 'smooth',
+    })
+  }
+}
+
+watch(
+  () => props.selectedId,
+  id => {
+    void revealSelected(id)
+  },
+  { immediate: true, flush: 'post' },
+)
 </script>
 
 <style scoped>
