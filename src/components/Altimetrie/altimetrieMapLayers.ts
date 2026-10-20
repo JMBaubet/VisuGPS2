@@ -22,10 +22,7 @@ import type {
   AltimetrieFile,
   AltimetrieProfilePoint,
 } from '../../stores/altimetrie'
-import {
-  colorForCategoryId,
-  colorForSlope,
-} from '../../utils/altimetrieCategories'
+import { colorForCategoryId } from '../../utils/altimetrieCategories'
 import { haversineMeters } from '../../utils/geo'
 
 export const ALTIMETRIE_MAP_STYLE = 'mapbox://styles/mapbox/standard-satellite'
@@ -66,7 +63,7 @@ export function addAltimetrieLayers(map: Map): void {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': '#ffffff',
-      'line-width': 6,
+      'line-width': 7,
       'line-opacity': 0.75,
     },
   }
@@ -79,7 +76,7 @@ export function addAltimetrieLayers(map: Map): void {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': '#ffffff',
-      'line-width': 12,
+      'line-width': 10,
       'line-opacity': 0.9,
     },
   }
@@ -91,8 +88,10 @@ export function addAltimetrieLayers(map: Map): void {
     source: ALTIMETRIE_SOURCE_IDS.selected,
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      'line-color': ['get', 'color'] as unknown as ExpressionSpecification,
-      'line-width': 10,
+      // Couleur grise par défaut ; `AltimetrieMap` applique le réglage
+      // `Altimetrie.Visualisation.couleurTraceSelectionnee` après le `load`.
+      'line-color': '#607D8B',
+      'line-width': 8,
       'line-opacity': 0.95,
     },
   }
@@ -325,7 +324,7 @@ export function buildMarkerFeatures(
   return { type: 'FeatureCollection', features }
 }
 
-/** Portion de trace de la montée sélectionnée, colorée par sa pente moyenne. */
+/** Portion de trace de la montée sélectionnée (halo sous les segments). */
 export function buildSelectedClimbFeature(
   file: AltimetrieFile,
   selectedClimbId: number | null,
@@ -349,7 +348,7 @@ export function buildSelectedClimbFeature(
     features: [
       {
         type: 'Feature',
-        properties: { color: colorForSlope(climb.avgSlopePct) },
+        properties: { climbId: climb.id },
         geometry: { type: 'LineString', coordinates },
       },
     ],

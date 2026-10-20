@@ -76,6 +76,7 @@ groups = [
   "Altimetrie.Lissage",
   "Altimetrie.Detection",
   "Altimetrie.Segments",
+  "Altimetrie.Visualisation",
 ]
 
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
@@ -163,6 +164,10 @@ icon = "mdi-image-filter-hdr"
 [_meta.groups."Altimetrie.Segments"]
 label = "Altimétrie — Segments de pente"
 icon = "mdi-chart-timeline-variant"
+
+[_meta.groups."Altimetrie.Visualisation"]
+label = "Altimétrie — Visualisation"
+icon = "mdi-palette-outline"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -1129,6 +1134,54 @@ max = 2000
 step = 10
 unit = "m"
 icon = "mdi-ruler"
+
+# ---------------------------------------------------------------------------
+# Visualisation de la carte altimétrique.
+# Ces réglages ne participent pas à l'analyse : ils s'appliquent immédiatement
+# aux couches Mapbox et ne sont pas enregistrés dans `altimetrie.json`.
+# ---------------------------------------------------------------------------
+
+[Altimetrie.Visualisation.largeurTrace]
+description = "Largeur du tracé coloré (px)"
+documentation = """
+Épaisseur, en pixels, des segments colorés par la pente sur la carte 3D.
+
+Valeur par défaut : 5 px.
+"""
+type = "int"
+default = 5
+min = 2
+max = 10
+step = 1
+unit = "px"
+icon = "mdi-format-line-weight"
+
+[Altimetrie.Visualisation.largeurTraceSelectionnee]
+description = "Largeur du tracé sélectionné (px)"
+documentation = """
+Épaisseur, en pixels, du halo gris qui entoure la montée sélectionnée. Il est
+tracé sous les segments colorés : pour rester visible, il doit être plus large
+qu'eux.
+
+Valeur par défaut : 8 px, pour un tracé coloré de 5 px.
+"""
+type = "int"
+default = 8
+min = 4
+max = 12
+step = 1
+unit = "px"
+icon = "mdi-format-line-weight"
+
+[Altimetrie.Visualisation.couleurTraceSelectionnee]
+description = "Couleur du tracé sélectionné"
+documentation = """
+Couleur du halo de la montée sélectionnée, tracé sous les segments colorés.
+Bleu gris base (#607D8BFF) par défaut.
+"""
+type = "material_extended"
+default = "#607D8BFF"
+icon = "mdi-palette"
 
 # ---------------------------------------------------------------------------
 # Détection des communes traversées (module Communes).

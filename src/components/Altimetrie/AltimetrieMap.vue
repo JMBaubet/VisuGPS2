@@ -40,7 +40,9 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import type { AltimetrieFile } from '../../stores/altimetrie'
 import { useSettingsStore } from '../../stores/settings'
+import { hexToRgbaString } from '../../utils/materialColors'
 import {
+  ALTIMETRIE_LAYER_IDS,
   ALTIMETRIE_MAP_STYLE,
   ALTIMETRIE_SOURCE_IDS,
   ALTIMETRIE_TERRAIN_SOURCE,
@@ -87,6 +89,68 @@ const tracePath = computed(() => buildTracePath(props.traceGeometry))
 /** Dernier contenu poussé dans la source des segments. */
 let lastSegmentsSource: AltimetrieFile['segments'] | null = null
 let lastSegmentsPath: TracePath | null = null
+
+/** Valeur d'un paramètre via son chemin. */
+function getParam(path: string): unknown {
+  return settingsStore.getParamDef(path)?.value
+}
+
+/** Couleur d'un paramètre convertie en rgba(), avec fallback #RRGGBBAA. */
+function getColor(path: string, fallback: string): string {
+  const value = getParam(path)
+  return hexToRgbaString(typeof value === 'string' ? value : fallback)
+}
+
+/**
+ * Applique les réglages `Altimetrie.Visualisation` aux couches Mapbox.
+ *
+ * Les largeurs sont utilisées telles que configurées ; les liserés blancs
+ * suivent avec 2 px de plus. Le halo sélectionné reste sous les segments.
+ */
+function applyLayerStyle(): void {
+  const instance = map.value
+  if (!instance || !mapReady.value) return
+  if (!instance.getLayer(ALTIMETRIE_LAYER_IDS.segments)) return
+
+  const largeurBrute = Number(
+    getParam('Altimetrie.Visualisation.largeurTrace') ?? 5,
+  )
+  const selectionBrute = Number(
+    getParam('Altimetrie.Visualisation.largeurTraceSelectionnee') ?? 8,
+  )
+  const largeurTrace = Number.isFinite(largeurBrute) ? largeurBrute : 5
+  const largeurSelection = Number.isFinite(selectionBrute) ? selectionBrute : 8
+  const couleurSelection = getColor(
+    'Altimetrie.Visualisation.couleurTraceSelectionnee',
+    '#607D8BFF',
+  )
+
+  instance.setPaintProperty(
+    ALTIMETRIE_LAYER_IDS.segments,
+    'line-width',
+    largeurTrace,
+  )
+  instance.setPaintProperty(
+    ALTIMETRIE_LAYER_IDS.segmentsCasing,
+    'line-width',
+    largeurTrace + 2,
+  )
+  instance.setPaintProperty(
+    ALTIMETRIE_LAYER_IDS.selected,
+    'line-width',
+    largeurSelection,
+  )
+  instance.setPaintProperty(
+    ALTIMETRIE_LAYER_IDS.selected,
+    'line-color',
+    couleurSelection,
+  )
+  instance.setPaintProperty(
+    ALTIMETRIE_LAYER_IDS.selectedCasing,
+    'line-width',
+    largeurSelection + 2,
+  )
+}
 
 function whenMapReady(fn: () => void): void {
   if (mapReady.value && map.value) fn()
@@ -290,6 +354,7 @@ async function initializeMap(token: string): Promise<void> {
     })
 
     addAltimetrieLayers(instance)
+    applyLayerStyle()
 
     const queue = readyQueue.splice(0)
     for (const fn of queue) {
@@ -363,6 +428,12 @@ watch(
     render(false)
     if (id !== null) fitSelectedClimb(id)
   },
+)
+
+watch(
+  () => settingsStore.settings,
+  () => applyLayerStyle(),
+  { deep: true },
 )
 
 defineExpose({

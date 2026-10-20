@@ -368,7 +368,7 @@ pub struct CommunePassage {
 | `altimetrie_preview` | `async (app, trace_id: String, climbs: Vec<AltimetrieClimbEdit>) -> Result<AltimetrieFile, String>` | Rejoue la reconstruction avec les montées éditées, en reprenant les paramètres et l'horodatage du fichier existant, **sans écrire**. Utilisée à chaque fin de geste (drag, création, split, merge). |
 | `altimetrie_save` | `async (app, trace_id: String, climbs: Vec<AltimetrieClimbEdit>) -> Result<AltimetrieFile, String>` | Même reconstruction, puis écriture atomique et nouvel `updatedAt`. Utilisée par le bouton « Sauvegarder ». |
 
-**Type `AltimetrieParams`** (miroir TS dans `src/stores/altimetrie.ts`) — les 14 réglages `Altimetrie.*` :
+**Type `AltimetrieParams`** (miroir TS dans `src/stores/altimetrie.ts`) — les 14 réglages de traitement `Altimetrie.*` :
 ```rust
 pub struct AltimetrieParams {
     pub pas_echantillonnage: f64,

@@ -927,7 +927,7 @@ mod tests {
 
     /// Le namespace `Altimetrie.*` est déclaré et cohérent avec sa vue `_meta`.
     ///
-    /// La vue `/altimetrie` porte ses quatre groupes ; chaque paramètre doit
+    /// La vue `/altimetrie` porte ses cinq groupes ; chaque paramètre doit
     /// être rattaché à l'un d'eux, sans quoi il serait invisible dans le drawer.
     #[test]
     fn altimetrie_namespace_is_declared_and_consistent() {
@@ -956,15 +956,16 @@ mod tests {
             assert!(g.label.is_some(), "groupe `{}` sans libellé", group);
         }
 
-        // 3. Les 14 paramètres du pipeline, tous rattachés à un groupe affiché.
+        // 3. Les 14 paramètres de traitement et les 3 de visualisation, tous
+        //    rattachés à un groupe affiché.
         let altimetrie_defs: Vec<_> = defs
             .iter()
             .filter(|d| d.path.starts_with("Altimetrie."))
             .collect();
         assert_eq!(
             altimetrie_defs.len(),
-            14,
-            "14 paramètres `Altimetrie.*` attendus : {:?}",
+            17,
+            "17 paramètres `Altimetrie.*` attendus : {:?}",
             altimetrie_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
         );
         for def in &altimetrie_defs {
@@ -1002,7 +1003,35 @@ mod tests {
         assert_eq!(renforce.setting_type, "bool");
         assert_eq!(renforce.default.as_bool(), Some(true));
 
-        // 5. Les valeurs 0 qui désactivent une étape sont admises.
+        // 5. Les réglages de visualisation ont leurs bornes et leur couleur.
+        let largeur = altimetrie_defs
+            .iter()
+            .find(|d| d.path == "Altimetrie.Visualisation.largeurTrace")
+            .expect("paramètre `largeurTrace` déclaré");
+        assert_eq!(largeur.setting_type, "int");
+        assert_eq!(largeur.default.as_i64(), Some(5));
+        assert_eq!(largeur.min, Some(2.0));
+        assert_eq!(largeur.max, Some(10.0));
+        assert_eq!(largeur.unit.as_deref(), Some("px"));
+
+        let largeur_selection = altimetrie_defs
+            .iter()
+            .find(|d| d.path == "Altimetrie.Visualisation.largeurTraceSelectionnee")
+            .expect("paramètre `largeurTraceSelectionnee` déclaré");
+        assert_eq!(largeur_selection.setting_type, "int");
+        assert_eq!(largeur_selection.default.as_i64(), Some(8));
+        assert_eq!(largeur_selection.min, Some(4.0));
+        assert_eq!(largeur_selection.max, Some(12.0));
+        assert_eq!(largeur_selection.unit.as_deref(), Some("px"));
+
+        let couleur_selection = altimetrie_defs
+            .iter()
+            .find(|d| d.path == "Altimetrie.Visualisation.couleurTraceSelectionnee")
+            .expect("paramètre `couleurTraceSelectionnee` déclaré");
+        assert_eq!(couleur_selection.setting_type, "material_extended");
+        assert_eq!(couleur_selection.default.as_str(), Some("#607D8BFF"));
+
+        // 6. Les valeurs 0 qui désactivent une étape sont admises.
         for path in [
             "Altimetrie.Preparation.seuilAntiPic",
             "Altimetrie.Detection.ecartFusion",

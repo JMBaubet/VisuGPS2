@@ -467,8 +467,11 @@ restaurable de la vue `/altimetrie`.
   séparé : **une entrée par membre**, même `groupId`, `isSeparated = true` ; la
   fusion du groupe reconstruit une entrée unique. C'est ce qui rend le fichier
   restaurable, contrairement à un export consolidé.
-- `params` : les 14 réglages `Altimetrie.*` ayant produit l'analyse. `preview` et
-  `save` les reprennent ; un changement de réglages exige un recalcul explicite.
+- `params` : les 14 réglages de traitement `Altimetrie.*` ayant produit
+  l'analyse. `preview` et `save` les reprennent ; un changement de réglages
+  exige un recalcul explicite. Les réglages de visualisation
+  (`Altimetrie.Visualisation`) sont des paramètres applicatifs : ils ne sont
+  pas enregistrés dans le fichier.
 - Nom **uniforme** `altimetrie.json` ; écriture **atomique** (`.tmp` puis
   `rename`). Lecture **tolérante** (`altimetrie_load`) : absent, illisible,
   version inconnue ou autre `traceId` → `null`, et la vue relance la détection.
