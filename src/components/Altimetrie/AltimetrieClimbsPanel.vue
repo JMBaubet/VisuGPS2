@@ -114,6 +114,17 @@ const emit = defineEmits<{
   padding: 12px;
 }
 
+/* Les cartes gardent leur hauteur naturelle : la liste déborde et défile
+   au lieu de comprimer les cartes pour les faire tenir. */
+.alt-panel__list > * {
+  flex: 0 0 auto;
+}
+
+/* Le défilement appartient à la liste : l'en-tête et le pied restent fixes. */
+.alt-panel :deep(.v-navigation-drawer__content) {
+  overflow: hidden;
+}
+
 .alt-panel__footer {
   flex: 0 0 auto;
   padding: 12px;
