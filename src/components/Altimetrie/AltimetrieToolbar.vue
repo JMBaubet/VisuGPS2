@@ -36,11 +36,31 @@
         Recalculer
       </v-btn>
 
+      <!--
+        Tant que l'opérateur n'a pas sauvegardé l'analyse, le bouton vaut
+        « Valider » : il persiste l'analyse telle quelle et vaut validation.
+        Dès qu'une montée est modifiée, il redevient « Sauvegarder » — la
+        validation ne disparaît qu'une fois une sauvegarde effectuée.
+      -->
       <v-btn
+        v-if="showValidate"
+        color="success"
+        variant="tonal"
+        prepend-icon="mdi-check-circle"
+        :disabled="!ready || saving"
+        :loading="saving"
+        title="Valider l'altimétrie (aucune sauvegarde effectuée)"
+        @click="emit('save')"
+      >
+        Valider
+      </v-btn>
+
+      <v-btn
+        v-else
         color="success"
         variant="tonal"
         prepend-icon="mdi-content-save"
-        :disabled="!dirty || saving"
+        :disabled="!ready || !dirty || saving"
         :loading="saving"
         :title="
           dirty
@@ -82,6 +102,10 @@ const props = defineProps<{
   dirty: boolean
   /** Une sauvegarde est en cours. */
   saving: boolean
+  /** L'analyse a déjà été sauvegardée / validée par l'opérateur. */
+  validated: boolean
+  /** L'analyse est chargée : les actions de persistance sont disponibles. */
+  ready: boolean
   /** Statut global des paramètres courants. */
   settingsStatus: AltimetrieStatus
   /** Causes du statut dégradé, ou liste vide si cohérent. */
@@ -98,6 +122,13 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+
+/**
+ * « Valider » n'existe que tant qu'aucune sauvegarde n'a eu lieu **et**
+ * qu'aucune montée n'a été modifiée. Une modification bascule le bouton en
+ * « Sauvegarder » : c'est la sauvegarde qui vaut validation.
+ */
+const showValidate = computed(() => !props.validated && !props.dirty)
 
 const causesText = computed(() => {
   if (props.settingsCauses.length === 0) return 'Paramètres cohérents'

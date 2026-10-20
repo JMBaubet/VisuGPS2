@@ -358,15 +358,19 @@ pub struct CommunePassage {
 > changement de réglages ne s'applique qu'après un recalcul explicite
 > (`altimetrie_detect`).
 >
-> Aucun champ n'est ajouté au registre : l'absence de fichier est détectée à
-> l'ouverture de la vue, qui régénère l'analyse.
+> Le registre des traces porte **`altimetrie_validated`** : la génération
+> automatique n'est qu'une proposition, seule une **sauvegarde utilisateur**
+> vaut validation. Le drapeau est posé par `altimetrie_save`, reposé à `false`
+> par `altimetrie_detect` (recalcul ou première génération) et par
+> `audit_validate` (le GPX réécrit change la trace). Il permet à la carte du
+> circuit de colorer l'icône `mdi-terrain` sans lire de fichier.
 
 | Commande | Signature Rust | Retour |
 |---|---|---|
 | `altimetrie_load` | `async (app, trace_id: String) -> Result<Option<AltimetrieFile>, String>` | Relit `altimetrie.json`. `null` si le fichier est absent, illisible, d'une version inconnue ou rattaché à une autre trace — la vue relance alors la détection. |
-| `altimetrie_detect` | `async (app, trace_id: String, params: AltimetrieParams) -> Result<AltimetrieFile, String>` | Lit le GPX, exécute le pipeline complet (prétraitement, lissage, segments, détection des montées) et réécrit le fichier. Utilisée à l'ouverture quand le fichier manque et par « Recalculer ». |
+| `altimetrie_detect` | `async (app, trace_id: String, params: AltimetrieParams) -> Result<AltimetrieFile, String>` | Lit le GPX, exécute le pipeline complet (prétraitement, lissage, segments, détection des montées), réécrit le fichier et **repose `altimetrie_validated` à `false`**. Utilisée à l'ouverture quand le fichier manque et par « Recalculer ». |
 | `altimetrie_preview` | `async (app, trace_id: String, climbs: Vec<AltimetrieClimbEdit>) -> Result<AltimetrieFile, String>` | Rejoue la reconstruction avec les montées éditées, en reprenant les paramètres et l'horodatage du fichier existant, **sans écrire**. Utilisée à chaque fin de geste (drag, création, split, merge). |
-| `altimetrie_save` | `async (app, trace_id: String, climbs: Vec<AltimetrieClimbEdit>) -> Result<AltimetrieFile, String>` | Même reconstruction, puis écriture atomique et nouvel `updatedAt`. Utilisée par le bouton « Sauvegarder ». |
+| `altimetrie_save` | `async (app, trace_id: String, climbs: Vec<AltimetrieClimbEdit>) -> Result<AltimetrieFile, String>` | Même reconstruction, puis écriture atomique, nouvel `updatedAt` et **pose `altimetrie_validated = true`** : c'est la validation par l'opérateur. Utilisée par « Valider » (première sauvegarde) et « Sauvegarder ». |
 
 **Type `AltimetrieParams`** (miroir TS dans `src/stores/altimetrie.ts`) — les 14 réglages de traitement `Altimetrie.*` :
 ```rust

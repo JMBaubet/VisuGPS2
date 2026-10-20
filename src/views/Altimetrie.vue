@@ -5,6 +5,8 @@
         :trace-name="traceName"
         :dirty="altimetrieStore.dirty"
         :saving="altimetrieStore.saving"
+        :validated="altimetrieStore.validated"
+        :ready="!!altimetrieStore.file"
         :settings-status="settingsStatus"
         :settings-causes="settingsCauses"
         :params-outdated="paramsOutdated"
@@ -342,12 +344,19 @@ async function onEditBounds(payload: {
   }
 }
 
-/** Enregistre les modifications de montées. */
+/**
+ * Enregistre l'analyse. La première sauvegarde vaut **validation** de
+ * l'altimétrie par l'opérateur, qu'elle passe par « Valider » ou par
+ * « Sauvegarder » après une modification.
+ */
 async function onSaveClicked(): Promise<void> {
   if (!traceId.value) return
+  const wasValidated = altimetrieStore.validated
   try {
     await altimetrieStore.save(traceId.value)
-    ui.showSuccess('Altimétrie enregistrée.')
+    ui.showSuccess(
+      wasValidated ? 'Altimétrie enregistrée.' : 'Altimétrie validée.',
+    )
   } catch (error) {
     const message =
       typeof error === 'string'
@@ -546,7 +555,11 @@ onMounted(async () => {
       )
     }
 
-    await altimetrieStore.loadOrDetect(traceId.value, buildParams())
+    await altimetrieStore.loadOrDetect(
+      traceId.value,
+      buildParams(),
+      trace.altimetrie_validated,
+    )
   } catch (error) {
     const message =
       typeof error === 'string' ? error : 'Analyse altimétrique impossible.'

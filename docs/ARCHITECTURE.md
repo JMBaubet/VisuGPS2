@@ -545,14 +545,22 @@ Import d'une trace propre / validation d'audit
       - altimetrie_load → fichier présent
       - sinon altimetrie_detect → pipeline Rust → écriture
   → édition des montées : altimetrie_preview (sans écriture) → store.dirty
-  → « Sauvegarder » : altimetrie_save (écriture atomique)
+  → « Valider » (première fois) / « Sauvegarder » : altimetrie_save
+      (écriture atomique + altimetrie_validated = true dans le registre)
   → « Recalculer » : altimetrie_detect avec les réglages courants
+      (repose altimetrie_validated = false : analyse non revue)
 ```
 
 `preview` et `save` reprennent les paramètres **du fichier** : modifier un
 réglage dans le drawer ne suffit pas, il faut un recalcul explicite. Les
 réglages `Altimetrie.Visualisation` font exception : ils ne touchent que les
 couches Mapbox et s'appliquent en direct.
+
+La génération automatique du fichier n'est qu'une **proposition** : le drapeau
+`altimetrie_validated` du registre reste faux jusqu'à une sauvegarde de
+l'opérateur. La carte du circuit le lit directement — sans lire
+`altimetrie.json` ni appeler l'IPC — pour colorer l'icône `mdi-terrain` en
+jaune (à valider) ou en vert (validée).
 
 ## Patterns architecturaux
 
@@ -842,7 +850,12 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
-   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien, et les **actions de consultation** de la source) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Icône Éditer** : `mdi-map-marker-path` **orange** tant que `audit_status !== 'clean'` (**barrière 1** — audit requis), `mdi-repeat` **ambre** tant que `multiride_status === 'pending'` (**barrière 2** — passages multiples à valider), `mdi-pencil` sinon. Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace non « clean » → `/audit?traceId=…` (cf. § « Audit GPX » ci-dessous), passages multiples à valider → `/multiride?traceId=…` ; sinon `editionStore.selectTrace` puis vue `editionCamera`. **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / ambre > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition, qui emploie le jaune au palier > 50 %) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. **Actions de consultation** : dans la section info déroulante, en regard de la ligne « Importé le… », deux boutons **verts** de même facture — **Voir les anomalies de la source** (`mdi-map-marker-path`), **rendu** seulement si `audit_status === 'clean'` **et** `audit_archived` (le clic ouvre `/audit?traceId=…` en **consultation** : anomalies et corrections en lecture seule), et **Passages multiples** (`mdi-repeat`), rendu seulement si `multiride_status === 'validated'` (consultation et ajustement d'un état déjà validé). Hors de ces conditions le bouton est **absent** : il n'existe plus d'état **gris** informatif, `voirAnomaliesSource()` n'ayant plus de repli (la vue n'aurait rien à restituer). Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Anomalies de la source, Passages multiples, Terrain, Communes, Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Icône Éditer** : `mdi-map-marker-path` **orange** tant que `audit_status !== 'clean'` (**barrière 1** — audit requis), `mdi-pencil` sinon. Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace non « clean » → `/audit?traceId=…` (cf. § « Audit GPX » ci-dessous), passages multiples à valider → `/multiride?traceId=…` ; sinon `editionStore.selectTrace` puis vue `editionCamera`. **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / ambre > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition, qui emploie le jaune au palier > 50 %) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. **Actions de la seconde rangée** — principe : affichées et actives, ou **absentes** ; plus d'état grisé désactivé :
+     - `mdi-map-marker-path` (consultation des anomalies) : rendue seulement si `audit_status === 'clean'` **et** `audit_archived` ; le clic ouvre `/audit?traceId=…` en **consultation** (lecture seule). Sans archive, le bouton est absent.
+     - `mdi-repeat` : `pending` → ambre, **forcée visible** (barrière 2) ; `validated` → verte, au survol ; `none` → **blanche** au survol, le clic affiche le message bleu « Aucun passage multiple détecté sur cette trace. » ; `null` → **absente**, la détection n'a jamais été jouée.
+     - `mdi-terrain` : trace non nettoyée → grise, le clic affiche « L'altimétrie n'est disponible qu'après le nettoyage de la trace. » ; trace propre sans sauvegarde utilisateur → **jaune, forcée visible** (validation à mener) ; `altimetrie_validated` → **verte**, au survol. Le clic ouvre `/altimetrie`.
+     - `mdi-city` : cinq états — grise (trace non nettoyée, le clic explique la condition d'accès), jaune (traitement de ce circuit), orange (en attente), verte (détection faite, consultation) et rouge (à lancer) ; seuls le rouge et le vert sont actionnables.
+     Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
    - Carte Mapbox GL (style `standard`, token depuis `Systeme.Key.mapBox`).

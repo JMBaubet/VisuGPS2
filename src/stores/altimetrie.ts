@@ -150,6 +150,16 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
   const saving = ref(false)
   /** Des montées ont été éditées et ne sont pas encore enregistrées. */
   const dirty = ref(false)
+  /**
+   * L'opérateur a validé l'analyse : une sauvegarde utilisateur a été effectuée.
+   *
+   * Distinct de `dirty` : une analyse générée automatiquement n'est pas
+   * validée, même sans modification en attente. Le drapeau persiste dans le
+   * registre des traces (`altimetrie_validated`) et pilote le libellé du bouton
+   * de la toolbar — « Valider » tant qu'aucune sauvegarde n'a eu lieu,
+   * « Sauvegarder » ensuite.
+   */
+  const validated = ref(false)
   const selectedClimbId = ref<number | null>(null)
   /** Aperçu local d'une borne déplacée, affiché sans attendre le backend. */
   const boundsDraft = ref<BoundsDraft | null>(null)
@@ -193,12 +203,24 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
    * fonctionnalité, ou dont la génération automatique a échoué, sont couvertes
    * à la première ouverture.
    */
-  async function loadOrDetect(traceId: string, params: AltimetrieParams): Promise<void> {
+  async function loadOrDetect(
+    traceId: string,
+    params: AltimetrieParams,
+    persistedValidated = false,
+  ): Promise<void> {
     loading.value = true
     try {
       const existing = await invoke<AltimetrieFile | null>('altimetrie_load', { traceId })
-      file.value =
-        existing ?? (await invoke<AltimetrieFile>('altimetrie_detect', { traceId, params }))
+      if (existing) {
+        file.value = existing
+        // Un fichier existant conserve l'état de validation persisté.
+        validated.value = persistedValidated
+      } else {
+        // La détection produit une analyse neuve : le backend repose le
+        // drapeau du registre, la validation appartient à l'opérateur.
+        file.value = await invoke<AltimetrieFile>('altimetrie_detect', { traceId, params })
+        validated.value = false
+      }
       dirty.value = false
       selectedClimbId.value = null
       boundsDraft.value = null
@@ -213,6 +235,9 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     try {
       file.value = await invoke<AltimetrieFile>('altimetrie_detect', { traceId, params })
       dirty.value = false
+      // Le backend repose le drapeau du registre : l'analyse recalculée n'a pas
+      // été relue par l'opérateur.
+      validated.value = false
       selectedClimbId.value = null
       boundsDraft.value = null
     } finally {
@@ -355,6 +380,10 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
         climbs,
       })
       dirty.value = false
+      // `altimetrie_save` pose le drapeau dans le registre : c'est la
+      // validation de l'opérateur, qu'elle passe par « Valider » ou
+      // « Sauvegarder ».
+      validated.value = true
     } finally {
       saving.value = false
     }
@@ -538,6 +567,7 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     loading.value = false
     saving.value = false
     dirty.value = false
+    validated.value = false
     selectedClimbId.value = null
     boundsDraft.value = null
   }
@@ -548,6 +578,7 @@ export const useAltimetrieStore = defineStore('altimetrie', () => {
     loading,
     saving,
     dirty,
+    validated,
     selectedClimbId,
     // Getters
     displayFile,

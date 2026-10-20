@@ -116,22 +116,22 @@
            - **jamais rendue quand `needsAudit` est vrai** : dans ce cas
              l'icône figure déjà sur la première rangée (bouton Éditer en
              mode audit), la redondance est évitée ;
-           - visible **au survol uniquement** ;
-           - **désactivée et grisée** quand aucun audit n'est archivé
-             (`hasAuditArchive` faux) : la vue `/audit` n'aurait rien à
-             restituer.
+           - **rendue seulement quand un audit est archivé**
+             (`hasAuditArchive`) : sans archive, la vue `/audit` n'aurait rien
+             à restituer. Principe général : un bouton est affiché et actif,
+             ou absent — plus d'état grisé désactivé ;
+           - visible **au survol uniquement**.
         -->
         <v-btn
-          v-if="!needsAudit"
+          v-if="!needsAudit && hasAuditArchive"
           class="action-btn"
           :class="{ 'action-btn--hidden': !isHovering }"
           icon="mdi-map-marker-path"
-          :color="hasAuditArchive ? 'green' : 'grey'"
+          color="green"
           variant="text"
           density="comfortable"
           size="small"
-          :disabled="!hasAuditArchive"
-          :title="hasAuditArchive ? 'Voir les anomalies de la source' : 'Aucune anomalie archivée'"
+          title="Voir les anomalies de la source"
           @click="voirAnomaliesSource"
         />
         <!--
@@ -142,10 +142,14 @@
              c'est une barrière à lever avant l'édition caméra ;
            - passages validés : visible au survol, couleur verte
              (consultation) ;
-           - trace jamais détectée : visible au survol, neutre et
-             **désactivée** — la vue n'aurait rien à restituer.
+           - **aucun passage détecté** (`multiride_status === "none"`) :
+             visible au survol, **blanche**, et le clic affiche le message
+             bleu « Aucun passage multiple détecté sur cette trace. » ;
+           - **trace jamais détectée** (`multiride_status` nul) : bouton
+             **absent** — il n'y a rien à consulter.
         -->
         <v-btn
+          v-if="!isMultirideHidden"
           class="action-btn"
           :class="{ 'action-btn--hidden': !(needsMultiride || isHovering) }"
           icon="mdi-repeat"
@@ -153,24 +157,29 @@
           variant="text"
           density="comfortable"
           size="small"
-          :disabled="isMultirideDisabled"
           :title="multirideTitle"
           @click="voirMultiride"
         />
         <!--
           Terrain : icône mdi-terrain, affichée sur la seconde rangée.
-          Ouvre la vue Altimétrie d'une trace nettoyée ; grise et inactive
-          tant que l'audit n'est pas appliqué. Visible au survol uniquement.
+          Ouvre la vue Altimétrie d'une trace nettoyée.
+           - trace non nettoyée : grise, le clic affiche le message
+             « L'altimétrie n'est disponible qu'après le nettoyage de la
+             trace. » ;
+           - trace propre, analyse jamais sauvegardée par l'opérateur :
+             **jaune**, et **forcée visible** — une validation reste à mener ;
+           - analyse validée (sauvegarde utilisateur) : **verte**, visible au
+             survol seulement.
         -->
         <v-btn
           class="action-btn"
-          :class="{ 'action-btn--hidden': !isHovering }"
+          :class="{ 'action-btn--hidden': !(isTerrainForced || isHovering) }"
           icon="mdi-terrain"
-          :color="needsAudit ? 'grey' : undefined"
+          :color="terrainColor"
           variant="text"
           density="comfortable"
           size="small"
-          :title="needsAudit ? 'Altimétrie — nettoyage requis' : 'Altimétrie'"
+          :title="terrainTitle"
           @click="ouvrirAltimetrie"
         />
         <!--
@@ -296,27 +305,38 @@
  * du verrouillage (mêmes seuils que la toolbar d'édition, qui emploie le jaune
  * pour le palier > 50 %).
  *
+ * Principe général des actions de la seconde rangée : un bouton est **affiché
+ * et actif**, ou **absent** — plus d'état grisé désactivé. Les deux exceptions
+ * sont des explications au clic, pas des boutons inertes.
+ *
  * L'icône mdi-map-marker-path (seconde rangée) matérialise la consultation
  * des anomalies de la source : elle n'est rendue que lorsque `needsAudit` est
- * faux (sinon l'icône figure déjà sur la première rangée), n'apparaît qu'au
- * survol, et reste **désactivée et grisée** tant qu'aucun audit n'est archivé
- * (`hasAuditArchive` faux). Elle mène à `/audit`.
+ * faux (sinon l'icône figure déjà sur la première rangée) **et** qu'un audit
+ * est archivé (`hasAuditArchive`). Sans archive, la vue `/audit` n'aurait rien
+ * à restituer : le bouton est absent. Elle mène à `/audit`.
  *
  * L'icône mdi-repeat (seconde rangée) matérialise la barrière des passages
- * multiples : visible **en permanence** tant que `needsMultiride` est vrai
- * (ambre), sinon visible au survol seulement. Elle est désactivée pour une
- * trace jamais détectée (aucune action à ouvrir). Elle mène à `/multiride`.
+ * multiples : **blanche** et accompagnée du message bleu « Aucun passage
+ * multiple détecté sur cette trace. » quand la détection n'a rien trouvé
+ * (`multiride_status === "none"`), visible **en permanence** et ambre tant que
+ * `needsMultiride` est vrai, verte une fois les passages validés. Une trace
+ * jamais détectée (`multiride_status` nul) n'affiche **pas** le bouton.
  *
  * L'icône mdi-city (seconde rangée) matérialise la **détection des communes
  * traversées** (module Communes), par sa couleur : **grise** tant que la trace
- * n'est pas nettoyée, **jaune** pendant que ce circuit est effectivement traité,
- * **orange** en attente de traitement (en file, ou tâche de fond occupée
- * ailleurs), **verte** une fois la détection aboutie et **rouge** dans les
- * autres cas. Deux états seulement sont actionnables : le **rouge** (le clic
- * lance la détection de ce circuit) et le **vert** (le clic ouvre la fenêtre des
- * communes). L'icône n'est jamais désactivée — un bouton `disabled` masquerait
- * son infobulle et éteindrait la couleur de l'état : c'est le garde du clic qui
- * rend les autres états inertes.
+ * n'est pas nettoyée (le clic explique la condition d'accès), **jaune** pendant
+ * que ce circuit est effectivement traité, **orange** en attente de traitement
+ * (en file, ou tâche de fond occupée ailleurs), **verte** une fois la détection
+ * aboutie et **rouge** dans les autres cas. Deux états seulement sont
+ * actionnables : le **rouge** (le clic lance la détection de ce circuit) et le
+ * **vert** (le clic ouvre la fenêtre des communes). L'icône n'est jamais
+ * désactivée — un bouton `disabled` masquerait son infobulle et éteindrait la
+ * couleur de l'état : c'est le garde du clic qui rend les autres états inertes.
+ *
+ * L'icône mdi-terrain (seconde rangée) ouvre la vue Altimétrie d'une trace
+ * propre : **jaune** et forcée visible tant que l'opérateur n'a pas validé
+ * l'analyse (aucune sauvegarde utilisateur), **verte** une fois validée, grise
+ * et explicative tant que la trace n'est pas nettoyée.
  *
  * Le bouton Info déploie une section (v-expand-transition) contenant les
  * détails du circuit (date d'import, source, lien) ; elle se réduit dès que le
@@ -468,30 +488,89 @@ const hasAuditArchive = computed(() => !!props.trace.audit_archived)
 // --- Icône Passages multiples (seconde rangée) ---
 
 /**
- * Couleur de l'icône mdi-repeat de la seconde rangée :
- *  - ambre tant que les passages restent à valider (barrière 2) ;
- *  - vert pour une trace dont les passages sont validés (consultation) ;
- *  - neutre sinon (trace jamais détectée : aucun état à représenter).
+ * État de l'icône Passages multiples :
+ * - `hidden`    : détection jamais jouée — rien à consulter, bouton absent ;
+ * - `none`      : détection jouée, aucun passage — icône blanche, message au clic ;
+ * - `pending`   : passages à valider — barrière 2, icône ambre forcée visible ;
+ * - `validated` : passages validés — icône verte, consultation au survol.
  */
-const multirideColor = computed(() => {
-  if (needsMultiride.value) return '#FFC107'
-  if (props.trace.multiride_status === 'validated') return 'green'
-  return ''
+type MultirideState = 'hidden' | 'none' | 'pending' | 'validated'
+
+const multirideState = computed<MultirideState>(() => {
+  const status = props.trace.multiride_status
+  if (status == null) return 'hidden'
+  if (status === 'pending') return 'pending'
+  if (status === 'validated') return 'validated'
+  return 'none'
 })
 
+/** Trace jamais détectée : le bouton est masqué, pas grisé. */
+const isMultirideHidden = computed(() => multirideState.value === 'hidden')
+
 /**
- * `true` quand l'icône Passages multiples est « neutre » : ni barrière à
- * lever (`pending`) ni passages validés. C'est le cas d'une trace dont la
- * détection n'a jamais été jouée — l'action n'a alors rien à ouvrir, le
- * bouton est désactivé.
+ * Couleur de l'icône mdi-repeat :
+ *  - ambre tant que les passages restent à valider (barrière 2) ;
+ *  - vert pour une trace dont les passages sont validés (consultation) ;
+ *  - blanc quand la détection n'a trouvé aucun passage.
  */
-const isMultirideDisabled = computed(() => multirideColor.value === '')
+const multirideColor = computed(() => {
+  if (multirideState.value === 'pending') return '#FFC107'
+  if (multirideState.value === 'validated') return 'green'
+  return 'white'
+})
 
 /** Tooltip de l'icône Passages multiples, selon l'état de la trace. */
 const multirideTitle = computed(() => {
-  if (needsMultiride.value) return 'Valider les passages multiples'
-  if (props.trace.multiride_status === 'validated') return 'Voir les passages multiples (validés)'
-  return 'Passages multiples (détection non jouée)'
+  switch (multirideState.value) {
+    case 'pending':
+      return 'Valider les passages multiples'
+    case 'validated':
+      return 'Voir les passages multiples (validés)'
+    case 'none':
+      return 'Aucun passage multiple détecté sur cette trace'
+    default:
+      return ''
+  }
+})
+
+// --- Icône Terrain (seconde rangée) ---
+
+/**
+ * État de l'icône Terrain :
+ * - `locked`    : trace non nettoyée — le clic explique la condition d'accès ;
+ * - `pending`   : analyse disponible mais jamais sauvegardée par l'opérateur ;
+ * - `validated` : une sauvegarde utilisateur a validé l'analyse.
+ */
+type TerrainState = 'locked' | 'pending' | 'validated'
+
+const terrainState = computed<TerrainState>(() => {
+  if (needsAudit.value) return 'locked'
+  return props.trace.altimetrie_validated ? 'validated' : 'pending'
+})
+
+/**
+ * Couleur de l'icône Terrain : grise tant que la trace n'est pas nettoyée,
+ * **jaune** tant que l'analyse reste à valider, verte une fois validée.
+ */
+const terrainColor = computed(() => {
+  if (terrainState.value === 'locked') return 'grey'
+  return terrainState.value === 'validated' ? 'green' : 'yellow-darken-2'
+})
+
+/**
+ * Une analyse non validée est une action en attente : l'icône jaune reste
+ * visible hors survol, comme la barrière des passages multiples.
+ */
+const isTerrainForced = computed(() => terrainState.value === 'pending')
+
+/** Tooltip de l'icône Terrain, selon l'état de la trace. */
+const terrainTitle = computed(() => {
+  if (terrainState.value === 'locked') {
+    return "L'altimétrie n'est disponible qu'après le nettoyage de la trace."
+  }
+  return terrainState.value === 'validated'
+    ? "Altimétrie validée — consulter l'analyse"
+    : "Analyser l'altimétrie — validation requise"
 })
 
 // --- Icône Communes (seconde rangée) ---------------------------------
@@ -550,7 +629,7 @@ const isCommunesForced = computed(() => communesState.value === 'red')
 /** Tooltip de l'icône Communes : l'état réel, ou l'action quand il y en a une. */
 const communesTitle = computed(() => {
   const titles: Record<CommunesState, string> = {
-    grey: 'Communes — circuit à nettoyer au préalable',
+    grey: "Les communes traversées ne sont disponibles qu'après le nettoyage de la trace.",
     yellow: 'Communes — détection en cours pour ce circuit…',
     orange: 'Communes — détection en attente…',
     green: 'Voir les communes traversées',
@@ -562,14 +641,21 @@ const communesTitle = computed(() => {
 /**
  * Action de l'icône Communes : elle n'existe que dans les deux états
  * actionnables — **rouge** (lancer la détection de ce circuit) et **verte**
- * (consulter les communes détectées). Gris, jaune et orange n'ont aucune action,
+ * (consulter les communes détectées). Jaune et orange n'ont aucune action,
  * et n'ouvrent pas non plus de fenêtre.
  *
  * L'icône n'étant jamais `disabled` — un bouton désactivé masquerait son
  * infobulle et éteindrait la couleur de l'état —, c'est ce garde qui rend ces
- * trois états inertes.
+ * états inertes. Le gris (trace non nettoyée) explique la condition d'accès
+ * par un message, au lieu de rester silencieux.
  */
 function onCommunesClick() {
+  if (communesState.value === 'grey') {
+    ui.showWarning(
+      "Les communes traversées ne sont disponibles qu'après le nettoyage de la trace.",
+    )
+    return
+  }
   if (communesState.value === 'red') {
     // La trace passe en tête de la file du store : une analyse déjà en cours se
     // termine d'abord, puis Overpass et le backend enchaînent.
@@ -720,8 +806,15 @@ function voirAnomaliesSource() {
  * des passages déjà validés : il réécrit le fichier de description sans faire
  * rebasculer le statut, un ajustement n'ayant pas d'incidence sur l'édition
  * caméra.
+ *
+ * Une détection sans passage (`none`) n'a rien à ouvrir : le clic se contente
+ * du message bleu, l'icône restant blanche.
  */
 function voirMultiride() {
+  if (multirideState.value === 'none') {
+    ui.showInfo('Aucun passage multiple détecté sur cette trace.')
+    return
+  }
   router.push({ name: 'multiride', query: { traceId: props.trace.id } })
 }
 
@@ -735,7 +828,7 @@ function voirMultiride() {
 function ouvrirAltimetrie() {
   if (needsAudit.value) {
     ui.showWarning(
-      "L'altimétrie n'est disponible qu'après nettoyage de la trace.",
+      "L'altimétrie n'est disponible qu'après le nettoyage de la trace.",
     )
     return
   }

@@ -6,11 +6,14 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::gpx_altimetrie::commands::{
-    detect_impl, generate_status, read_raw_points, rebuild_impl,
+    detect_impl, generate_status, read_raw_points, rebuild_impl, save_impl,
 };
 use crate::gpx_altimetrie::file;
 use crate::gpx_altimetrie::types::{
     AltimetrieClimbEdit, AltimetrieMergedPartEdit, AltimetrieParams,
+};
+use crate::import_gpx::{
+    get_traces_path, load_registry, save_registry, Point3D, TraceMetadata, TraceStats,
 };
 
 fn fixture_path() -> PathBuf {
@@ -45,6 +48,52 @@ fn manual_climb(id: u32, start_km: f64, end_km: f64) -> AltimetrieClimbEdit {
         merged_parts: None,
         fallback: false,
     }
+}
+
+/// Écrit une entrée de registre minimale pour la trace, avec l'état de
+/// validation demandé.
+fn seed_registry(mode_dir: &Path, trace_id: &str, validated: bool) {
+    let trace = TraceMetadata {
+        id: trace_id.to_string(),
+        name: "Trace de test".to_string(),
+        source: "Test".to_string(),
+        source_url: None,
+        activity_type: None,
+        filename: "poggio.gpx".to_string(),
+        import_date: "2026-01-01T00:00:00Z".to_string(),
+        stats: TraceStats {
+            start_point: Point3D {
+                lat: 45.0,
+                lon: 2.0,
+                alt: None,
+            },
+            end_point: Point3D {
+                lat: 45.0,
+                lon: 2.1,
+                alt: None,
+            },
+            distance_m: 1000.0,
+            positive_elevation_m: 0.0,
+            negative_elevation_m: 0.0,
+            alt_min_m: None,
+            alt_max_m: None,
+            points_count: 2,
+            duration_s: None,
+        },
+        hash: "sha256:test".to_string(),
+        favorite: false,
+        is_displayed: false,
+        audit_status: "clean".to_string(),
+        audit_archived: false,
+        multiride_status: None,
+        communes_completed: false,
+        altimetrie_validated: validated,
+    };
+    save_registry(&get_traces_path(mode_dir), &[trace]).expect("écriture du registre");
+}
+
+fn registry_validated(mode_dir: &Path) -> bool {
+    load_registry(&get_traces_path(mode_dir))[0].altimetrie_validated
 }
 
 #[test]
@@ -278,6 +327,73 @@ fn generate_status_is_best_effort_and_invalidates_a_stale_file() {
         params
     ));
     assert!(file::load_file(&path, trace_id).is_none());
+
+    cleanup(&mode_dir);
+}
+
+#[test]
+fn save_marks_the_analysis_validated() {
+    let mode_dir = temp_mode_dir();
+    let trace_id = "trace-save-validee";
+    let gpx_path = copy_fixture(&mode_dir, trace_id);
+    let params = AltimetrieParams::default();
+    seed_registry(&mode_dir, trace_id, false);
+
+    detect_impl(
+        &mode_dir,
+        trace_id,
+        &gpx_path,
+        "poggio.gpx",
+        &params,
+        "2026-10-19T12:00:00Z",
+    )
+    .expect("détection");
+    assert!(
+        !registry_validated(&mode_dir),
+        "une détection ne vaut pas validation"
+    );
+
+    save_impl(
+        &mode_dir,
+        trace_id,
+        &gpx_path,
+        "poggio.gpx",
+        &params,
+        "2026-10-19T12:05:00Z",
+        &[manual_climb(1, 1.0, 2.0)],
+    )
+    .expect("sauvegarde");
+
+    assert!(
+        registry_validated(&mode_dir),
+        "une sauvegarde utilisateur doit valider l'altimétrie"
+    );
+
+    cleanup(&mode_dir);
+}
+
+#[test]
+fn detect_invalidates_a_previous_validation() {
+    let mode_dir = temp_mode_dir();
+    let trace_id = "trace-recalcul";
+    let gpx_path = copy_fixture(&mode_dir, trace_id);
+    let params = AltimetrieParams::default();
+    seed_registry(&mode_dir, trace_id, true);
+
+    detect_impl(
+        &mode_dir,
+        trace_id,
+        &gpx_path,
+        "poggio.gpx",
+        &params,
+        "2026-10-19T12:10:00Z",
+    )
+    .expect("recalcul");
+
+    assert!(
+        !registry_validated(&mode_dir),
+        "un recalcul produit une analyse que l'opérateur n'a pas validée"
+    );
 
     cleanup(&mode_dir);
 }

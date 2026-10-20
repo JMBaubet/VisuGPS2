@@ -196,6 +196,7 @@ fn make_registry_entry(trace_id: &str, filename: &str) -> TraceMetadata {
         audit_archived: false,
         multiride_status: None,
         communes_completed: false,
+        altimetrie_validated: false,
     }
 }
 

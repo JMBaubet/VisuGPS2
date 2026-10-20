@@ -104,6 +104,18 @@ export interface TraceMetadata {
    * un nettoyage (le GPX réécrit change la géométrie de la trace).
    */
   communes_completed: boolean
+  /**
+   * L'opérateur a **validé** l'analyse altimétrique : une sauvegarde utilisateur
+   * a été effectuée depuis la vue `/altimetrie`.
+   *
+   * La génération automatique du fichier n'est qu'une proposition — elle ne
+   * vaut pas validation. Ce drapeau, lu par la carte du circuit sans lecture de
+   * fichier, colore l'icône `mdi-terrain` : jaune tant que l'analyse reste à
+   * valider, verte ensuite.
+   *
+   * Absent des registres antérieurs → `false`.
+   */
+  altimetrie_validated: boolean
 }
 
 // --- Store ---

@@ -144,6 +144,7 @@ fn make_trace_metadata(id: &str, filename: &str) -> TraceMetadata {
         audit_archived: false,
         multiride_status: None,
         communes_completed: false,
+        altimetrie_validated: false,
     }
 }
 
@@ -427,6 +428,9 @@ fn test_validate_updates_audit_status() {
     fs::write(&communes_path, "[]").expect("écriture de la description périmée");
     let mut seeded = load_registry(&get_traces_path(&mode_dir));
     seeded[0].communes_completed = true;
+    // L'altimétrie de l'ancienne trace avait été validée : le GPX réécrit doit
+    // invalider cette validation, l'analyse régénérée étant nouvelle.
+    seeded[0].altimetrie_validated = true;
     save_registry(&get_traces_path(&mode_dir), &seeded).expect("écriture du registre");
 
     let updated = validate_impl(
@@ -461,6 +465,10 @@ fn test_validate_updates_audit_status() {
     assert!(
         !communes_path.exists(),
         "la description périmée des communes doit être supprimée"
+    );
+    assert!(
+        !registry[0].altimetrie_validated,
+        "le nettoyage doit invalider la validation de l'altimétrie"
     );
 
     // La détection des passages multiples a suivi l'audit, dans la même

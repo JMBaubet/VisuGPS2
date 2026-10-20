@@ -55,6 +55,7 @@ fn make_trace(trace_id: &str) -> TraceMetadata {
         audit_archived: false,
         multiride_status: None,
         communes_completed: false,
+        altimetrie_validated: false,
     }
 }
 

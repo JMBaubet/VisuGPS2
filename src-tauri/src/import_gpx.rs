@@ -123,6 +123,18 @@ pub struct TraceMetadata {
     /// été réalisée, la tâche de fond la reprendra au lancement.
     #[serde(default)]
     pub communes_completed: bool,
+    /// L'opérateur a **validé** l'analyse altimétrique de la trace : une
+    /// sauvegarde utilisateur a été effectuée depuis la vue `/altimetrie`.
+    ///
+    /// La génération automatique du fichier n'est qu'une proposition : elle ne
+    /// vaut pas validation. Ce drapeau, lu par la carte du circuit sans lire de
+    /// fichier, colore l'icône `mdi-terrain` — jaune tant que l'analyse reste à
+    /// valider, verte ensuite.
+    ///
+    /// Absent des registres antérieurs → `false` : ces traces n'ont jamais été
+    /// validées par l'opérateur.
+    #[serde(default)]
+    pub altimetrie_validated: bool,
 }
 
 /// Valeur par défaut du statut d'audit pour les registres antérieurs :
@@ -1022,6 +1034,9 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         // déclenchera aussitôt si la trace est déjà propre, à la validation de
         // l'audit sinon.
         communes_completed: false,
+        // L'analyse altimétrique générée automatiquement n'est qu'une
+        // proposition : la validation appartient à l'opérateur.
+        altimetrie_validated: false,
     };
 
     // 9. Ajouter au registre et sauvegarder — registre relu sous le verrou :
@@ -1392,6 +1407,7 @@ mod tests {
             audit_archived: false,
             multiride_status: None,
             communes_completed: false,
+            altimetrie_validated: false,
         }
     }
 

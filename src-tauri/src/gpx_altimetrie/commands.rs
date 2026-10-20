@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::gpx_audit::export::iso_now;
-use crate::import_gpx::{get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry};
+use crate::import_gpx::{
+    get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry, update_registry,
+};
 
 use super::file;
 use super::params::read_altimetrie_params;
@@ -87,9 +89,48 @@ pub fn read_raw_points(gpx_path: &Path) -> Result<Vec<RawPoint>, String> {
     Ok(points)
 }
 
+// ─── Validation de l'analyse par l'opérateur ─────────────────────────
+
+/// Pose le drapeau de validation de l'altimétrie dans le registre des traces.
+///
+/// La mutation passe par `update_registry` : chargement, modification et
+/// écriture forment une section critique, sans quoi une écriture concurrente
+/// (détection des communes en tâche de fond) pourrait effacer le drapeau.
+fn set_validated(mode_dir: &Path, trace_id: &str, validated: bool) -> Result<(), String> {
+    update_registry(&get_traces_path(mode_dir), |registry| {
+        if let Some(entry) = registry.iter_mut().find(|trace| trace.id == trace_id) {
+            entry.altimetrie_validated = validated;
+        }
+        Ok(())
+    })
+}
+
+/// Repose le drapeau de validation à `false`, en **best-effort**.
+///
+/// Utilisé après une régénération : l'analyse produite n'a pas été relue par
+/// l'opérateur. Tolérant à une trace absente du registre (import d'une trace
+/// neuve, enregistrée après la génération) et à un registre absent ; une erreur
+/// d'écriture est loggée sans faire échouer la génération.
+fn clear_validated(mode_dir: &Path, trace_id: &str) {
+    let traces_path = get_traces_path(mode_dir);
+    if !traces_path.exists() {
+        return;
+    }
+    if let Err(error) = set_validated(mode_dir, trace_id, false) {
+        eprintln!(
+            "[altimetrie] invalidation de la validation impossible pour {} : {}",
+            trace_id, error
+        );
+    }
+}
+
 // ─── Implémentations testables ────────────────────────────────────────
 
 /// Détecte l'altimétrie, écrit le fichier et retourne son contenu.
+///
+/// Une détection — automatique ou « Recalculer » — produit une analyse que
+/// l'opérateur n'a pas encore validée : le drapeau du registre est reposé à
+/// `false`. Une trace absente du registre (import en cours) est ignorée.
 pub fn detect_impl(
     mode_dir: &Path,
     trace_id: &str,
@@ -101,6 +142,7 @@ pub fn detect_impl(
     let points = read_raw_points(gpx_path)?;
     let file = pipeline::detect(&points, params, trace_id, source, updated_at)?;
     file::save_file(&file::file_path(mode_dir, trace_id), &file)?;
+    clear_validated(mode_dir, trace_id);
     Ok(file)
 }
 
@@ -120,6 +162,35 @@ pub fn rebuild_impl(
     if persist {
         file::save_file(&file::file_path(mode_dir, trace_id), &file)?;
     }
+    Ok(file)
+}
+
+/// Reconstruit l'analyse avec les montées éditées, l'écrit et **valide** le
+/// résultat dans le registre.
+///
+/// C'est la seule opération qui pose `altimetrie_validated = true` : la vue
+/// n'appelle `save` que sur un geste explicite de l'opérateur — bouton
+/// « Valider » ou « Sauvegarder ». Une détection, elle, ne vaut pas validation.
+pub fn save_impl(
+    mode_dir: &Path,
+    trace_id: &str,
+    gpx_path: &Path,
+    source: &str,
+    params: &AltimetrieParams,
+    updated_at: &str,
+    climbs: &[AltimetrieClimbEdit],
+) -> Result<AltimetrieFile, String> {
+    let file = rebuild_impl(
+        mode_dir,
+        trace_id,
+        gpx_path,
+        source,
+        params,
+        updated_at,
+        climbs,
+        true,
+    )?;
+    set_validated(mode_dir, trace_id, true)?;
     Ok(file)
 }
 
@@ -279,7 +350,7 @@ pub async fn altimetrie_save(
     let (source, gpx_path) = resolve_trace(&mode_dir, &trace_id)?;
     let started = Instant::now();
 
-    let file = rebuild_impl(
+    let file = save_impl(
         &mode_dir,
         &trace_id,
         &gpx_path,
@@ -287,7 +358,6 @@ pub async fn altimetrie_save(
         &existing.params,
         &iso_now(),
         &climbs,
-        true,
     )?;
 
     println!(

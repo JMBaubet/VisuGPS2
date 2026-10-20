@@ -133,7 +133,8 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "audit_status": "needs_review",
     "audit_archived": false,
     "multiride_status": "pending",
-    "communes_completed": false
+    "communes_completed": false,
+    "altimetrie_validated": false
   }
 ]
 ```
@@ -146,9 +147,11 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Détection des communes** (`communes_completed`) : `true` quand le fichier `communes.json` de la trace est présent et à jour — la fonctionnalité a été menée à son terme pour cette trace. L'information **absente** vaut `false` (« la tâche n'a pas été réalisée ») : c'est ce qui permet à la tâche de fond du lancement de rattraper les traces nettoyées avant l'introduction du module. Posé par `communes_detect`, reposé à `false` par `audit_validate` — le GPX réécrit change la géométrie de la trace, la description est donc supprimée et la détection rejouée.
 
+**Validation de l'altimétrie** (`altimetrie_validated`) : `true` quand l'**opérateur** a sauvegardé l'analyse depuis la vue `/altimetrie` — la première sauvegarde vaut validation du profil et des montées. L'information **absente** vaut `false` : la génération automatique du fichier (import d'une trace propre, validation d'audit) n'est qu'une proposition, elle ne vaut pas validation. Posé par `altimetrie_save`, reposé à `false` par `altimetrie_detect` (recalcul explicite ou génération à l'ouverture) et par `audit_validate` (le GPX réécrit produit une nouvelle analyse). C'est ce drapeau, lu par la carte du circuit sans lire de fichier, qui colore l'icône `mdi-terrain` — jaune tant que l'analyse reste à valider, verte ensuite.
+
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
-**Rétrocompatibilité et registres pré-audit (D1)** : `favorite`, `is_displayed` et `audit_archived` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ces champs se charge donc sans erreur. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
+**Rétrocompatibilité et registres pré-audit (D1)** : `favorite`, `is_displayed`, `audit_archived`, `communes_completed` et `altimetrie_validated` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ces champs se charge donc sans erreur. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
 
 ### `traces/{trace_id}/trace.geojson` — LineString GeoJSON
 
@@ -478,6 +481,12 @@ restaurable de la vue `/altimetrie`.
 - **Invalidation** : `audit_validate` réécrit le GPX ; la génération automatique
   supprime l'ancien fichier puis le régénère. Un échec laisse le fichier absent —
   jamais périmé — et la vue réessaie à l'ouverture.
+- **Validation** : le fichier peut exister sans être validé — la génération
+  automatique n'est qu'une proposition. Le drapeau `altimetrie_validated` du
+  registre (voir `traces.json`) est posé par `altimetrie_save` et reposé à
+  `false` par toute régénération (`altimetrie_detect`, `audit_validate`). La
+  carte du circuit le lit pour colorer l'icône `mdi-terrain` (jaune à valider,
+  verte validée).
 - **Suppression** : le fichier disparaît avec le dossier de la trace
   (`delete_trace`), comme les autres artefacts.
 
