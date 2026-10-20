@@ -76,6 +76,7 @@ import type {
 import { colorForCategoryId, colorForSlope } from '../../utils/altimetrieCategories'
 import {
   constrainClimbBound,
+  minimalSegmentAt,
   MIN_CLIMB_LENGTH_KM,
   type ClimbHandle,
 } from '../../utils/altimetrieClimbs'
@@ -91,6 +92,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   'select-climb': [id: number]
   recenter: [distanceM: number]
+  /** Valeurs du segment minimal au point cliqué, pour le tooltip de la carte. */
+  inspect: [
+    payload: { distanceM: number; slopePct: number; altitudeM: number },
+  ]
   'edit-bounds': [
     payload: { climbId: number; handle: ClimbHandle; km: number },
   ]
@@ -926,6 +931,15 @@ function onPointerDown(event: PointerEvent): void {
   const distanceM = distanceAtX(x, currentView)
   if (distanceM >= 0 && distanceM <= totalDistanceM.value) {
     emit('recenter', distanceM)
+
+    const segment = minimalSegmentAt(profile.value, distanceM)
+    if (segment) {
+      emit('inspect', {
+        distanceM: segment.distanceM,
+        slopePct: segment.slopePct,
+        altitudeM: segment.altitudeM,
+      })
+    }
   }
 }
 

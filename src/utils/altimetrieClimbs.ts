@@ -96,6 +96,43 @@ export function applyClimbBounds(
   }
 }
 
+/** Métriques du segment minimal contenant une distance. */
+export interface MinimalSegmentMetrics {
+  distanceM: number
+  slopePct: number
+  altitudeM: number
+}
+
+/**
+ * Pente et altitude du segment minimal contenant une distance.
+ *
+ * Le segment minimal est l'intervalle entre deux points consécutifs du profil
+ * affiché. La pente est calculée entre ses deux extrémités ; l'altitude
+ * retournée est la moyenne des altitudes de ces deux extrémités.
+ */
+export function minimalSegmentAt(
+  profile: AltimetrieProfilePoint[],
+  distanceM: number,
+): MinimalSegmentMetrics | null {
+  const first = profile[0]
+  const last = profile[profile.length - 1]
+  if (!first || !last || profile.length < 2) return null
+
+  const target = Math.max(first.d, Math.min(last.d, distanceM))
+  let index = lowerBound(profile, target)
+  if (index <= 0) index = 1
+
+  const previous = profile[index - 1]
+  const next = profile[index] ?? last
+  if (!previous || !next || next.d <= previous.d) return null
+
+  return {
+    distanceM: target,
+    slopePct: ((next.ele - previous.ele) / (next.d - previous.d)) * 100,
+    altitudeM: (previous.ele + next.ele) / 2,
+  }
+}
+
 /** Altitude interpolée du profil à une distance donnée (m). */
 function elevationAt(
   profile: AltimetrieProfilePoint[],

@@ -61,6 +61,7 @@
             :creating="creating"
             @select-climb="altimetrieStore.selectClimb"
             @recenter="onRecenter"
+            @inspect="onInspect"
             @edit-bounds="onEditBounds"
             @draft-bounds="onDraftBounds"
             @cancel-bounds="altimetrieStore.clearClimbDraft"
@@ -68,6 +69,27 @@
             @cancel-create="onCancelCreation"
             @create-error="onCreateError"
           />
+
+          <div v-if="inspectPoint" class="altimetrie-inspect">
+            <div class="altimetrie-inspect__row">
+              <span class="altimetrie-inspect__label">Distance</span>
+              <span class="altimetrie-inspect__value">
+                {{ formatDistance(inspectPoint.distanceM) }}
+              </span>
+            </div>
+            <div class="altimetrie-inspect__row">
+              <span class="altimetrie-inspect__label">Pente</span>
+              <span class="altimetrie-inspect__value">
+                {{ inspectPoint.slopePct.toFixed(1) }} %
+              </span>
+            </div>
+            <div class="altimetrie-inspect__row">
+              <span class="altimetrie-inspect__label">Altitude</span>
+              <span class="altimetrie-inspect__value">
+                {{ formatAltitude(inspectPoint.altitudeM) }}
+              </span>
+            </div>
+          </div>
         </div>
       </v-main>
 
@@ -108,7 +130,7 @@
  * À la sortie, le store est réinitialisé ; si des montées ont été éditées sans
  * être sauvegardées, un dialogue demande confirmation.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useAltimetrieStore, type AltimetrieParams } from '../stores/altimetrie'
@@ -128,6 +150,14 @@ import {
   type AltimetrieStatus,
 } from '../utils/altimetrieDiagnostics'
 import type { ClimbHandle } from '../utils/altimetrieClimbs'
+import { formatAltitude, formatDistance } from '../utils/format'
+
+/** Valeurs du segment minimal affichées dans le tooltip de la carte. */
+interface InspectPoint {
+  distanceM: number
+  slopePct: number
+  altitudeM: number
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -153,6 +183,9 @@ const dialogRecalcOpen = ref(false)
 const traceGeometry = ref<GeoJSON.Feature | null>(null)
 /** Instance de la carte, exposée pour le widget de profil. */
 const mapRef = ref<InstanceType<typeof AltimetrieMap> | null>(null)
+/** Valeurs du dernier clic sur le profil, affichées 5 s sur la carte. */
+const inspectPoint = ref<InspectPoint | null>(null)
+let inspectTimer: ReturnType<typeof setTimeout> | null = null
 
 const traceId = computed(() => (route.query.traceId as string | null) ?? null)
 const traceName = computed(
@@ -256,6 +289,21 @@ function onBackClicked(): void {
 /** Recentre la carte sur un point du profil (clic dans le widget). */
 function onRecenter(distanceM: number): void {
   mapRef.value?.centerOnDistance(distanceM)
+}
+
+/**
+ * Affiche les valeurs du segment minimal cliqué, pendant 5 secondes.
+ *
+ * Chaque clic remplace le contenu précédent et relance le minuteur.
+ */
+function onInspect(payload: InspectPoint): void {
+  inspectPoint.value = payload
+
+  if (inspectTimer) clearTimeout(inspectTimer)
+  inspectTimer = setTimeout(() => {
+    inspectPoint.value = null
+    inspectTimer = null
+  }, 5000)
 }
 
 /** Projette la borne en cours de glissement, sans appel backend. */
@@ -509,6 +557,11 @@ onMounted(async () => {
   }
 })
 
+onUnmounted(() => {
+  if (inspectTimer) clearTimeout(inspectTimer)
+  inspectTimer = null
+})
+
 onBeforeRouteLeave(() => {
   if (!altimetrieStore.dirty && !creating.value) {
     altimetrieStore.reset()
@@ -531,5 +584,39 @@ onBeforeRouteLeave(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+.altimetrie-inspect {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 6;
+  min-width: 150px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface), 0.95);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+.altimetrie-inspect__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.altimetrie-inspect__row + .altimetrie-inspect__row {
+  margin-top: 2px;
+}
+
+.altimetrie-inspect__label {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.altimetrie-inspect__value {
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.92);
 }
 </style>
