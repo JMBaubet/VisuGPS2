@@ -83,6 +83,7 @@ const router = createRouter({
     { path: '/edition-camera', name: 'editionCamera', component: EditionCamera },
     { path: '/audit', name: 'audit', component: () => import('../views/Audit.vue') },
     { path: '/multiride', name: 'multiride', component: () => import('../views/Multiride.vue') },
+    { path: '/altimetrie', name: 'altimetrie', component: () => import('../views/Altimetrie.vue') },
     { path: '/screen-bis', name: 'screenBis', component: ScreenBis }
   ]
 })
@@ -91,8 +92,8 @@ const router = createRouter({
 **Stratégie de routing** :
 - `createWebHistory()` : URLs propres sans `#`
 - Navigation par `name` recommandée (plus stable que `path`)
-- 6 routes : `accueil`, `visualisation`, `editionCamera`, `audit`, `multiride`, `screenBis`
-- Seule la route `audit` est en **lazy loading** (contrairement aux autres, chargées statiquement) : Mapbox GL ne doit pas alourdir le bundle principal au démarrage.
+- 7 routes : `accueil`, `visualisation`, `editionCamera`, `audit`, `multiride`, `altimetrie`, `screenBis`
+- Les routes `audit`, `multiride` et `altimetrie` sont en **lazy loading** (les autres sont chargées statiquement) : Mapbox GL ne doit pas alourdir le bundle principal au démarrage.
 
 **Ajout de routes** :
 ```typescript
@@ -252,9 +253,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 44 commandes : voir COMMANDS.md pour le catalogue complet
+            // 51 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
-            gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*
+            gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*,
+            gpx_multiride::commands::*, gpx_communes::commands::*,
+            gpx_altimetrie::commands::*
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -272,6 +275,8 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces, points avec distance cumulée, persistance des keyframes)
 - `gpx_audit/` : Module Audit GPX (détection AR/RP, corrections, export, commandes Tauri) — voir § « Audit GPX » ci-dessous
 - `gpx_multiride/` : Module Multiride (détection des portions parcourues plusieurs fois, ajustements, fichier de description) — voir § « Passage multiples » ci-dessous
+- `gpx_communes/` : Module Communes (croisement avec les limites administratives OSM via Overpass, description des passages) — voir § « Détection des communes » ci-dessous
+- `gpx_altimetrie/` : Module Altimétrie (profil lissé, segments de pente, détection et reconstruction des montées) — voir § « Altimétrie » ci-dessous
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -336,6 +341,8 @@ src/
 │   ├── edition.ts    # Store de la vue d'édition caméra (trace, lecture, keyframes)
 │   ├── audit.ts      # Store du module Audit GPX (détection, archive, corrections)
 │   ├── multiride.ts  # Store du module Multiride (détection, ajustements, validation)
+│   ├── communes.ts   # Store des communes traversées (file d'attente, consultation)
+│   ├── altimetrie.ts # Store Altimétrie (analyse, montées, édition, sauvegarde)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
 │   ├── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra (simple + délégation frustum)
@@ -343,14 +350,20 @@ src/
 │   └── headingChanges.ts     # Analyse des changements de cap entre keyframes (Δcap, sens, taux °/km, couleur MD)
 ├── utils/            # Fonctions utilitaires (named exports)
 │   ├── format.ts     # Helpers de formatage (distance, élévation, durée)
-│   └── geo.ts        # Utilitaires géographiques (Haversine, bearing, cap)
+│   ├── geo.ts        # Utilitaires géographiques (Haversine, bearing, cap)
+│   ├── altimetrieCategories.ts # Catégories et couleurs de pente
+│   ├── altimetrieClimbs.ts     # Contraintes de bornes, segments minimaux, projections
+│   └── altimetrieDiagnostics.ts # Diagnostic de cohérence des paramètres
 ├── plugins/          # Plugins Vue (Vuetify, etc.)
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
-│   ├── Home.vue
+│   ├── Accueil.vue   # Fenêtre principale (route `/`)
+│   ├── Visualisation.vue # Page visualisation (stub)
+│   ├── EditionCamera.vue # Édition caméra (route `/edition-camera`)
 │   ├── Audit.vue     # Audit GPX (route `/audit`) — carte, panneau des anomalies, panneau d'action
 │   ├── Multiride.vue # Passages multiples (route `/multiride`) — carte, panneau des segments
-│   └── About.vue
+│   ├── Altimetrie.vue # Altimétrie (route `/altimetrie`) — montées, carte 3D, widget de profil
+│   └── ScreenBis.vue # Fenêtre secondaire (route `/screen-bis`)
 ├── components/       # Composants réutilisables
 │   ├── Accueil/      # Composants de la page d'accueil
 │   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits (triée par distance)
@@ -390,6 +403,17 @@ src/
 │   │   ├── multirideMapLayers.ts  # Contrat de rendu : palette, couches, libellés de sens
 │   │   └── dialogs/
 │   │       └── ConfirmExitDialog.vue   # Sortie avec la barrière encore levée
+│   ├── Altimetrie/   # Composants de la vue altimétrie
+│   │   ├── AltimetrieToolbar.vue      # Barre d'outils (statut des paramètres, sauvegarde, recalcul)
+│   │   ├── AltimetrieClimbsPanel.vue  # Panneau latéral — liste des montées (défilement, révélation)
+│   │   ├── AltimetrieClimbCard.vue    # Carte d'une montée (mini-profil, métriques, D+, pente max)
+│   │   ├── AltimetrieMap.vue          # Carte Mapbox GL 3D (5ᵉ instance) — segments colorés, bornes
+│   │   ├── altimetrieMapLayers.ts     # Sources, couches et découpage sur la géométrie d'origine
+│   │   ├── AltimetrieProfileWidget.vue # Widget canvas — axes fixes, profil défilant, bornes, échelles
+│   │   └── dialogs/
+│   │       ├── ConfirmExitDialog.vue  # Sortie avec des montées non enregistrées
+│   │       ├── CreateClimbDialog.vue  # Aide de création manuelle (deux clics)
+│   │       └── ConfirmRecalcDialog.vue # Recalcul explicite avec éditions en cours
 │   ├── parameters/   # Composants d'édition des paramètres
 │       ├── ParameterCard.vue
 │       ├── InputBool.vue
@@ -421,6 +445,9 @@ src-tauri/
 │   ├── settings.rs       # Système de paramètres de configuration
 │   ├── import_gpx.rs     # Import de fichiers GPX
 │   ├── gpx_audit/        # Module Audit GPX (15 fichiers + tests)
+│   ├── gpx_multiride/    # Module Multiride (11 fichiers + tests)
+│   ├── gpx_communes/     # Module Communes (7 fichiers + tests)
+│   ├── gpx_altimetrie/   # Module Altimétrie (6 fichiers + tests)
 │   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
 │   │   └── default.json  # Permissions pour les fenêtres
@@ -440,6 +467,8 @@ src-tauri/
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
 - `gpx_audit/` : Module Audit GPX (détection AR/RP, moteur de correction, archive d'audit, réécriture GPX) — 15 fichiers : `types.rs`, `geometry.rs`, `consolidation.rs`, `ar.rs`, `rp.rs`, `anchor.rs`, `corrections.rs`, `migration.rs`, `export.rs`, `archive.rs`, `overlay.rs`, `preview.rs`, `routing.rs`, `pipeline.rs`, `commands.rs`. Détails au § « Audit GPX » ci-dessous.
 - `gpx_multiride/` : Module Multiride (détection des portions répétées, ajustements, fichier de description) — 11 fichiers : `types.rs`, `projection.rs`, `resample.rs`, `runs.rs`, `direction.rs`, `segments.rs`, `adjustments.rs`, `file.rs`, `detection.rs`, `commands.rs`, plus `tests/`. Détails au § « Passage multiples » ci-dessous.
+- `gpx_communes/` : Module Communes (croisement OSM/Overpass, écriture de la description) — 7 fichiers : `types.rs`, `geometry.rs`, `osm.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Détection des communes » ci-dessous.
+- `gpx_altimetrie/` : Module Altimétrie (profil, segments de pente, montées) — 6 fichiers : `types.rs`, `params.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Altimétrie » ci-dessous.
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -505,6 +534,25 @@ Utilisateur déplace/zoome la carte
 - Le pattern d'epoch (`visibleEpoch`) annule les résultats périmés si un nouveau `moveend` survient pendant les appels asynchrones à `getClusterLeaves`.
 - Pendant un focus (`focusedTraceId` positionné), `refreshVisibleTraceIds()` est court-circuité pour garder le drawer stable (cohérent avec `moveend`).
 - **Durée de vie du focus** : le focus est un état de **store**, il survit donc à la navigation, alors que les deux gardes qui le consomment (`moveend` et `refreshVisibleTraceIds`) appartiennent à `Map.vue`. Il est par conséquent **libéré au démontage de `Map.vue`** (`onUnmounted`), aux côtés du popup et du `map.remove()`. Sans cette libération, sortir de l'accueil par un bouton de la section Info — clic qui navigue sans que le curseur quitte la carte, donc sans `mouseleave`, seul geste qui relâchait le focus — laissait le focus armé pour le reste de la session : `moveend` et `refreshVisibleTraceIds` restaient court-circuités au retour, et la liste des circuits se figeait au dernier ensemble calculé avant le départ, un redémarrage étant seul à la rétablir.
+
+### 5. Analyse altimétrique
+
+```text
+Import d'une trace propre / validation d'audit
+  → generate_status (best-effort, fichier périmé supprimé)
+  → traces/{trace_id}/altimetrie.json
+  → ouverture /altimetrie : loadOrDetect
+      - altimetrie_load → fichier présent
+      - sinon altimetrie_detect → pipeline Rust → écriture
+  → édition des montées : altimetrie_preview (sans écriture) → store.dirty
+  → « Sauvegarder » : altimetrie_save (écriture atomique)
+  → « Recalculer » : altimetrie_detect avec les réglages courants
+```
+
+`preview` et `save` reprennent les paramètres **du fichier** : modifier un
+réglage dans le drawer ne suffit pas, il faut un recalcul explicite. Les
+réglages `Altimetrie.Visualisation` font exception : ils ne touchent que les
+couches Mapbox et s'appliquent en direct.
 
 ## Patterns architecturaux
 
@@ -963,7 +1011,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 | `audit_save_state(trace_id, params, total_distance_m, points, findings, validated)` | Écrit l'**archive d'audit** (`audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection puis après **chaque** traitement ; `validated = true` après une validation réussie. Jamais appelée par les aperçus. |
 | `audit_load_archive(trace_id)` | Relit l'archive d'une trace (`None` si absente, illisible, d'une version inconnue ou d'une autre trace) — reprise d'une session interrompue et consultation d'un audit appliqué. |
 
-> Référence complète des **44 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des **51 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ### Paramètres (`Audit.*`)
 
@@ -1302,6 +1350,149 @@ expose. `delaiSec` règle le **délai d'attente par miroir** — le client patie
 5 s de plus, pour que ce soit l'erreur du serveur qui clôt la tentative — une
 détection pouvant donc coûter jusqu'à quatre fois ce délai.
 
+## Altimétrie (`/altimetrie`)
+
+L'analyse altimétrique est une **vue de consultation et d'édition** d'une trace
+**propre** (`audit_status = "clean"`). Elle est **indépendante de Multiride** :
+l'icône `mdi-terrain` de la carte d'un circuit propre ouvre
+`/altimetrie?traceId=…`. La vue est chargée en lazy loading (Mapbox GL).
+
+L'analyse est produite par le module Rust `gpx_altimetrie` et stockée dans
+**un seul fichier** `traces/{trace_id}/altimetrie.json`, qui porte à la fois
+l'état éditable et le résultat :
+
+- `params` : les **14 réglages de traitement** `Altimetrie.*` ayant produit le fichier ;
+- `profile` : le profil affiché (altitude lissée ancrée) échantillonné au pas
+  `pasEchantillonnage`, avec `d` (mètres) et `lat`/`lon` interpolés ;
+- `segments` : la segmentation par catégorie de pente (8 catégories `dh3`…`up4`),
+  couvrant la trace sans trou ;
+- `climbs` : les montées triées avec leurs métriques ; un groupe **séparé** est
+  stocké **membre par membre** avec un `groupId` commun, une montée fusionnée
+  non séparée porte `mergedParts` — c'est ce qui rend le fichier restaurable ;
+- `legend` : la note et les bornes des catégories.
+
+Les **3 réglages de visualisation** (`Altimetrie.Visualisation`) sont des
+paramètres applicatifs : ils ne sont pas enregistrés dans ce fichier et
+s'appliquent en direct à la carte.
+
+### Génération automatique
+
+Le fichier est généré **après un import de trace déjà propre** (`import_gpx_file`
+si `audit_status == "clean"`) et **après une validation d'audit** (`audit_validate`
+sur le GPX réécrit), par `generate_status(...)`. La chaîne est **best-effort** :
+un échec (analyse ou écriture) est journalisé et ne bloque ni l'import ni l'audit.
+Le fichier périmé est supprimé avant la tentative ; un échec laisse le fichier
+absent, jamais périmé. La vue relance la détection à l'ouverture si le fichier
+manque (`loadOrDetect`).
+
+### Pipeline Rust
+
+`src-tauri/src/gpx_altimetrie/pipeline.rs` porte le pipeline du prototype :
+
+- distances **2D** Haversine (R = 6 371 000 m), indépendantes de la distance 3D
+  de `TraceStats` ;
+- correction des plateaux, rééchantillonnage uniforme par moyenne, anti-pic de
+  Hampel ;
+- lissage Savitzky-Golay (ordre 2), gaussien, médian optionnel et lissage ancré
+  aux bornes des montées (avec lissage renforcé optionnel) ;
+- calcul de pente sur fenêtre, écrêtage ±25 %, 8 catégories et fusion des
+  micro-segments ;
+- détection des montées par hystérésis, meilleur sous-segment valide,
+  raffinement des extrema, fusion des montées proches, validation avec repli ;
+- `rebuild` : tri, contraintes (1 m entre montées, 100 m minimum après
+  résolution), ancrage du profil, segments, métriques, normalisation des groupes.
+
+Les arrondis sont fixés (km 4 décimales, progression 5, D+ entier, pente 2,
+altitude 1, lat/lon 6). Les tests couvrent le profil plat, une montée unique,
+les fusions, les groupes séparés, le repli, le fichier et les commandes.
+
+### Architecture
+
+1. **Commandes** (`commands.rs`) :
+
+   | Commande | Rôle |
+   |---|---|
+   | `altimetrie_load` | Relit le fichier ; `null` si absent, illisible, version inconnue ou autre trace. |
+   | `altimetrie_detect` | Relit le GPX, exécute le pipeline avec les paramètres courants et réécrit le fichier. |
+   | `altimetrie_preview` | Reconstruit avec les montées éditées, en reprenant les paramètres et l'horodatage **du fichier**, sans écrire. |
+   | `altimetrie_save` | Même reconstruction, puis écriture atomique et nouvel `updatedAt`. |
+
+   `detect` est utilisé à l'ouverture quand le fichier manque et par
+   « Recalculer » ; `preview`/`save` ne prennent jamais les paramètres courants,
+   pour éviter une dérive silencieuse.
+
+2. **Store** (`src/stores/altimetrie.ts`) : `file`, `loading`, `saving`, `dirty`,
+   `selectedClimbId` ; `displayFile` projetant le brouillon de borne en cours de
+   glissement ; `climbs`, `selectedClimb` ; actions de chargement/détection,
+   aperçu, édition de borne, sauvegarde, création, suppression, séparation,
+   fusion, sélection et réinitialisation. `preview` remplace le fichier affiché
+   et marque `dirty` ; en cas d'échec, l'état précédent est restauré.
+
+3. **Vue** (`src/views/Altimetrie.vue`) : squelette commun aux vues de travail
+   (toolbar, panneau latéral, carte, `SettingsDrawer` limité à la vue, garde de
+   sortie). Elle charge les réglages, la trace et `trace.geojson`, puis
+   `loadOrDetect`. La sortie est bloquée si `dirty` ou si une création est en
+   cours ; « Recalculer » demande confirmation si des éditions sont en cours.
+
+4. **Panneau** (`AltimetrieClimbsPanel.vue`, `AltimetrieClimbCard.vue`) : liste
+   défilante des montées, mini-profil de la trace avec la montée surlignée,
+   vallée, longueur, D+, pente moyenne et **pente maximale** (maximum des pentes
+   des segments minimaux entre points consécutifs du profil), actions
+   supprimer/séparer/fusionner, bouton « Créer une montée ». La sélection
+   provenant du graphe, de la carte ou de la liste révèle automatiquement la
+   carte concernée.
+
+5. **Carte** (`AltimetrieMap.vue`, `altimetrieMapLayers.ts`) : 5ᵉ instance
+   Mapbox GL, style `standard-satellite`, relief `terrain-rgb` et pitch 60. Les
+   segments de pente sont découpés sur la **géométrie d'origine** de
+   `trace.geojson` (distances 2D recalculées côté front, repli sur le profil),
+   la montée sélectionnée est un halo sous les segments et les bornes
+   vallée/sommet sont des marqueurs. Les largeurs et la couleur du halo viennent
+   de `Altimetrie.Visualisation` ; elles s'appliquent en direct, sans recalcul.
+
+6. **Widget de profil** (`AltimetrieProfileWidget.vue`) : canvas 2D flottant.
+   Colonne des altitudes et bande des distances **fixes**, profil défilant
+   horizontalement (et verticalement à 2,5 m/px) ; clic sur la colonne = échelle
+   Y (10/5/2,5 m/px), clic sur la bande = échelle X (50/12,5 m/px), touches X/Y.
+   Le profil est coloré par segment, les triangles vallée/sommet sont
+   déplaçables, les barres de montée sélectionnent la montée, un clic sur le
+   profil recentre la carte et affiche pendant 5 s un tooltip (distance, pente
+   et altitude du segment minimal). La création manuelle se fait en deux clics
+   (vallée puis sommet), avec Échap pour annuler.
+
+### Paramètres (`Altimetrie.*`)
+
+5 groupes, 17 paramètres :
+
+- `Altimetrie.Preparation` : `pasEchantillonnage`, `correctionPlateaux`,
+  `fenetreAntiPic`, `seuilAntiPic` ;
+- `Altimetrie.Lissage` : `fenetreAltitude`, `fenetrePente`, `sigmaGaussien`,
+  `fenetreMediane`, `lissageRenforce` ;
+- `Altimetrie.Detection` : `seuilMontee`, `ecartFusion`, `rechercheExtrema` ;
+- `Altimetrie.Segments` : `fenetreCalcul`, `longueurMin` ;
+- `Altimetrie.Visualisation` : `largeurTrace` (5 px), `largeurTraceSelectionnee`
+  (8 px), `couleurTraceSelectionnee` (`#607D8BFF`).
+
+Les 14 premiers sont les **paramètres de traitement** enregistrés dans
+`altimetrie.json` ; ils exigent un recalcul explicite. Les 3 derniers sont des
+réglages d'affichage appliqués en direct. Le diagnostic de cohérence
+(`altimetrieDiagnostics.ts`) colore l'icône de paramètres (vert/orange/rouge) et
+liste les causes dans la toolbar.
+
+### Flux de données
+
+```text
+Import propre / validation d'audit
+  → generate_status (best-effort)
+  → traces/{trace_id}/altimetrie.json
+  → ouverture /altimetrie : loadOrDetect (load, sinon detect)
+  → édition : preview (sans écriture) → dirty
+  → Sauvegarder : altimetrie_save (écriture atomique)
+```
+
+Les paramètres `preview`/`save` sont ceux du fichier, jamais ceux du drawer :
+un changement de réglage ne s'applique qu'après « Recalculer ».
+
 ## Vue d'édition caméra (`/edition-camera`)
 
 La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox ») est l'interface de réglage de la caméra qui suit une trace. Elle dispose d'un **playback fonctionnel** avec : génération de keyframes, boucle d'animation `requestAnimationFrame`, contrôles de lecture (Composant A), **graphe SVG d'avancement (§4.6)** et HUD de télémétrie (Composant C). S'y ajoutent le **Composant B** (édition fine des keyframes via `CameraEditor`) et l'**algorithme intelligent de frustum** (spec §3.3) — le tout décrit ci-dessous.
@@ -1392,7 +1583,8 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
     ├── traces.json          # Registre des traces importées (Vec<TraceMetadata>)
     ├── traces/              # Un dossier par trace (le dossier est le discriminant)
     │   └── {trace_id}/      #   gpx, .gpx.orig, audit.json, multiride.json,
-    │                        #   trace.geojson, keyframes_169|_43
+    │                        #   communes.json, altimetrie.json, trace.geojson,
+    │                        #   keyframes_169|_43
     ├── config-dev.toml      # Surcharges de paramètres (dev)
     └── config.toml          # Surcharges de paramètres (prod)
 ```
@@ -1411,10 +1603,10 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | `get_keyframes` | Charge les keyframes persistés d'une trace pour un ratio (`None` si absent). |
 | `delete_keyframes` | Supprime le fichier keyframes d'un ratio (tolérant si absent). |
 
-> Référence complète des 44 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 51 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-09-17
+**Dernière mise à jour** : 2026-10-20

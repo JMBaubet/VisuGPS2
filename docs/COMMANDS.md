@@ -506,4 +506,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-10-14
+**Dernière mise à jour** : 2026-10-20

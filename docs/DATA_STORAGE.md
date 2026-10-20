@@ -562,4 +562,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-09-17
+**Dernière mise à jour** : 2026-10-20
