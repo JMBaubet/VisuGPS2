@@ -1,60 +1,50 @@
 <template>
-  <div class="alt-profile">
-    <div class="alt-profile__header">
-      <div class="alt-profile__heading">
-        <span class="alt-profile__title">{{ title }}</span>
-        <span class="alt-profile__hint">{{ hint }}</span>
+  <div ref="rootRef" class="alt-profile">
+    <div class="alt-profile__body">
+      <div
+        ref="yAxisHost"
+        class="alt-profile__y-axis"
+        :title="yAxisTitle"
+        @click="cycleYScale"
+        @wheel.prevent="onYAxisWheel"
+      >
+        <canvas ref="yAxisRef" class="alt-profile__axis-canvas" />
       </div>
 
-      <div class="alt-profile__scales">
-        <v-select
-          v-model="xScale"
-          :items="xScaleItems"
-          label="X (m/px)"
-          density="compact"
-          variant="outlined"
-          hide-details
-          class="alt-profile__scale"
+      <div
+        ref="scrollContainer"
+        class="alt-profile__scroll"
+        :style="{
+          height: `${plotViewportHeight}px`,
+          background: plotBackground,
+        }"
+        @scroll="onScroll"
+        @wheel.prevent="onWheel"
+      >
+        <canvas
+          ref="canvasRef"
+          class="alt-profile__canvas"
+          :class="{ 'alt-profile__canvas--dragging': dragState }"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerCancel"
         />
-        <v-select
-          v-model="yScale"
-          :items="yScaleItems"
-          label="Y (m/px)"
-          density="compact"
-          variant="outlined"
-          hide-details
-          class="alt-profile__scale"
-        />
-        <v-btn
-          v-if="creating"
-          variant="text"
-          size="small"
-          color="warning"
-          @click="emit('cancel-create')"
-        >
-          Annuler
-        </v-btn>
-        <v-btn
-          v-else-if="mode === 'climb'"
-          icon="mdi-close"
-          variant="text"
-          size="small"
-          title="Revenir au profil complet"
-          @click="returnToFull"
-        />
+      </div>
+
+      <div
+        ref="xAxisHost"
+        class="alt-profile__x-axis"
+        :title="xAxisTitle"
+        @click="cycleXScale"
+        @wheel.prevent="onXAxisWheel"
+      >
+        <canvas ref="xAxisRef" class="alt-profile__axis-canvas" />
       </div>
     </div>
 
-    <div ref="scrollContainer" class="alt-profile__scroll" @wheel.prevent="onWheel">
-      <canvas
-        ref="canvasRef"
-        class="alt-profile__canvas"
-        :class="{ 'alt-profile__canvas--dragging': dragState }"
-        @pointerdown="onPointerDown"
-        @pointermove="onPointerMove"
-        @pointerup="onPointerUp"
-        @pointercancel="onPointerCancel"
-      />
+    <div v-if="creationHint" class="alt-profile__hint">
+      {{ creationHint }}
     </div>
   </div>
 </template>
@@ -63,19 +53,18 @@
 /**
  * Widget de profil altimétrique flottant.
  *
- * Le canvas est dessiné à la main, comme le prototype validé :
- * - repères Y (lignes pointillées) et X (distances) ;
- * - profil coloré par segments de pente ;
- * - triangles vallée/sommet avec traits pointillés ;
- * - traits horizontaux des montées sur l'axe X.
+ * Disposition :
+ * - colonne gauche fixe : altitudes, clic sur la colonne = échelle Y ;
+ * - bande basse fixe : distances, clic sur la bande = échelle X ;
+ * - profil défilant horizontalement entre les deux, et verticalement quand
+ *   l'échelle 2,5 m/px dépasse la hauteur du widget.
  *
- * Interactions :
- * - molette : défilement horizontal ;
- * - clic sur le profil : recentrage de la carte ;
- * - clic sur un trait de montée : sélection et cadrage carte ;
- * - clic sur un triangle : sélection et passage en échelle détaillée 12,5 m/px ;
- * - en échelle détaillée, drag des triangles : aperçu des nouvelles bornes,
- *   envoyé au parent au relâchement.
+ * Les deux axes sont redessinés à chaque défilement pour rester alignés avec
+ * le profil. Le canvas du profil n'est pas redessiné pendant le défilement.
+ *
+ * Échelles : X = 50 ou 12,5 m/px ; Y = 10, 5 ou 2,5 m/px. Les touches X et Y
+ * font défiler ces valeurs. Un clic sur un triangle sélectionne la montée et
+ * permet de glisser ses bornes, sans changer l'échelle courante.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAppStore } from '../../stores/app'
@@ -116,18 +105,26 @@ const emit = defineEmits<{
   'create-error': [message: string]
 }>()
 
-const LEFT_PAD = 46
+const X_SCALES: number[] = [50, 12.5]
+const Y_SCALES: number[] = [10, 5, 2.5]
+
+const Y_AXIS_WIDTH = 54
+const X_AXIS_HEIGHT = 26
+const PLOT_LEFT = 10
 const RIGHT_PAD = 10
 const TOP_PAD = 24
-const BOTTOM_PAD = 26
-const MIN_HEIGHT = 140
-const HANDLE_HIT_Y = 22
+const PLOT_BOTTOM_PAD = 6
+const MIN_PLOT_HEIGHT = 100
 const HANDLE_HIT_X = 14
+const HANDLE_HIT_HEIGHT = 22
+const HANDLE_TOP_GAP = 22
 
 interface WidgetView {
   leftPad: number
   xScale: number
   axisY: number
+  plotTop: number
+  handleTop: number
 }
 
 interface DragState {
@@ -141,22 +138,45 @@ interface HandleHit {
   handle: ClimbHandle
 }
 
+interface YTick {
+  alt: number
+  y: number
+}
+
+interface ThemeColors {
+  dark: boolean
+  background: string
+  grid: string
+  text: string
+  muted: string
+  line: string
+  outline: string
+}
+
 const appStore = useAppStore()
 
+const rootRef = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const yAxisHost = ref<HTMLDivElement | null>(null)
+const yAxisRef = ref<HTMLCanvasElement | null>(null)
+const xAxisHost = ref<HTMLDivElement | null>(null)
+const xAxisRef = ref<HTMLCanvasElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
-const mode = ref<'full' | 'climb'>('full')
 const xScale = ref(50)
 const yScale = ref(10)
 const dragState = ref<DragState | null>(null)
 /** Création manuelle en cours : bornes de vallée et aperçu de sommet. */
 const creation = ref<{ valleyKm: number; summitKm: number } | null>(null)
+/** Hauteur maximale du profil visible, en pixels. */
+const maxPlotHeight = ref(computeMaxPlotHeight())
 
 let currentView: WidgetView | null = null
 let drawFrame = 0
+let axesFrame = 0
 let dragPointerId: number | null = null
 /** Dernière borne transmise pendant le drag, pour éviter les doublons. */
 let lastDraftKm: number | null = null
+let resizeObserver: ResizeObserver | null = null
 
 const profile = computed(() => props.file?.profile ?? [])
 const climbs = computed(() => props.file?.climbs ?? [])
@@ -186,44 +206,94 @@ const altBounds = computed(() => {
   return { min, max }
 })
 
-const xScaleItems = computed(() =>
-  scaleValues(
-    mode.value === 'climb' ? 2.5 : 5,
-    mode.value === 'climb' ? 50 : 100,
-    mode.value === 'climb' ? 2.5 : 5,
-  ),
+/**
+ * Géométrie verticale du profil.
+ *
+ * `plotTop` peut être plus grand que `TOP_PAD` quand l'amplitude d'altitude
+ * produit un profil plus court que `MIN_PLOT_HEIGHT` : l'espace excédentaire
+ * est placé au-dessus, pour que le bas du profil reste sur l'axe X fixe.
+ */
+const plotGeometry = computed(() => {
+  const altMin = altBounds.value.min
+  const altMax = altBounds.value.max
+  const range = Math.max(altMax - altMin, 1)
+  const altitudeHeight = range / yScale.value
+  const plotAreaHeight = Math.max(altitudeHeight, MIN_PLOT_HEIGHT)
+  const plotTop = TOP_PAD + (plotAreaHeight - altitudeHeight)
+  const axisY = plotTop + altitudeHeight
+  const canvasHeight = axisY + PLOT_BOTTOM_PAD
+
+  return {
+    altMin,
+    altMax,
+    range,
+    altitudeHeight,
+    plotTop,
+    axisY,
+    canvasHeight,
+  }
+})
+
+/** Hauteur visible du profil : le widget grandit, puis plafonne et défile. */
+const plotViewportHeight = computed(() =>
+  Math.min(plotGeometry.value.canvasHeight, maxPlotHeight.value),
 )
 
-const yScaleItems = scaleValues(2.5, 50, 2.5)
+/** Repères d'altitude, partagés par le canvas du profil et la colonne fixe. */
+const yTicks = computed<YTick[]>(() => {
+  const { altMin, altMax, plotTop } = plotGeometry.value
+  const step = niceStep(yScale.value * 32)
+  const ticks: YTick[] = []
 
-const title = computed(() => {
-  if (props.creating) {
-    return creation.value
-      ? 'Créer une montée — poser le sommet'
-      : 'Créer une montée — poser la vallée'
+  for (
+    let alt = Math.ceil(altMin / step) * step;
+    alt <= altMax + 1e-9;
+    alt += step
+  ) {
+    ticks.push({ alt, y: plotTop + (altMax - alt) / yScale.value })
   }
-  return mode.value === 'climb' && selectedClimb.value
-    ? `Montée #${selectedClimb.value.index + 1} — ajuster les bornes`
-    : 'Profil altimétrique complet'
+
+  if (ticks.length === 0) {
+    ticks.push({ alt: altMax, y: plotTop })
+    ticks.push({
+      alt: altMin,
+      y: plotTop + (altMax - altMin) / yScale.value,
+    })
+  }
+
+  return ticks
 })
 
-const hint = computed(() => {
-  if (props.creating) {
-    return creation.value
-      ? 'Cliquez sur le profil pour poser le sommet · Échap pour annuler'
-      : "Cliquez sur le profil pour poser la vallée, en dehors d'une montée existante"
-  }
-  return mode.value === 'climb'
-    ? 'Glissez les triangles pour ajuster les bornes · molette : défilement horizontal'
-    : 'Cliquez pour recentrer la carte · cliquez un triangle pour ajuster une montée'
+const plotBackground = computed(() =>
+  appStore.isDarkMode ? '#0f172a' : '#f8fafc',
+)
+
+const yAxisTitle = computed(
+  () =>
+    `Échelle Y : ${formatScale(yScale.value)} m/px — cliquer pour changer (touche Y)`,
+)
+
+const xAxisTitle = computed(
+  () =>
+    `Échelle X : ${formatScale(xScale.value)} m/px — cliquer pour changer (touche X)`,
+)
+
+const creationHint = computed(() => {
+  if (!props.creating) return ''
+  return creation.value
+    ? 'Cliquez pour poser le sommet — Échap pour annuler'
+    : 'Cliquez pour poser la vallée — Échap pour annuler'
 })
 
-function scaleValues(min: number, max: number, step: number): number[] {
-  const values: number[] = []
-  for (let value = min; value <= max + 1e-9; value += step) {
-    values.push(Math.round(value * 10) / 10)
-  }
-  return values
+function computeMaxPlotHeight(): number {
+  const available = window.innerHeight * 0.45 - X_AXIS_HEIGHT
+  return Math.max(MIN_PLOT_HEIGHT + TOP_PAD + PLOT_BOTTOM_PAD, available)
+}
+
+function formatScale(value: number): string {
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(1).replace('.', ',')
 }
 
 function niceStep(raw: number): number {
@@ -234,7 +304,10 @@ function niceStep(raw: number): number {
   return nice * 10 ** exponent
 }
 
-function lowerBound(profilePoints: AltimetrieProfilePoint[], targetM: number): number {
+function lowerBound(
+  profilePoints: AltimetrieProfilePoint[],
+  targetM: number,
+): number {
   let lo = 0
   let hi = profilePoints.length - 1
   while (lo < hi) {
@@ -274,6 +347,51 @@ function creationValid(valleyKm: number, summitKm: number): boolean {
   )
 }
 
+/**
+ * Change l'échelle X en conservant le centre visible.
+ *
+ * Le redessin est demandé avant le repositionnement : la largeur du canvas est
+ * recalculée, puis le navigateur borne le défilement avant la nouvelle valeur.
+ */
+function setXScale(next: number): void {
+  if (next === xScale.value) return
+
+  const container = scrollContainer.value
+  const previous = xScale.value
+  const centerDistance = container
+    ? (container.scrollLeft + container.clientWidth / 2) * previous
+    : 0
+
+  xScale.value = next
+  requestDraw()
+
+  requestAnimationFrame(() => {
+    const element = scrollContainer.value
+    if (!element) return
+    element.scrollLeft = Math.max(
+      0,
+      centerDistance / next - element.clientWidth / 2,
+    )
+    requestAxesDraw()
+  })
+}
+
+function cycleXScale(): void {
+  const index = X_SCALES.indexOf(xScale.value)
+  setXScale(X_SCALES[(index + 1) % X_SCALES.length])
+}
+
+function setYScale(next: number): void {
+  if (next === yScale.value) return
+  yScale.value = next
+  requestDraw()
+}
+
+function cycleYScale(): void {
+  const index = Y_SCALES.indexOf(yScale.value)
+  setYScale(Y_SCALES[(index + 1) % Y_SCALES.length])
+}
+
 function requestDraw(): void {
   if (drawFrame) return
   drawFrame = requestAnimationFrame(() => {
@@ -282,11 +400,61 @@ function requestDraw(): void {
   })
 }
 
+/** Redessine uniquement les axes fixes, après un défilement. */
+function requestAxesDraw(): void {
+  if (axesFrame) return
+  axesFrame = requestAnimationFrame(() => {
+    axesFrame = 0
+    drawYAxis()
+    drawXAxis()
+  })
+}
+
+function getTheme(): ThemeColors {
+  const dark = appStore.isDarkMode
+  return {
+    dark,
+    background: dark ? '#0f172a' : '#f8fafc',
+    grid: dark ? 'rgba(148,163,184,0.38)' : 'rgba(100,116,139,0.28)',
+    text: dark ? 'rgba(226,232,240,0.78)' : 'rgba(51,65,85,0.82)',
+    muted: dark ? 'rgba(148,163,184,0.68)' : 'rgba(100,116,139,0.72)',
+    line: dark ? '#e2e8f0' : '#1e293b',
+    outline: dark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.14)',
+  }
+}
+
+/** Prépare un canvas haute densité et retourne son contexte. */
+function prepareCanvas(
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+): CanvasRenderingContext2D | null {
+  const dpr = window.devicePixelRatio || 1
+  const cssWidth = Math.max(1, Math.floor(width))
+  const cssHeight = Math.max(1, Math.floor(height))
+  const pixelWidth = Math.max(1, Math.floor(cssWidth * dpr))
+  const pixelHeight = Math.max(1, Math.floor(cssHeight * dpr))
+
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight
+  canvas.style.width = `${cssWidth}px`
+  canvas.style.height = `${cssHeight}px`
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  return ctx
+}
+
 function draw(): void {
+  drawPlot()
+  drawYAxis()
+  drawXAxis()
+}
+
+function drawPlot(): void {
   const canvas = canvasRef.value
   if (!canvas) return
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
 
   const points = profile.value
   const totalM = totalDistanceM.value
@@ -299,67 +467,37 @@ function draw(): void {
     return
   }
 
-  const dark = appStore.isDarkMode
-  const background = dark ? '#0f172a' : '#f8fafc'
-  const gridColor = dark ? 'rgba(148,163,184,0.38)' : 'rgba(100,116,139,0.28)'
-  const textColor = dark ? 'rgba(226,232,240,0.78)' : 'rgba(51,65,85,0.82)'
-  const lineColor = dark ? '#e2e8f0' : '#1e293b'
-  const categoryOutline = dark
-    ? 'rgba(255,255,255,0.22)'
-    : 'rgba(0,0,0,0.14)'
+  const theme = getTheme()
+  const { altMax, plotTop, axisY, canvasHeight } = plotGeometry.value
+  const width = Math.ceil(PLOT_LEFT + totalM / xScale.value + RIGHT_PAD)
+  const ctx = prepareCanvas(canvas, width, canvasHeight)
+  if (!ctx) return
 
-  const altMin = altBounds.value.min
-  const altMax = altBounds.value.max
-  const range = Math.max(altMax - altMin, 1)
-  const plotHeight = range / yScale.value
-  const width = Math.ceil(totalM / xScale.value) + LEFT_PAD + RIGHT_PAD
-  const height = Math.max(
-    MIN_HEIGHT,
-    Math.ceil(plotHeight) + TOP_PAD + BOTTOM_PAD,
-  )
-  const axisY = TOP_PAD + plotHeight
-  const dpr = window.devicePixelRatio || 1
+  ctx.fillStyle = theme.background
+  ctx.fillRect(0, 0, width, canvasHeight)
 
-  canvas.width = Math.max(1, Math.floor(width * dpr))
-  canvas.height = Math.max(1, Math.floor(height * dpr))
-  canvas.style.width = `${width}px`
-  canvas.style.height = `${height}px`
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  ctx.clearRect(0, 0, width, height)
-  ctx.fillStyle = background
-  ctx.fillRect(0, 0, width, height)
+  const xOf = (distanceM: number) => PLOT_LEFT + distanceM / xScale.value
+  const yOf = (ele: number) => plotTop + (altMax - ele) / yScale.value
+  const handleTop = plotTop - HANDLE_TOP_GAP
 
-  const xOf = (distanceM: number) => LEFT_PAD + distanceM / xScale.value
-  const yOf = (ele: number) => TOP_PAD + (altMax - ele) / yScale.value
-  currentView = { leftPad: LEFT_PAD, xScale: xScale.value, axisY }
-
-  // Repères Y
-  ctx.save()
-  ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-  ctx.textBaseline = 'middle'
-  ctx.textAlign = 'left'
-  ctx.lineWidth = 1
-  ctx.strokeStyle = gridColor
-  ctx.fillStyle = textColor
-  ctx.setLineDash([3, 4])
-  const yStep = niceStep(yScale.value * 32)
-  let drewGrid = false
-  for (
-    let alt = Math.ceil(altMin / yStep) * yStep;
-    alt <= altMax + 1e-9;
-    alt += yStep
-  ) {
-    const y = yOf(alt)
-    ctx.beginPath()
-    ctx.moveTo(LEFT_PAD, y)
-    ctx.lineTo(width - RIGHT_PAD, y)
-    ctx.stroke()
-    ctx.fillText(`${Math.round(alt)} m`, 4, y)
-    drewGrid = true
+  currentView = {
+    leftPad: PLOT_LEFT,
+    xScale: xScale.value,
+    axisY,
+    plotTop,
+    handleTop,
   }
-  if (!drewGrid) {
-    ctx.fillText(`${Math.round(altMax)} m`, 4, yOf(altMax))
-    ctx.fillText(`${Math.round(altMin)} m`, 4, yOf(altMin))
+
+  // Repères Y (les libellés sont dans la colonne fixe)
+  ctx.save()
+  ctx.lineWidth = 1
+  ctx.strokeStyle = theme.grid
+  ctx.setLineDash([3, 4])
+  for (const tick of yTicks.value) {
+    ctx.beginPath()
+    ctx.moveTo(PLOT_LEFT, tick.y)
+    ctx.lineTo(width - RIGHT_PAD, tick.y)
+    ctx.stroke()
   }
   ctx.restore()
 
@@ -387,7 +525,7 @@ function draw(): void {
     ctx.fillStyle = colorForCategoryId(segment.categoryId)
     ctx.fill()
     ctx.globalAlpha = 1
-    ctx.strokeStyle = categoryOutline
+    ctx.strokeStyle = theme.outline
     ctx.lineWidth = 0.8
     ctx.stroke()
   }
@@ -401,10 +539,10 @@ function draw(): void {
     const endKm = drag?.handle === 'summit' ? drag.km : selected.endKm
     const x1 = xOf(Math.min(startKm, endKm) * 1000)
     const x2 = xOf(Math.max(startKm, endKm) * 1000)
-    ctx.fillStyle = dark
+    ctx.fillStyle = theme.dark
       ? 'rgba(250,204,21,0.12)'
       : 'rgba(250,204,21,0.18)'
-    ctx.fillRect(x1, TOP_PAD, Math.max(1, x2 - x1), axisY - TOP_PAD)
+    ctx.fillRect(x1, plotTop, Math.max(1, x2 - x1), axisY - plotTop)
   }
 
   // Ligne de profil
@@ -417,39 +555,11 @@ function draw(): void {
     if (i === 0) ctx.moveTo(x, y)
     else ctx.lineTo(x, y)
   }
-  ctx.strokeStyle = lineColor
+  ctx.strokeStyle = theme.line
   ctx.lineWidth = 1.4
   ctx.stroke()
 
-  // Axe X
-  ctx.beginPath()
-  ctx.moveTo(LEFT_PAD, axisY)
-  ctx.lineTo(width - RIGHT_PAD, axisY)
-  ctx.strokeStyle = gridColor
-  ctx.lineWidth = 1
-  ctx.setLineDash([])
-  ctx.stroke()
-
-  // Graduations X
-  ctx.save()
-  ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = textColor
-  const xStep = niceStep(xScale.value * 110)
-  for (let distance = 0; distance <= totalM + 1e-9; distance += xStep) {
-    const x = xOf(distance)
-    ctx.beginPath()
-    ctx.moveTo(x, axisY)
-    ctx.lineTo(x, axisY + 4)
-    ctx.strokeStyle = gridColor
-    ctx.lineWidth = 1
-    ctx.stroke()
-    ctx.fillText(formatDistance(distance), x, axisY + 6)
-  }
-  ctx.restore()
-
-  // Traits horizontaux des montées, au niveau de l'axe X
+  // Traits horizontaux des montées, au-dessus de l'axe X
   for (const climb of climbs.value) {
     const x1 = xOf(climb.startKm * 1000)
     const x2 = xOf(climb.endKm * 1000)
@@ -463,10 +573,10 @@ function draw(): void {
     ctx.fillRect(x1, barY, barWidth, barHeight)
     ctx.globalAlpha = 1
     ctx.strokeStyle = isSelected
-      ? dark
+      ? theme.dark
         ? '#ffffff'
         : '#1e293b'
-      : categoryOutline
+      : theme.outline
     ctx.lineWidth = isSelected ? 1.2 : 0.6
     ctx.strokeRect(x1, barY, barWidth, barHeight)
   }
@@ -484,16 +594,18 @@ function draw(): void {
       xOf(valleyKm * 1000),
       '#16a34a',
       isSelected,
+      handleTop,
       axisY,
-      dark,
+      theme.dark,
     )
     drawProfileHandle(
       ctx,
       xOf(summitKm * 1000),
       '#dc2626',
       isSelected,
+      handleTop,
       axisY,
-      dark,
+      theme.dark,
     )
   }
 
@@ -508,38 +620,149 @@ function draw(): void {
       : 'rgba(239,68,68,0.16)'
     ctx.fillRect(
       Math.min(valleyX, summitX),
-      TOP_PAD,
+      plotTop,
       Math.max(1, Math.abs(summitX - valleyX)),
-      axisY - TOP_PAD,
+      axisY - plotTop,
     )
-    drawProfileHandle(ctx, valleyX, '#16a34a', true, axisY, dark)
+    drawProfileHandle(
+      ctx,
+      valleyX,
+      '#16a34a',
+      true,
+      handleTop,
+      axisY,
+      theme.dark,
+    )
     drawProfileHandle(
       ctx,
       summitX,
       valid ? '#dc2626' : '#ef4444',
       true,
+      handleTop,
       axisY,
-      dark,
+      theme.dark,
+    )
+  }
+}
+
+/** Colonne fixe des altitudes. */
+function drawYAxis(): void {
+  const canvas = yAxisRef.value
+  const host = yAxisHost.value
+  if (!canvas || !host) return
+
+  const width = host.clientWidth || Y_AXIS_WIDTH
+  const height = plotViewportHeight.value + X_AXIS_HEIGHT
+  const ctx = prepareCanvas(canvas, width, height)
+  if (!ctx) return
+
+  const theme = getTheme()
+  ctx.fillStyle = theme.background
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.beginPath()
+  ctx.moveTo(width - 0.5, 0)
+  ctx.lineTo(width - 0.5, height)
+  ctx.strokeStyle = theme.grid
+  ctx.lineWidth = 1
+  ctx.stroke()
+
+  if (props.file && profile.value.length >= 2) {
+    const scrollTop = scrollContainer.value?.scrollTop ?? 0
+    const viewportHeight = plotViewportHeight.value
+
+    ctx.save()
+    ctx.font =
+      '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = theme.text
+
+    for (const tick of yTicks.value) {
+      const y = tick.y - scrollTop
+      if (y < -6 || y > viewportHeight + 6) continue
+      ctx.fillText(`${Math.round(tick.alt)} m`, 4, y)
+    }
+
+    ctx.restore()
+  }
+
+  // Rappel de l'échelle Y, dans le coin bas-gauche
+  ctx.save()
+  ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = theme.muted
+  ctx.fillText(
+    `Y ${formatScale(yScale.value)}`,
+    width / 2,
+    plotViewportHeight.value + X_AXIS_HEIGHT / 2,
+  )
+  ctx.restore()
+}
+
+/** Bande fixe des distances. */
+function drawXAxis(): void {
+  const canvas = xAxisRef.value
+  const host = xAxisHost.value
+  if (!canvas || !host) return
+
+  const width = host.clientWidth
+  const height = X_AXIS_HEIGHT
+  if (width <= 0) return
+
+  const ctx = prepareCanvas(canvas, width, height)
+  if (!ctx) return
+
+  const theme = getTheme()
+  ctx.fillStyle = theme.background
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.beginPath()
+  ctx.moveTo(0, 0.5)
+  ctx.lineTo(width, 0.5)
+  ctx.strokeStyle = theme.grid
+  ctx.lineWidth = 1
+  ctx.stroke()
+
+  const totalM = totalDistanceM.value
+  if (!props.file || totalM <= 0) return
+
+  const scrollLeft = scrollContainer.value?.scrollLeft ?? 0
+  const step = niceStep(xScale.value * 110)
+
+  ctx.save()
+  ctx.font =
+    '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = theme.text
+
+  for (
+    let distance = 0;
+    distance <= totalM + 1e-9;
+    distance += step
+  ) {
+    const x = PLOT_LEFT + distance / xScale.value - scrollLeft
+    if (x < -40 || x > width + 40) continue
+
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x, 4)
+    ctx.strokeStyle = theme.grid
+    ctx.lineWidth = 1
+    ctx.stroke()
+
+    // Le km 0 est aligné sur le bord gauche pour rester entièrement visible.
+    const leftAligned = distance === 0 && x <= PLOT_LEFT + 2
+    ctx.textAlign = leftAligned ? 'left' : 'center'
+    ctx.fillText(
+      formatDistance(distance),
+      leftAligned ? x + 2 : x,
+      6,
     )
   }
 
-  // Centrage automatique sur la montée sélectionnée, hors drag.
-  if (
-    mode.value === 'climb' &&
-    selected &&
-    !dragState.value &&
-    scrollContainer.value
-  ) {
-    const centerM = ((selected.startKm + selected.endKm) / 2) * 1000
-    const centerX = xOf(centerM)
-    const target = Math.max(
-      0,
-      centerX - scrollContainer.value.clientWidth / 2,
-    )
-    requestAnimationFrame(() => {
-      if (scrollContainer.value) scrollContainer.value.scrollLeft = target
-    })
-  }
+  ctx.restore()
 }
 
 function drawProfileHandle(
@@ -547,11 +770,11 @@ function drawProfileHandle(
   x: number,
   color: string,
   selected: boolean,
+  top: number,
   axisY: number,
   dark: boolean,
 ): void {
   const size = selected ? 8 : 5
-  const top = 2
   const apex = top + size * 1.6
 
   ctx.save()
@@ -582,7 +805,9 @@ function drawProfileHandle(
 }
 
 function hitHandle(x: number, y: number): HandleHit | null {
-  if (!currentView || y > HANDLE_HIT_Y) return null
+  if (!currentView || y > currentView.handleTop + HANDLE_HIT_HEIGHT) {
+    return null
+  }
 
   let best: (HandleHit & { distance: number }) | null = null
   for (const climb of climbs.value) {
@@ -621,7 +846,8 @@ function hitBar(x: number, y: number): AltimetrieClimb | null {
 }
 
 function handleCreationClick(x: number, y: number): void {
-  if (!currentView || y < TOP_PAD || y > currentView.axisY) return
+  if (!currentView) return
+  if (y < currentView.plotTop || y > currentView.axisY) return
 
   const km = distanceAtX(x, currentView) / 1000
   if (km < 0 || km > totalKm.value) return
@@ -674,13 +900,6 @@ function onPointerDown(event: PointerEvent): void {
   const handleHit = hitHandle(x, y)
   if (handleHit) {
     emit('select-climb', handleHit.climb.id)
-
-    if (mode.value === 'full') {
-      mode.value = 'climb'
-      xScale.value = 12.5
-      requestDraw()
-      return
-    }
 
     dragState.value = {
       climbId: handleHit.climb.id,
@@ -807,60 +1026,100 @@ function onPointerCancel(event: PointerEvent): void {
   requestDraw()
 }
 
+function onScroll(): void {
+  requestAxesDraw()
+}
+
 function onWheel(event: WheelEvent): void {
   const container = scrollContainer.value
   if (!container) return
   container.scrollLeft += event.deltaY + event.deltaX
 }
 
-function returnToFull(): void {
-  mode.value = 'full'
-  xScale.value = 50
+function onYAxisWheel(event: WheelEvent): void {
   const container = scrollContainer.value
-  if (container) container.scrollLeft = 0
-  requestDraw()
+  if (!container) return
+  container.scrollTop += event.deltaY + event.deltaX
+}
+
+function onXAxisWheel(event: WheelEvent): void {
+  const container = scrollContainer.value
+  if (!container) return
+  container.scrollLeft += event.deltaY + event.deltaX
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null
+  if (!element) return false
+  const tag = element.tagName
+  return (
+    tag === 'INPUT' ||
+    tag === 'TEXTAREA' ||
+    tag === 'SELECT' ||
+    element.isContentEditable
+  )
 }
 
 function onKeyDown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && props.creating) {
     emit('cancel-create')
+    return
   }
+  if (event.ctrlKey || event.metaKey || event.altKey) return
+  if (isEditableTarget(event.target)) return
+
+  if (event.key === 'x' || event.key === 'X') {
+    event.preventDefault()
+    cycleXScale()
+  } else if (event.key === 'y' || event.key === 'Y') {
+    event.preventDefault()
+    cycleYScale()
+  }
+}
+
+function onWindowResize(): void {
+  maxPlotHeight.value = computeMaxPlotHeight()
+  requestDraw()
 }
 
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('resize', onWindowResize)
+
+  if (rootRef.value) {
+    resizeObserver = new ResizeObserver(() => requestDraw())
+    resizeObserver.observe(rootRef.value)
+  }
+
   requestDraw()
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('resize', onWindowResize)
+  resizeObserver?.disconnect()
+  resizeObserver = null
+
   if (drawFrame) cancelAnimationFrame(drawFrame)
+  if (axesFrame) cancelAnimationFrame(axesFrame)
   drawFrame = 0
+  axesFrame = 0
 })
 
 watch(
-  [() => props.file, xScale, yScale, mode, () => appStore.isDarkMode],
+  [() => props.file, xScale, yScale, () => appStore.isDarkMode],
   () => requestDraw(),
 )
 
 watch(
   () => props.selectedClimbId,
-  id => {
-    if (id === null) {
-      mode.value = 'full'
-      xScale.value = 50
-      const container = scrollContainer.value
-      if (container) container.scrollLeft = 0
-    }
-    requestDraw()
-  },
+  () => requestDraw(),
 )
 
 watch(
   () => props.creating,
   creating => {
     if (creating) {
-      mode.value = 'full'
       xScale.value = 50
       const container = scrollContainer.value
       if (container) container.scrollLeft = 0
@@ -882,7 +1141,6 @@ watch(
   z-index: 5;
   display: flex;
   flex-direction: column;
-  max-height: 45vh;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 10px;
@@ -890,47 +1148,53 @@ watch(
   overflow: hidden;
 }
 
-.alt-profile__header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+.alt-profile__body {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  grid-template-rows: auto 26px;
+  min-height: 0;
 }
 
-.alt-profile__heading {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1 1 260px;
-}
-
-.alt-profile__title {
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.alt-profile__hint {
-  font-size: 0.68rem;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-}
-
-.alt-profile__scales {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.alt-profile__scale {
-  width: 108px;
+.alt-profile__y-axis {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  position: relative;
+  overflow: hidden;
+  cursor: ns-resize;
+  user-select: none;
 }
 
 .alt-profile__scroll {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
   overflow: auto;
-  max-height: calc(45vh - 64px);
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/* Le défilement horizontal se fait à la molette ; la barre verticale reste. */
+.alt-profile__scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 0;
+}
+
+.alt-profile__scroll::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-on-surface), 0.22);
+  border-radius: 4px;
+}
+
+.alt-profile__x-axis {
+  grid-column: 2;
+  grid-row: 2;
+  position: relative;
+  overflow: hidden;
+  cursor: ew-resize;
+  user-select: none;
+}
+
+.alt-profile__axis-canvas {
+  display: block;
 }
 
 .alt-profile__canvas {
@@ -941,5 +1205,19 @@ watch(
 
 .alt-profile__canvas--dragging {
   cursor: ew-resize;
+}
+
+.alt-profile__hint {
+  position: absolute;
+  top: 6px;
+  left: 62px;
+  z-index: 3;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface), 0.92);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  color: rgba(var(--v-theme-on-surface), 0.78);
+  font-size: 0.7rem;
+  pointer-events: none;
 }
 </style>
