@@ -95,6 +95,17 @@ export interface TraceMetadata {
    */
   multiride_status: string | null
   /**
+   * Tous les **segments** de la détection des passages multiples ont reçu un
+   * verdict — approuvé ou écarté. Distinct de `multiride_status` : une
+   * validation globale peut être posée alors que des segments restent à
+   * examiner.
+   *
+   * `null` pour un registre antérieur au champ : `get_traces` calcule et
+   * persiste la valeur au premier chargement (rattrapage). La carte du circuit
+   * colore l'icône `mdi-repeat` en vert seulement quand ce drapeau est `true`.
+   */
+  multiride_complete: boolean | null
+  /**
    * État de la détection des communes traversées (module Communes) : `true`
    * quand le fichier `communes.json` de la trace est présent et à jour — la
    * fonctionnalité a été menée à son terme pour cette trace.
@@ -116,6 +127,15 @@ export interface TraceMetadata {
    * Absent des registres antérieurs → `false`.
    */
   altimetrie_validated: boolean
+  /**
+   * Nombre de montées de l'analyse altimétrique. Permet à la carte de rendre
+   * l'icône `mdi-terrain` **blanche** quand l'analyse est validée mais ne
+   * contient aucune montée, sans relire `altimetrie.json`.
+   *
+   * `null` sur un registre antérieur au champ : `get_traces` calcule et
+   * persiste la valeur pour les analyses validées (rattrapage).
+   */
+  altimetrie_climb_count: number | null
 }
 
 // --- Store ---

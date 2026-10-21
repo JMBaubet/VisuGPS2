@@ -280,6 +280,277 @@
               {{ trace.source_url }}
             </a>
           </div>
+
+          <v-divider class="my-2" />
+
+          <div v-if="infoLoading" class="text-caption">
+            Chargement des informations…
+          </div>
+          <div v-else-if="infoError" class="text-caption text-warning">
+            {{ infoError }}
+          </div>
+          <template v-else-if="infoSummary">
+            <!-- Audit : aller-retours puis rond-points. La date de l'archive
+                 est portée par la seconde ligne, les deux catégories la
+                 partageant. -->
+            <template v-if="infoSummary.audit">
+              <div class="circuit-info__row">
+                <span class="circuit-info__left">
+                  <v-icon
+                    size="x-small"
+                    :color="progressColor(
+                      infoSummary.audit.arTreated,
+                      infoSummary.audit.arTotal,
+                    )"
+                    icon="mdi-map-marker-path"
+                    class="mr-1"
+                  />
+                  <span
+                    :style="{
+                      color: progressColor(
+                        infoSummary.audit.arTreated,
+                        infoSummary.audit.arTotal,
+                      ),
+                    }"
+                  >
+                    Aller-retours
+                  </span>
+                  <template v-if="infoSummary.audit.arTotal > 0">
+                    :
+                    <span
+                      v-if="infoSummary.audit.arTreated > 0"
+                      class="text-green"
+                    >
+                      {{ infoSummary.audit.arTreated }}
+                      traité{{ plural(infoSummary.audit.arTreated) }}
+                    </span>
+                    <span
+                      v-if="infoSummary.audit.arTreated > 0 && infoSummary.audit.arPending > 0"
+                    >
+                      /
+                    </span>
+                    <span
+                      v-if="infoSummary.audit.arPending > 0"
+                      class="text-red"
+                    >
+                      {{ infoSummary.audit.arPending }}
+                      non traité{{ plural(infoSummary.audit.arPending) }}
+                    </span>
+                  </template>
+                  <template v-else> : Aucun</template>
+                </span>
+              </div>
+
+              <div class="circuit-info__row">
+                <span class="circuit-info__left">
+                  <v-icon
+                    size="x-small"
+                    :color="progressColor(
+                      infoSummary.audit.rpTreated,
+                      infoSummary.audit.rpTotal,
+                    )"
+                    icon="mdi-map-marker-path"
+                    class="mr-1"
+                  />
+                  <span
+                    :style="{
+                      color: progressColor(
+                        infoSummary.audit.rpTreated,
+                        infoSummary.audit.rpTotal,
+                      ),
+                    }"
+                  >
+                    Rond-points
+                  </span>
+                  <template v-if="infoSummary.audit.rpTotal > 0">
+                    :
+                    <span
+                      v-if="infoSummary.audit.rpTreated > 0"
+                      class="text-green"
+                    >
+                      {{ infoSummary.audit.rpTreated }}
+                      traité{{ plural(infoSummary.audit.rpTreated) }}
+                    </span>
+                    <span
+                      v-if="infoSummary.audit.rpTreated > 0 && infoSummary.audit.rpPending > 0"
+                    >
+                      /
+                    </span>
+                    <span
+                      v-if="infoSummary.audit.rpPending > 0"
+                      class="text-red"
+                    >
+                      {{ infoSummary.audit.rpPending }}
+                      non traité{{ plural(infoSummary.audit.rpPending) }}
+                    </span>
+                  </template>
+                  <template v-else> : Aucun</template>
+                </span>
+                <span class="circuit-info__right">
+                  Traitement :
+                  {{ formatDateTime(infoSummary.audit.updatedAt) }}
+                </span>
+              </div>
+            </template>
+            <!-- Le repli ne concerne que les traces encore à auditer : une
+                 trace propre d'origine n'a jamais eu d'archive, il n'y a rien
+                 à annoncer. -->
+            <div v-else-if="needsAudit" class="circuit-info__row">
+              <span class="circuit-info__left">
+                <v-icon size="x-small" icon="mdi-map-marker-path" class="mr-1" />
+                Audit :
+                <span class="text-medium-emphasis">Aucune archive</span>
+              </span>
+            </div>
+
+            <!-- Tant que la trace n'est pas nettoyée, seuls l'audit et ses
+                 deux familles d'anomalies ont un sens : passages multiples,
+                 montées, profil et communes ne s'appliquent qu'à une trace
+                 propre. -->
+            <template v-if="!needsAudit">
+            <!-- Passages multiples : la ligne n'existe que si une détection a
+                 laissé une description. La couleur du libellé suit l'icône
+                 (verte seulement si la validation est globale et complète). -->
+            <div v-if="infoSummary.multiride" class="circuit-info__row">
+              <span class="circuit-info__left">
+                <v-icon
+                  size="x-small"
+                  :color="multirideLabelColor"
+                  icon="mdi-repeat"
+                  class="mr-1"
+                />
+                <span :style="{ color: multirideLabelColor }">
+                  Passages multiples
+                </span>
+                <template
+                  v-if="infoSummary.multiride && infoSummary.multiride.segmentsTotal > 0"
+                >
+                  :
+                  <span
+                    v-if="infoSummary.multiride.segmentsTreated > 0"
+                    class="text-green"
+                  >
+                    {{ infoSummary.multiride.segmentsTreated }}
+                    traité{{ plural(infoSummary.multiride.segmentsTreated) }}
+                  </span>
+                  <span
+                    v-if="infoSummary.multiride.segmentsTreated > 0 && infoSummary.multiride.segmentsPending > 0"
+                  >
+                    /
+                  </span>
+                  <span
+                    v-if="infoSummary.multiride.segmentsPending > 0"
+                    class="text-red"
+                  >
+                    {{ infoSummary.multiride.segmentsPending }}
+                    non traité{{ plural(infoSummary.multiride.segmentsPending) }}
+                  </span>
+                </template>
+                <template v-else> : Aucune détection</template>
+              </span>
+              <span
+                v-if="infoSummary.multiride && infoSummary.multiride.segmentsTotal > 0"
+                class="circuit-info__right"
+              >
+                Traitement :
+                {{ formatDateTime(infoSummary.multiride.updatedAt) }}
+              </span>
+            </div>
+
+            <!-- Montées : total global et, s'il y en a, nombre de fusionnées.
+                 En attente de validation, toute la ligne passe en jaune. -->
+            <div
+              class="circuit-info__row"
+              :class="{ 'circuit-info__row--pending': isAltimetriePending }"
+            >
+              <span class="circuit-info__left">
+                <v-icon
+                  size="x-small"
+                  :color="infoTerrainColor"
+                  icon="mdi-terrain"
+                  class="mr-1"
+                />
+                Montées :
+                <template v-if="infoSummary.altimetrie">
+                  <template v-if="climbTotal > 0">
+                    <b>{{ climbTotal }}</b>
+                    <template v-if="infoSummary.altimetrie.mergedClimbs > 0">
+                      dont <b>{{ infoSummary.altimetrie.mergedClimbs }}</b>
+                      fusionnée{{ plural(infoSummary.altimetrie.mergedClimbs) }}
+                    </template>
+                  </template>
+                  <template v-else>Aucune</template>
+                </template>
+                <span v-else class="text-medium-emphasis">
+                  Analyse indisponible
+                </span>
+              </span>
+              <span v-if="infoSummary.altimetrie" class="circuit-info__right">
+                <template v-if="infoSummary.altimetrie.validated">
+                  Traitement :
+                  {{ formatDateTime(infoSummary.altimetrie.updatedAt) }}
+                </template>
+                <span v-else>Attente de validation</span>
+              </span>
+            </div>
+
+            <!-- Profil : uniquement si des montées existent. -->
+            <div
+              v-if="infoSummary.altimetrie && climbTotal > 0"
+              class="circuit-info__profile"
+            >
+              <div class="circuit-info__label mb-1">
+                <v-icon
+                  size="x-small"
+                  icon="mdi-chart-areaspline"
+                  class="mr-1"
+                />
+                Profil d'altitude
+              </div>
+              <CircuitAltitudeProfile
+                :profile="infoSummary.altimetrie.profile"
+                :climbs="infoSummary.altimetrie.climbs"
+                :alt-min-m="infoSummary.altimetrie.altMinM"
+                :alt-max-m="infoSummary.altimetrie.altMaxM"
+                :total-distance-m="infoSummary.altimetrie.totalDistanceM"
+              />
+            </div>
+
+            <!-- Communes : sous le profil. -->
+            <div class="circuit-info__row">
+              <span class="circuit-info__left">
+                <v-icon
+                  size="x-small"
+                  :color="communesColor"
+                  icon="mdi-city"
+                  class="mr-1"
+                />
+                Communes traversées :
+                <template v-if="infoSummary.communes">
+                  <b>{{ infoSummary.communes.communeCount }}</b>
+                  commune{{ plural(infoSummary.communes.communeCount) }}
+                </template>
+                <span v-else class="text-medium-emphasis">
+                  Détection indisponible
+                </span>
+              </span>
+            </div>
+            </template>
+          </template>
+
+          <!-- Diagnostic : l'identifiant n'apparaît qu'en mode debug, avec
+               une icône de copie dans le presse-papiers du système. -->
+          <div v-if="appStore.isDebug" class="circuit-info__id">
+            <v-btn
+              icon="mdi-content-copy"
+              size="x-small"
+              variant="text"
+              density="comfortable"
+              title="Copier l'identifiant de la trace"
+              @click.stop="copierIdentifiant"
+            />
+            <span>ID : {{ trace.id }}</span>
+          </div>
         </v-card-text>
       </div>
     </v-expand-transition>
@@ -339,9 +610,18 @@
  * et explicative tant que la trace n'est pas nettoyée.
  *
  * Le bouton Info déploie une section (v-expand-transition) contenant les
- * détails du circuit (date d'import, source, lien) ; elle se réduit dès que le
- * curseur quitte la carte. Le clic Info déclenche en outre un focus carte
- * (état `focusedTraceId` du store traces) : Map.vue isole la trace et la cadre.
+ * détails du circuit (date d'import, source, lien) puis une **synthèse** lue à
+ * la demande par `get_trace_info` : une ligne par catégorie, date à droite —
+ * **aller-retours** puis **rond-points** (libellé rouge / jaune / vert selon
+ * l'avancement, compteurs traités en vert et non traités en rouge), **passages
+ * multiples** (libellé de la couleur de l'icône), **montées** (total global et
+ * nombre de fusionnées, avec « Attente de validation » ou la date), puis le
+ * **profil d'altitude seulement si des montées existent** et le nombre de
+ * **communes** en dessous. En **mode debug** (`appStore.isDebug`), l'identifiant
+ * de la trace est ajouté en pied avec une icône de copie. La section se réduit
+ * dès que le curseur quitte la carte. Le clic Info déclenche en outre un focus
+ * carte (état `focusedTraceId` du store traces) : Map.vue isole la trace et la
+ * cadre.
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
@@ -355,7 +635,13 @@ import { useSettingsStore } from '../../stores/settings'
 import { useKeyframesStore } from '../../stores/keyframes'
 import { useUiStore } from '../../stores/ui'
 import type { ViewportAspect } from '../../algorithms/keyframeGenerator'
-import { formatDistance, formatElevation } from '../../utils/format'
+import { useCircuitInfo } from '../../composables/useCircuitInfo'
+import CircuitAltitudeProfile from './CircuitAltitudeProfile.vue'
+import {
+  formatDateTime,
+  formatDistance,
+  formatElevation,
+} from '../../utils/format'
 
 const emit = defineEmits<{
   /** Émis quand l'utilisateur demande la suppression de la trace. */
@@ -382,10 +668,49 @@ const settingsStore = useSettingsStore()
 const keyframesStore = useKeyframesStore()
 const ui = useUiStore()
 
+// Synthèse du volet Info, chargée à la première ouverture de la section.
+const {
+  summary: infoSummary,
+  loading: infoLoading,
+  error: infoError,
+  load: loadInfo,
+} = useCircuitInfo()
+
 /** État d'ouverture de la section info déroulante. */
 const infoExpanded = ref(false)
 /** true tant que le curseur survole la carte (régit l'affichage des actions). */
 const isHovering = ref(false)
+
+/** Nombre total de montées, fusionnées et séparées comprises. */
+const climbTotal = computed(() => {
+  const altimetrie = infoSummary.value?.altimetrie
+  if (!altimetrie) return 0
+  return (
+    altimetrie.simpleClimbs +
+    altimetrie.mergedClimbs +
+    altimetrie.separatedClimbs
+  )
+})
+
+/**
+ * Couleur de l'icône Terrain du volet Info, lue sur l'analyse affichée :
+ * jaune tant qu'elle n'est pas validée, blanche si validée sans montée, verte
+ * sinon. Neutre quand l'analyse est indisponible.
+ */
+const infoTerrainColor = computed(() => {
+  const altimetrie = infoSummary.value?.altimetrie
+  if (!altimetrie) return ''
+  if (!altimetrie.validated) return '#FBC02D'
+  return climbTotal.value === 0 ? 'white' : '#4CAF50'
+})
+
+/**
+ * L'analyse existe mais n'a pas été validée : toute la ligne « Montées »
+ * passe en jaune, pour attirer l'attention sur la validation à mener.
+ */
+const isAltimetriePending = computed(
+  () => infoSummary.value?.altimetrie?.validated === false,
+)
 
 // --- Avancement de l'édition (icône Éditer) ---
 
@@ -481,7 +806,7 @@ const pencilTitle = computed(() => {
  * `true` si un audit archivé est disponible pour cette trace : c'est la
  * condition pour que la consultation des anomalies de la source ait du
  * contenu à restituer. Sinon l'icône `mdi-map-marker-path` de la seconde
- * rangée est désactivée (grisée par Vuetify).
+ * rangée est absente.
  */
 const hasAuditArchive = computed(() => !!props.trace.audit_archived)
 
@@ -491,8 +816,9 @@ const hasAuditArchive = computed(() => !!props.trace.audit_archived)
  * État de l'icône Passages multiples :
  * - `hidden`    : détection jamais jouée — rien à consulter, bouton absent ;
  * - `none`      : détection jouée, aucun passage — icône blanche, message au clic ;
- * - `pending`   : passages à valider — barrière 2, icône ambre forcée visible ;
- * - `validated` : passages validés — icône verte, consultation au survol.
+ * - `pending`   : passages à valider — barrière 2, icône jaune forcée visible ;
+ * - `validated` : validation globale posée — icône verte seulement si tous les
+ *   segments ont un verdict (`multiride_complete`), jaune sinon.
  */
 type MultirideState = 'hidden' | 'none' | 'pending' | 'validated'
 
@@ -508,15 +834,38 @@ const multirideState = computed<MultirideState>(() => {
 const isMultirideHidden = computed(() => multirideState.value === 'hidden')
 
 /**
+ * `true` quand la détection est **globalement validée** et que **tous les
+ * segments** ont reçu un verdict. La couleur verte de l'icône est réservée à
+ * ce cas : une validation globale qui laisse des segments à examiner reste
+ * jaune.
+ */
+const isMultirideComplete = computed(
+  () =>
+    props.trace.multiride_status === 'validated' &&
+    props.trace.multiride_complete === true,
+)
+
+/**
  * Couleur de l'icône mdi-repeat :
- *  - ambre tant que les passages restent à valider (barrière 2) ;
- *  - vert pour une trace dont les passages sont validés (consultation) ;
+ *  - **verte** si la validation est globale et complète ;
+ *  - **jaune** tant que des segments restent à examiner, même si la
+ *    validation globale a été posée ;
  *  - blanc quand la détection n'a trouvé aucun passage.
  */
 const multirideColor = computed(() => {
-  if (multirideState.value === 'pending') return '#FFC107'
-  if (multirideState.value === 'validated') return 'green'
-  return 'white'
+  if (multirideState.value === 'none') return 'white'
+  return isMultirideComplete.value ? 'green' : '#FFC107'
+})
+
+/**
+ * Couleur du libellé « Passages multiples » du volet Info : la même que
+ * l'icône, pour que les deux lisent le même état. Neutre quand la détection
+ * n'a jamais été jouée (icône absente).
+ */
+const multirideLabelColor = computed(() => {
+  if (multirideState.value === 'hidden') return ''
+  if (multirideState.value === 'none') return 'white'
+  return isMultirideComplete.value ? '#4CAF50' : '#FFC107'
 })
 
 /** Tooltip de l'icône Passages multiples, selon l'état de la trace. */
@@ -525,13 +874,32 @@ const multirideTitle = computed(() => {
     case 'pending':
       return 'Valider les passages multiples'
     case 'validated':
-      return 'Voir les passages multiples (validés)'
+      return isMultirideComplete.value
+        ? 'Voir les passages multiples (validés)'
+        : 'Passages multiples — validation globale, segments encore à examiner'
     case 'none':
       return 'Aucun passage multiple détecté sur cette trace'
     default:
       return ''
   }
 })
+
+/**
+ * Couleur d'une catégorie d'anomalies selon son avancement : rouge sans
+ * traitement, jaune partiel, vert complet. Chaîne vide si la catégorie est
+ * absente (total nul), pour laisser le libellé dans sa couleur neutre.
+ */
+function progressColor(treated: number, total: number): string {
+  if (total === 0) return ''
+  if (treated === 0) return '#F44336'
+  if (treated >= total) return '#4CAF50'
+  return '#FBC02D'
+}
+
+/** Suffixe de pluriel des libellés de comptage (« 1 traité », « 2 traités »). */
+function plural(count: number): string {
+  return count > 1 ? 's' : ''
+}
 
 // --- Icône Terrain (seconde rangée) ---
 
@@ -550,11 +918,14 @@ const terrainState = computed<TerrainState>(() => {
 
 /**
  * Couleur de l'icône Terrain : grise tant que la trace n'est pas nettoyée,
- * **jaune** tant que l'analyse reste à valider, verte une fois validée.
+ * **jaune** tant que l'analyse reste à valider, **verte** une fois validée —
+ * sauf si l'analyse validée ne contient **aucune montée**, où elle est
+ * **blanche**.
  */
 const terrainColor = computed(() => {
   if (terrainState.value === 'locked') return 'grey'
-  return terrainState.value === 'validated' ? 'green' : 'yellow-darken-2'
+  if (terrainState.value === 'pending') return 'yellow-darken-2'
+  return props.trace.altimetrie_climb_count === 0 ? 'white' : 'green'
 })
 
 /**
@@ -568,9 +939,12 @@ const terrainTitle = computed(() => {
   if (terrainState.value === 'locked') {
     return "L'altimétrie n'est disponible qu'après le nettoyage de la trace."
   }
-  return terrainState.value === 'validated'
-    ? "Altimétrie validée — consulter l'analyse"
-    : "Analyser l'altimétrie — validation requise"
+  if (terrainState.value !== 'validated') {
+    return "Analyser l'altimétrie — validation requise"
+  }
+  return props.trace.altimetrie_climb_count === 0
+    ? 'Altimétrie validée — aucune montée détectée'
+    : "Altimétrie validée — consulter l'analyse"
 })
 
 // --- Icône Communes (seconde rangée) ---------------------------------
@@ -679,6 +1053,9 @@ function onInfoClick() {
   } else {
     infoExpanded.value = true
     tracesStore.focusedTraceId = props.trace.id
+    // Lecture disque à la première ouverture seulement : le résultat reste
+    // en cache tant que la carte est montée.
+    void loadInfo(props.trace.id)
   }
 }
 
@@ -758,6 +1135,48 @@ async function ouvrirSource() {
       console.error("Erreur lors de l'ouverture de l'URL source :", e)
     }
   }
+}
+
+/**
+ * Copie l'identifiant de la trace dans le presse-papiers du système.
+ *
+ * L'API Clipboard du webview est tentée d'abord ; le repli `execCommand`
+ * couvre les webviews où elle n'est pas exposée. L'action n'est proposée
+ * qu'en mode debug, où l'identifiant est affiché.
+ */
+async function copierIdentifiant(): Promise<void> {
+  const value = props.trace.id
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      ui.showSuccess('Identifiant copié.')
+      return
+    }
+  } catch {
+    // Repli ci-dessous : certains webviews refusent l'API Clipboard.
+  }
+
+  try {
+    copierViaExecCommand(value)
+    ui.showSuccess('Identifiant copié.')
+  } catch {
+    ui.showError("Copie de l'identifiant impossible.")
+  }
+}
+
+/** Repli de copie pour les webviews sans API Clipboard. */
+function copierViaExecCommand(value: string): void {
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  if (!copied) throw new Error('Copie refusée par le webview.')
 }
 
 /**
@@ -895,5 +1314,62 @@ async function visualiserCircuit() {
 .action-btn--hidden {
   opacity: 0;
   pointer-events: none;
+}
+
+/* Synthèse du volet Info : une ligne par thème, la date en retrait. */
+.circuit-info__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.circuit-info__row + .circuit-info__row {
+  margin-top: 4px;
+}
+
+.circuit-info__left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  min-width: 0;
+}
+
+.circuit-info__right {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  white-space: nowrap;
+}
+
+.circuit-info__label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: rgba(var(--v-theme-on-surface), 0.62);
+  white-space: nowrap;
+}
+
+/* Ligne « Montées » en attente de validation : toute la ligne en jaune. */
+.circuit-info__row--pending,
+.circuit-info__row--pending .circuit-info__right {
+  color: #FBC02D;
+}
+
+.circuit-info__profile {
+  margin-top: 10px;
+}
+
+.circuit-info__id {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-family: monospace;
+  font-size: 0.68rem;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  word-break: break-all;
 }
 </style>

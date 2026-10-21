@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::gpx_altimetrie::commands::{
-    detect_impl, generate_status, read_raw_points, rebuild_impl, save_impl,
+    backfill_climb_count, detect_impl, generate_status, read_raw_points, rebuild_impl,
+    save_impl,
 };
 use crate::gpx_altimetrie::file;
 use crate::gpx_altimetrie::types::{
@@ -86,14 +87,20 @@ fn seed_registry(mode_dir: &Path, trace_id: &str, validated: bool) {
         audit_status: "clean".to_string(),
         audit_archived: false,
         multiride_status: None,
+        multiride_complete: None,
         communes_completed: false,
         altimetrie_validated: validated,
+        altimetrie_climb_count: None,
     };
     save_registry(&get_traces_path(mode_dir), &[trace]).expect("écriture du registre");
 }
 
 fn registry_validated(mode_dir: &Path) -> bool {
     load_registry(&get_traces_path(mode_dir))[0].altimetrie_validated
+}
+
+fn registry_climb_count(mode_dir: &Path) -> Option<u32> {
+    load_registry(&get_traces_path(mode_dir))[0].altimetrie_climb_count
 }
 
 #[test]
@@ -368,6 +375,11 @@ fn save_marks_the_analysis_validated() {
         registry_validated(&mode_dir),
         "une sauvegarde utilisateur doit valider l'altimétrie"
     );
+    assert_eq!(
+        registry_climb_count(&mode_dir),
+        Some(1),
+        "le nombre de montées sauvegardées doit être persisté"
+    );
 
     cleanup(&mode_dir);
 }
@@ -393,6 +405,46 @@ fn detect_invalidates_a_previous_validation() {
     assert!(
         !registry_validated(&mode_dir),
         "un recalcul produit une analyse que l'opérateur n'a pas validée"
+    );
+    assert!(
+        registry_climb_count(&mode_dir).is_some(),
+        "le recalcul doit mettre à jour le nombre de montées"
+    );
+
+    cleanup(&mode_dir);
+}
+
+#[test]
+fn backfill_fills_the_climb_count_of_a_validated_analysis() {
+    let mode_dir = temp_mode_dir();
+    let trace_id = "trace-backfill-montees";
+    let gpx_path = copy_fixture(&mode_dir, trace_id);
+    let params = AltimetrieParams::default();
+    seed_registry(&mode_dir, trace_id, true);
+
+    let detected = detect_impl(
+        &mode_dir,
+        trace_id,
+        &gpx_path,
+        "poggio.gpx",
+        &params,
+        "2026-10-19T12:20:00Z",
+    )
+    .expect("détection");
+
+    // Simule un registre antérieur : validé, mais compteur inconnu.
+    let traces_path = get_traces_path(&mode_dir);
+    let mut registry = load_registry(&traces_path);
+    registry[0].altimetrie_validated = true;
+    registry[0].altimetrie_climb_count = None;
+    save_registry(&traces_path, &registry).expect("écriture du registre");
+
+    backfill_climb_count(&mode_dir);
+
+    assert_eq!(
+        registry_climb_count(&mode_dir),
+        Some(detected.climbs.len() as u32),
+        "le rattrapage doit persister le nombre de montées du fichier"
     );
 
     cleanup(&mode_dir);

@@ -9,8 +9,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::gpx_multiride::commands::{
-    default_multiride_params, detect_impl, detect_status, load_impl, multiride_params_from_settings,
-    toggle_fp_impl, undo_impl, validate_impl, validate_segment_impl,
+    backfill_completion, default_multiride_params, detect_impl, detect_status, load_impl,
+    multiride_params_from_settings, toggle_fp_impl, undo_impl, validate_impl,
+    validate_segment_impl,
 };
 use crate::gpx_multiride::file::{build_archive, file_path, load_file, save_file};
 use crate::gpx_multiride::types::{
@@ -99,8 +100,10 @@ fn make_trace(id: &str, filename: &str) -> TraceMetadata {
         audit_status: "clean".to_string(),
         audit_archived: false,
         multiride_status: None,
+        multiride_complete: None,
         communes_completed: false,
         altimetrie_validated: false,
+        altimetrie_climb_count: None,
     }
 }
 
@@ -432,9 +435,17 @@ fn detect_status_writes_the_description_file() {
     let (mode, id) = mode_with_trace("hook_ok", 8);
     let gpx_path = get_trace_gpx_path(&mode, &id, "trace_test.gpx");
 
-    let status = detect_status(&mode, &id, "trace_test.gpx", &gpx_path, params());
+    let detected = detect_status(&mode, &id, "trace_test.gpx", &gpx_path, params());
 
-    assert_eq!(status.as_deref(), Some(STATUS_NONE));
+    assert_eq!(
+        detected.as_ref().map(|(status, _)| status.as_str()),
+        Some(STATUS_NONE)
+    );
+    assert_eq!(
+        detected.map(|(_, complete)| complete),
+        Some(true),
+        "une détection vide est complète"
+    );
     assert!(
         file_path(&mode, &id).exists(),
         "le fichier de description doit être écrit"
@@ -459,5 +470,39 @@ fn detect_status_stays_silent_on_a_failure() {
     assert!(
         !file_path(&mode, &id).exists(),
         "un échec ne doit rien écrire"
+    );
+}
+
+#[test]
+fn backfill_completion_fills_legacy_entries_once() {
+    let (mode, id) = mode_with_trace("backfill", 8);
+    let mut archive = archive_with_one_passage(&mode, &id);
+    save_file(&file_path(&mode, &id), &archive).unwrap();
+
+    // Registre antérieur au champ : statut connu, complétude inconnue.
+    let mut registry = load_registry(&get_traces_path(&mode));
+    registry[0].multiride_status = Some(STATUS_PENDING.to_string());
+    registry[0].multiride_complete = None;
+    save_registry(&get_traces_path(&mode), &registry).unwrap();
+
+    backfill_completion(&mode);
+    assert_eq!(
+        load_registry(&get_traces_path(&mode))[0].multiride_complete,
+        Some(false),
+        "un segment sans verdict laisse la détection incomplète"
+    );
+
+    // Un verdict rend la détection complète ; le rattrapage le constate.
+    archive.passages[0].valide = true;
+    save_file(&file_path(&mode, &id), &archive).unwrap();
+    let mut registry = load_registry(&get_traces_path(&mode));
+    registry[0].multiride_complete = None;
+    save_registry(&get_traces_path(&mode), &registry).unwrap();
+
+    backfill_completion(&mode);
+    assert_eq!(
+        load_registry(&get_traces_path(&mode))[0].multiride_complete,
+        Some(true),
+        "le rattrapage doit persister la complétude calculée"
     );
 }

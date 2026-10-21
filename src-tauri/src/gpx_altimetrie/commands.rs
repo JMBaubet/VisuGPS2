@@ -91,35 +91,95 @@ pub fn read_raw_points(gpx_path: &Path) -> Result<Vec<RawPoint>, String> {
 
 // ─── Validation de l'analyse par l'opérateur ─────────────────────────
 
-/// Pose le drapeau de validation de l'altimétrie dans le registre des traces.
+/// Pose l'état de validation et le nombre de montées dans le registre.
 ///
 /// La mutation passe par `update_registry` : chargement, modification et
 /// écriture forment une section critique, sans quoi une écriture concurrente
-/// (détection des communes en tâche de fond) pourrait effacer le drapeau.
-fn set_validated(mode_dir: &Path, trace_id: &str, validated: bool) -> Result<(), String> {
+/// (détection des communes en tâche de fond) pourrait effacer ces champs.
+/// Une trace absente du registre (import d'une trace neuve, enregistrée après
+/// la génération) est ignorée.
+fn set_validation_state(
+    mode_dir: &Path,
+    trace_id: &str,
+    validated: bool,
+    climb_count: Option<u32>,
+) -> Result<(), String> {
     update_registry(&get_traces_path(mode_dir), |registry| {
         if let Some(entry) = registry.iter_mut().find(|trace| trace.id == trace_id) {
             entry.altimetrie_validated = validated;
+            if let Some(count) = climb_count {
+                entry.altimetrie_climb_count = Some(count);
+            }
         }
         Ok(())
     })
 }
 
-/// Repose le drapeau de validation à `false`, en **best-effort**.
+/// Repose la validation et met à jour le nombre de montées après une
+/// régénération, en **best-effort**.
 ///
-/// Utilisé après une régénération : l'analyse produite n'a pas été relue par
-/// l'opérateur. Tolérant à une trace absente du registre (import d'une trace
-/// neuve, enregistrée après la génération) et à un registre absent ; une erreur
+/// L'analyse produite n'a pas été relue par l'opérateur. Tolérant à une trace
+/// absente du registre (import en cours) et à un registre absent ; une erreur
 /// d'écriture est loggée sans faire échouer la génération.
-fn clear_validated(mode_dir: &Path, trace_id: &str) {
+fn clear_validated(mode_dir: &Path, trace_id: &str, climb_count: usize) {
     let traces_path = get_traces_path(mode_dir);
     if !traces_path.exists() {
         return;
     }
-    if let Err(error) = set_validated(mode_dir, trace_id, false) {
+    if let Err(error) = set_validation_state(
+        mode_dir,
+        trace_id,
+        false,
+        Some(climb_count as u32),
+    ) {
         eprintln!(
             "[altimetrie] invalidation de la validation impossible pour {} : {}",
             trace_id, error
+        );
+    }
+}
+
+/// Rattrapage du nombre de montées sur les registres antérieurs au champ.
+///
+/// Appelé par `get_traces` : pour chaque trace dont l'analyse est **validée**
+/// mais dont le compteur est inconnu (`None`), relit `altimetrie.json` et
+/// persiste le nombre de montées. **Idempotent** — une fois le champ renseigné,
+/// plus aucun fichier n'est lu. Best-effort : un échec est loggé sans empêcher
+/// la liste des traces de se charger.
+pub fn backfill_climb_count(mode_dir: &Path) {
+    let traces_path = get_traces_path(mode_dir);
+    let registry = load_registry(&traces_path);
+    let pending: Vec<(String, u32)> = registry
+        .iter()
+        .filter(|trace| {
+            trace.altimetrie_validated && trace.altimetrie_climb_count.is_none()
+        })
+        .filter_map(|trace| {
+            let file = file::load_file(
+                &file::file_path(mode_dir, &trace.id),
+                &trace.id,
+            )?;
+            Some((trace.id.clone(), file.climbs.len() as u32))
+        })
+        .collect();
+
+    if pending.is_empty() {
+        return;
+    }
+
+    if let Err(error) = update_registry(&traces_path, |registry| {
+        for (trace_id, count) in &pending {
+            if let Some(entry) = registry.iter_mut().find(|t| t.id == *trace_id) {
+                if entry.altimetrie_climb_count.is_none() {
+                    entry.altimetrie_climb_count = Some(*count);
+                }
+            }
+        }
+        Ok(())
+    }) {
+        eprintln!(
+            "[altimetrie] rattrapage du nombre de montées impossible : {}",
+            error
         );
     }
 }
@@ -142,7 +202,7 @@ pub fn detect_impl(
     let points = read_raw_points(gpx_path)?;
     let file = pipeline::detect(&points, params, trace_id, source, updated_at)?;
     file::save_file(&file::file_path(mode_dir, trace_id), &file)?;
-    clear_validated(mode_dir, trace_id);
+    clear_validated(mode_dir, trace_id, file.climbs.len());
     Ok(file)
 }
 
@@ -190,7 +250,12 @@ pub fn save_impl(
         climbs,
         true,
     )?;
-    set_validated(mode_dir, trace_id, true)?;
+    set_validation_state(
+        mode_dir,
+        trace_id,
+        true,
+        Some(file.climbs.len() as u32),
+    )?;
     Ok(file)
 }
 

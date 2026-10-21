@@ -186,6 +186,33 @@ impl MultirideArchive {
             STATUS_PENDING
         }
     }
+
+    /// Tous les segments de la détection ont reçu un verdict — approuvé ou
+    /// écarté. Une détection vide est complète par vacuité.
+    ///
+    /// C'est un fait **distinct** de `status()` : la validation globale
+    /// (`valide`) peut être posée alors que des segments restent à examiner.
+    /// La carte du circuit s'en sert pour colorer l'icône `mdi-repeat` en vert
+    /// seulement quand tout a été jugé, en jaune sinon.
+    pub fn all_segments_treated(&self) -> bool {
+        segments_all_treated(&self.passages)
+    }
+}
+
+/// `true` quand chaque segment des passages porte un verdict.
+///
+/// Un segment fusionné sans verdict reste à examiner : c'est un segment neuf,
+/// comme dans le compteur d'avancement de la vue Multiride.
+pub fn segments_all_treated(passages: &[MultiridePassage]) -> bool {
+    let mut segments = std::collections::BTreeSet::new();
+    let mut treated = std::collections::BTreeSet::new();
+    for passage in passages {
+        segments.insert(passage.segment);
+        if passage.valide || passage.faux_positif {
+            treated.insert(passage.segment);
+        }
+    }
+    segments == treated
 }
 
 /// Résultat de la commande `multiride_detect`.

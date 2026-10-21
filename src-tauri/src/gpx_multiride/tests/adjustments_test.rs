@@ -25,8 +25,8 @@ use crate::import_gpx::{
     get_traces_path, save_registry, Point3D, TraceMetadata, TraceStats,
 };
 use crate::gpx_multiride::types::{
-    MultirideArchive, MultirideLatLon, MultirideParams, MultiridePassage, MultirideSens,
-    STATUS_PENDING,
+    segments_all_treated, MultirideArchive, MultirideLatLon, MultirideParams,
+    MultiridePassage, MultirideSens, STATUS_PENDING,
 };
 
 // ─── Aides de test ────────────────────────────────────────────────────
@@ -195,8 +195,10 @@ fn make_registry_entry(trace_id: &str, filename: &str) -> TraceMetadata {
         audit_status: "clean".to_string(),
         audit_archived: false,
         multiride_status: None,
+        multiride_complete: None,
         communes_completed: false,
         altimetrie_validated: false,
+        altimetrie_climb_count: None,
     }
 }
 
@@ -761,4 +763,28 @@ fn resetting_a_foreign_archive_is_refused() {
     let mode = mode_with_gpx("reinit_etrangere", "t-1", 8);
     let error = reset_impl(&mode, "autre", reference_case()).unwrap_err();
     assert!(error.contains("autre trace"), "message : {error}");
+}
+
+#[test]
+fn all_segments_treated_requires_a_verdict_per_segment() {
+    let mut approved = passage(1, 1, MultirideSens::Reference, 0.0, 1.0);
+    approved.valide = true;
+    let pending = passage(2, 1, MultirideSens::Reference, 1.0, 2.0);
+
+    assert!(
+        !segments_all_treated(&[approved.clone(), pending.clone()]),
+        "un segment sans verdict empêche la complétude"
+    );
+
+    let mut excluded = pending;
+    excluded.faux_positif = true;
+    assert!(
+        segments_all_treated(&[approved, excluded]),
+        "approuvé et écarté sont deux verdicts"
+    );
+
+    assert!(
+        segments_all_treated(&[]),
+        "une détection vide est complète par vacuité"
+    );
 }

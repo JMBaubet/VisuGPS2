@@ -54,3 +54,25 @@ export function formatAltitude(meters: number | null): string {
   if (meters === null || meters === undefined) return '—'
   return `${Math.round(meters).toLocaleString('fr-FR')} m`
 }
+
+/**
+ * Formate un horodatage ISO 8601 en date et heure locales françaises.
+ * Exemple : "2026-10-20T14:32:00Z" → "20/10/2026 14:32"
+ *
+ * Une valeur absente ou illisible est rendue telle quelle (`—` pour `null`) :
+ * l'appelant affiche l'information sans interrompre le rendu.
+ */
+export function formatDateTime(iso: string | null): string {
+  if (!iso) return '—'
+
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+
+  return date.toLocaleDateString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}

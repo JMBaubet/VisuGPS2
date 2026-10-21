@@ -115,6 +115,17 @@ pub struct TraceMetadata {
     /// détection a été jouée depuis.
     #[serde(default)]
     pub multiride_status: Option<String>,
+    /// Tous les **segments** de la détection des passages multiples ont reçu un
+    /// verdict — approuvé ou écarté. Distinct de `multiride_status` : une
+    /// validation globale peut être posée alors que des segments restent à
+    /// examiner.
+    ///
+    /// `None` pour un registre antérieur au champ : sa valeur est calculée par
+    /// `gpx_multiride::commands::backfill_completion`, appelé par `get_traces`,
+    /// puis persistée. C'est ce drapeau que lit la carte du circuit pour
+    /// colorer l'icône `mdi-repeat` en vert (tout est jugé) ou en jaune.
+    #[serde(default)]
+    pub multiride_complete: Option<bool>,
     /// État de la détection des communes traversées (module Communes) : `true`
     /// quand le fichier `communes.json` de la trace est présent et à jour —
     /// la fonctionnalité a été menée à son terme pour cette trace.
@@ -135,6 +146,17 @@ pub struct TraceMetadata {
     /// validées par l'opérateur.
     #[serde(default)]
     pub altimetrie_validated: bool,
+    /// Nombre de montées de l'analyse altimétrique (`altimetrie.json`).
+    ///
+    /// Permet à la carte du circuit de colorer l'icône `mdi-terrain` en blanc
+    /// quand l'analyse est validée mais ne contient aucune montée, sans relire
+    /// le fichier au montage de chaque carte.
+    ///
+    /// `None` sur un registre antérieur au champ : `get_traces` le calcule pour
+    /// les analyses **validées** (rattrapage), puis le persiste. Une analyse
+    /// régénérée ou sauvegardée le met à jour.
+    #[serde(default)]
+    pub altimetrie_climb_count: Option<u32>,
 }
 
 /// Valeur par défaut du statut d'audit pour les registres antérieurs :
@@ -847,6 +869,38 @@ where
     Ok(outcome)
 }
 
+/// Écrit l'archive d'audit d'une trace « à auditer » à l'import.
+///
+/// Le résultat de détection est celui qui a servi à poser `needs_review` :
+/// l'archiver évite de rejouer l'analyse à la première ouverture de `/audit`.
+/// L'écriture est **best-effort** — un échec est loggé et l'import continue ;
+/// la vue relancera la détection si l'archive manque.
+fn write_import_audit_archive(
+    mode_dir: &Path,
+    trace_id: &str,
+    params: &crate::gpx_audit::types::AuditParams,
+    outcome: crate::gpx_audit::pipeline::DetectionOutcome,
+) {
+    let archive = crate::gpx_audit::archive::build_archive(
+        trace_id,
+        false,
+        params.clone(),
+        outcome.total_distance_m,
+        outcome.points,
+        outcome.findings,
+    );
+
+    if let Err(error) = crate::gpx_audit::archive::save_archive(
+        &crate::gpx_audit::archive::archive_path(mode_dir, trace_id),
+        &archive,
+    ) {
+        eprintln!(
+            "[import_gpx] archive d'audit non écrite pour {} : {}",
+            trace_id, error
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Commande Tauri : import_gpx_file
 // ---------------------------------------------------------------------------
@@ -932,17 +986,24 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         crate::gpx_audit::commands::read_audit_params(&app)
     }))
     .unwrap_or_else(|_| crate::gpx_audit::commands::default_audit_params());
-    let audit_status = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // Le résultat complet est conservé : il servira à écrire l'archive
+    // `audit.json` d'une trace « à auditer » sans rejouer l'analyse.
+    let audit_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let raw = crate::gpx_audit::pipeline::raw_points_from_gpx(&gpx);
         crate::gpx_audit::pipeline::detect_all(raw, &audit_params)
     }))
-    .map(|outcome| match outcome {
-        // Trace trop courte après consolidation : aucune anomalie AR/RP
-        // possible, la trace est réputée propre.
-        Ok(outcome) if !outcome.findings.is_empty() => "needs_review".to_string(),
-        Ok(_) | Err(_) => "clean".to_string(),
-    })
-    .unwrap_or_else(|_| "needs_review".to_string());
+    .ok();
+
+    let audit_status = match &audit_result {
+        // Détection réussie avec au moins une anomalie.
+        Some(Ok(outcome)) if !outcome.findings.is_empty() => "needs_review".to_string(),
+        // Détection réussie sans anomalie, ou trace trop courte après
+        // consolidation : aucune anomalie AR/RP possible, la trace est réputée
+        // propre.
+        Some(Ok(_)) | Some(Err(_)) => "clean".to_string(),
+        // Panique : repli « needs_review », sans résultat à archiver.
+        None => "needs_review".to_string(),
+    };
 
     // 7. Générer l'UUID de la trace et créer son dossier
     //    (`traces/{id}/` — le dossier est le discriminant de la trace).
@@ -960,6 +1021,27 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
 
     std::fs::copy(&file_path, &dest_path)
         .map_err(|e| format!("Copie du fichier GPX : {}", e))?;
+
+    // 7ter. Archive d'audit d'une trace « à auditer ».
+    //
+    //       La détection a déjà été jouée pour décider du statut : son résultat
+    //       complet (points consolidés, findings, paramètres) est archivé ici,
+    //       sans relancer l'analyse. La vue `/audit` retrouve ainsi l'état dès
+    //       sa première ouverture. Best-effort : un échec d'écriture n'empêche
+    //       pas l'import — la vue relancera la détection si l'archive manque.
+    if audit_status == "needs_review" {
+        match audit_result {
+            Some(Ok(outcome)) => {
+                write_import_audit_archive(&mode_dir, &id, &audit_params, outcome);
+            }
+            Some(Err(_)) | None => {
+                eprintln!(
+                    "[import_gpx] archive d'audit non générée pour {} : détection indisponible",
+                    id
+                );
+            }
+        }
+    }
 
     // 8. Construire la métadonnée
     let import_date = chrono::Utc::now().to_rfc3339();
@@ -987,7 +1069,7 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
     //
     //       Best-effort : une défaillance laisse le statut vide, donc permissif,
     //       et n'empêche jamais l'import.
-    let multiride_status = if audit_status == "clean" {
+    let multiride = if audit_status == "clean" {
         crate::gpx_multiride::commands::detect_status(
             &mode_dir,
             &id,
@@ -1027,9 +1109,10 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         is_displayed: false,
         audit_status,
         audit_archived: false,
-        // Renseigné ci-dessus pour une trace déjà valide ; `None` pour une trace
+        // Renseignés ci-dessus pour une trace déjà valide ; `None` pour une trace
         // à auditer, dont la détection suivra la correction du GPX.
-        multiride_status,
+        multiride_status: multiride.as_ref().map(|(status, _)| status.clone()),
+        multiride_complete: multiride.map(|(_, complete)| complete),
         // Nouvelle trace : la détection des communes reste à faire. Le front la
         // déclenchera aussitôt si la trace est déjà propre, à la validation de
         // l'audit sinon.
@@ -1037,6 +1120,7 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         // L'analyse altimétrique générée automatiquement n'est qu'une
         // proposition : la validation appartient à l'opérateur.
         altimetrie_validated: false,
+        altimetrie_climb_count: None,
     };
 
     // 9. Ajouter au registre et sauvegarder — registre relu sous le verrou :
@@ -1068,6 +1152,14 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
 pub async fn get_traces(app: tauri::AppHandle) -> Result<Vec<TraceMetadata>, String> {
     let mode_dir = get_mode_dir(&app)?;
     let traces_path = get_traces_path(&mode_dir);
+    // Rattrapage de `multiride_complete` sur les registres antérieurs : la
+    // carte du circuit doit connaître la complétude sans relire les fichiers au
+    // montage de chaque carte. Idempotent, une fois le champ renseigné.
+    crate::gpx_multiride::commands::backfill_completion(&mode_dir);
+    // Même logique pour le nombre de montées : l'icône `mdi-terrain` doit
+    // pouvoir être blanche sur une analyse validée sans montée, sans relire
+    // `altimetrie.json` au montage de chaque carte.
+    crate::gpx_altimetrie::commands::backfill_climb_count(&mode_dir);
     Ok(load_registry(&traces_path))
 }
 
@@ -1406,8 +1498,10 @@ mod tests {
             audit_status: "needs_review".to_string(),
             audit_archived: false,
             multiride_status: None,
+            multiride_complete: None,
             communes_completed: false,
             altimetrie_validated: false,
+            altimetrie_climb_count: None,
         }
     }
 
@@ -1645,5 +1739,30 @@ mod tests {
         let td = mode.join("traces").join(id);
         assert_eq!(fs::read_to_string(td.join(gpx_name)).unwrap(), "gpx");
         assert_eq!(fs::read_to_string(td.join("trace.geojson")).unwrap(), "geo");
+    }
+
+    #[test]
+    fn import_writes_an_audit_archive_for_a_non_clean_trace() {
+        let mode = test_mode_dir("audit_archive_import");
+        let trace_id = "trace-a-auditer";
+        let params = crate::gpx_audit::commands::default_audit_params();
+        let outcome = crate::gpx_audit::pipeline::DetectionOutcome {
+            points: Vec::new(),
+            total_distance_m: 1234.5,
+            findings: Vec::new(),
+        };
+
+        write_import_audit_archive(&mode, trace_id, &params, outcome);
+
+        let archive = crate::gpx_audit::archive::load_archive(
+            &crate::gpx_audit::archive::archive_path(&mode, trace_id),
+            trace_id,
+        )
+        .expect("archive d'audit écrite");
+        assert!(!archive.validated, "l'archive d'import n'est pas validée");
+        assert_eq!(archive.trace_id, trace_id);
+        assert_eq!(archive.total_distance_m, 1234.5);
+
+        let _ = fs::remove_dir_all(&mode);
     }
 }

@@ -460,7 +460,7 @@ pub fn validate_impl(
     //        le bon fichier et qu'aucun état intermédiaire n'oppose un GPX
     //        corrigé à un statut périmé. Best-effort : une défaillance laisse le
     //        statut vide, donc permissif, et ne remet pas en cause l'audit.
-    let multiride_status = crate::gpx_multiride::commands::detect_status(
+    let multiride = crate::gpx_multiride::commands::detect_status(
         mode_dir,
         trace_id,
         &trace.filename,
@@ -492,12 +492,16 @@ pub fn validate_impl(
         // circuit peut alors proposer la consultation des anomalies.
         entry.audit_archived = true;
         // Le parcours se poursuit par la validation des passages multiples.
-        entry.multiride_status = multiride_status;
+        entry.multiride_status = multiride
+            .as_ref()
+            .map(|(status, _)| status.clone());
+        entry.multiride_complete = multiride.map(|(_, complete)| complete);
         // Le GPX réécrit a invalidé la description des communes (étape 8ter).
         entry.communes_completed = false;
         // Le GPX réécrit change la trace : l'altimétrie régénérée à l'étape 8quater
         // est une nouvelle analyse, que l'opérateur n'a pas encore validée.
         entry.altimetrie_validated = false;
+        entry.altimetrie_climb_count = None;
         Ok(entry.clone())
     })?;
 

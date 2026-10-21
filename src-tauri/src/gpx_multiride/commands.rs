@@ -137,13 +137,16 @@ pub fn detect_status(
     source: &str,
     gpx_path: &Path,
     params: MultirideParams,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         detect_and_save(mode_dir, trace_id, source, gpx_path, params)
     }));
 
     match outcome {
-        Ok(Ok(archive)) => Some(archive.status().to_string()),
+        Ok(Ok(archive)) => Some((
+            archive.status().to_string(),
+            archive.all_segments_treated(),
+        )),
         Ok(Err(error)) => {
             eprintln!(
                 "[multiride] détection non jouée pour {} : {}",
@@ -202,7 +205,7 @@ pub fn detect_impl(
     let gpx_path = get_trace_gpx_path(mode_dir, trace_id, &trace.filename);
 
     let archive = detect_and_save(mode_dir, trace_id, &trace.filename, &gpx_path, params)?;
-    let status = set_status(mode_dir, trace_id, archive.status())?;
+    let status = set_status(mode_dir, trace_id, &archive)?;
 
     Ok(MultirideDetectionResult {
         archive,
@@ -341,7 +344,7 @@ pub fn merge_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::merge_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
-    set_status(mode_dir, trace_id, updated.status())?;
+    set_status(mode_dir, trace_id, &updated)?;
     Ok(updated)
 }
 
@@ -354,7 +357,7 @@ pub fn toggle_fp_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::toggle_fp(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
-    set_status(mode_dir, trace_id, updated.status())?;
+    set_status(mode_dir, trace_id, &updated)?;
     Ok(updated)
 }
 
@@ -367,7 +370,7 @@ pub fn undo_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::undo_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
-    set_status(mode_dir, trace_id, updated.status())?;
+    set_status(mode_dir, trace_id, &updated)?;
     Ok(updated)
 }
 
@@ -380,7 +383,7 @@ pub fn validate_segment_impl(
 ) -> Result<MultirideArchive, String> {
     let updated = adjustments::validate_segment(&archive, segment)?;
     save_adjusted(mode_dir, trace_id, &updated)?;
-    set_status(mode_dir, trace_id, updated.status())?;
+    set_status(mode_dir, trace_id, &updated)?;
     Ok(updated)
 }
 
@@ -412,7 +415,7 @@ pub fn reset_impl(
         ..detected
     };
     file::save_file(&file::file_path(mode_dir, trace_id), &fresh)?;
-    set_status(mode_dir, trace_id, fresh.status())?;
+    set_status(mode_dir, trace_id, &fresh)?;
     Ok(fresh)
 }
 
@@ -490,28 +493,77 @@ pub fn validate_impl(
     archive.valide = true;
     archive.updated_at = iso_now();
     file::save_file(&file::file_path(mode_dir, trace_id), &archive)?;
-    set_status(mode_dir, trace_id, archive.status())?;
+    set_status(mode_dir, trace_id, &archive)?;
 
     Ok(archive)
 }
 
 // ─── Registre ─────────────────────────────────────────────────────────
 
-/// Pose `multiride_status` dans le registre des traces et retourne le statut
-/// écrit.
+/// Pose `multiride_status` et `multiride_complete` dans le registre des traces,
+/// et retourne le statut écrit.
 ///
 /// La mutation passe par `update_registry` : chargement, modification et
 /// écriture forment une section critique, sans quoi une écriture concurrente
 /// (détection des communes en tâche de fond) pourrait effacer ce statut.
 /// Une trace absente du registre est une incohérence d'appel, pas une panne :
 /// elle est remontée à l'appelant.
-fn set_status(mode_dir: &Path, trace_id: &str, status: &str) -> Result<String, String> {
+fn set_status(
+    mode_dir: &Path,
+    trace_id: &str,
+    archive: &MultirideArchive,
+) -> Result<String, String> {
+    let status = archive.status().to_string();
+    let complete = archive.all_segments_treated();
+
     update_registry(&get_traces_path(mode_dir), |registry| {
         let entry = registry
             .iter_mut()
             .find(|t| t.id == trace_id)
             .ok_or_else(|| format!("Trace introuvable : {}.", trace_id))?;
-        entry.multiride_status = Some(status.to_string());
-        Ok(status.to_string())
+        entry.multiride_status = Some(status.clone());
+        entry.multiride_complete = Some(complete);
+        Ok(status.clone())
     })
+}
+
+/// Rattrapage des registres antérieurs à `multiride_complete`.
+///
+/// Appelé par `get_traces` : pour chaque trace dont le statut Multiride est
+/// connu mais dont la complétude ne l'est pas (`None`), relit la description et
+/// persiste le résultat. **Idempotent** — une fois le champ renseigné, plus
+/// aucun fichier n'est lu. Best-effort : un échec est loggé sans empêcher la
+/// liste des traces de se charger.
+pub fn backfill_completion(mode_dir: &Path) {
+    let traces_path = get_traces_path(mode_dir);
+    let registry = load_registry(&traces_path);
+    let pending: Vec<(String, bool)> = registry
+        .iter()
+        .filter(|trace| {
+            trace.multiride_status.is_some() && trace.multiride_complete.is_none()
+        })
+        .map(|trace| {
+            let complete = load_impl(mode_dir, &trace.id)
+                .map(|archive| archive.all_segments_treated())
+                .unwrap_or(false);
+            (trace.id.clone(), complete)
+        })
+        .collect();
+
+    if pending.is_empty() {
+        return;
+    }
+
+    if let Err(error) = update_registry(&traces_path, |registry| {
+        for (trace_id, complete) in &pending {
+            if let Some(entry) = registry.iter_mut().find(|t| t.id == *trace_id) {
+                if entry.multiride_complete.is_none() {
+                    entry.multiride_complete = Some(*complete);
+                }
+            }
+        }
+        Ok(())
+    }) {
+        eprintln!("[multiride] rattrapage de complétude impossible : {}", error);
+    }
 }

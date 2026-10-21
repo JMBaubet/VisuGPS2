@@ -143,8 +143,10 @@ fn make_trace_metadata(id: &str, filename: &str) -> TraceMetadata {
         audit_status: "needs_review".to_string(),
         audit_archived: false,
         multiride_status: None,
+        multiride_complete: None,
         communes_completed: false,
         altimetrie_validated: false,
+        altimetrie_climb_count: None,
     }
 }
 
@@ -483,6 +485,11 @@ fn test_validate_updates_audit_status() {
     assert!(
         crate::gpx_multiride::file::file_path(&mode_dir, trace_id).exists(),
         "le fichier de description des passages multiples doit être écrit"
+    );
+    assert_eq!(
+        registry[0].multiride_complete,
+        Some(true),
+        "une détection vide est complète : aucun segment ne reste à juger"
     );
 
     // Le GPX a été réécrit avec les points de travail et son bloc d'audit.

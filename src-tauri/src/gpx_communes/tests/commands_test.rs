@@ -54,8 +54,10 @@ fn make_trace(trace_id: &str) -> TraceMetadata {
         audit_status: "clean".to_string(),
         audit_archived: false,
         multiride_status: None,
+        multiride_complete: None,
         communes_completed: false,
         altimetrie_validated: false,
+        altimetrie_climb_count: None,
     }
 }
 

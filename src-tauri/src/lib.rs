@@ -7,6 +7,7 @@ mod gpx_audit;
 mod gpx_multiride;
 mod gpx_communes;
 mod gpx_altimetrie;
+mod trace_info;
 
 use display::{get_displays, open_second_window, close_second_window};
 use tauri::Manager;
@@ -82,7 +83,8 @@ pub fn run() {
             gpx_altimetrie::commands::altimetrie_detect,
             gpx_altimetrie::commands::altimetrie_load,
             gpx_altimetrie::commands::altimetrie_preview,
-            gpx_altimetrie::commands::altimetrie_save
+            gpx_altimetrie::commands::altimetrie_save,
+            trace_info::get_trace_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
