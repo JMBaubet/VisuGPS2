@@ -467,7 +467,8 @@ restaurable de la vue `/altimetrie`.
 }
 ```
 
-- `profile` : profil affiché (altitude lissée ancrée) échantillonné au pas
+- `profile` : profil affiché — altitude lissée dont seules les extrémités de la
+  trace sont ancrées — échantillonné au pas
   `params.pasEchantillonnage`, avec la position interpolée (`lat`/`lon`). Le
   graphe et la carte n'ont pas besoin de relire le GPX.
 - `segments` : segmentation par catégorie de pente (8 catégories, bornes hautes
@@ -581,4 +582,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-10-20
+**Dernière mise à jour** : 2026-10-21

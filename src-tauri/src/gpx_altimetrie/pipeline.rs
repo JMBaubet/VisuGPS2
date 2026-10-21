@@ -1,18 +1,23 @@
-//! Pipeline altimétrique — portage fidèle du prototype validé
+//! Pipeline altimétrique — portage du prototype validé
 //! (`features/altimetrie/prototype/index.html`, GPX Climb Analyzer v3.9.6).
 //!
 //! Le module est **pur** : il ne dépend ni de Tauri ni du système de fichiers.
 //! Les commandes lui fournissent les points GPX et les paramètres ; il rend un
 //! [`AltimetrieFile`] complet.
 //!
+//! Écart assumé par rapport au prototype : seules les extrémités de la trace
+//! sont ancrées sur l'altitude brute. Ancrer aussi les bornes des montées
+//! recréait un pic ou un creux d'un point là où le lissage avait aplati le
+//! relief, et faussait la pente maximale.
+//!
 //! Enchaînement :
 //! 1. distances cumulées 2D (Haversine) et correction des plateaux ;
 //! 2. rééchantillonnage par moyenne, puis anti-pic Hampel ;
 //! 3. lissage (Savitzky-Golay, gaussien), pentes et catégories ;
 //! 4. détection par hystérésis, meilleur sous-segment, raffinement, fusion ;
-//! 5. `rebuild` : contraintes d'édition, ancrage du profil, segments, métriques.
+//! 5. `rebuild` : contraintes d'édition, profil lissé, segments, métriques.
 //!
-//! Les choix numériques du prototype sont conservés, y compris ceux qui
+//! Les autres choix numériques du prototype sont conservés, y compris ceux qui
 //! paraissent surprenants : Savitzky-Golay toujours d'ordre 2, fenêtre de pente
 //! pouvant atteindre le double du réglage, anti-pic avec répétition des bords,
 //! sous-segment **le plus long** et non le plus pentu, pente d'une montée
@@ -537,7 +542,8 @@ fn median_filter(arr: &[f64], win: usize) -> Vec<f64> {
 }
 
 /// Lissage final : Savitzky-Golay, gaussien optionnel, correction linéaire
-/// ancrée aux extrema, puis double passage optionnel.
+/// ancrée aux indices fournis (en pratique, les extrémités de la trace), puis
+/// double passage optionnel.
 pub fn anchored_moving_average(
     raw: &[f64],
     anchor_idxs: &[usize],
@@ -984,7 +990,6 @@ fn compute_auto(prepared: &PreparedTrace, params: &AltimetrieParams) -> Vec<Auto
         })
         .collect();
 
-    let mut anchors: Vec<usize> = Vec::new();
     let mut refined: Vec<RefinedClimb> = Vec::new();
     let mut last_end: i64 = -1;
 
@@ -1038,10 +1043,6 @@ fn compute_auto(prepared: &PreparedTrace, params: &AltimetrieParams) -> Vec<Auto
                 let mut new_previous_start = previous.start_idx;
                 if ele_base[mid_valley] < ele_base[previous.start_idx] {
                     new_previous_start = mid_valley;
-                    if anchors.len() >= 2 {
-                        let previous_start_anchor = anchors.len() - 2;
-                        anchors[previous_start_anchor] = mid_valley;
-                    }
                 }
 
                 previous
@@ -1054,16 +1055,11 @@ fn compute_auto(prepared: &PreparedTrace, params: &AltimetrieParams) -> Vec<Auto
                     });
                 previous.start_idx = new_previous_start;
                 previous.end_idx = combined_end;
-                if let Some(last_anchor) = anchors.last_mut() {
-                    *last_anchor = combined_end;
-                }
                 last_end = combined_end as i64;
                 continue;
             }
         }
 
-        anchors.push(new_start);
-        anchors.push(new_end);
         refined.push(RefinedClimb {
             start_idx: new_start,
             end_idx: new_end,
@@ -1072,9 +1068,12 @@ fn compute_auto(prepared: &PreparedTrace, params: &AltimetrieParams) -> Vec<Auto
         last_end = new_end as i64;
     }
 
+    // Seules les extrémités de la trace sont ancrées : forcer le profil à
+    // repasser par l'altitude brute des bornes de montée recréait un pic ou
+    // un creux d'un point là où le lissage avait aplati le relief.
     let ele_display = anchored_moving_average(
         &prepared.ele_raw,
-        &anchors,
+        &[],
         step,
         params.fenetre_altitude,
         params.sigma_gaussien,
@@ -1173,7 +1172,6 @@ fn rebuild(
         previous_end_km = climb.end_km;
     }
 
-    let mut anchors = Vec::new();
     let mut resolved: Vec<(AltimetrieClimbEdit, usize, usize)> = Vec::new();
     for climb in &sorted {
         let start_idx = find_idx_at_dist(&prepared.dist, climb.start_km * 1000.0);
@@ -1181,14 +1179,14 @@ fn rebuild(
         if start_idx >= end_idx {
             continue;
         }
-        anchors.push(start_idx);
-        anchors.push(end_idx);
         resolved.push((climb.clone(), start_idx, end_idx));
     }
 
+    // Même règle que la détection : les bornes de montée ne sont pas ancrées
+    // sur l'altitude brute, sous peine de recréer un pic d'un point.
     let display_ele = anchored_moving_average(
         &prepared.ele_raw,
-        &anchors,
+        &[],
         prepared.step_m,
         params.fenetre_altitude,
         params.sigma_gaussien,

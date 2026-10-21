@@ -120,6 +120,47 @@ fn single_climb_is_detected_with_coherent_metrics() {
         .any(|segment| segment.category_id == "up1" || segment.category_id == "up2"));
 }
 
+/// Un sommet étroit à l'arrivée d'une montée ne doit pas produire un pic
+/// d'un point dans le profil affiché : les bornes ne sont plus ancrées sur
+/// l'altitude brute.
+#[test]
+fn climb_boundaries_are_not_anchored_on_raw_altitude() {
+    fn narrow_summit(x: f64) -> f64 {
+        if x < 1_000.0 {
+            900.0
+        } else if x < 3_000.0 {
+            900.0 + (x - 1_000.0) * 0.05
+        } else if x < 3_150.0 {
+            1_000.0 + (x - 3_000.0) * 0.4
+        } else if x < 3_300.0 {
+            1_060.0 - (x - 3_150.0) * 0.4
+        } else {
+            1_000.0 - (x - 3_300.0) * 0.05
+        }
+    }
+
+    let points = track(6_000.0, 10.0, narrow_summit);
+    let file = detect_default(&points);
+
+    assert!(!file.climbs.is_empty(), "une montée attendue");
+    for climb in &file.climbs {
+        let start_m = climb.start_km * 1_000.0;
+        let end_m = climb.end_km * 1_000.0;
+        for pair in file.profile.windows(2) {
+            if pair[1].d < start_m || pair[0].d > end_m + 50.0 {
+                continue;
+            }
+            let jump = (pair[1].ele - pair[0].ele).abs();
+            assert!(
+                jump < 10.0,
+                "saut de {jump:.1} m entre {} et {} m",
+                pair[0].d,
+                pair[1].d
+            );
+        }
+    }
+}
+
 #[test]
 fn separated_climbs_are_merged_when_the_gap_is_below_the_threshold() {
     let points = track(6_000.0, 10.0, two_climbs_elevation);

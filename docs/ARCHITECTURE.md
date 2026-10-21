@@ -1418,7 +1418,8 @@ L'analyse est produite par le module Rust `gpx_altimetrie` et stockée dans
 l'état éditable et le résultat :
 
 - `params` : les **14 réglages de traitement** `Altimetrie.*` ayant produit le fichier ;
-- `profile` : le profil affiché (altitude lissée ancrée) échantillonné au pas
+- `profile` : le profil affiché — altitude lissée dont seules les extrémités
+  de la trace sont ancrées — échantillonné au pas
   `pasEchantillonnage`, avec `d` (mètres) et `lat`/`lon` interpolés ;
 - `segments` : la segmentation par catégorie de pente (8 catégories `dh3`…`up4`),
   couvrant la trace sans trou ;
@@ -1449,14 +1450,17 @@ manque (`loadOrDetect`).
   de `TraceStats` ;
 - correction des plateaux, rééchantillonnage uniforme par moyenne, anti-pic de
   Hampel ;
-- lissage Savitzky-Golay (ordre 2), gaussien, médian optionnel et lissage ancré
-  aux bornes des montées (avec lissage renforcé optionnel) ;
+- lissage Savitzky-Golay (ordre 2), gaussien, médian optionnel et ancrage des
+  extrémités de la trace (avec lissage renforcé optionnel) ; les bornes des
+  montées ne sont pas ancrées sur l'altitude brute, pour éviter les pics ou
+  creux d'un point ;
 - calcul de pente sur fenêtre, écrêtage ±25 %, 8 catégories et fusion des
   micro-segments ;
 - détection des montées par hystérésis, meilleur sous-segment valide,
   raffinement des extrema, fusion des montées proches, validation avec repli ;
 - `rebuild` : tri, contraintes (1 m entre montées, 100 m minimum après
-  résolution), ancrage du profil, segments, métriques, normalisation des groupes.
+  résolution), profil lissé (extrémités ancrées), segments, métriques,
+  normalisation des groupes.
 
 Les arrondis sont fixés (km 4 décimales, progression 5, D+ entier, pente 2,
 altitude 1, lat/lon 6). Les tests couvrent le profil plat, une montée unique,
@@ -1665,4 +1669,4 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-10-20
+**Dernière mise à jour** : 2026-10-21
