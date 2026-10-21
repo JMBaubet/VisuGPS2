@@ -133,8 +133,10 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "audit_status": "needs_review",
     "audit_archived": false,
     "multiride_status": "pending",
+    "multiride_complete": false,
     "communes_completed": false,
-    "altimetrie_validated": false
+    "altimetrie_validated": false,
+    "altimetrie_climb_count": 6
   }
 ]
 ```
@@ -145,13 +147,17 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Statut des passages multiples** (`multiride_status`) : `"none"` (détection jouée, aucune portion répétée), `"pending"` (au moins un passage reste à valider — **l'édition caméra est fermée**) ou `"validated"` (passages validés). Il vaut `null` pour une trace dont la détection n'a pas été jouée : la valeur est **permissive**, la barrière ne s'appliquant qu'aux traces détectées depuis l'introduction du module. Posé par `multiride_detect` (`none`/`pending`) et par `multiride_validate` (`validated`), et **reposé par chacune des commandes de geste** — approbation, fusion, faux positif, annulation, réinitialisation — : un geste invalide la validation de la détection, donc le statut retombe à `pending` (ou `none` si la détection ne trouve plus rien) et la barrière se referme. Comme `audit_archived`, ce champ évite à la carte du circuit de lire un fichier pour connaître l'état de la trace.
 
+**Complétude des passages multiples** (`multiride_complete`) : `true` quand **chaque segment** de la détection a reçu un verdict — approuvé ou écarté. Distinct de `multiride_status` : une validation globale peut être posée alors que des segments restent à examiner. `null` sur un registre antérieur au champ ; `get_traces` le calcule depuis `multiride.json` et le persiste au premier chargement (rattrapage idempotent). La carte du circuit s'en sert pour colorer l'icône `mdi-repeat` : **verte** seulement si la validation est globale et complète, **jaune** sinon.
+
 **Détection des communes** (`communes_completed`) : `true` quand le fichier `communes.json` de la trace est présent et à jour — la fonctionnalité a été menée à son terme pour cette trace. L'information **absente** vaut `false` (« la tâche n'a pas été réalisée ») : c'est ce qui permet à la tâche de fond du lancement de rattraper les traces nettoyées avant l'introduction du module. Posé par `communes_detect`, reposé à `false` par `audit_validate` — le GPX réécrit change la géométrie de la trace, la description est donc supprimée et la détection rejouée.
 
 **Validation de l'altimétrie** (`altimetrie_validated`) : `true` quand l'**opérateur** a sauvegardé l'analyse depuis la vue `/altimetrie` — la première sauvegarde vaut validation du profil et des montées. L'information **absente** vaut `false` : la génération automatique du fichier (import d'une trace propre, validation d'audit) n'est qu'une proposition, elle ne vaut pas validation. Posé par `altimetrie_save`, reposé à `false` par `altimetrie_detect` (recalcul explicite ou génération à l'ouverture) et par `audit_validate` (le GPX réécrit produit une nouvelle analyse). C'est ce drapeau, lu par la carte du circuit sans lire de fichier, qui colore l'icône `mdi-terrain` — jaune tant que l'analyse reste à valider, verte ensuite.
 
+**Nombre de montées** (`altimetrie_climb_count`) : nombre de montées de `altimetrie.json`, posé par `altimetrie_save` et par `altimetrie_detect`. Il permet à la carte de rendre l'icône `mdi-terrain` **blanche** quand l'analyse est validée mais ne contient aucune montée, sans relire le fichier. `null` sur un registre antérieur au champ ; `get_traces` le calcule pour les analyses **validées** (rattrapage idempotent) et le persiste. `audit_validate` le repose à `null`, la régénération qui suit le réécrivant.
+
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
-**Rétrocompatibilité et registres pré-audit (D1)** : `favorite`, `is_displayed`, `audit_archived`, `communes_completed` et `altimetrie_validated` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ces champs se charge donc sans erreur. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
+**Rétrocompatibilité et registres pré-audit (D1)** : `favorite`, `is_displayed`, `audit_archived`, `communes_completed`, `altimetrie_validated`, `altimetrie_climb_count` et `multiride_complete` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ces champs se charge donc sans erreur. `multiride_complete` est le seul à distinguer « absent » (`null`) de « faux » : c'est ce qui permet à `get_traces` de le rattraper une seule fois. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
 
 ### `traces/{trace_id}/trace.geojson` — LineString GeoJSON
 
@@ -188,20 +194,24 @@ Le backend traite le JSON de manière transparente (`serde_json::Value`), sans v
 
 ### `traces/{trace_id}/audit.json` — Archive d'audit
 
-État complet du travail d'audit, écrit **au fil des actions** (avenant à la décision 6 : les
-findings ne sont plus volatils). Sans cette archive, ni la reprise d'une session interrompue ni
-la consultation d'un audit appliqué ne seraient possibles.
+État complet du travail d'audit, **créé dès l'import d'une trace non propre** puis écrit
+**au fil des actions** (avenant à la décision 6 : les findings ne sont plus volatils). Sans
+cette archive, ni la reprise d'une session interrompue ni la consultation d'un audit appliqué
+ne seraient possibles.
 
-**Quand le fichier est écrit** (commande `audit_save_state`, écriture **atomique** tmp + rename) :
+**Quand le fichier est écrit** (écriture **atomique** tmp + rename) :
 
-| Événement | `validated` écrit |
-|---|---|
-| Détection initiale (`audit_run_detection` par la vue) | `false` |
-| Chaque traitement : suppression, routage, faux positif, retrait du faux positif, annulation | `false` |
-| Validation (`audit_validate`), après la réécriture du GPX | `true` |
+| Événement | Écrit par | `validated` écrit |
+|---|---|---|
+| Import d'une trace `needs_review` (résultat de la détection) | `write_import_audit_archive` | `false` |
+| Détection initiale depuis la vue (archive absente) | `audit_save_state` | `false` |
+| Chaque traitement : suppression, routage, faux positif, retrait du faux positif, annulation | `audit_save_state` | `false` |
+| Validation (`audit_validate`), après la réécriture du GPX | `audit_save_state` | `true` |
 
-Les **aperçus** — réglage continu des curseurs de suppression ou de routage — n'écrivent
-**jamais** : seuls les traitements effectifs sont archivés.
+L'écriture à l'import est **best-effort** : un échec est loggé et n'empêche pas l'import ; la
+vue `/audit` relance alors la détection si l'archive manque. Les **aperçus** — réglage continu
+des curseurs de suppression ou de routage — n'écrivent **jamais** : seuls les traitements
+effectifs sont archivés.
 
 **Format** (JSON en camelCase, miroir TS `AuditArchive` dans `src/stores/audit.ts`) :
 

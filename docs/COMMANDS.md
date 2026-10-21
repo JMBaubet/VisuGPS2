@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (51 commandes)
+## Catalogue (52 commandes)
 
 ### Application
 
@@ -92,6 +92,19 @@ pub struct ModeInfo {
 | `get_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<Option<Value>, String>` | Charge les keyframes persistés d'une trace **pour un ratio donné** (`"16:9"`/`"4:3"`). Retourne `None` si le fichier est absent. |
 | `delete_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<(), String>` | Supprime le fichier `keyframes/{trace_id}_{ratio}.json` d'un ratio donné (tolérant si absent). |
 
+### Informations de circuit (`trace_info.rs`)
+
+> Agrégation **en lecture seule** des artefacts d'une trace pour le volet Info
+> de la carte (`Circuit.vue`). Une seule commande évite de transférer les
+> archives complètes : audit (compteurs AR), multiride (segments jugés),
+> altimétrie (montées et profil réduit à ~120 points) et communes (nombre de
+> communes distinctes). Chaque bloc est `null` quand le fichier correspondant
+> est absent ou illisible.
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `get_trace_info` | `async (app, trace_id: String) -> Result<TraceInfo, String>` | Synthèse du circuit : `audit` (`arTotal`, `arTreated`, `arPending`, `rpTotal`, `rpTreated`, `rpPending`, `updatedAt`), `multiride` (`segmentsTotal`, `segmentsTreated`, `segmentsPending`, `updatedAt`), `altimetrie` (`simpleClimbs`, `mergedClimbs`, `separatedClimbs`, `validated`, `updatedAt`, `profile`, `climbs`, `altMinM`, `altMaxM`, `totalDistanceM`) et `communes` (`communeCount`). |
+
 ### Audit GPX (`gpx_audit/commands.rs`)
 
 > Le module Audit GPX **remplace** l'ancien module Nettoyage. Il détecte deux
@@ -102,13 +115,14 @@ pub struct ModeInfo {
 > annulable par anomalie. Une trace n'est **valide** que si elle est auditée
 > (`audit_status = "clean"`) ; elle est sinon redirigée vers la vue `/audit`.
 >
-> **L'état de travail est archivé sur disque** (`audit_save_state` →
-> `traces/{trace_id}/audit.json`, avenant à la décision 6) : trace de travail,
-> findings et traitements sont écrits après la détection puis après **chaque**
-> traitement. L'archive sert la **reprise** d'une session interrompue et la
-> **consultation** d'un audit appliqué (lecture seule, sans annulation possible).
-> Elle est relue par `audit_load_archive`, avec repli silencieux sur la détection
-> si elle est absente ou inexploitable. Voir
+> **L'état de travail est archivé sur disque** (`traces/{trace_id}/audit.json`,
+> avenant à la décision 6) : l'archive est **créée dès l'import d'une trace
+> `needs_review`** avec le résultat de la détection qui a posé ce statut, puis
+> réécrite par `audit_save_state` après **chaque** traitement. L'archive sert la
+> **reprise** d'une session interrompue et la **consultation** d'un audit
+> appliqué (lecture seule, sans annulation possible). Elle est relue par
+> `audit_load_archive`, avec repli silencieux sur la détection si elle est
+> absente ou inexploitable. Voir
 > [DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idauditjson--archive-daudit).
 >
 > Les commandes `audit_map_overlay`, `audit_delete_preview`,
@@ -127,8 +141,8 @@ pub struct ModeInfo {
 | `audit_unmark_fp` | `(findings: Vec<Finding>, finding_id: String) -> Result<Vec<Finding>, String>` | Symétrique de `audit_mark_fp` : repasse une anomalie `Fp` en `Pending`. |
 | `audit_undo_correction` | `(trace_id: String, points, findings, finding_id: String) -> Result<AuditState, String>` | Annule la correction portée par une anomalie (restaure les points d'origine, retire les points insérés, réintègre les faux positifs absorbés). |
 | `audit_validate` | `async (app, trace_id: String, points: Vec<AuditPoint>, findings: Vec<Finding>) -> Result<TraceMetadata, String>` | **Point de non-retour.** Refuse tant qu'un finding est `pending`. Réécrit le GPX (backup `{filename}.gpx.orig` posé **une seule fois**, jamais écrasé), régénère geojson/stats/hash et pose `audit_status = "clean"` **et** `audit_archived = true`. Le GPX est écrit **avant** `traces.json` : un échec de réécriture laisse le statut intact. |
-| `audit_save_state` | `async (app, trace_id: String, params: AuditParams, total_distance_m: f64, points: Vec<AuditPoint>, findings: Vec<Finding>, validated: bool) -> Result<String, String>` | Écrit l'**archive d'audit** (`traces/{trace_id}/audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection (`validated = false`) puis après **chaque** traitement ; `validated = true` après une validation réussie. Les aperçus (curseurs) ne l'appellent jamais. |
-| `audit_load_archive` | `async (app, trace_id: String) -> Result<Option<AuditArchive>, String>` | Relit l'archive d'une trace : `null` si elle est absente, illisible, d'une version inconnue ou rattachée à une autre trace — l'appelant retombe alors sur `audit_run_detection`. Sert la reprise d'une session interrompue et la consultation d'un audit appliqué. |
+| `audit_save_state` | `async (app, trace_id: String, params: AuditParams, total_distance_m: f64, points: Vec<AuditPoint>, findings: Vec<Finding>, validated: bool) -> Result<String, String>` | Écrit l'**archive d'audit** (`traces/{trace_id}/audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection depuis la vue (`validated = false`) puis après **chaque** traitement ; `validated = true` après une validation réussie. L'archive d'import d'une trace `needs_review` est écrite séparément, par `write_import_audit_archive`. Les aperçus (curseurs) ne l'appellent jamais. |
+| `audit_load_archive` | `async (app, trace_id: String) -> Result<Option<AuditArchive>, String>` | Relit l'archive d'une trace : `null` si elle est absente, illisible, d'une version inconnue ou rattachée à une autre trace — l'appelant retombe alors sur `audit_run_detection`. Sert la reprise d'une session interrompue (archive créée à l'import ou après une détection) et la consultation d'un audit appliqué. |
 
 **Type `AuditParams`** (miroir TS `AuditParams` dans `src/stores/audit.ts`) — assemblé par la vue depuis les réglages `Audit.*` :
 ```rust
@@ -222,7 +236,10 @@ pub struct AuditArchive {
 > **contrat de sortie** que consommera la Visualisation et le support du verrou.
 > Le statut correspondant vit dans le **registre** (`multiride_status`), ce qui
 > permet à la carte du circuit de connaître la barrière **sans lire de fichier** :
-> tant qu'il vaut `"pending"`, l'édition caméra est inaccessible. Voir
+> tant qu'il vaut `"pending"`, l'édition caméra est inaccessible. Le registre
+> porte aussi **`multiride_complete`** : `true` quand chaque segment a reçu un
+> verdict, distinct de la validation globale. La carte du circuit colore
+> l'icône `mdi-repeat` en vert seulement dans ce cas, en jaune sinon. Voir
 > [DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idmultiridejson--description-des-passages-multiples).
 >
 > La détection est aussi **déclenchée automatiquement** : à l'import d'une trace
@@ -362,8 +379,10 @@ pub struct CommunePassage {
 > automatique n'est qu'une proposition, seule une **sauvegarde utilisateur**
 > vaut validation. Le drapeau est posé par `altimetrie_save`, reposé à `false`
 > par `altimetrie_detect` (recalcul ou première génération) et par
-> `audit_validate` (le GPX réécrit change la trace). Il permet à la carte du
-> circuit de colorer l'icône `mdi-terrain` sans lire de fichier.
+> `audit_validate` (le GPX réécrit change la trace). Il porte aussi
+> **`altimetrie_climb_count`**, le nombre de montées : la carte du circuit peut
+> ainsi colorer l'icône `mdi-terrain` sans lire de fichier — jaune à valider,
+> verte validée, **blanche** validée sans montée.
 
 | Commande | Signature Rust | Retour |
 |---|---|---|

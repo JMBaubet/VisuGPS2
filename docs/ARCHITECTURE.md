@@ -253,7 +253,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 51 commandes : voir COMMANDS.md pour le catalogue complet
+            // 52 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
             gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*,
             gpx_multiride::commands::*, gpx_communes::commands::*,
@@ -277,6 +277,7 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `gpx_multiride/` : Module Multiride (détection des portions parcourues plusieurs fois, ajustements, fichier de description) — voir § « Passage multiples » ci-dessous
 - `gpx_communes/` : Module Communes (croisement avec les limites administratives OSM via Overpass, description des passages) — voir § « Détection des communes » ci-dessous
 - `gpx_altimetrie/` : Module Altimétrie (profil lissé, segments de pente, détection et reconstruction des montées) — voir § « Altimétrie » ci-dessous
+- `trace_info.rs` : Agrégation **en lecture seule** des artefacts d'une trace pour le volet Info de la carte (compteurs d'audit et de passages multiples, montées, profil sous-échantillonné, communes) — voir § « Informations de circuit » ci-dessous
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
 
@@ -368,6 +369,7 @@ src/
 │   ├── Accueil/      # Composants de la page d'accueil
 │   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits (triée par distance)
 │   │   ├── Circuit.vue          # Carte d'un circuit (2 lignes d'icônes d'action, extension Info, focus carte, édition caméra)
+│   │   ├── CircuitAltitudeProfile.vue # Sparkline du profil d'altitude avec les montées surlignées (volet Info)
 │   │   ├── Map.vue              # Carte Mapbox GL (clusters, favoris, traces affichées, focus)
 │   │   ├── AppBar.vue
 │   │   ├── ModeExecutionCard.vue
@@ -421,7 +423,8 @@ src/
 ├── composables/      # Logique réutilisable (Composition API)
 │   ├── useSettingsTree.ts  # Construit l'arbre catégories/params du drawer (filtré par route)
 │   ├── useAuditOrs.ts      # Requêtes OpenRouteService du module Audit (2 clés en bascule)
-│   └── useEditionMap.ts    # Logique partagée de la carte d'édition caméra
+│   ├── useEditionMap.ts    # Logique partagée de la carte d'édition caméra
+│   └── useCircuitInfo.ts   # Chargement et cache de la synthèse du volet Info (get_trace_info)
 ├── assets/           # Ressources statiques
 │   └── styles/
 ├── App.vue          # Layout racine
@@ -469,6 +472,7 @@ src-tauri/
 - `gpx_multiride/` : Module Multiride (détection des portions répétées, ajustements, fichier de description) — 11 fichiers : `types.rs`, `projection.rs`, `resample.rs`, `runs.rs`, `direction.rs`, `segments.rs`, `adjustments.rs`, `file.rs`, `detection.rs`, `commands.rs`, plus `tests/`. Détails au § « Passage multiples » ci-dessous.
 - `gpx_communes/` : Module Communes (croisement OSM/Overpass, écriture de la description) — 7 fichiers : `types.rs`, `geometry.rs`, `osm.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Détection des communes » ci-dessous.
 - `gpx_altimetrie/` : Module Altimétrie (profil, segments de pente, montées) — 6 fichiers : `types.rs`, `params.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Altimétrie » ci-dessous.
+- `trace_info.rs` : Agrégation **en lecture seule** (`get_trace_info`) pour le volet Info de la carte — compteurs d'audit AR, segments Multiride, montées Altimétrie avec profil sous-échantillonné, communes distinctes. Aucun fichier n'est écrit ; chaque bloc est `None` si son artefact manque.
 
 **Capacités Tauri** :
 - `default.json` : Permissions appliquées aux fenêtres `main` et `screen-bis`
@@ -560,7 +564,32 @@ La génération automatique du fichier n'est qu'une **proposition** : le drapeau
 `altimetrie_validated` du registre reste faux jusqu'à une sauvegarde de
 l'opérateur. La carte du circuit le lit directement — sans lire
 `altimetrie.json` ni appeler l'IPC — pour colorer l'icône `mdi-terrain` en
-jaune (à valider) ou en vert (validée).
+jaune (à valider), en vert (validée) ou en **blanc** (validée sans aucune
+montée). Le nombre de montées est porté par `altimetrie_climb_count`, maintenu
+par `altimetrie_save` / `altimetrie_detect` et rattrapé par `get_traces` sur
+les analyses validées antérieures au champ.
+
+### 6. Informations de circuit (volet Info)
+
+Le volet Info de `Circuit.vue` est chargé **à la demande**, à la première
+ouverture : `useCircuitInfo().load(traceId)` appelle `get_trace_info`, qui lit
+les artefacts déjà écrits et renvoie une synthèse compacte. Le résultat est
+gardé par l'instance de carte ; un retour sur l'accueil remonte les cartes et
+rafraîchit donc l'état.
+
+| Source | Information renvoyée |
+|---|---|
+| `traces/{id}/audit.json` | AR et **rond-points** traités / non traités (findings non `pending`), `updatedAt` |
+| `traces/{id}/multiride.json` | segments traités (approuvés ou écartés) / non traités, `updatedAt` |
+| `traces/{id}/altimetrie.json` + registre | montées simples / fusionnées / séparées, état `validated`, `updatedAt`, profil réduit à ~120 points, bornes d'altitude |
+| `traces/{id}/communes.json` | nombre de communes **distinctes** traversées |
+
+La commande ne sérialise jamais les points d'audit ni les emprunts complets :
+la carte n'a besoin que des compteurs et d'une sparkline. La lecture de
+`audit.json` est **partielle** — seuls le type et le statut des findings sont
+désérialisés —, ce qui évite de charger la trace de travail et les
+enregistrements d'annulation. Un artefact absent laisse son bloc à `null`, et le
+volet affiche l'information comme indisponible.
 
 ## Patterns architecturaux
 
@@ -850,11 +879,12 @@ L'application permet d'importer des fichiers GPX provenant de plateformes comme 
 
 4. **Composants Vue** :
    - `CircuitsDrawer.vue` : câblage du bouton `mdi-image-plus-outline` sur `importerGpx()`, liste pilotée par le store, filtrée par viewport (`visibleTracesByDistance`), plafonnée au paramètre `Accueil.nbrCircuits.list`.
-   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Anomalies de la source, Passages multiples, Terrain, Communes, Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Icône Éditer** : `mdi-map-marker-path` **orange** tant que `audit_status !== 'clean'` (**barrière 1** — audit requis), `mdi-pencil` sinon. Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace non « clean » → `/audit?traceId=…` (cf. § « Audit GPX » ci-dessous), passages multiples à valider → `/multiride?traceId=…` ; sinon `editionStore.selectTrace` puis vue `editionCamera`. **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / ambre > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition, qui emploie le jaune au palier > 50 %) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. **Actions de la seconde rangée** — principe : affichées et actives, ou **absentes** ; plus d'état grisé désactivé :
+   - `Circuit.vue` : affiche les statistiques calculées (distance, dénivelé) ; deux lignes d'icônes d'action masquées par opacité hors survol — ligne de titre (Éditer, Groupes, Météo, Visualiser) et ligne Distance/Dénivelé (Anomalies de la source, Passages multiples, Terrain, Communes, Supprimer, Exporter, Info, Affichage, Favoris) ; extension `v-expand-transition` au clic Info (date d'import, source, lien, puis synthèse) ; déclenche le focus carte via `tracesStore.focusedTraceId`. **Icône Éditer** : `mdi-map-marker-path` **orange** tant que `audit_status !== 'clean'` (**barrière 1** — audit requis), `mdi-pencil` sinon. Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace non « clean » → `/audit?traceId=…` (cf. § « Audit GPX » ci-dessous), passages multiples à valider → `/multiride?traceId=…` ; sinon `editionStore.selectTrace` puis vue `editionCamera`. **Indicateur d'avancement de l'édition** : au montage, `Circuit` charge le fichier keyframes du **viewport paramétré** (`Edition.Camera.viewportDefaut`) via `keyframesStore.loadKeyframes` et calcule le ratio de segments verrouillés ; l'icône Éditer est **colorée** selon ce ratio (vert 100 % / ambre > 50 % / orange ≥ 10 % / rouge sinon, mêmes seuils que la toolbar d'édition, qui emploie le jaune au palier > 50 %) et **forcée visible quand l'édition est incomplète** (non verte), même sans survol ; masquée uniquement si **verte et non survolée** ; visible au survol quelle que soit la couleur. **Actions de la seconde rangée** — principe : affichées et actives, ou **absentes** ; plus d'état grisé désactivé :
      - `mdi-map-marker-path` (consultation des anomalies) : rendue seulement si `audit_status === 'clean'` **et** `audit_archived` ; le clic ouvre `/audit?traceId=…` en **consultation** (lecture seule). Sans archive, le bouton est absent.
-     - `mdi-repeat` : `pending` → ambre, **forcée visible** (barrière 2) ; `validated` → verte, au survol ; `none` → **blanche** au survol, le clic affiche le message bleu « Aucun passage multiple détecté sur cette trace. » ; `null` → **absente**, la détection n'a jamais été jouée.
-     - `mdi-terrain` : trace non nettoyée → grise, le clic affiche « L'altimétrie n'est disponible qu'après le nettoyage de la trace. » ; trace propre sans sauvegarde utilisateur → **jaune, forcée visible** (validation à mener) ; `altimetrie_validated` → **verte**, au survol. Le clic ouvre `/altimetrie`.
+     - `mdi-repeat` : `pending` → **jaune**, forcée visible (barrière 2) ; `validated` → verte **seulement si `multiride_complete` est vrai**, jaune si des segments restent à examiner ; `none` → **blanche** au survol, le clic affiche le message bleu « Aucun passage multiple détecté sur cette trace. » ; `null` → **absente**, la détection n'a jamais été jouée.
+     - `mdi-terrain` : trace non nettoyée → grise, le clic affiche « L'altimétrie n'est disponible qu'après le nettoyage de la trace. » ; trace propre sans sauvegarde utilisateur → **jaune, forcée visible** (validation à mener) ; `altimetrie_validated` → **verte**, au survol ; **blanche** si l'analyse validée ne contient aucune montée (`altimetrie_climb_count = 0`). Le clic ouvre `/altimetrie`.
      - `mdi-city` : cinq états — grise (trace non nettoyée, le clic explique la condition d'accès), jaune (traitement de ce circuit), orange (en attente), verte (détection faite, consultation) et rouge (à lancer) ; seuls le rouge et le vert sont actionnables.
+     **Volet Info** : à l'ouverture, `Circuit` appelle `useCircuitInfo().load(traceId)` → commande `get_trace_info`, qui agrège les artefacts sans transférer les archives complètes (profil réduit à ~120 points). Une ligne par catégorie, avec la date à droite : **aller-retours** puis **rond-points** (libellé rouge / jaune / vert selon l'avancement, compteurs traités en vert et non traités en rouge, date de l'archive sur la ligne des rond-points), **passages multiples** (libellé de la couleur de l'icône, compteurs colorés, date ; **ligne absente** si aucune description de détection n'existe, « Aucune détection » restant affiché quand la détection a été jouée sans portion répétée), **montées** (total global et nombre de fusionnées ; **toute la ligne passe en jaune** tant que l'analyse n'est pas validée, avec « Attente de validation » ; elle reprend sa couleur normale et affiche la date une fois validée). Le **profil d'altitude** n'est affiché que si des montées existent ; les **communes** viennent en dessous. Le **bloc d'audit est omis** pour une trace propre qui n'a jamais eu d'archive (trace `clean` d'origine, `audit.json` absent) : le repli « Audit : Aucune archive » n'apparaît que sur une trace encore à auditer. En **mode debug** (`appStore.isDebug`), l'identifiant de la trace est ajouté en pied avec une icône de copie dans le presse-papiers.
      Les autres boutons de la ligne de titre (Groupes, Météo) restent à câbler.
 
 5. **Carte Mapbox** (`src/components/Accueil/Map.vue`) :
@@ -917,11 +947,13 @@ d'`EditionCamera.vue` redirigent tous deux vers `/audit?traceId=…`. Le `traceI
 ### Archive d'audit (avenant à la décision 6)
 
 L'état de travail — trace de travail (`AuditPoint[]`), findings, corrections et enregistrements
-d'annulation — est écrit sur disque **au fil des actions**, dans `traces/{trace_id}/audit.json`
-(commande `audit_save_state`, écriture atomique). Il n'est donc **plus volatil** : la sortie de
-la vue, ou la fermeture de l'application, ne perd plus le travail. Les **aperçus** (réglage
-continu des curseurs de suppression et de routage) n'écrivent jamais — seuls les traitements
-effectifs sont archivés.
+d'annulation — est **créé dès l'import d'une trace non propre** (`write_import_audit_archive`,
+avec le résultat de la détection qui a posé `needs_review`), puis écrit sur disque **au fil
+des actions**, dans `traces/{trace_id}/audit.json` (commande `audit_save_state`, écriture
+atomique). Il n'est donc **plus volatil** : la sortie de la vue, ou la fermeture de
+l'application, ne perd plus le travail. L'écriture à l'import est **best-effort** : un échec
+est loggé et la vue relancera la détection. Les **aperçus** (réglage continu des curseurs de
+suppression et de routage) n'écrivent jamais — seuls les traitements effectifs sont archivés.
 
 L'archive porte la **trace de travail**, ce qui restitue la carte, la liste et les zones
 d'anomalie telles qu'elles étaient, **sans réexécuter la détection** ; elle conserve en outre les
@@ -936,9 +968,13 @@ Trois modes d'entrée en découlent, décidés par le statut de la trace :
 
 | Statut | Archive | Mode de la vue |
 |---|---|---|
-| `needs_review` | absente | **détection** (comportement d'origine), puis archivage |
-| `needs_review` | présente | **reprise** de la session interrompue, entièrement modifiable |
+| `needs_review` | absente | **détection** (cas résiduel : trace importée avant ce comportement, ou écriture d'import échouée), puis archivage |
+| `needs_review` | présente | **reprise** — archive créée à l'import, ou session interrompue ; entièrement modifiable |
 | `clean` | présente | **consultation** : audit appliqué restitué, **lecture seule** |
+
+> Une trace `needs_review` importée dispose donc de son archive **avant** toute ouverture de
+> la vue : le volet Info de la carte affiche immédiatement les compteurs AR/RP, et `/audit`
+> s'ouvre directement en reprise, sans rejouer la détection.
 
 En consultation, corriger, annuler ou réappliquer est exclu — gardes du store `audit.ts` et
 interface sans action : une correction archivée n'est plus annulable, les enregistrements
@@ -1024,7 +1060,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 | `audit_save_state(trace_id, params, total_distance_m, points, findings, validated)` | Écrit l'**archive d'audit** (`audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection puis après **chaque** traitement ; `validated = true` après une validation réussie. Jamais appelée par les aperçus. |
 | `audit_load_archive(trace_id)` | Relit l'archive d'une trace (`None` si absente, illisible, d'une version inconnue ou d'une autre trace) — reprise d'une session interrompue et consultation d'un audit appliqué. |
 
-> Référence complète des **51 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des **52 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ### Paramètres (`Audit.*`)
 
@@ -1073,6 +1109,13 @@ dossier de la trace (`multiride.json`) et un **statut** dans le registre
 | `"none"` | Détection jouée, aucune portion répétée | accessible |
 | `"pending"` | Au moins un passage reste à valider | **fermée** — redirection vers `/multiride` |
 | `"validated"` | Passages validés par l'utilisateur | accessible |
+
+**Complétude** (`multiride_complete`) : `true` quand **chaque segment** a reçu un
+verdict — approuvé ou écarté. Distinct du statut : une validation globale peut
+être posée alors que des segments restent à examiner. Ce drapeau colore l'icône
+`mdi-repeat` de la carte (verte seulement si la validation est globale **et**
+complète, jaune sinon) et il est rattrapé par `get_traces` sur les registres
+antérieurs — une fois calculé, il est persisté.
 
 Le statut vit dans le registre — et non dans le fichier — pour la même raison que
 `audit_archived` : la carte du circuit doit connaître la barrière **sans lire de
@@ -1570,9 +1613,9 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
    - `CameraEditor.vue` (Composant B, spec « Interface de contrôle MapBox ») : widgets de manipulation directe superposés sur la carte, **pilotés par la position de lecture** (`currentKeyframe`). **Hors RdV** → bouton « Ajouter un point de RdV » (sous le compas). **Sur un RdV** → widgets : **switch Cible** (pitch à 0° + croix bleue + drag sur carte pour viser, sauvegarde `cam.lng/lat`), **sliders Pitch/Zoom customs** (drag vertical + molette ±1 pas, double-clic ou clic sur valeur orange pour remettre les **valeurs par défaut des paramètres** `Edition.Camera.pitchDefaut`/`zoomDefaut`, **vert** sur la valeur par défaut sinon **bleu**), **CompassBandeau** (bandeau ±90°, défilement **infini** sur 3 copies -360°…720°, drag + molette ±1°, repère rouge fixe). **Barre d'actions** en bas : Undo (restaure la baseline), Supprimer (grisé sur le km 0), Sauvegarder (**grisé tant que non modifié** — sauvegarde explicite). **Verrouillage carte** : sur un RdV, toutes les interactions Mapbox sont désactivées tant que le mode Cible est inactif. **Keyframes verrouillés** : si le keyframe courant borde un segment verrouillé (mode validation), un badge cadenas s'affiche et les widgets (sliders, compas, Cible, Undo/Supprimer, Ajouter) sont **désactivés** — la protection réelle est portée par les gardes du store. Raccourcis : Espace Play/Pause, flèches ←/→ navigation RdV.
 
 6. **Déclencheur** (`src/components/Accueil/Circuit.vue`) :
-   - Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace à auditer (`audit_status !== 'clean'`) → `router.push({ name: 'audit', query: { traceId: trace.id } })` ; passages multiples à valider (`multiride_status === 'pending'`) → `router.push({ name: 'multiride', query: { traceId: trace.id } })` ; sinon → édition caméra. Son icône porte l'état : `mdi-map-marker-path` **orange** (à auditer), `mdi-repeat` **ambre** (passages à valider) ou `mdi-pencil` (libre — la couleur traduit alors l'avancement du verrouillage), et l'icône est **forcée visible** hors survol tant qu'une barrière subsiste ou que l'édition est incomplète. La trace est désignée par la **query** de la route : plus de store intermédiaire.
-   - Le bouton **Voir les anomalies de la source** (section info déroulante, `mdi-map-marker-path` **vert**) appelle `voirAnomaliesSource()` : il ouvre la route `/audit?traceId=…` en **consultation**. Il n'est **rendu** que si `audit_status === 'clean'` **et** `audit_archived` — il n'y a plus de repli informatif, la vue n'ayant rien à restituer sans archive.
-   - Le bouton **Passages multiples** (section info déroulante, `mdi-repeat` **vert**) ouvre `/multiride?traceId=…` en **consultation**, ajustement compris. Il n'est **rendu** que si `multiride_status === 'validated'` : tant que les passages restent à valider, c'est l'icône Éditer qui mène à la vue (barrière). Un **geste** y invalide la validation — la trace repasse à valider, et le bouton laisse place à l'icône Éditer ambre jusqu'à une nouvelle validation.
+   - Le bouton **Éditer** appelle `editerCircuit()`, qui **enchaîne les deux barrières** : trace à auditer (`audit_status !== 'clean'`) → `router.push({ name: 'audit', query: { traceId: trace.id } })` ; passages multiples à valider (`multiride_status === 'pending'`) → `router.push({ name: 'multiride', query: { traceId: trace.id } })` ; sinon → édition caméra. Son icône porte l'état : `mdi-map-marker-path` **orange** (à auditer) ou `mdi-pencil` (libre — la couleur traduit l'avancement du verrouillage), **forcée visible** hors survol tant qu'une barrière subsiste ou que l'édition est incomplète. La trace est désignée par la **query** de la route.
+   - Les **actions de consultation** vivent sur la **seconde rangée** : `mdi-map-marker-path` **vert** (seulement si `audit_archived`, ouvre `/audit` en consultation), `mdi-repeat` (jaune / verte / blanche selon l'état, ouvre `/multiride`), `mdi-terrain` (altimétrie, jaune tant que l'analyse n'est pas validée, verte ensuite, blanche si validée sans montée) et `mdi-city` (communes). Le volet **Info** (icône `mdi-information-outline`) porte la synthèse décrite au §5.
+   - Un **geste** dans `/multiride` invalide la validation — la trace repasse à valider, et l'icône `mdi-repeat` repasse au jaune jusqu'à une nouvelle validation.
 
 ### Carte satellite + terrain (vs. Accueil/Map.vue)
 
@@ -1616,7 +1659,7 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | `get_keyframes` | Charge les keyframes persistés d'une trace pour un ratio (`None` si absent). |
 | `delete_keyframes` | Supprime le fichier keyframes d'un ratio (tolérant si absent). |
 
-> Référence complète des 51 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 52 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
