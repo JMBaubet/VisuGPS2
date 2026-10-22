@@ -1,5 +1,6 @@
 //! Tests du module Tunnels.
 
+mod commands_test;
 mod download_test;
 mod file_test;
 mod geometry_test;

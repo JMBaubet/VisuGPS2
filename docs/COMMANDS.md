@@ -448,6 +448,66 @@ pub struct AltimetrieClimbEdit {
 > unique. Le backend recalcule toutes les métriques et ne fait jamais confiance
 > aux valeurs dérivées.
 
+### Tunnels (`gpx_tunnels/commands.rs`)
+
+**Principe** : une trace propre est confrontée aux ways OSM `tunnel` + `highway`
+des PBF régionaux. Le seul fichier écrit dans le dossier de la trace est
+`traces/{trace_id}/tunnels.json` ; `regions.json` et les `.osm.pbf` restent sur
+le support OSM (`Tunnels.Support.dossierPbf`). La détection est **silencieuse** :
+`regions.json` est produit depuis Geofabrik si nécessaire, les PBF manquants sont
+téléchargés sans confirmation, et la progression est émise par l'événement
+`tunnels-progress` (`{ traceId, stage, region?, filename?, bytesDone, bytesTotal, percent }`).
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `tunnels_load` | `async (app, trace_id: String) -> Result<Option<TunnelFile>, String>` | Relit `tunnels.json`. `null` si le fichier est absent, illisible, d'une version inconnue ou rattaché à une autre trace. |
+| `tunnels_requirements` | `async (app, trace_id: String) -> Result<TunnelRequirements, String>` | Décrit les ressources OSM nécessaires à la trace : état (`disabled`, `not_configured`, `needs_regions`, `no_region`, `missing_pbf`, `ready`), dossier, régions Geofabrik requises et présence de chaque PBF. Ne télécharge rien. |
+| `tunnels_prepare` | `async (app, trace_id: String) -> Result<TunnelPrepareResult, String>` | Produit `regions.json` si absent, télécharge silencieusement les PBF manquants requis (progression), lit les PBF en Rust pur, apparie la trace, écrit `tunnels.json` et pose le statut du registre. Une seule préparation à la fois. Garde de hash : si le GPX a changé pendant les téléchargements, rien n'est écrit. |
+| `tunnels_detect` | `async (app, trace_id: String) -> Result<TunnelPrepareResult, String>` | Même détection **sans téléchargement** ; refuse si `regions.json` ou un PBF requis manque. Utilisée par la relance de l'onglet Tunnels. |
+| `tunnels_save` | `async (app, trace_id: String, tunnels: Vec<Tunnel>) -> Result<TunnelFile, String>` | Valide et normalise les tunnels édités (bornes, longueur minimale 10 m, chevauchements, groupes ≥ 2, identifiants uniques), recalcule les longueurs, écrit atomiquement et pose `tunnels_status = "success"` : **la sauvegarde vaut validation opérateur**. |
+| `tunnels_support_status` | `async (app) -> Result<TunnelSupportStatus, String>` | État global du support OSM : activation, dossier configuré/lisible, présence et version de `regions.json`, nombre de PBF. Lu par la carte du circuit. |
+| `pick_directory` | `async (app) -> Result<Option<String>, String>` | Sélecteur natif de dossier, utilisé par le paramètre `Tunnels.Support.dossierPbf`. |
+
+**Type `TunnelFile`** — contenu de `traces/{trace_id}/tunnels.json` :
+```rust
+pub struct TunnelFile {
+    pub version: u32,                    // 1
+    pub trace_id: String,
+    pub detected_at: Option<String>,     // None pour un fichier créé manuellement
+    pub updated_at: String,              // ISO 8601
+    pub pbf_files: Vec<PbfFileRef>,      // { name, modifiedAt? }
+    pub params: TunnelParams,            // réglages de détection utilisés
+    pub tunnels: Vec<Tunnel>,
+}
+
+pub struct Tunnel {
+    pub id: String,
+    pub way_id: Option<String>,          // w123456
+    pub name: Option<String>,            // tunnel:name, sinon name
+    pub highway: Option<String>,
+    pub tunnel_type: Option<String>,     // yes, building_passage, culvert…
+    pub start_km: f64,
+    pub end_km: f64,
+    pub length_m: f64,                   // recalculée à chaque sauvegarde
+    pub detection_method: String,        // "osm" | "manual"
+    pub max_distance_m: Option<f64>,
+    pub max_angle_diff_deg: Option<f64>,
+    pub group_id: Option<String>,        // fusion logique, tronçons disjoints
+}
+```
+
+**Statuts du registre** (`TraceMetadata`) :
+- `tunnels_status` : `waiting_validate` (fichier avec tunnels, pas encore validé),
+  `success` (validé, ou détection sans tunnel), `error`, `not_configured`,
+  `missing_pbf` ; absent (`None`) sur un registre antérieur.
+- `tunnels_count` : nombre de tunnels **logiques** (un groupe fusionné compte une
+  fois). `get_traces` fait un rattrapage pour les fichiers existants sans statut.
+
+**Réglages** : `Tunnels.Detection.*` (distance, angle, marge bbox, fenêtre de cap,
+longueur minimale de run, écart de fusion) et `Tunnels.Support.*` (dossier OSM,
+activation). Le type `directory` est accepté par `update_setting` comme une
+chaîne libre.
+
 ### Paramètres / Settings (`settings.rs`)
 
 **Types `TracePoint` et `TracePoints`** (miroir TS `TracePoint` dans `src/stores/traces.ts`) :

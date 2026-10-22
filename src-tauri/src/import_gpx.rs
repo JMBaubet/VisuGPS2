@@ -157,6 +157,20 @@ pub struct TraceMetadata {
     /// régénérée ou sauvegardée le met à jour.
     #[serde(default)]
     pub altimetrie_climb_count: Option<u32>,
+    /// Statut de la détection des tunnels (module Tunnels) : `waiting_validate`
+    /// (fichier présent, pas encore validé par l'opérateur), `success`
+    /// (validation opérateur, ou détection sans tunnel), `error`,
+    /// `not_configured` ou `missing_pbf`.
+    ///
+    /// Absent des registres antérieurs → `None` : aucun état de tunnel n'est
+    /// affiché, la trace conserve son icône altimétrique. `get_traces` fait un
+    /// rattrapage pour les fichiers `tunnels.json` déjà présents.
+    #[serde(default)]
+    pub tunnels_status: Option<String>,
+    /// Nombre de tunnels logiques (groupes fusionnés comptés une fois), pour
+    /// l'infobulle de l'icône combinée.
+    #[serde(default)]
+    pub tunnels_count: Option<u32>,
 }
 
 /// Valeur par défaut du statut d'audit pour les registres antérieurs :
@@ -1121,6 +1135,8 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         // proposition : la validation appartient à l'opérateur.
         altimetrie_validated: false,
         altimetrie_climb_count: None,
+        tunnels_status: None,
+        tunnels_count: None,
     };
 
     // 9. Ajouter au registre et sauvegarder — registre relu sous le verrou :
@@ -1160,6 +1176,9 @@ pub async fn get_traces(app: tauri::AppHandle) -> Result<Vec<TraceMetadata>, Str
     // pouvoir être blanche sur une analyse validée sans montée, sans relire
     // `altimetrie.json` au montage de chaque carte.
     crate::gpx_altimetrie::commands::backfill_climb_count(&mode_dir);
+    // Et pour l'état des tunnels : une analyse `tunnels.json` antérieure au
+    // champ doit apparaître à valider sans relire le fichier sur chaque carte.
+    crate::gpx_tunnels::commands::backfill_state(&mode_dir);
     Ok(load_registry(&traces_path))
 }
 
@@ -1502,6 +1521,8 @@ mod tests {
             communes_completed: false,
             altimetrie_validated: false,
             altimetrie_climb_count: None,
+            tunnels_status: None,
+            tunnels_count: None,
         }
     }
 

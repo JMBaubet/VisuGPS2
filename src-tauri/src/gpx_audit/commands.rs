@@ -476,6 +476,9 @@ pub fn validate_impl(
     //        reposé à `false` (étape 9) — le front relancera la détection sur la
     //        trace nettoyée.
     crate::gpx_communes::file::remove_file(mode_dir, trace_id);
+    // Le GPX réécrit invalide aussi la détection des tunnels : le fichier est
+    // supprimé et le statut reposé ; la file frontend relancera la détection.
+    crate::gpx_tunnels::file::remove_file(mode_dir, trace_id);
 
     // 9. Registre : statut d'audit, stats et hash — sous le verrou du registre,
     //    car une autre commande peut écrire pendant que l'audit s'applique (la
@@ -502,6 +505,9 @@ pub fn validate_impl(
         // est une nouvelle analyse, que l'opérateur n'a pas encore validée.
         entry.altimetrie_validated = false;
         entry.altimetrie_climb_count = None;
+        // La géométrie a changé : la détection des tunnels est à rejouer.
+        entry.tunnels_status = None;
+        entry.tunnels_count = None;
         Ok(entry.clone())
     })?;
 

@@ -615,8 +615,10 @@ pub async fn update_setting(
                 .ok_or_else(|| format!("Valeur invalide pour un booléen : {:?}", value))?;
             toml::Value::Boolean(val_bool)
         }
-        // Type `string` : texte libre, non chiffré, sans borne (décision 12).
-        "string" => {
+        // Types `string` et `directory` : texte libre, non chiffré, sans borne
+        // (décision 12). Le chemin du dossier est fourni par le sélecteur natif
+        // côté frontend, mais reste éditable à la main.
+        "string" | "directory" => {
             let val_str = value.as_str()
                 .ok_or_else(|| format!("Valeur invalide pour un texte : {:?}", value))?;
             toml::Value::String(val_str.to_string())
@@ -1043,6 +1045,116 @@ mod tests {
                 .unwrap_or_else(|| panic!("paramètre `{path}` déclaré"));
             assert_eq!(def.min, Some(0.0), "`{path}` doit admettre 0");
         }
+    }
+
+    /// Le namespace `Tunnels.*` est déclaré et cohérent avec `_meta`.
+    ///
+    /// Les réglages sont accessibles depuis la vue Altimétrie **et** depuis
+    /// l'Accueil (l'icône grise de la carte ouvre le drawer Paramètres). Chaque
+    /// paramètre doit être rattaché à l'un des deux groupes, sans quoi il serait
+    /// invisible.
+    #[test]
+    fn tunnels_namespace_is_declared_and_consistent() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        let meta = extract_meta(&table);
+
+        // 1. Les deux vues déclarent les deux groupes, avec leur métadonnée.
+        for view_name in ["accueil", "altimetrie"] {
+            let view = meta
+                .views
+                .get(view_name)
+                .unwrap_or_else(|| panic!("vue `{}` déclarée", view_name));
+            for group in ["Tunnels.Detection", "Tunnels.Support"] {
+                assert!(
+                    view.groups
+                        .iter()
+                        .any(|candidate| candidate.as_str() == group),
+                    "vue `{}` sans groupe `{}`",
+                    view_name,
+                    group
+                );
+                let metadata = meta
+                    .groups
+                    .get(group)
+                    .unwrap_or_else(|| panic!("groupe `{}` sans métadonnée", group));
+                assert!(
+                    metadata.label.is_some(),
+                    "groupe `{}` sans libellé",
+                    group
+                );
+            }
+        }
+
+        // 2. Huit paramètres, tous rattachés aux deux vues.
+        let tunnel_defs: Vec<_> = defs
+            .iter()
+            .filter(|definition| definition.path.starts_with("Tunnels."))
+            .collect();
+        assert_eq!(
+            tunnel_defs.len(),
+            8,
+            "8 paramètres `Tunnels.*` attendus : {:?}",
+            tunnel_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
+        );
+        for definition in &tunnel_defs {
+            let group = definition
+                .path
+                .split('.')
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(".");
+            assert!(
+                meta.views["altimetrie"].groups.contains(&group),
+                "paramètre `{}` absent de la vue altimetrie",
+                definition.path
+            );
+            assert!(
+                meta.views["accueil"].groups.contains(&group),
+                "paramètre `{}` absent de la vue accueil",
+                definition.path
+            );
+        }
+
+        // 3. Types, bornes et défauts structurants.
+        let distance = tunnel_defs
+            .iter()
+            .find(|definition| definition.path == "Tunnels.Detection.distanceTolerance")
+            .expect("paramètre `distanceTolerance` déclaré");
+        assert_eq!(distance.setting_type, "int");
+        assert_eq!(distance.default.as_i64(), Some(20));
+        assert_eq!(distance.min, Some(5.0));
+        assert_eq!(distance.max, Some(50.0));
+        assert_eq!(distance.unit.as_deref(), Some("m"));
+
+        let merge = tunnel_defs
+            .iter()
+            .find(|definition| definition.path == "Tunnels.Detection.mergeGap")
+            .expect("paramètre `mergeGap` déclaré");
+        assert_eq!(merge.setting_type, "int");
+        assert_eq!(merge.default.as_i64(), Some(100));
+        assert_eq!(merge.min, Some(25.0));
+        assert_eq!(merge.max, Some(250.0));
+
+        let folder = tunnel_defs
+            .iter()
+            .find(|definition| definition.path == "Tunnels.Support.dossierPbf")
+            .expect("paramètre `dossierPbf` déclaré");
+        assert_eq!(folder.setting_type, "directory");
+        assert_eq!(folder.default.as_str(), Some(""));
+
+        let active = tunnel_defs
+            .iter()
+            .find(|definition| definition.path == "Tunnels.Support.actif")
+            .expect("paramètre `actif` déclaré");
+        assert_eq!(active.setting_type, "bool");
+        assert_eq!(active.default.as_bool(), Some(true));
     }
 
     /// Le namespace `Communes.*` est déclaré et cohérent avec `_meta`.

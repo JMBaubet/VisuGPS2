@@ -11,6 +11,7 @@
 //! - `pbf`, `regions`, `download`, `pipeline`, `commands` — acquisition OSM,
 //!   matching et adaptateurs Tauri (sous-étapes suivantes).
 
+pub mod commands;
 pub mod download;
 pub mod file;
 pub mod geometry;

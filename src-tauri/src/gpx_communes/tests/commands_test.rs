@@ -58,6 +58,8 @@ fn make_trace(trace_id: &str) -> TraceMetadata {
         communes_completed: false,
         altimetrie_validated: false,
         altimetrie_climb_count: None,
+        tunnels_status: None,
+        tunnels_count: None,
     }
 }
 

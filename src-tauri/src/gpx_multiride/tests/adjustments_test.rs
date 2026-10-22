@@ -199,6 +199,8 @@ fn make_registry_entry(trace_id: &str, filename: &str) -> TraceMetadata {
         communes_completed: false,
         altimetrie_validated: false,
         altimetrie_climb_count: None,
+        tunnels_status: None,
+        tunnels_count: None,
     }
 }
 

@@ -85,6 +85,13 @@ pub fn run() {
             gpx_altimetrie::commands::altimetrie_load,
             gpx_altimetrie::commands::altimetrie_preview,
             gpx_altimetrie::commands::altimetrie_save,
+            gpx_tunnels::commands::tunnels_load,
+            gpx_tunnels::commands::tunnels_requirements,
+            gpx_tunnels::commands::tunnels_prepare,
+            gpx_tunnels::commands::tunnels_detect,
+            gpx_tunnels::commands::tunnels_save,
+            gpx_tunnels::commands::tunnels_support_status,
+            gpx_tunnels::commands::pick_directory,
             trace_info::get_trace_info
         ])
         .run(tauri::generate_context!())

@@ -46,7 +46,7 @@ action = "openModes"
 [_meta.views.accueil]
 label = "Accueil"
 icon = "mdi-home"
-groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Communes.Detection", "Communes.Overpass", "Exemples"]
+groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Communes.Detection", "Communes.Overpass", "Tunnels.Detection", "Tunnels.Support", "Exemples"]
 
 [_meta.views.editionCamera]
 label = "Édition"
@@ -77,6 +77,8 @@ groups = [
   "Altimetrie.Detection",
   "Altimetrie.Segments",
   "Altimetrie.Visualisation",
+  "Tunnels.Detection",
+  "Tunnels.Support",
 ]
 
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
@@ -168,6 +170,14 @@ icon = "mdi-chart-timeline-variant"
 [_meta.groups."Altimetrie.Visualisation"]
 label = "Altimétrie — Visualisation"
 icon = "mdi-palette-outline"
+
+[_meta.groups."Tunnels.Detection"]
+label = "Tunnels — Détection"
+icon = "mdi-tunnel"
+
+[_meta.groups."Tunnels.Support"]
+label = "Tunnels — Données OSM"
+icon = "mdi-database"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -1182,6 +1192,131 @@ Bleu gris base (#607D8BFF) par défaut.
 type = "material_extended"
 default = "#607D8BFF"
 icon = "mdi-palette"
+
+# ---------------------------------------------------------------------------
+# Détection des tunnels (module Tunnels).
+# Une trace propre est confrontée aux ways OSM `tunnel` + `highway` des PBF
+# régionaux ; le résultat est écrit dans `traces/{trace_id}/tunnels.json` et
+# l'état de validation dans `traces.json` (`tunnels_status`, `tunnels_count`).
+# `regions.json` et les `.osm.pbf` vivent sur le support OSM, jamais dans le
+# dossier de la trace.
+# ---------------------------------------------------------------------------
+
+[Tunnels.Detection.distanceTolerance]
+description = "Tolérance de distance trace / segment OSM"
+documentation = """
+Distance maximale, en mètres, entre un point de la trace et un segment OSM pour
+que le point soit considéré comme apparié. Valeur du prototype validé : **20 m**.
+"""
+type = "int"
+default = 20
+min = 5
+max = 50
+step = 1
+unit = "m"
+icon = "mdi-ruler"
+
+[Tunnels.Detection.angleTolerance]
+description = "Tolérance d'écart de cap"
+documentation = """
+Écart angulaire maximal, en degrés, entre le cap de la trace et celui du segment
+OSM. La comparaison est **bidirectionnelle** : un tunnel parcouru dans l'autre
+sens reste apparié. Valeur du prototype validé : **25°**.
+"""
+type = "int"
+default = 25
+min = 5
+max = 90
+step = 1
+unit = "°"
+icon = "mdi-compass-outline"
+
+[Tunnels.Detection.bboxMargin]
+description = "Marge de la bbox d'extraction OSM"
+documentation = """
+Marge, en mètres, ajoutée à la boîte englobante de la trace avant de sélectionner
+les régions Geofabrik et de filtrer les ways. Valeur du prototype validé :
+**500 m**.
+"""
+type = "int"
+default = 500
+min = 100
+max = 5000
+step = 100
+unit = "m"
+icon = "mdi-vector-square"
+
+[Tunnels.Detection.bearingWindow]
+description = "Fenêtre de calcul du cap"
+documentation = """
+Longueur, en mètres, de la fenêtre glissante utilisée pour calculer le cap de la
+trace autour de chaque point. Une fenêtre trop courte est sensible au bruit GPS ;
+trop longue, elle lisse les entrées de tunnel. Valeur du prototype : **30 m**.
+"""
+type = "int"
+default = 30
+min = 10
+max = 100
+step = 5
+unit = "m"
+icon = "mdi-arrow-expand-horizontal"
+
+[Tunnels.Detection.minRunLength]
+description = "Points consécutifs minimum par tunnel"
+documentation = """
+Nombre minimal de points consécutifs appariés à la même way OSM pour retenir un
+tunnel. Un point isolé est le plus souvent un faux positif. Valeur du prototype :
+**2 points**.
+"""
+type = "int"
+default = 2
+min = 1
+max = 5
+step = 1
+unit = "pts"
+icon = "mdi-counter"
+
+[Tunnels.Detection.mergeGap]
+description = "Écart maximal pour proposer une fusion"
+documentation = """
+Écart maximal, en mètres, entre la sortie d'un tunnel et l'entrée du suivant pour
+que l'IHM propose de les fusionner. Ce réglage n'intervient pas dans la détection :
+il pilote uniquement le bouton de fusion de l'onglet Tunnels. Les tronçons
+fusionnés restent **disjoints** sur la carte et dans le profil.
+"""
+type = "int"
+default = 100
+min = 25
+max = 250
+step = 5
+unit = "m"
+icon = "mdi-call-merge"
+
+[Tunnels.Support.dossierPbf]
+description = "Dossier des données OSM"
+documentation = """
+Dossier du support externe (clé USB ou disque) qui contient `regions.json` et les
+fichiers régionaux `.osm.pbf`. Les téléchargements Geofabrik sont silencieux :
+`regions.json` est produit si nécessaire, puis les PBF requis par la trace sont
+téléchargés avec affichage de la progression dans l'onglet Tunnels.
+
+Les fichiers ne sont **jamais** copiés dans le dossier de la trace : seul
+`tunnels.json` y est écrit.
+"""
+type = "directory"
+default = ""
+icon = "mdi-folder-open"
+
+[Tunnels.Support.actif]
+description = "Activer la détection des tunnels"
+documentation = """
+Active la préparation automatique des tunnels après nettoyage d'une trace. Quand
+elle est désactivée, aucune détection ni téléchargement n'est lancé ; les tunnels
+déjà présents restent consultables et éditables dans l'onglet Tunnels.
+"""
+type = "bool"
+default = true
+icon = "mdi-toggle-switch"
 
 # ---------------------------------------------------------------------------
 # Détection des communes traversées (module Communes).

@@ -91,6 +91,8 @@ fn seed_registry(mode_dir: &Path, trace_id: &str, validated: bool) {
         communes_completed: false,
         altimetrie_validated: validated,
         altimetrie_climb_count: None,
+        tunnels_status: None,
+        tunnels_count: None,
     };
     save_registry(&get_traces_path(mode_dir), &[trace]).expect("écriture du registre");
 }

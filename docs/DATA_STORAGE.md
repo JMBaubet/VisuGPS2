@@ -35,6 +35,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
 │           ├── multiride.json          # description des passages multiples (contrat)
 │           ├── communes.json           # communes traversées (module Communes)
 │           ├── altimetrie.json         # profil, segments et montées (module Altimétrie)
+│           ├── tunnels.json            # tunnels détectés et édités (module Tunnels)
 │           ├── trace.geojson           # LineString GeoJSON
 │           ├── keyframes_169.json      # keyframes ratio 16:9
 │           └── keyframes_43.json       # keyframes ratio 4:3
@@ -49,6 +50,7 @@ Toutes les données persistantes vivent dans le `app_data_dir` de Tauri, résolu
         ├── multiride.json
         ├── communes.json
         ├── altimetrie.json
+        ├── tunnels.json
         ├── trace.geojson
         └── keyframes_169.json / keyframes_43.json
 ```
@@ -136,7 +138,9 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "multiride_complete": false,
     "communes_completed": false,
     "altimetrie_validated": false,
-    "altimetrie_climb_count": 6
+    "altimetrie_climb_count": 6,
+    "tunnels_status": "waiting_validate",
+    "tunnels_count": 3
   }
 ]
 ```
@@ -154,6 +158,8 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 **Validation de l'altimétrie** (`altimetrie_validated`) : `true` quand l'**opérateur** a sauvegardé l'analyse depuis la vue `/altimetrie` — la première sauvegarde vaut validation du profil et des montées. L'information **absente** vaut `false` : la génération automatique du fichier (import d'une trace propre, validation d'audit) n'est qu'une proposition, elle ne vaut pas validation. Posé par `altimetrie_save`, reposé à `false` par `altimetrie_detect` (recalcul explicite ou génération à l'ouverture) et par `audit_validate` (le GPX réécrit produit une nouvelle analyse). C'est ce drapeau, lu par la carte du circuit sans lire de fichier, qui colore l'icône `mdi-terrain` — jaune tant que l'analyse reste à valider, verte ensuite.
 
 **Nombre de montées** (`altimetrie_climb_count`) : nombre de montées de `altimetrie.json`, posé par `altimetrie_save` et par `altimetrie_detect`. Il permet à la carte de rendre l'icône `mdi-terrain` **blanche** quand l'analyse est validée mais ne contient aucune montée, sans relire le fichier. `null` sur un registre antérieur au champ ; `get_traces` le calcule pour les analyses **validées** (rattrapage idempotent) et le persiste. `audit_validate` le repose à `null`, la régénération qui suit le réécrivant.
+
+**Tunnels** (`tunnels_status`, `tunnels_count`) : `tunnels_status` vaut `waiting_validate` (fichier présent avec au moins un tunnel, pas encore validé par l'opérateur), `success` (validation opérateur, ou détection sans tunnel), `error`, `not_configured` ou `missing_pbf`. `tunnels_count` est le nombre de tunnels **logiques** — un groupe fusionné compte une fois. Ces champs alimentent l'icône combinée `mdi-tunnel` / `mdi-terrain` du circuit sans relire `tunnels.json`. `null` sur un registre antérieur ; `get_traces` fait un rattrapage pour les fichiers déjà présents (`backfill_state`). `audit_validate` les repose à `null` et supprime le fichier, la géométrie ayant changé.
 
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
@@ -503,6 +509,88 @@ restaurable de la vue `/altimetrie`.
 
 > Les paramètres et commandes sont décrits dans
 > [COMMANDS.md](./COMMANDS.md#altimétrie-gpx_altimetriecommandsrs).
+
+### `tunnels.json` — Tunnels détectés et édités
+
+Fichier **unique** du module Tunnels, dans `traces/{trace_id}/tunnels.json`. Les
+`regions.json` et les `.osm.pbf` restent sur le support OSM
+(`Tunnels.Support.dossierPbf`) et ne sont **jamais** copiés dans le dossier de la
+trace. Les fichiers temporaires de téléchargement (`.part`) et l'index Geofabrik
+téléchargé vivent hors du dossier de la trace (temporaire système pour l'index,
+support OSM pour les `.part`).
+
+```json
+{
+  "version": 1,
+  "traceId": "cd9e49cb-…",
+  "detectedAt": "2026-10-22T10:00:00Z",
+  "updatedAt": "2026-10-22T10:05:00Z",
+  "pbfFiles": [
+    { "name": "provence-alpes-cote-d-azur-latest.osm.pbf", "modifiedAt": "2026-10-20T08:00:00Z" }
+  ],
+  "params": {
+    "distanceToleranceM": 20,
+    "angleToleranceDeg": 25,
+    "bboxMarginM": 500,
+    "bearingWindowM": 30,
+    "minRunLength": 2
+  },
+  "tunnels": [
+    {
+      "id": "t-001",
+      "wayId": "w123456",
+      "name": "Tunnel de la Giraude",
+      "highway": "motorway",
+      "tunnelType": "yes",
+      "startKm": 12.34,
+      "endKm": 13.01,
+      "lengthM": 670,
+      "detectionMethod": "osm",
+      "maxDistanceM": 8.4,
+      "maxAngleDiffDeg": 6.0,
+      "groupId": null
+    }
+  ]
+}
+```
+
+- `detectedAt` vaut `null` pour un fichier créé uniquement par des ajouts
+  manuels. `pbfFiles` documente les PBF réellement analysés.
+- `lengthM` est **dérivé** : le backend le recalcule à chaque sauvegarde à partir
+  des bornes. Le frontend ne fait jamais foi.
+- `groupId` identifie une **fusion logique** : les tronçons restent distincts et
+  disjoints, sur la carte comme dans le profil. L'écart entre deux tronçons n'est
+  pas traité comme du tunnel.
+- Aucune géométrie n'est stockée : la carte découpe `trace.geojson` aux bornes
+  kilométriques, comme pour les montées.
+- Écriture **atomique** (`.tmp` puis `rename`), lecture **tolérante**
+  (`tunnels_load`) : absent, illisible, version inconnue ou autre `traceId` →
+  `null`.
+- **Validation** : une détection avec tunnels pose `waiting_validate` ; le bouton
+  « Valider » ou « Sauvegarder » de l'onglet Tunnels écrit le fichier et pose
+  `success`. Une détection sans tunnel pose directement `success`.
+- **Invalidation** : `audit_validate` réécrit le GPX, supprime `tunnels.json` et
+  repose les champs du registre ; la file frontend relance la préparation.
+- **Suppression** : le fichier disparaît avec le dossier de la trace
+  (`delete_trace`).
+
+**Support OSM** (dossier `Tunnels.Support.dossierPbf`) :
+
+```
+{clé USB}/osm-data/
+├── regions.json                       # produit depuis Geofabrik, ~554 régions
+├── provence-alpes-cote-d-azur-latest.osm.pbf
+├── monaco-latest.osm.pbf
+└── …                                   # PBF régionaux requis par les traces
+```
+
+Les téléchargements sont **silencieux** : `regions.json` est produit au premier
+besoin ; les PBF manquants requis par une trace sont téléchargés en tâche de
+fond. La progression est émise par l'événement `tunnels-progress` et affichée
+dans l'onglet Tunnels. Aucun fichier OSM n'est embarqué dans le binaire.
+
+> Les paramètres et commandes sont décrits dans
+> [COMMANDS.md](./COMMANDS.md#tunnels-gpx_tunnelscommandsrs).
 
 ### `config.toml` / `config-dev.toml` — Surcharges de paramètres
 
