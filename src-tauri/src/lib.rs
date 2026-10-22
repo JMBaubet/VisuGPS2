@@ -7,6 +7,7 @@ mod gpx_audit;
 mod gpx_multiride;
 mod gpx_communes;
 mod gpx_altimetrie;
+mod gpx_tunnels;
 mod trace_info;
 
 use display::{get_displays, open_second_window, close_second_window};
