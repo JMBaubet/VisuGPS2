@@ -5,8 +5,9 @@
 // - les segments de pente colorés, découpés sur la géométrie d'origine de la
 //   trace nettoyée (`trace.geojson`) ;
 // - les bornes vallée/sommet de chaque montée ;
-// - la montée sélectionnée, en halo sous les segments (les couleurs de pente
-//   restent visibles).
+// - la montée sélectionnée, en halo sous les segments ;
+// - en mode Tunnels, les tronçons de tunnels en blanc bordé de noir, avec un
+//   halo bleu pour le groupe sélectionné (les tronçons restent disjoints).
 //
 // Les couleurs viennent de `altimetrieCategories` : elles sont identiques dans
 // la liste, le graphe et la carte.
@@ -22,6 +23,7 @@ import type {
   AltimetrieFile,
   AltimetrieProfilePoint,
 } from '../../stores/altimetrie'
+import type { Tunnel } from '../../stores/tunnels'
 import { colorForCategoryId } from '../../utils/altimetrieCategories'
 import { haversineMeters } from '../../utils/geo'
 
@@ -32,6 +34,7 @@ export const ALTIMETRIE_SOURCE_IDS = {
   segments: 'altimetrie-segments',
   markers: 'altimetrie-markers',
   selected: 'altimetrie-selected',
+  tunnels: 'altimetrie-tunnels',
 } as const
 
 export const ALTIMETRIE_LAYER_IDS = {
@@ -39,6 +42,9 @@ export const ALTIMETRIE_LAYER_IDS = {
   selectedCasing: 'altimetrie-selected-casing',
   selected: 'altimetrie-selected-line',
   segments: 'altimetrie-segments-line',
+  selectedTunnels: 'altimetrie-tunnels-selected',
+  tunnelsCasing: 'altimetrie-tunnels-casing',
+  tunnels: 'altimetrie-tunnels-line',
   markers: 'altimetrie-climb-markers',
 } as const
 
@@ -53,6 +59,7 @@ export function addAltimetrieLayers(map: Map): void {
   map.addSource(ALTIMETRIE_SOURCE_IDS.segments, { type: 'geojson', data: empty })
   map.addSource(ALTIMETRIE_SOURCE_IDS.markers, { type: 'geojson', data: empty })
   map.addSource(ALTIMETRIE_SOURCE_IDS.selected, { type: 'geojson', data: empty })
+  map.addSource(ALTIMETRIE_SOURCE_IDS.tunnels, { type: 'geojson', data: empty })
 
   // Ordre d'empilement (bas → haut) : les segments de pente restent au-dessus
   // de la montée sélectionnée, qui ne sert plus que de halo coloré.
@@ -109,6 +116,50 @@ export function addAltimetrieLayers(map: Map): void {
     },
   }
   map.addLayer(segments)
+
+  // Couche Tunnels : halo bleu de sélection, liseré noir puis ligne blanche.
+  // Elle est au-dessus des segments de pente et sous les bornes de montée
+  // (vides en mode Tunnels). Les tronçons d'un groupe fusionné restent des
+  // LineString distinctes : l'écart n'est jamais peint.
+  const selectedTunnels: LineLayerSpecification = {
+    id: ALTIMETRIE_LAYER_IDS.selectedTunnels,
+    type: 'line',
+    source: ALTIMETRIE_SOURCE_IDS.tunnels,
+    filter: ['==', ['get', 'selected'], true] as unknown as ExpressionSpecification,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#2196F3',
+      'line-width': 9,
+      'line-opacity': 0.8,
+    },
+  }
+  map.addLayer(selectedTunnels)
+
+  const tunnelsCasing: LineLayerSpecification = {
+    id: ALTIMETRIE_LAYER_IDS.tunnelsCasing,
+    type: 'line',
+    source: ALTIMETRIE_SOURCE_IDS.tunnels,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#000000',
+      'line-width': 6,
+      'line-opacity': 0.95,
+    },
+  }
+  map.addLayer(tunnelsCasing)
+
+  const tunnels: LineLayerSpecification = {
+    id: ALTIMETRIE_LAYER_IDS.tunnels,
+    type: 'line',
+    source: ALTIMETRIE_SOURCE_IDS.tunnels,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#ffffff',
+      'line-width': 3.2,
+      'line-opacity': 1,
+    },
+  }
+  map.addLayer(tunnels)
 
   const markers: CircleLayerSpecification = {
     id: ALTIMETRIE_LAYER_IDS.markers,
@@ -353,6 +404,46 @@ export function buildSelectedClimbFeature(
       },
     ],
   }
+}
+
+/**
+ * Tronçons de tunnels, prêts pour la source GeoJSON.
+ *
+ * Chaque tunnel physique est une LineString découpée sur la géométrie
+ * d'origine. `selected` porte la sélection du groupe dans son ensemble : le
+ * halo bleu de la couche sélectionnée couvre donc tous les tronçons du groupe,
+ * jamais l'écart qui les sépare.
+ */
+export function buildTunnelFeatures(
+  file: AltimetrieFile,
+  tunnels: Tunnel[],
+  selectedIds: string[],
+  path: TracePath | null = null,
+): GeoJSON.FeatureCollection {
+  const selected = new Set(selectedIds)
+  const features: GeoJSON.Feature<GeoJSON.LineString>[] = []
+
+  for (const tunnel of tunnels) {
+    const coordinates = sliceCoordinates(
+      file,
+      path,
+      tunnel.startKm * 1000,
+      tunnel.endKm * 1000,
+    )
+    if (coordinates.length < 2) continue
+
+    features.push({
+      type: 'Feature',
+      properties: {
+        tunnelId: tunnel.id,
+        groupId: tunnel.groupId ?? null,
+        selected: selected.has(tunnel.id),
+      },
+      geometry: { type: 'LineString', coordinates },
+    })
+  }
+
+  return { type: 'FeatureCollection', features }
 }
 
 /** Découpe sur la géométrie d'origine, avec repli sur le profil échantillonné. */

@@ -31,6 +31,10 @@
  * - les bornes vallée/sommet des montées ;
  * - la montée sélectionnée, en halo sous les segments.
  *
+ * En mode Tunnels, les bornes de montée sont masquées et un layer de tunnels
+ * est affiché : ligne blanche bordée de noir sur la trace, halo bleu pour le
+ * groupe sélectionné. Les tronçons fusionnés restent des lignes distinctes.
+ *
  * Le terrain Mapbox est activé (relief, pitch 60) et les couches sont drapées
  * sur le relief. Le composant ne connaît ni le store ni la vue : il reçoit ses
  * données en props et expose `centerOnDistance` au widget de profil.
@@ -39,6 +43,7 @@ import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import type { AltimetrieFile } from '../../stores/altimetrie'
+import type { Tunnel } from '../../stores/tunnels'
 import { useSettingsStore } from '../../stores/settings'
 import { hexToRgbaString } from '../../utils/materialColors'
 import {
@@ -50,6 +55,7 @@ import {
   buildMarkerFeatures,
   buildSegmentFeatures,
   buildSelectedClimbFeature,
+  buildTunnelFeatures,
   buildTracePath,
   coordinateAtDistance,
   emptyFC,
@@ -61,10 +67,15 @@ import {
 } from './altimetrieMapLayers'
 
 const props = defineProps<{
+  /** Onglet actif : montées ou tunnels. */
+  mode: 'climbs' | 'tunnels'
   file: AltimetrieFile | null
   /** Géométrie complète de la trace (`trace.geojson`). */
   traceGeometry: GeoJSON.Feature | null
   selectedClimbId: number | null
+  /** Tunnels physiques ; les groupes restent des tronçons distincts. */
+  tunnels: Tunnel[]
+  selectedTunnelIds: string[]
 }>()
 
 const settingsStore = useSettingsStore()
@@ -190,6 +201,7 @@ function render(fit = false): void {
     )
     const markersSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.markers)
     const selectedSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.selected)
+    const tunnelsSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.tunnels)
 
     // Les segments ne changent pas pendant un glissement : on ne reconstruit
     // la géométrie complète que lorsque le fichier ou le chemin change.
@@ -206,16 +218,32 @@ function render(fit = false): void {
       lastSegmentsPath = null
     }
 
-    if (file) {
-      markersSource?.setData(
-        buildMarkerFeatures(file, props.selectedClimbId, path),
+    if (props.mode === 'tunnels') {
+      tunnelsSource?.setData(
+        file
+          ? buildTunnelFeatures(
+              file,
+              props.tunnels,
+              props.selectedTunnelIds,
+              path,
+            )
+          : emptyFC(),
       )
-      selectedSource?.setData(
-        buildSelectedClimbFeature(file, props.selectedClimbId, path),
-      )
-    } else {
       markersSource?.setData(emptyFC())
       selectedSource?.setData(emptyFC())
+    } else {
+      tunnelsSource?.setData(emptyFC())
+      if (file) {
+        markersSource?.setData(
+          buildMarkerFeatures(file, props.selectedClimbId, path),
+        )
+        selectedSource?.setData(
+          buildSelectedClimbFeature(file, props.selectedClimbId, path),
+        )
+      } else {
+        markersSource?.setData(emptyFC())
+        selectedSource?.setData(emptyFC())
+      }
     }
 
     if (fit && !framed && fitTrace()) {
@@ -271,6 +299,38 @@ function fitSelectedClimb(id: number): void {
           climb.startKm * 1000,
           climb.endKm * 1000,
         )
+    const first = coordinates[0]
+    if (!first || coordinates.length < 2) return
+
+    const bounds = new mapboxgl.LngLatBounds(first, first)
+    for (const coordinate of coordinates) bounds.extend(coordinate)
+    instance.fitBounds(bounds, {
+      padding: { top: 60, bottom: 320, left: 60, right: 60 },
+      duration: 600,
+      maxZoom: 15,
+    })
+  })
+}
+
+/** Cadre la carte sur le groupe de tunnels sélectionné. */
+function fitSelectedTunnels(): void {
+  whenMapReady(() => {
+    const instance = map.value
+    if (!instance || !props.file || props.selectedTunnelIds.length === 0) {
+      return
+    }
+
+    const selected = props.tunnels.filter(tunnel =>
+      props.selectedTunnelIds.includes(tunnel.id),
+    )
+    if (selected.length === 0) return
+
+    const startM = Math.min(...selected.map(tunnel => tunnel.startKm)) * 1000
+    const endM = Math.max(...selected.map(tunnel => tunnel.endKm)) * 1000
+    const path = usableTracePath()
+    const coordinates = path
+      ? slicePathCoordinates(path, startM, endM)
+      : sliceProfileCoordinates(props.file.profile, startM, endM)
     const first = coordinates[0]
     if (!first || coordinates.length < 2) return
 
@@ -426,7 +486,30 @@ watch(
   () => props.selectedClimbId,
   id => {
     render(false)
-    if (id !== null) fitSelectedClimb(id)
+    if (props.mode === 'climbs' && id !== null) fitSelectedClimb(id)
+  },
+)
+
+watch(
+  () => props.mode,
+  () => {
+    render(false)
+    if (props.mode === 'tunnels' && props.selectedTunnelIds.length > 0) {
+      fitSelectedTunnels()
+    }
+  },
+)
+
+watch(
+  () => props.tunnels,
+  () => render(false),
+)
+
+watch(
+  () => props.selectedTunnelIds,
+  ids => {
+    render(false)
+    if (props.mode === 'tunnels' && ids.length > 0) fitSelectedTunnels()
   },
 )
 

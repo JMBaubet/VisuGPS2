@@ -73,8 +73,11 @@
           <AltimetrieMap
             v-else
             ref="mapRef"
+            :mode="activeTab"
             :file="altimetrieStore.displayFile"
             :trace-geometry="traceGeometry"
+            :tunnels="tunnelsStore.tunnels"
+            :selected-tunnel-ids="selectedTunnelIds"
             :selected-climb-id="
               activeTab === 'climbs' ? altimetrieStore.selectedClimbId : null
             "

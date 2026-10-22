@@ -161,26 +161,32 @@
           @click="voirMultiride"
         />
         <!--
-          Terrain : icône mdi-terrain, affichée sur la seconde rangée.
-          Ouvre la vue Altimétrie d'une trace nettoyée.
-           - trace non nettoyée : grise, le clic affiche le message
-             « L'altimétrie n'est disponible qu'après le nettoyage de la
-             trace. » ;
-           - trace propre, analyse jamais sauvegardée par l'opérateur :
-             **jaune**, et **forcée visible** — une validation reste à mener ;
-           - analyse validée (sauvegarde utilisateur) : **verte**, visible au
-             survol seulement.
+          Icône combinée Tunnels / Terrain (seconde rangée) : une seule icône,
+          `mdi-tunnel` ou `mdi-terrain`, selon la priorité du §2.3 de la Note
+          technique. La couleur et l'action sont calculées par
+          `computeCircuitStatusDisplay` :
+           - altitude verrouillée : terrain gris, clic explicatif ;
+           - détection des tunnels en cours : tunnel orange + spinner ;
+           - erreur de tunnels : tunnel rouge, clic = relance ;
+           - tunnels à valider : tunnel jaune, clic = onglet Tunnels ;
+           - altimétrie à valider : terrain jaune, clic = onglet Montées ;
+           - support OSM absent : tunnel gris, clic = onglet Tunnels ;
+           - altimétrie validée : terrain vert (ou blanc sans montée).
         -->
         <v-btn
           class="action-btn"
-          :class="{ 'action-btn--hidden': !(isTerrainForced || isHovering) }"
-          icon="mdi-terrain"
-          :color="terrainColor"
+          :class="{
+            'action-btn--hidden':
+              statusDisplay.visibility === 'hover' && !isHovering,
+          }"
+          :icon="statusDisplay.icon"
+          :color="statusDisplay.color"
+          :loading="statusDisplay.loading"
           variant="text"
           density="comfortable"
           size="small"
-          :title="terrainTitle"
-          @click="ouvrirAltimetrie"
+          :title="statusDisplay.tooltip"
+          @click="onStatusClick"
         />
         <!--
           Communes traversées (mdi-city) : état de la détection, seconde rangée.
@@ -604,10 +610,11 @@
  * désactivée — un bouton `disabled` masquerait son infobulle et éteindrait la
  * couleur de l'état : c'est le garde du clic qui rend les autres états inertes.
  *
- * L'icône mdi-terrain (seconde rangée) ouvre la vue Altimétrie d'une trace
- * propre : **jaune** et forcée visible tant que l'opérateur n'a pas validé
- * l'analyse (aucune sauvegarde utilisateur), **verte** une fois validée, grise
- * et explicative tant que la trace n'est pas nettoyée.
+ * L'icône combinée `mdi-tunnel` / `mdi-terrain` (seconde rangée) suit la
+ * priorité du §2.3 de la Note technique : grise si la trace n'est pas
+ * nettoyée, orange pendant la préparation des tunnels, rouge en erreur, jaune
+ * tant que des tunnels ou l'altimétrie restent à valider, grise si le support
+ * OSM manque, verte ou blanche une fois l'altimétrie validée.
  *
  * Le bouton Info déploie une section (v-expand-transition) contenant les
  * détails du circuit (date d'import, source, lien) puis une **synthèse** lue à
@@ -630,12 +637,18 @@ import { useAppStore } from '../../stores/app'
 import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
 import { useCommunesStore } from '../../stores/communes'
+import { useTunnelsStore } from '../../stores/tunnels'
 import { useEditionStore } from '../../stores/edition'
 import { useSettingsStore } from '../../stores/settings'
 import { useKeyframesStore } from '../../stores/keyframes'
 import { useUiStore } from '../../stores/ui'
 import type { ViewportAspect } from '../../algorithms/keyframeGenerator'
 import { useCircuitInfo } from '../../composables/useCircuitInfo'
+import {
+  computeCircuitStatusDisplay,
+  type CircuitAltitudeStatus,
+  type CircuitTunnelStatus,
+} from '../../composables/useCircuitStatusIcon'
 import CircuitAltitudeProfile from './CircuitAltitudeProfile.vue'
 import {
   formatDateTime,
@@ -663,6 +676,7 @@ const appStore = useAppStore()
 const router = useRouter()
 const tracesStore = useTracesStore()
 const communesStore = useCommunesStore()
+const tunnelsStore = useTunnelsStore()
 const editionStore = useEditionStore()
 const settingsStore = useSettingsStore()
 const keyframesStore = useKeyframesStore()
@@ -901,51 +915,101 @@ function plural(count: number): string {
   return count > 1 ? 's' : ''
 }
 
-// --- Icône Terrain (seconde rangée) ---
+// --- Icône combinée Tunnels / Terrain (seconde rangée) ---
+
+/** État de l'altimétrie, tel que le lit l'icône combinée. */
+const altitudeStatus = computed<CircuitAltitudeStatus>(() => ({
+  state: needsAudit.value
+    ? 'locked'
+    : props.trace.altimetrie_validated
+      ? 'validated'
+      : 'pending',
+  climbCount: props.trace.altimetrie_climb_count ?? 0,
+}))
 
 /**
- * État de l'icône Terrain :
- * - `locked`    : trace non nettoyée — le clic explique la condition d'accès ;
- * - `pending`   : analyse disponible mais jamais sauvegardée par l'opérateur ;
- * - `validated` : une sauvegarde utilisateur a validé l'analyse.
+ * État des tunnels pour cette carte. La file de préparation du store Tunnels
+ * prime sur le registre : une trace en cours de téléchargement/détection est
+ * « pending », même si son ancien fichier portait un autre statut.
  */
-type TerrainState = 'locked' | 'pending' | 'validated'
+const tunnelStatus = computed<CircuitTunnelStatus>(() => {
+  const count = props.trace.tunnels_count ?? null
+  const message =
+    tunnelsStore.lastErrorTraceId === props.trace.id
+      ? tunnelsStore.lastError
+      : null
 
-const terrainState = computed<TerrainState>(() => {
-  if (needsAudit.value) return 'locked'
-  return props.trace.altimetrie_validated ? 'validated' : 'pending'
-})
-
-/**
- * Couleur de l'icône Terrain : grise tant que la trace n'est pas nettoyée,
- * **jaune** tant que l'analyse reste à valider, **verte** une fois validée —
- * sauf si l'analyse validée ne contient **aucune montée**, où elle est
- * **blanche**.
- */
-const terrainColor = computed(() => {
-  if (terrainState.value === 'locked') return 'grey'
-  if (terrainState.value === 'pending') return 'yellow-darken-2'
-  return props.trace.altimetrie_climb_count === 0 ? 'white' : 'green'
-})
-
-/**
- * Une analyse non validée est une action en attente : l'icône jaune reste
- * visible hors survol, comme la barrière des passages multiples.
- */
-const isTerrainForced = computed(() => terrainState.value === 'pending')
-
-/** Tooltip de l'icône Terrain, selon l'état de la trace. */
-const terrainTitle = computed(() => {
-  if (terrainState.value === 'locked') {
-    return "L'altimétrie n'est disponible qu'après le nettoyage de la trace."
+  if (!tunnelsStore.supportLoaded) {
+    return { state: 'hidden', hasFile: false, count, message }
   }
-  if (terrainState.value !== 'validated') {
-    return "Analyser l'altimétrie — validation requise"
+  if (!tunnelsStore.support.active) {
+    return { state: 'disabled', hasFile: false, count, message }
   }
-  return props.trace.altimetrie_climb_count === 0
-    ? 'Altimétrie validée — aucune montée détectée'
-    : "Altimétrie validée — consulter l'analyse"
+  if (tunnelsStore.isPending(props.trace.id)) {
+    const status = props.trace.tunnels_status
+    return {
+      state: 'pending',
+      hasFile: status === 'waiting_validate' || status === 'success',
+      count,
+      message,
+    }
+  }
+
+  const status = props.trace.tunnels_status
+  if (
+    status === 'waiting_validate' ||
+    status === 'success' ||
+    status === 'error' ||
+    status === 'not_configured' ||
+    status === 'missing_pbf'
+  ) {
+    return {
+      state: status,
+      hasFile: status === 'waiting_validate' || status === 'success',
+      count,
+      message,
+    }
+  }
+
+  if (!tunnelsStore.support.configured || !tunnelsStore.support.readable) {
+    return { state: 'not_configured', hasFile: false, count, message }
+  }
+  return { state: 'hidden', hasFile: false, count, message }
 })
+
+const statusDisplay = computed(() =>
+  computeCircuitStatusDisplay(altitudeStatus.value, tunnelStatus.value),
+)
+
+function onStatusClick(): void {
+  switch (statusDisplay.value.action) {
+    case 'warning-altitude':
+      ui.showWarning(
+        "L'altimétrie n'est disponible qu'après le nettoyage de la trace.",
+      )
+      break
+    case 'altimetrie-climbs':
+      router.push({
+        name: 'altimetrie',
+        query: { traceId: props.trace.id, tab: 'climbs' },
+      })
+      break
+    case 'altimetrie-tunnels':
+      router.push({
+        name: 'altimetrie',
+        query: { traceId: props.trace.id, tab: 'tunnels' },
+      })
+      break
+    case 'relaunch-tunnels':
+      tunnelsStore.request(props.trace.id)
+      break
+    case 'settings':
+      appStore.isSettingsDrawerOpen = true
+      break
+    default:
+      break
+  }
+}
 
 // --- Icône Communes (seconde rangée) ---------------------------------
 
@@ -1235,23 +1299,6 @@ function voirMultiride() {
     return
   }
   router.push({ name: 'multiride', query: { traceId: props.trace.id } })
-}
-
-/**
- * Ouvre la vue Altimétrie.
- *
- * L'analyse suit le nettoyage de la trace : une trace non « clean » est
- * refusée, avec un message qui renvoie vers l'audit. Le multiride n'est pas
- * une barrière : l'altimétrie est une analyse indépendante.
- */
-function ouvrirAltimetrie() {
-  if (needsAudit.value) {
-    ui.showWarning(
-      "L'altimétrie n'est disponible qu'après le nettoyage de la trace.",
-    )
-    return
-  }
-  router.push({ name: 'altimetrie', query: { traceId: props.trace.id } })
 }
 
 /** Lance la visualisation 3D du circuit. */
