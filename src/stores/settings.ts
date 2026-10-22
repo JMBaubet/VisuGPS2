@@ -11,6 +11,7 @@ export type SettingType =
   | 'float'
   | 'bool'
   | 'string'
+  | 'directory'
   | 'secret'
   | 'list'
   | 'rgba'

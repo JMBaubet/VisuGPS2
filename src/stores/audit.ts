@@ -20,6 +20,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useCommunesStore } from './communes'
+import { useTunnelsStore } from './tunnels'
 import { useUiStore } from './ui'
 
 // ─── Types primaires ──────────────────────────────────────────────────
@@ -528,9 +529,11 @@ export const useAuditStore = defineStore('audit', () => {
     })
     await persistOrWarn(true)
     // Le GPX vient d'être réécrit : sa géométrie a changé, la détection des
-    // communes doit être rejouée sur la trace nettoyée. La trace passe en tête
-    // de file — une tâche de fond en cours termine son analyse d'abord.
+    // communes et des tunnels doit être rejouée sur la trace nettoyée. Les
+    // traces passent en tête de file — une tâche de fond en cours termine son
+    // analyse d'abord.
     useCommunesStore().request(traceId)
+    useTunnelsStore().request(traceId)
     return result
   }
 

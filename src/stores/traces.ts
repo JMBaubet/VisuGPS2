@@ -14,6 +14,7 @@ import { haversineMeters } from '../utils/geo'
 // Import croisé avec `communes.ts` : chaque store n'appelle l'autre qu'à
 // l'intérieur de ses actions, jamais au chargement du module.
 import { useCommunesStore } from './communes'
+import { useTunnelsStore } from './tunnels'
 
 // --- Types (miroir exact des structs Rust import_gpx.rs, snake_case) ---
 
@@ -136,6 +137,20 @@ export interface TraceMetadata {
    * persiste la valeur pour les analyses validées (rattrapage).
    */
   altimetrie_climb_count: number | null
+  /**
+   * Statut de la détection des tunnels (module Tunnels) : `waiting_validate`
+   * (fichier avec tunnels, pas encore validé), `success` (validation opérateur
+   * ou détection sans tunnel), `error`, `not_configured`, `missing_pbf`.
+   *
+   * `null` sur un registre antérieur ; `get_traces` rattrape les fichiers
+   * `tunnels.json` déjà présents.
+   */
+  tunnels_status: string | null
+  /**
+   * Nombre de tunnels **logiques** (un groupe fusionné compte une fois), pour
+   * l'infobulle de l'icône combinée.
+   */
+  tunnels_count: number | null
 }
 
 // --- Store ---
@@ -234,11 +249,12 @@ export const useTracesStore = defineStore('traces', () => {
       } catch (error) {
         console.error(`Impossible d'afficher/cadrer la trace ${result.id} :`, error)
       }
-      // Trace déjà propre : la détection de ses communes suit immédiatement
-      // l'import. Une trace à auditer suivra la validation de son audit
-      // (`auditStore.validateAndRewrite`).
+      // Trace déjà propre : la détection de ses communes et de ses tunnels suit
+      // immédiatement l'import. Une trace à auditer suivra la validation de son
+      // audit (`auditStore.validateAndRewrite`).
       if (result.audit_status === 'clean') {
         useCommunesStore().request(result.id)
+        useTunnelsStore().request(result.id)
       }
       return result
     } finally {
