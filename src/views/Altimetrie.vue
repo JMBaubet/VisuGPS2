@@ -2,14 +2,15 @@
   <v-app :theme="appStore.theme" class="h-screen w-screen">
     <v-layout>
       <AltimetrieToolbar
+        :mode="activeTab"
         :trace-name="traceName"
-        :dirty="altimetrieStore.dirty"
-        :saving="altimetrieStore.saving"
-        :validated="altimetrieStore.validated"
-        :ready="!!altimetrieStore.file"
-        :settings-status="settingsStatus"
-        :settings-causes="settingsCauses"
-        :params-outdated="paramsOutdated"
+        :dirty="toolbarDirty"
+        :saving="toolbarSaving"
+        :validated="toolbarValidated"
+        :ready="toolbarReady"
+        :settings-status="toolbarSettingsStatus"
+        :settings-causes="toolbarSettingsCauses"
+        :params-outdated="toolbarParamsOutdated"
         @back="onBackClicked"
         @save="onSaveClicked"
         @recalculate="onRecalculateClicked"
@@ -17,6 +18,7 @@
       />
 
       <AltimetrieClimbsPanel
+        :active-tab="activeTab"
         :climbs="altimetrieStore.climbs"
         :profile="profile"
         :alt-min="altBounds.min"
@@ -24,11 +26,30 @@
         :total-distance-m="totalDistanceM"
         :selected-id="altimetrieStore.selectedClimbId"
         :creating="creating"
+        :tunnels="tunnelGroups"
+        :selected-tunnel-ids="selectedTunnelIds"
+        :tunnel-count="tunnelCount"
+        :tunnel-creating="creatingTunnel"
+        :tunnel-pending="tunnelPending"
+        :tunnel-preparing="tunnelPreparing"
+        :tunnel-progress="tunnelProgress"
+        :tunnel-requirements="tunnelRequirements"
+        :tunnel-has-file="tunnelHasFile"
+        :can-create-tunnel="tunnelCreationAvailable"
+        :merge-gap-m="mergeGapM"
+        :tunnel-error="tunnelError"
+        @update:active-tab="onTabChange"
         @select="altimetrieStore.selectClimb"
         @delete="onDeleteClimb"
         @split="onSplitClimb"
         @merge="onMergeClimb"
         @create="onCreateRequested"
+        @select-tunnel="onSelectTunnel"
+        @delete-tunnel="onDeleteTunnel"
+        @merge-tunnel="onMergeTunnel"
+        @split-tunnel="onSplitTunnel"
+        @create-tunnel="onCreateTunnelRequested"
+        @relaunch-tunnels="onRelaunchTunnels"
       />
 
       <v-main>
@@ -53,11 +74,13 @@
             ref="mapRef"
             :file="altimetrieStore.displayFile"
             :trace-geometry="traceGeometry"
-            :selected-climb-id="altimetrieStore.selectedClimbId"
+            :selected-climb-id="
+              activeTab === 'climbs' ? altimetrieStore.selectedClimbId : null
+            "
           />
 
           <AltimetrieProfileWidget
-            v-if="altimetrieStore.displayFile"
+            v-if="altimetrieStore.displayFile && activeTab === 'climbs'"
             :file="altimetrieStore.displayFile"
             :selected-climb-id="altimetrieStore.selectedClimbId"
             :creating="creating"
@@ -115,6 +138,20 @@
         @confirm="runRecalculation"
         @cancel="dialogRecalcOpen = false"
       />
+
+      <CreateTunnelDialog
+        v-model="tunnelCreateHelpOpen"
+        @start="onStartTunnelCreation"
+        @cancel="tunnelCreateHelpOpen = false"
+      />
+
+      <ConfirmTunnelDetectionDialog
+        v-model="dialogTunnelDetectOpen"
+        :existing-count="tunnelGroups.length"
+        :dirty="tunnelsStore.dirty"
+        @confirm="runTunnelDetection"
+        @cancel="dialogTunnelDetectOpen = false"
+      />
     </v-layout>
   </v-app>
 </template>
@@ -136,6 +173,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useAltimetrieStore, type AltimetrieParams } from '../stores/altimetrie'
+import { useTunnelsStore } from '../stores/tunnels'
 import { useSettingsStore } from '../stores/settings'
 import { useTracesStore } from '../stores/traces'
 import { useUiStore } from '../stores/ui'
@@ -146,6 +184,8 @@ import AltimetrieProfileWidget from '../components/Altimetrie/AltimetrieProfileW
 import ConfirmExitDialog from '../components/Altimetrie/dialogs/ConfirmExitDialog.vue'
 import CreateClimbDialog from '../components/Altimetrie/dialogs/CreateClimbDialog.vue'
 import ConfirmRecalcDialog from '../components/Altimetrie/dialogs/ConfirmRecalcDialog.vue'
+import CreateTunnelDialog from '../components/Altimetrie/dialogs/CreateTunnelDialog.vue'
+import ConfirmTunnelDetectionDialog from '../components/Altimetrie/dialogs/ConfirmTunnelDetectionDialog.vue'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 import {
   computeAltimetrieDiagnostics,
@@ -165,22 +205,38 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const altimetrieStore = useAltimetrieStore()
+const tunnelsStore = useTunnelsStore()
 const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const ui = useUiStore()
 
 /** Chargement initial (réglages, traces, analyse). */
 const initializing = ref(true)
+/** Onglet actif du panneau gauche. */
+const activeTab = ref<'climbs' | 'tunnels'>(
+  route.query.tab === 'tunnels' ? 'tunnels' : 'climbs',
+)
 /** Message d'erreur de détection, affiché au centre. */
 const errorMessage = ref<string | null>(null)
 /** Confirmation de sortie avec des modifications non enregistrées. */
 const dialogExitOpen = ref(false)
-/** Création manuelle en cours (deux clics dans le widget). */
+/** Création manuelle de montée en cours (deux clics dans le widget). */
 const creating = ref(false)
-/** Dialogue d'aide de création ouvert. */
+/** Dialogue d'aide de création de montée ouvert. */
 const createHelpOpen = ref(false)
-/** Confirmation du recalcul lorsque des éditions sont en cours. */
+/** Création manuelle de tunnel en cours (deux clics dans le widget). */
+const creatingTunnel = ref(false)
+/**
+ * Le widget de profil accepte la création de tunnels. Activé à la sous-étape
+ * « widget » ; le bouton reste sinon désactivé, sans flux inachevé.
+ */
+const tunnelCreationAvailable = ref(false)
+/** Dialogue d'aide de création de tunnel ouvert. */
+const tunnelCreateHelpOpen = ref(false)
+/** Confirmation du recalcul de l'altimétrie lorsque des éditions sont en cours. */
 const dialogRecalcOpen = ref(false)
+/** Confirmation de relance de la détection des tunnels. */
+const dialogTunnelDetectOpen = ref(false)
 /** Géométrie complète de la trace, pour le trait neutre de la carte. */
 const traceGeometry = ref<GeoJSON.Feature | null>(null)
 /** Instance de la carte, exposée pour le widget de profil. */
@@ -194,7 +250,95 @@ const traceName = computed(
   () => tracesStore.traces.find(trace => trace.id === traceId.value)?.name ?? 'Trace',
 )
 const profile = computed(() => altimetrieStore.file?.profile ?? [])
-const isLoading = computed(() => initializing.value || altimetrieStore.loading)
+const isLoading = computed(
+  () =>
+    initializing.value ||
+    altimetrieStore.loading ||
+    tunnelsStore.loading,
+)
+
+// ─── Onglet Tunnels ──────────────────────────────────────────────────
+
+const tunnelGroups = computed(() => tunnelsStore.groups)
+const selectedTunnelIds = computed(() => tunnelsStore.selectedTunnelIds)
+const tunnelCount = computed(() => tunnelsStore.tunnelCount)
+const mergeGapM = computed(() =>
+  settingNumber('Tunnels.Detection.mergeGap', 100),
+)
+const tunnelPending = computed(() =>
+  traceId.value ? tunnelsStore.isPending(traceId.value) : false,
+)
+const tunnelPreparing = computed(() =>
+  traceId.value ? tunnelsStore.isPreparing(traceId.value) : false,
+)
+const tunnelProgress = computed(() =>
+  traceId.value ? tunnelsStore.progressFor(traceId.value) : null,
+)
+const tunnelRequirements = computed(() => tunnelsStore.requirements)
+const tunnelHasFile = computed(() => tunnelsStore.fileExists)
+const tunnelError = computed(() =>
+  tunnelsStore.lastErrorTraceId === traceId.value
+    ? tunnelsStore.lastError
+    : null,
+)
+
+/** Paramètres de détection courants, pour signaler un fichier périmé. */
+const currentTunnelParams = computed(() => ({
+  distanceToleranceM: settingNumber('Tunnels.Detection.distanceTolerance', 20),
+  angleToleranceDeg: settingNumber('Tunnels.Detection.angleTolerance', 25),
+  bboxMarginM: settingNumber('Tunnels.Detection.bboxMargin', 500),
+  bearingWindowM: settingNumber('Tunnels.Detection.bearingWindow', 30),
+  minRunLength: settingNumber('Tunnels.Detection.minRunLength', 2),
+}))
+
+const tunnelParamsOutdated = computed(() => {
+  const currentFile = tunnelsStore.file
+  if (!currentFile || !tunnelsStore.fileExists) return false
+  const current = currentTunnelParams.value
+  return (Object.keys(current) as (keyof typeof current)[]).some(
+    key => currentFile.params[key] !== current[key],
+  )
+})
+
+// ─── Toolbar adaptée à l'onglet ──────────────────────────────────────
+
+const toolbarDirty = computed(() =>
+  activeTab.value === 'tunnels'
+    ? tunnelsStore.dirty
+    : altimetrieStore.dirty,
+)
+const toolbarSaving = computed(() =>
+  activeTab.value === 'tunnels'
+    ? tunnelsStore.saving
+    : altimetrieStore.saving,
+)
+const toolbarValidated = computed(() =>
+  activeTab.value === 'tunnels'
+    ? tunnelsStore.validated
+    : altimetrieStore.validated,
+)
+const toolbarReady = computed(() =>
+  activeTab.value === 'tunnels'
+    ? !!altimetrieStore.file && !tunnelPending.value
+    : !!altimetrieStore.file,
+)
+const toolbarSettingsStatus = computed<AltimetrieStatus>(() =>
+  activeTab.value === 'tunnels'
+    ? tunnelParamsOutdated.value
+      ? 'warning'
+      : 'success'
+    : settingsStatus.value,
+)
+const toolbarSettingsCauses = computed(() =>
+  activeTab.value === 'tunnels'
+    ? tunnelParamsOutdated.value
+      ? ['Paramètres de détection modifiés — relancez la détection']
+      : []
+    : settingsCauses.value,
+)
+const toolbarParamsOutdated = computed(
+  () => activeTab.value === 'climbs' && paramsOutdated.value,
+)
 
 const totalDistanceM = computed(() => {
   const points = profile.value
@@ -350,6 +494,10 @@ async function onEditBounds(payload: {
  * « Sauvegarder » après une modification.
  */
 async function onSaveClicked(): Promise<void> {
+  if (activeTab.value === 'tunnels') {
+    await saveTunnels()
+    return
+  }
   if (!traceId.value) return
   const wasValidated = altimetrieStore.validated
   try {
@@ -362,6 +510,24 @@ async function onSaveClicked(): Promise<void> {
       typeof error === 'string'
         ? error
         : "Enregistrement de l'altimétrie impossible."
+    ui.showError(message)
+  }
+}
+
+/** Persiste les tunnels édités ; la sauvegarde vaut validation. */
+async function saveTunnels(): Promise<void> {
+  if (!traceId.value) return
+  const wasValidated = tunnelsStore.validated
+  try {
+    await tunnelsStore.save(traceId.value)
+    ui.showSuccess(
+      wasValidated ? 'Tunnels enregistrés.' : 'Tunnels validés.',
+    )
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : "Enregistrement des tunnels impossible."
     ui.showError(message)
   }
 }
@@ -456,6 +622,102 @@ async function onCreateClimb(payload: {
   }
 }
 
+// ─── Actions de l'onglet Tunnels ─────────────────────────────────────
+
+/** Bascule d'onglet : annule les créations et vide les sélections croisées. */
+function onTabChange(tab: 'climbs' | 'tunnels'): void {
+  if (tab === activeTab.value) return
+  creating.value = false
+  creatingTunnel.value = false
+  createHelpOpen.value = false
+  tunnelCreateHelpOpen.value = false
+  altimetrieStore.selectClimb(null)
+  tunnelsStore.selectTunnel(null)
+  activeTab.value = tab
+  void router.replace({ query: { ...route.query, tab } })
+  if (tab === 'tunnels') {
+    void tunnelsStore.refreshSupport()
+    if (traceId.value) void tunnelsStore.refreshRequirements(traceId.value)
+  }
+}
+
+function onCreateTunnelRequested(): void {
+  if (!tunnelCreationAvailable.value) return
+  if (tunnelPending.value) {
+    ui.showWarning('La préparation des tunnels est déjà en cours.')
+    return
+  }
+  tunnelCreateHelpOpen.value = true
+}
+
+function onStartTunnelCreation(): void {
+  tunnelCreateHelpOpen.value = false
+  creating.value = false
+  creatingTunnel.value = true
+}
+
+function onSelectTunnel(id: string): void {
+  tunnelsStore.selectTunnel(id)
+}
+
+function onDeleteTunnel(id: string): void {
+  if (creatingTunnel.value) {
+    ui.showWarning(
+      'Terminez ou annulez la création de tunnel avant de modifier la liste.',
+    )
+    return
+  }
+  tunnelsStore.deleteGroup(id)
+}
+
+function onMergeTunnel(id: string): void {
+  if (creatingTunnel.value) {
+    ui.showWarning(
+      'Terminez ou annulez la création de tunnel avant de modifier la liste.',
+    )
+    return
+  }
+  if (!tunnelsStore.mergeWithPrevious(id, mergeGapM.value)) {
+    ui.showWarning(
+      "Fusion impossible : écart trop grand ou tunnel sans précédent.",
+    )
+    return
+  }
+  ui.showSuccess("Tunnels fusionnés. Sauvegardez pour l'enregistrer.")
+}
+
+function onSplitTunnel(id: string): void {
+  if (creatingTunnel.value) {
+    ui.showWarning(
+      'Terminez ou annulez la création de tunnel avant de modifier la liste.',
+    )
+    return
+  }
+  if (tunnelsStore.splitGroup(id)) {
+    ui.showSuccess("Tunnels séparés. Sauvegardez pour l'enregistrer.")
+  }
+}
+
+/** Relance explicite : confirmation si des tunnels ou des éditions existent. */
+function onRelaunchTunnels(): void {
+  if (tunnelPending.value) {
+    ui.showWarning('La préparation des tunnels est déjà en cours.')
+    return
+  }
+  if (tunnelsStore.dirty || tunnelGroups.value.length > 0) {
+    dialogTunnelDetectOpen.value = true
+    return
+  }
+  runTunnelDetection()
+}
+
+/** Enfile la préparation silencieuse de la trace courante. */
+function runTunnelDetection(): void {
+  dialogTunnelDetectOpen.value = false
+  if (!traceId.value) return
+  tunnelsStore.request(traceId.value)
+}
+
 async function onDeleteClimb(id: number): Promise<void> {
   if (!traceId.value) return
   if (creating.value) {
@@ -512,7 +774,9 @@ async function onMergeClimb(id: number): Promise<void> {
 function onExitConfirmed(): void {
   dialogExitOpen.value = false
   creating.value = false
+  creatingTunnel.value = false
   altimetrieStore.reset()
+  tunnelsStore.reset()
   router.push({ name: 'accueil' })
 }
 
@@ -560,6 +824,16 @@ onMounted(async () => {
       buildParams(),
       trace.altimetrie_validated,
     )
+
+    // Onglet Tunnels : état du support OSM, fichier éventuel (ou état local
+    // vide pour permettre la création manuelle), puis écoute de la
+    // progression des téléchargements.
+    await tunnelsStore.refreshSupport()
+    await tunnelsStore.loadOrCreate(
+      traceId.value,
+      trace.tunnels_status === 'success',
+    )
+    void tunnelsStore.bindProgress()
   } catch (error) {
     const message =
       typeof error === 'string' ? error : 'Analyse altimétrique impossible.'
@@ -573,11 +847,18 @@ onMounted(async () => {
 onUnmounted(() => {
   if (inspectTimer) clearTimeout(inspectTimer)
   inspectTimer = null
+  tunnelsStore.reset()
 })
 
 onBeforeRouteLeave(() => {
-  if (!altimetrieStore.dirty && !creating.value) {
+  if (
+    !altimetrieStore.dirty &&
+    !tunnelsStore.dirty &&
+    !creating.value &&
+    !creatingTunnel.value
+  ) {
     altimetrieStore.reset()
+    tunnelsStore.reset()
     return true
   }
   if (!dialogExitOpen.value) {
@@ -585,7 +866,9 @@ onBeforeRouteLeave(() => {
     return false
   }
   creating.value = false
+  creatingTunnel.value = false
   altimetrieStore.reset()
+  tunnelsStore.reset()
   return true
 })
 </script>

@@ -10,8 +10,12 @@
     <v-app-bar-title>
       <div class="alt-toolbar-title">
         <div class="alt-toolbar-title__main">
-          <v-icon icon="mdi-terrain" size="18" class="mr-2" />
-          Altimétrie — {{ traceName }}
+          <v-icon
+            :icon="mode === 'tunnels' ? 'mdi-tunnel' : 'mdi-terrain'"
+            size="18"
+            class="mr-2"
+          />
+          {{ mode === 'tunnels' ? 'Tunnels' : 'Altimétrie' }} — {{ traceName }}
         </div>
         <div
           class="alt-toolbar-title__causes"
@@ -49,7 +53,7 @@
         prepend-icon="mdi-check-circle"
         :disabled="!ready || saving"
         :loading="saving"
-        title="Valider l'altimétrie (aucune sauvegarde effectuée)"
+        :title="validateTitle"
         @click="emit('save')"
       >
         Valider
@@ -62,11 +66,7 @@
         prepend-icon="mdi-content-save"
         :disabled="!ready || !dirty || saving"
         :loading="saving"
-        :title="
-          dirty
-            ? 'Enregistrer les modifications de montées'
-            : 'Aucune modification à enregistrer'
-        "
+        :title="saveTitle"
         @click="emit('save')"
       >
         Sauvegarder
@@ -97,6 +97,8 @@ import { useAppStore } from '../../stores/app'
 import type { AltimetrieStatus } from '../../utils/altimetrieDiagnostics'
 
 const props = defineProps<{
+  /** Onglet actif : adapte l'icône, le titre et le libellé des actions. */
+  mode: 'climbs' | 'tunnels'
   traceName: string
   /** Des modifications de montées restent à enregistrer. */
   dirty: boolean
@@ -129,6 +131,20 @@ const appStore = useAppStore()
  * « Sauvegarder » : c'est la sauvegarde qui vaut validation.
  */
 const showValidate = computed(() => !props.validated && !props.dirty)
+
+const validateTitle = computed(() =>
+  props.mode === 'tunnels'
+    ? 'Valider les tunnels (aucune sauvegarde effectuée)'
+    : "Valider l'altimétrie (aucune sauvegarde effectuée)",
+)
+
+const saveTitle = computed(() =>
+  props.dirty
+    ? props.mode === 'tunnels'
+      ? 'Enregistrer les modifications de tunnels'
+      : 'Enregistrer les modifications de montées'
+    : 'Aucune modification à enregistrer',
+)
 
 const causesText = computed(() => {
   if (props.settingsCauses.length === 0) return 'Paramètres cohérents'

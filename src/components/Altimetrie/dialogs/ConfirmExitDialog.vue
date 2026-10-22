@@ -8,9 +8,9 @@
     <v-card>
       <v-card-title>Modifications non enregistrées</v-card-title>
       <v-card-text>
-        Une modification des montées est en cours — création, déplacement,
-        séparation, fusion ou suppression — et n'est pas enregistrée. Quitter
-        sans sauvegarder ?
+        Une modification des montées ou des tunnels est en cours — création,
+        déplacement, séparation, fusion ou suppression — et n'est pas
+        enregistrée. Quitter sans sauvegarder ?
       </v-card-text>
       <v-card-actions>
         <v-spacer />
