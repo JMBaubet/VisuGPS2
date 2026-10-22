@@ -31,12 +31,13 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
-tokio = "1"
+tokio = { version = "1", features = ["fs", "io-util", "rt", "net", "time"] }
 # Module d'import GPX
 gpx = "0.10"
 geo = "0.29"
 osmpbfreader = "0.19"
 rstar = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 hex = "0.4"
