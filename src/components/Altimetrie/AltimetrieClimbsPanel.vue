@@ -125,7 +125,12 @@
             color="primary"
             variant="tonal"
             prepend-icon="mdi-plus"
-            :disabled="tunnelCreating || tunnelPending || !canCreateTunnel"
+            :disabled="
+              tunnelCreating ||
+              tunnelPending ||
+              tunnelLoading ||
+              !canCreateTunnel
+            "
             :title="
               canCreateTunnel
                 ? 'Créer un tunnel'
@@ -139,7 +144,7 @@
             block
             variant="text"
             prepend-icon="mdi-refresh"
-            :disabled="tunnelPending || tunnelCreating"
+            :disabled="tunnelPending || tunnelCreating || tunnelLoading"
             @click="emit('relaunch-tunnels')"
           >
             Relancer la détection
@@ -188,6 +193,8 @@ const props = defineProps<{
   tunnelCreating: boolean
   /** Une préparation est en cours ou en file pour cette trace. */
   tunnelPending: boolean
+  /** Le fichier de tunnels est en cours de chargement. */
+  tunnelLoading: boolean
   /** La trace est la préparation en cours. */
   tunnelPreparing: boolean
   tunnelProgress: TunnelProgress | null

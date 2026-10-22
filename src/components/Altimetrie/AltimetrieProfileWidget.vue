@@ -43,8 +43,8 @@
       </div>
     </div>
 
-    <div v-if="creationHint" class="alt-profile__hint">
-      {{ creationHint }}
+    <div v-if="creationHint || tunnelCreationHint" class="alt-profile__hint">
+      {{ creationHint || tunnelCreationHint }}
     </div>
   </div>
 </template>
@@ -81,12 +81,28 @@ import {
   type ClimbHandle,
 } from '../../utils/altimetrieClimbs'
 import { formatDistance } from '../../utils/format'
+import type { Tunnel } from '../../stores/tunnels'
+import {
+  constrainTunnelBound,
+  isShortTunnelOnWidget,
+  MIN_TUNNEL_LENGTH_KM,
+  tunnelRangeOverlaps,
+} from '../../utils/altimetrieTunnels'
+
+type TunnelHandle = 'entrance' | 'exit'
 
 const props = defineProps<{
+  /** Onglet actif : montées ou tunnels. */
+  mode: 'climbs' | 'tunnels'
   file: AltimetrieFile | null
   selectedClimbId: number | null
   /** Mode création manuelle : le prochain clic pose la vallée, le suivant le sommet. */
   creating: boolean
+  /** Tunnels physiques de la trace (les groupes restent des tronçons distincts). */
+  tunnels: Tunnel[]
+  selectedTunnelIds: string[]
+  /** Mode création manuelle de tunnel : entrée puis sortie. */
+  creatingTunnel: boolean
 }>()
 
 const emit = defineEmits<{
@@ -108,10 +124,25 @@ const emit = defineEmits<{
   'create-climb': [payload: { startKm: number; endKm: number }]
   'cancel-create': []
   'create-error': [message: string]
+  'select-tunnel': [id: string]
+  'draft-tunnel-bounds': [
+    payload: { tunnelId: string; handle: TunnelHandle; km: number },
+  ]
+  'edit-tunnel-bounds': [
+    payload: { tunnelId: string; handle: TunnelHandle; km: number },
+  ]
+  'cancel-tunnel-bounds': []
+  'create-tunnel': [payload: { startKm: number; endKm: number }]
+  'cancel-create-tunnel': []
+  'create-tunnel-error': [message: string]
 }>()
 
 const X_SCALES: number[] = [50, 12.5]
 const Y_SCALES: number[] = [10, 5, 2.5]
+
+const TUNNEL_COLOR = '#2196F3'
+const TUNNEL_ENTRANCE_COLOR = '#1565C0'
+const TUNNEL_EXIT_COLOR = '#42A5F5'
 
 const Y_AXIS_WIDTH = 54
 const X_AXIS_HEIGHT = 26
@@ -136,6 +167,17 @@ interface DragState {
   climbId: number
   handle: ClimbHandle
   km: number
+}
+
+interface TunnelDragState {
+  tunnelId: string
+  handle: TunnelHandle
+  km: number
+}
+
+interface TunnelHandleHit {
+  tunnel: Tunnel
+  handle: TunnelHandle
 }
 
 interface HandleHit {
@@ -170,8 +212,11 @@ const scrollContainer = ref<HTMLDivElement | null>(null)
 const xScale = ref(50)
 const yScale = ref(10)
 const dragState = ref<DragState | null>(null)
+const dragTunnelState = ref<TunnelDragState | null>(null)
 /** Création manuelle en cours : bornes de vallée et aperçu de sommet. */
 const creation = ref<{ valleyKm: number; summitKm: number } | null>(null)
+/** Création manuelle de tunnel : entrée puis sortie. */
+const tunnelCreation = ref<{ entranceKm: number; exitKm: number } | null>(null)
 /** Hauteur maximale du profil visible, en pixels. */
 const maxPlotHeight = ref(computeMaxPlotHeight())
 
@@ -181,6 +226,7 @@ let axesFrame = 0
 let dragPointerId: number | null = null
 /** Dernière borne transmise pendant le drag, pour éviter les doublons. */
 let lastDraftKm: number | null = null
+let lastDraftTunnelKm: number | null = null
 let resizeObserver: ResizeObserver | null = null
 
 const profile = computed(() => props.file?.profile ?? [])
@@ -189,6 +235,18 @@ const segments = computed(() => props.file?.segments ?? [])
 
 const selectedClimb = computed(
   () => climbs.value.find(climb => climb.id === props.selectedClimbId) ?? null,
+)
+
+const tunnels = computed(() => props.tunnels ?? [])
+const selectedTunnels = computed(() =>
+  tunnels.value.filter(tunnel => props.selectedTunnelIds.includes(tunnel.id)),
+)
+const selectedTunnel = computed(() => selectedTunnels.value[0] ?? null)
+/** Un tunnel fusionné n'est pas étirable : il faut d'abord le séparer. */
+const selectedTunnelEditable = computed(
+  () =>
+    selectedTunnels.value.length === 1 &&
+    !selectedTunnels.value[0]?.groupId,
 )
 
 const totalDistanceM = computed(() => {
@@ -290,6 +348,13 @@ const creationHint = computed(() => {
     : 'Cliquez pour poser la vallée — Échap pour annuler'
 })
 
+const tunnelCreationHint = computed(() => {
+  if (!props.creatingTunnel) return ''
+  return tunnelCreation.value
+    ? 'Cliquez pour poser la sortie du tunnel — Échap pour annuler'
+    : "Cliquez pour poser l'entrée du tunnel — Échap pour annuler"
+})
+
 function computeMaxPlotHeight(): number {
   const available = window.innerHeight * 0.45 - X_AXIS_HEIGHT
   return Math.max(MIN_PLOT_HEIGHT + TOP_PAD + PLOT_BOTTOM_PAD, available)
@@ -349,6 +414,19 @@ function creationValid(valleyKm: number, summitKm: number): boolean {
   return (
     summitKm > valleyKm + MIN_CLIMB_LENGTH_KM &&
     isFreeRange(valleyKm, summitKm)
+  )
+}
+
+function isInsideTunnel(km: number): boolean {
+  return tunnels.value.some(
+    tunnel => km >= tunnel.startKm && km <= tunnel.endKm,
+  )
+}
+
+function tunnelCreationValid(entranceKm: number, exitKm: number): boolean {
+  return (
+    exitKm > entranceKm + MIN_TUNNEL_LENGTH_KM &&
+    !tunnelRangeOverlaps(tunnels.value, entranceKm, exitKm)
   )
 }
 
@@ -535,9 +613,9 @@ function drawPlot(): void {
     ctx.stroke()
   }
 
-  // Bande de la montée sélectionnée (avec aperçu de drag)
+  // Bande de la montée sélectionnée (mode Montées)
   const selected = selectedClimb.value
-  if (selected) {
+  if (props.mode === 'climbs' && selected) {
     const drag =
       dragState.value?.climbId === selected.id ? dragState.value : null
     const startKm = drag?.handle === 'valley' ? drag.km : selected.startKm
@@ -548,6 +626,37 @@ function drawPlot(): void {
       ? 'rgba(250,204,21,0.12)'
       : 'rgba(250,204,21,0.18)'
     ctx.fillRect(x1, plotTop, Math.max(1, x2 - x1), axisY - plotTop)
+  }
+
+  // Bandes des tunnels sélectionnés (mode Tunnels). Le groupe fusionné est
+  // signalé par une bande très légère sur son étendue, chaque tronçon par une
+  // bande plus marquée : l'écart n'est jamais peint comme du tunnel.
+  if (props.mode === 'tunnels' && selectedTunnels.value.length > 0) {
+    const groupStart = Math.min(
+      ...selectedTunnels.value.map(tunnel => tunnel.startKm),
+    )
+    const groupEnd = Math.max(
+      ...selectedTunnels.value.map(tunnel => tunnel.endKm),
+    )
+    const groupX1 = xOf(groupStart * 1000)
+    const groupX2 = xOf(groupEnd * 1000)
+    ctx.fillStyle = theme.dark
+      ? 'rgba(33,150,243,0.10)'
+      : 'rgba(33,150,243,0.07)'
+    ctx.fillRect(
+      groupX1,
+      plotTop,
+      Math.max(1, groupX2 - groupX1),
+      axisY - plotTop,
+    )
+    ctx.fillStyle = theme.dark
+      ? 'rgba(33,150,243,0.20)'
+      : 'rgba(33,150,243,0.15)'
+    for (const tunnel of selectedTunnels.value) {
+      const x1 = xOf(tunnel.startKm * 1000)
+      const x2 = xOf(tunnel.endKm * 1000)
+      ctx.fillRect(x1, plotTop, Math.max(1, x2 - x1), axisY - plotTop)
+    }
   }
 
   // Ligne de profil
@@ -564,89 +673,95 @@ function drawPlot(): void {
   ctx.lineWidth = 1.4
   ctx.stroke()
 
-  // Traits horizontaux des montées, au-dessus de l'axe X
-  for (const climb of climbs.value) {
-    const x1 = xOf(climb.startKm * 1000)
-    const x2 = xOf(climb.endKm * 1000)
-    const barWidth = Math.max(1, x2 - x1)
-    const isSelected = climb.id === props.selectedClimbId
-    const barHeight = isSelected ? 5 : 3
-    const barY = axisY - 3 - (barHeight - 3)
+  if (props.mode === 'climbs') {
+    // Traits horizontaux des montées, au-dessus de l'axe X
+    for (const climb of climbs.value) {
+      const x1 = xOf(climb.startKm * 1000)
+      const x2 = xOf(climb.endKm * 1000)
+      const barWidth = Math.max(1, x2 - x1)
+      const isSelected = climb.id === props.selectedClimbId
+      const barHeight = isSelected ? 5 : 3
+      const barY = axisY - 3 - (barHeight - 3)
 
-    ctx.fillStyle = colorForSlope(climb.avgSlopePct)
-    ctx.globalAlpha = isSelected ? 1 : 0.85
-    ctx.fillRect(x1, barY, barWidth, barHeight)
-    ctx.globalAlpha = 1
-    ctx.strokeStyle = isSelected
-      ? theme.dark
-        ? '#ffffff'
-        : '#1e293b'
-      : theme.outline
-    ctx.lineWidth = isSelected ? 1.2 : 0.6
-    ctx.strokeRect(x1, barY, barWidth, barHeight)
+      ctx.fillStyle = colorForSlope(climb.avgSlopePct)
+      ctx.globalAlpha = isSelected ? 1 : 0.85
+      ctx.fillRect(x1, barY, barWidth, barHeight)
+      ctx.globalAlpha = 1
+      ctx.strokeStyle = isSelected
+        ? theme.dark
+          ? '#ffffff'
+          : '#1e293b'
+        : theme.outline
+      ctx.lineWidth = isSelected ? 1.2 : 0.6
+      ctx.strokeRect(x1, barY, barWidth, barHeight)
+    }
+
+    // Triangles vallée/sommet et traits pointillés
+    for (const climb of climbs.value) {
+      const isSelected = climb.id === props.selectedClimbId
+      const drag =
+        dragState.value?.climbId === climb.id ? dragState.value : null
+      const valleyKm = drag?.handle === 'valley' ? drag.km : climb.startKm
+      const summitKm = drag?.handle === 'summit' ? drag.km : climb.endKm
+
+      drawProfileHandle(
+        ctx,
+        xOf(valleyKm * 1000),
+        '#16a34a',
+        isSelected,
+        handleTop,
+        axisY,
+        theme.dark,
+      )
+      drawProfileHandle(
+        ctx,
+        xOf(summitKm * 1000),
+        '#dc2626',
+        isSelected,
+        handleTop,
+        axisY,
+        theme.dark,
+      )
+    }
+
+    // Aperçu de la création manuelle
+    const creating = creation.value
+    if (creating) {
+      const valid = creationValid(creating.valleyKm, creating.summitKm)
+      const valleyX = xOf(creating.valleyKm * 1000)
+      const summitX = xOf(creating.summitKm * 1000)
+      ctx.fillStyle = valid
+        ? 'rgba(34,197,94,0.14)'
+        : 'rgba(239,68,68,0.16)'
+      ctx.fillRect(
+        Math.min(valleyX, summitX),
+        plotTop,
+        Math.max(1, Math.abs(summitX - valleyX)),
+        axisY - plotTop,
+      )
+      drawProfileHandle(
+        ctx,
+        valleyX,
+        '#16a34a',
+        true,
+        handleTop,
+        axisY,
+        theme.dark,
+      )
+      drawProfileHandle(
+        ctx,
+        summitX,
+        valid ? '#dc2626' : '#ef4444',
+        true,
+        handleTop,
+        axisY,
+        theme.dark,
+      )
+    }
   }
 
-  // Triangles vallée/sommet et traits pointillés
-  for (const climb of climbs.value) {
-    const isSelected = climb.id === props.selectedClimbId
-    const drag =
-      dragState.value?.climbId === climb.id ? dragState.value : null
-    const valleyKm = drag?.handle === 'valley' ? drag.km : climb.startKm
-    const summitKm = drag?.handle === 'summit' ? drag.km : climb.endKm
-
-    drawProfileHandle(
-      ctx,
-      xOf(valleyKm * 1000),
-      '#16a34a',
-      isSelected,
-      handleTop,
-      axisY,
-      theme.dark,
-    )
-    drawProfileHandle(
-      ctx,
-      xOf(summitKm * 1000),
-      '#dc2626',
-      isSelected,
-      handleTop,
-      axisY,
-      theme.dark,
-    )
-  }
-
-  // Aperçu de la création manuelle
-  const creating = creation.value
-  if (creating) {
-    const valid = creationValid(creating.valleyKm, creating.summitKm)
-    const valleyX = xOf(creating.valleyKm * 1000)
-    const summitX = xOf(creating.summitKm * 1000)
-    ctx.fillStyle = valid
-      ? 'rgba(34,197,94,0.14)'
-      : 'rgba(239,68,68,0.16)'
-    ctx.fillRect(
-      Math.min(valleyX, summitX),
-      plotTop,
-      Math.max(1, Math.abs(summitX - valleyX)),
-      axisY - plotTop,
-    )
-    drawProfileHandle(
-      ctx,
-      valleyX,
-      '#16a34a',
-      true,
-      handleTop,
-      axisY,
-      theme.dark,
-    )
-    drawProfileHandle(
-      ctx,
-      summitX,
-      valid ? '#dc2626' : '#ef4444',
-      true,
-      handleTop,
-      axisY,
-      theme.dark,
-    )
+  if (props.mode === 'tunnels') {
+    drawTunnelsOverlay(ctx, xOf, plotTop, axisY, handleTop, theme)
   }
 }
 
@@ -770,6 +885,167 @@ function drawXAxis(): void {
   ctx.restore()
 }
 
+function drawTunnelHandle(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  color: string,
+  selected: boolean,
+  top: number,
+  axisY: number,
+  dark: boolean,
+): void {
+  const size = selected ? 6 : 4
+  const centerY = top + 4
+
+  ctx.save()
+  ctx.globalAlpha = selected ? 0.95 : 0.5
+  ctx.strokeStyle = color
+  ctx.lineWidth = selected ? 1.5 : 1
+  ctx.setLineDash([4, 3])
+  ctx.beginPath()
+  ctx.moveTo(x, centerY + size)
+  ctx.lineTo(x, axisY)
+  ctx.stroke()
+  ctx.restore()
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.moveTo(x, centerY - size)
+  ctx.lineTo(x + size, centerY)
+  ctx.lineTo(x, centerY + size)
+  ctx.lineTo(x - size, centerY)
+  ctx.closePath()
+  ctx.globalAlpha = selected ? 1 : 0.7
+  ctx.fillStyle = color
+  ctx.fill()
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = dark ? '#ffffff' : '#1e293b'
+  ctx.lineWidth = 1
+  ctx.stroke()
+  ctx.restore()
+}
+
+/**
+ * Tunnels dans le profil : trait vertical pointillé bleu pour un tunnel court,
+ * bande bleue pour un tunnel long, poignées entrée/sortie du tunnel
+ * sélectionné non fusionné, et aperçu de création en deux clics.
+ */
+function drawTunnelsOverlay(
+  ctx: CanvasRenderingContext2D,
+  xOf: (distanceM: number) => number,
+  plotTop: number,
+  axisY: number,
+  handleTop: number,
+  theme: ThemeColors,
+): void {
+  for (const tunnel of tunnels.value) {
+    const x1 = xOf(tunnel.startKm * 1000)
+    const x2 = xOf(tunnel.endKm * 1000)
+    const selected = props.selectedTunnelIds.includes(tunnel.id)
+
+    if (isShortTunnelOnWidget(tunnel.startKm, tunnel.endKm, xScale.value)) {
+      const mid = (x1 + x2) / 2
+      ctx.save()
+      ctx.strokeStyle = TUNNEL_COLOR
+      ctx.lineWidth = selected ? 3 : 2.5
+      ctx.globalAlpha = selected ? 1 : 0.9
+      ctx.setLineDash([4, 3])
+      ctx.beginPath()
+      ctx.moveTo(mid, handleTop)
+      ctx.lineTo(mid, axisY)
+      ctx.stroke()
+      ctx.restore()
+    } else {
+      const barHeight = selected ? 6 : 4
+      const barY = axisY - barHeight
+      const barWidth = Math.max(1, x2 - x1)
+      ctx.save()
+      ctx.fillStyle = TUNNEL_COLOR
+      ctx.globalAlpha = selected ? 1 : 0.9
+      ctx.fillRect(x1, barY, barWidth, barHeight)
+      ctx.globalAlpha = 1
+      ctx.strokeStyle = selected
+        ? theme.dark
+          ? '#ffffff'
+          : '#1e293b'
+        : theme.outline
+      ctx.lineWidth = selected ? 1.2 : 0.6
+      ctx.strokeRect(x1, barY, barWidth, barHeight)
+      ctx.restore()
+    }
+  }
+
+  // Poignées du tunnel sélectionné : uniquement s'il est isolé. Un groupe
+  // fusionné se sépare d'abord dans la liste.
+  if (selectedTunnelEditable.value && selectedTunnel.value) {
+    const tunnel = selectedTunnel.value
+    const drag =
+      dragTunnelState.value?.tunnelId === tunnel.id
+        ? dragTunnelState.value
+        : null
+    const entranceKm = drag?.handle === 'entrance' ? drag.km : tunnel.startKm
+    const exitKm = drag?.handle === 'exit' ? drag.km : tunnel.endKm
+
+    drawTunnelHandle(
+      ctx,
+      xOf(entranceKm * 1000),
+      TUNNEL_ENTRANCE_COLOR,
+      true,
+      handleTop,
+      axisY,
+      theme.dark,
+    )
+    drawTunnelHandle(
+      ctx,
+      xOf(exitKm * 1000),
+      TUNNEL_EXIT_COLOR,
+      true,
+      handleTop,
+      axisY,
+      theme.dark,
+    )
+  }
+
+  // Aperçu de la création manuelle : entrée puis sortie.
+  const creating = tunnelCreation.value
+  if (creating) {
+    const valid = tunnelCreationValid(creating.entranceKm, creating.exitKm)
+    const entranceX = xOf(creating.entranceKm * 1000)
+    const exitX = xOf(creating.exitKm * 1000)
+
+    ctx.save()
+    ctx.fillStyle = valid
+      ? 'rgba(33,150,243,0.16)'
+      : 'rgba(239,68,68,0.16)'
+    ctx.fillRect(
+      Math.min(entranceX, exitX),
+      plotTop,
+      Math.max(1, Math.abs(exitX - entranceX)),
+      axisY - plotTop,
+    )
+    ctx.restore()
+
+    drawTunnelHandle(
+      ctx,
+      entranceX,
+      TUNNEL_ENTRANCE_COLOR,
+      true,
+      handleTop,
+      axisY,
+      theme.dark,
+    )
+    drawTunnelHandle(
+      ctx,
+      exitX,
+      valid ? TUNNEL_EXIT_COLOR : '#ef4444',
+      true,
+      handleTop,
+      axisY,
+      theme.dark,
+    )
+  }
+}
+
 function drawProfileHandle(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -850,6 +1126,121 @@ function hitBar(x: number, y: number): AltimetrieClimb | null {
   return null
 }
 
+function hitTunnelHandle(x: number, y: number): TunnelHandleHit | null {
+  if (!currentView || !selectedTunnelEditable.value || !selectedTunnel.value) {
+    return null
+  }
+  if (
+    y < currentView.handleTop - 8 ||
+    y > currentView.handleTop + HANDLE_HIT_HEIGHT
+  ) {
+    return null
+  }
+
+  const tunnel = selectedTunnel.value
+  const drag =
+    dragTunnelState.value?.tunnelId === tunnel.id
+      ? dragTunnelState.value
+      : null
+  const entranceKm = drag?.handle === 'entrance' ? drag.km : tunnel.startKm
+  const exitKm = drag?.handle === 'exit' ? drag.km : tunnel.endKm
+  const entranceX = xOfDistance(entranceKm * 1000, currentView)
+  const exitX = xOfDistance(exitKm * 1000, currentView)
+  const entranceDistance = Math.abs(x - entranceX)
+  const exitDistance = Math.abs(x - exitX)
+
+  if (entranceDistance <= HANDLE_HIT_X && entranceDistance <= exitDistance) {
+    return { tunnel, handle: 'entrance' }
+  }
+  if (exitDistance <= HANDLE_HIT_X) {
+    return { tunnel, handle: 'exit' }
+  }
+  return null
+}
+
+function hitTunnelMark(x: number, y: number): Tunnel | null {
+  if (!currentView) return null
+
+  for (const tunnel of tunnels.value) {
+    const x1 = xOfDistance(tunnel.startKm * 1000, currentView)
+    const x2 = xOfDistance(tunnel.endKm * 1000, currentView)
+
+    if (isShortTunnelOnWidget(tunnel.startKm, tunnel.endKm, xScale.value)) {
+      const mid = (x1 + x2) / 2
+      if (
+        Math.abs(x - mid) <= 6 &&
+        y >= currentView.handleTop &&
+        y <= currentView.axisY + 2
+      ) {
+        return tunnel
+      }
+    } else if (
+      y >= currentView.axisY - 12 &&
+      y <= currentView.axisY + 2 &&
+      x >= x1 - 2 &&
+      x <= x2 + 2
+    ) {
+      return tunnel
+    }
+  }
+  return null
+}
+
+function handleTunnelCreationClick(x: number, y: number): void {
+  if (!currentView) return
+  if (y < currentView.plotTop || y > currentView.axisY) return
+
+  const km = distanceAtX(x, currentView) / 1000
+  if (km < 0 || km > totalKm.value) return
+
+  if (!tunnelCreation.value) {
+    if (isInsideTunnel(km)) {
+      emit(
+        'create-tunnel-error',
+        "Le point d'entrée doit être en dehors d'un tunnel existant.",
+      )
+      return
+    }
+    tunnelCreation.value = {
+      entranceKm: km,
+      exitKm: Math.min(totalKm.value, km + MIN_TUNNEL_LENGTH_KM),
+    }
+    requestDraw()
+    return
+  }
+
+  const entranceKm = tunnelCreation.value.entranceKm
+  if (km <= entranceKm + MIN_TUNNEL_LENGTH_KM) {
+    emit(
+      'create-tunnel-error',
+      "La sortie doit être placée après l'entrée (10 m minimum).",
+    )
+    return
+  }
+  if (tunnelRangeOverlaps(tunnels.value, entranceKm, km)) {
+    emit('create-tunnel-error', 'Le tunnel chevauche un tunnel existant.')
+    return
+  }
+
+  emit('create-tunnel', { startKm: entranceKm, endKm: km })
+}
+
+function recenterAndInspect(x: number): void {
+  if (!currentView) return
+  const distanceM = distanceAtX(x, currentView)
+  if (distanceM < 0 || distanceM > totalDistanceM.value) return
+
+  emit('recenter', distanceM)
+  const segment = minimalSegmentAt(profile.value, distanceM)
+  if (segment) {
+    emit('inspect', {
+      distanceM: segment.distanceM,
+      slopePct: segment.slopePct,
+      altitudeM: segment.altitudeM,
+    })
+  }
+}
+
 function handleCreationClick(x: number, y: number): void {
   if (!currentView) return
   if (y < currentView.plotTop || y > currentView.axisY) return
@@ -897,6 +1288,42 @@ function onPointerDown(event: PointerEvent): void {
   const x = event.clientX - rect.left
   const y = event.clientY - rect.top
 
+  if (props.mode === 'tunnels') {
+    if (props.creatingTunnel) {
+      handleTunnelCreationClick(x, y)
+      return
+    }
+
+    const tunnelHandle = hitTunnelHandle(x, y)
+    if (tunnelHandle) {
+      emit('select-tunnel', tunnelHandle.tunnel.id)
+      dragState.value = null
+      dragTunnelState.value = {
+        tunnelId: tunnelHandle.tunnel.id,
+        handle: tunnelHandle.handle,
+        km:
+          tunnelHandle.handle === 'entrance'
+            ? tunnelHandle.tunnel.startKm
+            : tunnelHandle.tunnel.endKm,
+      }
+      lastDraftTunnelKm = null
+      dragPointerId = event.pointerId
+      canvas.setPointerCapture(event.pointerId)
+      event.preventDefault()
+      requestDraw()
+      return
+    }
+
+    const tunnelHit = hitTunnelMark(x, y)
+    if (tunnelHit) {
+      emit('select-tunnel', tunnelHit.id)
+      return
+    }
+
+    recenterAndInspect(x)
+    return
+  }
+
   if (props.creating) {
     handleCreationClick(x, y)
     return
@@ -905,6 +1332,7 @@ function onPointerDown(event: PointerEvent): void {
   const handleHit = hitHandle(x, y)
   if (handleHit) {
     emit('select-climb', handleHit.climb.id)
+    dragTunnelState.value = null
 
     dragState.value = {
       climbId: handleHit.climb.id,
@@ -928,26 +1356,69 @@ function onPointerDown(event: PointerEvent): void {
     return
   }
 
-  const distanceM = distanceAtX(x, currentView)
-  if (distanceM >= 0 && distanceM <= totalDistanceM.value) {
-    emit('recenter', distanceM)
-
-    const segment = minimalSegmentAt(profile.value, distanceM)
-    if (segment) {
-      emit('inspect', {
-        distanceM: segment.distanceM,
-        slopePct: segment.slopePct,
-        altitudeM: segment.altitudeM,
-      })
-    }
-  }
+  recenterAndInspect(x)
 }
 
 function onPointerMove(event: PointerEvent): void {
   const canvas = canvasRef.value
-  if (canvas && props.creating && creation.value && currentView) {
-    const rect = canvas.getBoundingClientRect()
-    const x = event.clientX - rect.left
+  if (!canvas || !currentView) return
+
+  const rect = canvas.getBoundingClientRect()
+  const x = event.clientX - rect.left
+
+  if (props.mode === 'tunnels') {
+    if (props.creatingTunnel && tunnelCreation.value) {
+      const distanceM = distanceAtX(x, currentView)
+      if (distanceM >= 0 && distanceM <= totalDistanceM.value) {
+        const entranceKm = tunnelCreation.value.entranceKm
+        const exitKm = Math.max(
+          entranceKm + MIN_TUNNEL_LENGTH_KM,
+          Math.min(totalKm.value, distanceM / 1000),
+        )
+        tunnelCreation.value = { entranceKm, exitKm }
+        requestDraw()
+      }
+      return
+    }
+
+    const tunnelDrag = dragTunnelState.value
+    if (!tunnelDrag || dragPointerId !== event.pointerId) return
+
+    const rawKm = distanceAtX(x, currentView) / 1000
+    const tunnel = tunnels.value.find(
+      entry => entry.id === tunnelDrag.tunnelId,
+    )
+    if (!tunnel) return
+
+    const bounds = constrainTunnelBound(
+      tunnel,
+      tunnelDrag.handle,
+      rawKm,
+      tunnels.value,
+      totalKm.value,
+    )
+    const km =
+      tunnelDrag.handle === 'entrance' ? bounds.startKm : bounds.endKm
+    dragTunnelState.value = { ...tunnelDrag, km }
+
+    if (
+      lastDraftTunnelKm === null ||
+      Math.abs(lastDraftTunnelKm - km) > 1e-6
+    ) {
+      lastDraftTunnelKm = km
+      emit('draft-tunnel-bounds', {
+        tunnelId: tunnelDrag.tunnelId,
+        handle: tunnelDrag.handle,
+        km,
+      })
+    }
+
+    event.preventDefault()
+    requestDraw()
+    return
+  }
+
+  if (props.creating && creation.value) {
     const distanceM = distanceAtX(x, currentView)
     if (distanceM >= 0 && distanceM <= totalDistanceM.value) {
       const valleyKm = creation.value.valleyKm
@@ -962,17 +1433,10 @@ function onPointerMove(event: PointerEvent): void {
   }
 
   const drag = dragState.value
-  if (
-    !canvas ||
-    !drag ||
-    !currentView ||
-    dragPointerId !== event.pointerId
-  ) {
+  if (!drag || dragPointerId !== event.pointerId) {
     return
   }
 
-  const rect = canvas.getBoundingClientRect()
-  const x = event.clientX - rect.left
   const rawKm = distanceAtX(x, currentView) / 1000
   const climb = climbs.value.find(entry => entry.id === drag.climbId)
   if (!climb) return
@@ -999,8 +1463,35 @@ function onPointerMove(event: PointerEvent): void {
 
 function onPointerUp(event: PointerEvent): void {
   const canvas = canvasRef.value
+  if (!canvas) return
+
+  const tunnelDrag = dragTunnelState.value
+  if (tunnelDrag && dragPointerId === event.pointerId) {
+    dragTunnelState.value = null
+    dragPointerId = null
+    lastDraftTunnelKm = null
+    if (canvas.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId)
+    }
+
+    const tunnel = tunnels.value.find(
+      entry => entry.id === tunnelDrag.tunnelId,
+    )
+    if (tunnel) {
+      emit('edit-tunnel-bounds', {
+        tunnelId: tunnel.id,
+        handle: tunnelDrag.handle,
+        km: tunnelDrag.km,
+      })
+    } else {
+      emit('cancel-tunnel-bounds')
+    }
+    requestDraw()
+    return
+  }
+
   const drag = dragState.value
-  if (!canvas || !drag || dragPointerId !== event.pointerId) return
+  if (!drag || dragPointerId !== event.pointerId) return
 
   dragState.value = null
   dragPointerId = null
@@ -1033,10 +1524,13 @@ function onPointerCancel(event: PointerEvent): void {
   ) {
     canvas.releasePointerCapture(event.pointerId)
   }
+  if (dragTunnelState.value) emit('cancel-tunnel-bounds')
   if (dragState.value) emit('cancel-bounds')
+  dragTunnelState.value = null
   dragState.value = null
   dragPointerId = null
   lastDraftKm = null
+  lastDraftTunnelKm = null
   requestDraw()
 }
 
@@ -1075,9 +1569,15 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && props.creating) {
-    emit('cancel-create')
-    return
+  if (event.key === 'Escape') {
+    if (props.creating) {
+      emit('cancel-create')
+      return
+    }
+    if (props.creatingTunnel) {
+      emit('cancel-create-tunnel')
+      return
+    }
   }
   if (event.ctrlKey || event.metaKey || event.altKey) return
   if (isEditableTarget(event.target)) return
@@ -1141,6 +1641,40 @@ watch(
     } else {
       creation.value = null
     }
+    requestDraw()
+  },
+)
+
+watch(
+  () => props.creatingTunnel,
+  creating => {
+    if (creating) {
+      xScale.value = 50
+      const container = scrollContainer.value
+      if (container) container.scrollLeft = 0
+      tunnelCreation.value = null
+    } else {
+      tunnelCreation.value = null
+    }
+    requestDraw()
+  },
+)
+
+watch(
+  [() => props.mode, () => props.tunnels, () => props.selectedTunnelIds],
+  () => requestDraw(),
+)
+
+watch(
+  () => props.mode,
+  () => {
+    dragState.value = null
+    dragTunnelState.value = null
+    dragPointerId = null
+    lastDraftKm = null
+    lastDraftTunnelKm = null
+    creation.value = null
+    tunnelCreation.value = null
     requestDraw()
   },
 )

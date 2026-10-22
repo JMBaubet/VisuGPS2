@@ -31,6 +31,7 @@
         :tunnel-count="tunnelCount"
         :tunnel-creating="creatingTunnel"
         :tunnel-pending="tunnelPending"
+        :tunnel-loading="tunnelsStore.loading"
         :tunnel-preparing="tunnelPreparing"
         :tunnel-progress="tunnelProgress"
         :tunnel-requirements="tunnelRequirements"
@@ -80,10 +81,16 @@
           />
 
           <AltimetrieProfileWidget
-            v-if="altimetrieStore.displayFile && activeTab === 'climbs'"
+            v-if="altimetrieStore.displayFile"
+            :mode="activeTab"
             :file="altimetrieStore.displayFile"
-            :selected-climb-id="altimetrieStore.selectedClimbId"
+            :selected-climb-id="
+              activeTab === 'climbs' ? altimetrieStore.selectedClimbId : null
+            "
             :creating="creating"
+            :tunnels="tunnelsStore.tunnels"
+            :selected-tunnel-ids="selectedTunnelIds"
+            :creating-tunnel="creatingTunnel"
             @select-climb="altimetrieStore.selectClimb"
             @recenter="onRecenter"
             @inspect="onInspect"
@@ -93,6 +100,13 @@
             @create-climb="onCreateClimb"
             @cancel-create="onCancelCreation"
             @create-error="onCreateError"
+            @select-tunnel="onSelectTunnel"
+            @draft-tunnel-bounds="onDraftTunnelBounds"
+            @edit-tunnel-bounds="onEditTunnelBounds"
+            @cancel-tunnel-bounds="onCancelTunnelBounds"
+            @create-tunnel="onCreateTunnel"
+            @cancel-create-tunnel="onCancelTunnelCreation"
+            @create-tunnel-error="onTunnelCreateError"
           />
 
           <div v-if="inspectPoint" class="altimetrie-inspect">
@@ -227,10 +241,9 @@ const createHelpOpen = ref(false)
 /** Création manuelle de tunnel en cours (deux clics dans le widget). */
 const creatingTunnel = ref(false)
 /**
- * Le widget de profil accepte la création de tunnels. Activé à la sous-étape
- * « widget » ; le bouton reste sinon désactivé, sans flux inachevé.
+ * Le widget de profil accepte la création de tunnels (entrée puis sortie).
  */
-const tunnelCreationAvailable = ref(false)
+const tunnelCreationAvailable = ref(true)
 /** Dialogue d'aide de création de tunnel ouvert. */
 const tunnelCreateHelpOpen = ref(false)
 /** Confirmation du recalcul de l'altimétrie lorsque des éditions sont en cours. */
@@ -251,10 +264,7 @@ const traceName = computed(
 )
 const profile = computed(() => altimetrieStore.file?.profile ?? [])
 const isLoading = computed(
-  () =>
-    initializing.value ||
-    altimetrieStore.loading ||
-    tunnelsStore.loading,
+  () => initializing.value || altimetrieStore.loading,
 )
 
 // ─── Onglet Tunnels ──────────────────────────────────────────────────
@@ -276,11 +286,15 @@ const tunnelProgress = computed(() =>
 )
 const tunnelRequirements = computed(() => tunnelsStore.requirements)
 const tunnelHasFile = computed(() => tunnelsStore.fileExists)
-const tunnelError = computed(() =>
-  tunnelsStore.lastErrorTraceId === traceId.value
-    ? tunnelsStore.lastError
-    : null,
-)
+const tunnelError = computed(() => {
+  if (
+    tunnelsStore.lastErrorTraceId === traceId.value &&
+    tunnelsStore.lastError
+  ) {
+    return tunnelsStore.lastError
+  }
+  return tunnelsStore.loadError
+})
 
 /** Paramètres de détection courants, pour signaler un fichier périmé. */
 const currentTunnelParams = computed(() => ({
@@ -319,7 +333,7 @@ const toolbarValidated = computed(() =>
 )
 const toolbarReady = computed(() =>
   activeTab.value === 'tunnels'
-    ? !!altimetrieStore.file && !tunnelPending.value
+    ? !!altimetrieStore.file && !tunnelPending.value && !tunnelsStore.loading
     : !!altimetrieStore.file,
 )
 const toolbarSettingsStatus = computed<AltimetrieStatus>(() =>
@@ -632,7 +646,9 @@ function onTabChange(tab: 'climbs' | 'tunnels'): void {
   createHelpOpen.value = false
   tunnelCreateHelpOpen.value = false
   altimetrieStore.selectClimb(null)
+  altimetrieStore.clearClimbDraft()
   tunnelsStore.selectTunnel(null)
+  tunnelsStore.clearTunnelDraft()
   activeTab.value = tab
   void router.replace({ query: { ...route.query, tab } })
   if (tab === 'tunnels') {
@@ -658,6 +674,65 @@ function onStartTunnelCreation(): void {
 
 function onSelectTunnel(id: string): void {
   tunnelsStore.selectTunnel(id)
+}
+
+function onDraftTunnelBounds(payload: {
+  tunnelId: string
+  handle: 'entrance' | 'exit'
+  km: number
+}): void {
+  tunnelsStore.draftTunnelBound(
+    payload.tunnelId,
+    payload.handle,
+    payload.km,
+    totalDistanceM.value / 1000,
+  )
+}
+
+function onEditTunnelBounds(payload: {
+  tunnelId: string
+  handle: 'entrance' | 'exit'
+  km: number
+}): void {
+  try {
+    tunnelsStore.updateTunnelBound(
+      payload.tunnelId,
+      payload.handle,
+      payload.km,
+      totalDistanceM.value / 1000,
+    )
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : 'Modification du tunnel impossible.'
+    ui.showError(message)
+  }
+}
+
+function onCancelTunnelBounds(): void {
+  tunnelsStore.clearTunnelDraft()
+}
+
+function onCreateTunnel(payload: { startKm: number; endKm: number }): void {
+  if (!traceId.value) return
+  try {
+    tunnelsStore.createTunnel(payload.startKm, payload.endKm)
+    creatingTunnel.value = false
+    ui.showSuccess("Tunnel ajouté. Sauvegardez pour l'enregistrer.")
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Création du tunnel impossible.'
+    ui.showError(message)
+  }
+}
+
+function onCancelTunnelCreation(): void {
+  creatingTunnel.value = false
+}
+
+function onTunnelCreateError(message: string): void {
+  ui.showWarning(message)
 }
 
 function onDeleteTunnel(id: string): void {
