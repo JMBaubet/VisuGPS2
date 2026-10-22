@@ -3,6 +3,8 @@
 mod file_test;
 mod geometry_test;
 mod params_test;
+mod pbf_test;
+mod pipeline_test;
 
 use super::types::{PbfFileRef, Tunnel, TunnelFile, TunnelParams, FILE_VERSION};
 

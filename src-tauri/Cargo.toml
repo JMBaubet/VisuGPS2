@@ -35,6 +35,8 @@ tokio = "1"
 # Module d'import GPX
 gpx = "0.10"
 geo = "0.29"
+osmpbfreader = "0.19"
+rstar = "0.12"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 hex = "0.4"

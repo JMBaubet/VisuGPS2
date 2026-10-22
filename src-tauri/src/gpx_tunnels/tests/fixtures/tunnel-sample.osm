@@ -1,0 +1,31 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<osm version="0.6" generator="VisuGPS2 tunnel tests">
+  <node id="1" lat="45.0000000" lon="2.0000000"/>
+  <node id="2" lat="45.0000000" lon="2.0010000"/>
+  <node id="3" lat="45.0000000" lon="2.0020000"/>
+  <node id="4" lat="45.0000000" lon="2.0030000"/>
+  <node id="5" lat="45.0100000" lon="2.0010000"/>
+  <node id="6" lat="45.0200000" lon="2.0010000"/>
+  <way id="100" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="primary"/>
+    <tag k="tunnel" v="yes"/>
+    <tag k="name" v="Route du Test"/>
+    <tag k="tunnel:name" v="Tunnel du Test"/>
+  </way>
+  <way id="101" version="1">
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="Route sans tunnel"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <tag k="railway" v="rail"/>
+    <tag k="tunnel" v="yes"/>
+    <tag k="name" v="Tunnel ferroviaire"/>
+  </way>
+</osm>

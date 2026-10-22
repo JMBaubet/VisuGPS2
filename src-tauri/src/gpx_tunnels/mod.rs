@@ -14,6 +14,8 @@
 pub mod file;
 pub mod geometry;
 pub mod params;
+pub mod pbf;
+pub mod pipeline;
 pub mod types;
 
 #[cfg(test)]
