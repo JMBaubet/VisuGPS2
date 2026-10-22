@@ -79,6 +79,9 @@
             </div>
             <div class="osm-panel__file" :title="region.pbfFilename">
               {{ region.pbfFilename }}
+              <span v-if="region.sizeMb != null">
+                — {{ formatSize(region.sizeMb) }}
+              </span>
             </div>
             <v-progress-linear
               v-if="statusFor(region).percent != null"
@@ -97,6 +100,18 @@
             {{ statusFor(region).label }}
           </v-chip>
         </div>
+
+        <v-btn
+          v-if="tooLargeCount > 0 && !pending"
+          block
+          color="warning"
+          variant="tonal"
+          prepend-icon="mdi-download"
+          class="mt-2"
+          @click="emit('force-download')"
+        >
+          Télécharger quand même ({{ tooLargeCount }})
+        </v-btn>
       </v-expansion-panel-text>
     </v-expansion-panel>
   </v-expansion-panels>
@@ -127,6 +142,10 @@ const props = defineProps<{
   error: string | null
 }>()
 
+const emit = defineEmits<{
+  (e: 'force-download'): void
+}>()
+
 const opened = ref<string | undefined>('osm')
 
 const total = computed(() => props.requirements?.regions.length ?? 0)
@@ -134,6 +153,16 @@ const presentCount = computed(
   () => props.requirements?.regions.filter(region => region.present).length ?? 0,
 )
 const missingCount = computed(() => props.requirements?.missingCount ?? 0)
+const tooLargeCount = computed(
+  () =>
+    props.requirements?.regions.filter(region => region.tooLarge).length ?? 0,
+)
+
+function formatSize(sizeMb: number | null | undefined): string {
+  if (sizeMb == null) return '—'
+  if (sizeMb >= 1024) return `${(sizeMb / 1024).toFixed(2)} Go`
+  return `${Math.round(sizeMb)} Mo`
+}
 
 const readinessLabel = computed(() => {
   switch (props.requirements?.readiness) {
@@ -169,6 +198,11 @@ const readinessMessage = computed(() => {
         'Aucune région Geofabrik ne couvre la zone de cette trace.'
       )
     case 'missing_pbf':
+      if (
+        props.requirements?.regions.some(region => region.tooLarge)
+      ) {
+        return "Certaines régions dépassent le plafond de téléchargement. Utilisez « Télécharger quand même » ou augmentez Tunnels.Support.tailleMaxPbf."
+      }
       return props.pending
         ? null
         : (props.requirements.message ??
@@ -230,6 +264,15 @@ function statusFor(region: TunnelRequirementRegion): {
       label: 'chargé',
       color: 'success',
       icon: 'mdi-check-circle-outline',
+      percent: null,
+    }
+  }
+
+  if (region.tooLarge) {
+    return {
+      label: `bloqué (${formatSize(region.sizeMb)})`,
+      color: 'error',
+      icon: 'mdi-download-off',
       percent: null,
     }
   }

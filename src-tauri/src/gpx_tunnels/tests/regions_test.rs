@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::gpx_tunnels::regions::{
     build_requirements, count_pbfs, find_regions, load_regions, pbf_present, save_regions,
-    transform_index,
+    select_regions, transform_index,
 };
 use crate::gpx_tunnels::types::{
     RegionEntry, RegionsFile, READINESS_DISABLED, READINESS_MISSING_PBF,
@@ -129,6 +129,58 @@ fn find_regions_is_exhaustive_including_sub_regions() {
 }
 
 #[test]
+fn select_regions_prefers_the_smallest_containing_region() {
+    let regions = RegionsFile {
+        version: "v1".to_string(),
+        regions: vec![
+            region(
+                "alps",
+                "Alps",
+                [4.0, 43.0, 8.0, 46.0],
+                "alps-latest.osm.pbf",
+            ),
+            region(
+                "france",
+                "France",
+                [4.0, 42.0, 8.0, 46.0],
+                "france-latest.osm.pbf",
+            ),
+            region(
+                "paca",
+                "PACA",
+                [5.0, 43.0, 7.0, 45.0],
+                "paca-latest.osm.pbf",
+            ),
+            region(
+                "monaco",
+                "Monaco",
+                [7.40, 43.72, 7.44, 43.75],
+                "monaco-latest.osm.pbf",
+            ),
+        ],
+    };
+
+    // Une trace en PACA ne doit pas tirer alps/france.
+    let paca = select_regions(&regions, &[[5.5, 44.0]]);
+    assert_eq!(
+        paca.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(),
+        vec!["paca"]
+    );
+
+    // Une trace qui longe Monaco sélectionne PACA et Monaco, pas leurs aînés.
+    let border = select_regions(&regions, &[[5.5, 44.0], [7.41, 43.73]]);
+    assert_eq!(
+        border
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["monaco", "paca"]
+    );
+
+    assert!(select_regions(&regions, &[[2.0, 41.0]]).is_empty());
+}
+
+#[test]
 fn save_and_load_round_trip() {
     let dir = temp_dir();
     let regions = RegionsFile {
@@ -198,20 +250,34 @@ fn build_requirements_reports_missing_then_ready() {
         version: "v1".to_string(),
         regions: vec![paca, monaco],
     };
-    let trace_bbox = [7.41, 43.73, 7.42, 43.74];
+    let points = [[5.5, 44.0], [7.41, 43.73]];
 
     std::fs::write(dir.join("paca-latest.osm.pbf"), b"x").expect("PBF PACA");
 
-    let requirements = build_requirements(true, Some(&dir), Some(&regions), trace_bbox);
+    let requirements = build_requirements(true, Some(&dir), Some(&regions), &points);
     assert_eq!(requirements.readiness, READINESS_MISSING_PBF);
     assert_eq!(requirements.missing_count, 1);
     assert_eq!(requirements.regions.len(), 2);
-    assert!(requirements.regions[0].present);
-    assert!(!requirements.regions[1].present);
+    assert_eq!(
+        requirements
+            .regions
+            .iter()
+            .find(|entry| entry.id == "europe/france/paca")
+            .map(|entry| entry.present),
+        Some(true)
+    );
+    assert_eq!(
+        requirements
+            .regions
+            .iter()
+            .find(|entry| entry.id == "europe/monaco")
+            .map(|entry| entry.present),
+        Some(false)
+    );
     assert!(requirements.message.is_some());
 
     std::fs::write(dir.join("monaco-latest.osm.pbf"), b"x").expect("PBF Monaco");
-    let requirements = build_requirements(true, Some(&dir), Some(&regions), trace_bbox);
+    let requirements = build_requirements(true, Some(&dir), Some(&regions), &points);
     assert_eq!(requirements.readiness, READINESS_READY);
     assert_eq!(requirements.missing_count, 0);
     assert!(requirements.regions.iter().all(|entry| entry.present));
@@ -232,22 +298,22 @@ fn build_requirements_covers_readiness_states() {
             "monaco-latest.osm.pbf",
         )],
     };
-    let trace_bbox = [7.41, 43.73, 7.42, 43.74];
+    let points = [[7.41, 43.73]];
 
     assert_eq!(
-        build_requirements(false, Some(&dir), Some(&regions), trace_bbox).readiness,
+        build_requirements(false, Some(&dir), Some(&regions), &points).readiness,
         READINESS_DISABLED
     );
     assert_eq!(
-        build_requirements(true, None, Some(&regions), trace_bbox).readiness,
+        build_requirements(true, None, Some(&regions), &points).readiness,
         READINESS_NOT_CONFIGURED
     );
     assert_eq!(
-        build_requirements(true, Some(&dir), None, trace_bbox).readiness,
+        build_requirements(true, Some(&dir), None, &points).readiness,
         READINESS_NEEDS_REGIONS
     );
     assert_eq!(
-        build_requirements(true, Some(&dir), Some(&regions), [2.0, 41.0, 3.0, 42.0]).readiness,
+        build_requirements(true, Some(&dir), Some(&regions), &[[2.0, 41.0]]).readiness,
         READINESS_NO_REGION
     );
 

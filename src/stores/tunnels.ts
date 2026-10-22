@@ -92,6 +92,8 @@ export interface TunnelRequirementRegion {
   pbfFilename: string
   sizeMb?: number | null
   present: boolean
+  /** PBF manquant au-dessus du plafond configuré. */
+  tooLarge: boolean
 }
 
 export interface TunnelRequirements {
@@ -208,6 +210,8 @@ export const useTunnelsStore = defineStore('tunnels', () => {
   const failed = new Set<string>()
   /** Demandes explicites : elles ne sont pas écartées par l'état du registre. */
   const forced = new Set<string>()
+  /** Prochaine préparation de ces traces ignore le plafond de taille. */
+  const sizeLimitOverrides = new Set<string>()
   let progressBound = false
 
   // ─── Getters ───────────────────────────────────────────────────────
@@ -524,8 +528,14 @@ export const useTunnelsStore = defineStore('tunnels', () => {
 
   // ─── File d'attente ────────────────────────────────────────────────
 
-  async function detect(traceId: string): Promise<TunnelPrepareResult> {
-    return invoke<TunnelPrepareResult>('tunnels_prepare', { traceId })
+  async function detect(
+    traceId: string,
+    ignoreSizeLimit = false,
+  ): Promise<TunnelPrepareResult> {
+    return invoke<TunnelPrepareResult>('tunnels_prepare', {
+      traceId,
+      ignoreSizeLimit,
+    })
   }
 
   /** Prépare une trace : téléchargements silencieux puis détection. */
@@ -539,6 +549,7 @@ export const useTunnelsStore = defineStore('tunnels', () => {
         const traceId = queue.value.shift()
         if (!traceId || failed.has(traceId)) {
           forced.delete(traceId ?? '')
+          sizeLimitOverrides.delete(traceId ?? '')
           continue
         }
 
@@ -550,7 +561,9 @@ export const useTunnelsStore = defineStore('tunnels', () => {
         await tracesStore.loadTraces()
         const trace = tracesStore.traces.find(candidate => candidate.id === traceId)
         const isForced = forced.has(traceId)
+        const ignoreSizeLimit = sizeLimitOverrides.has(traceId)
         forced.delete(traceId)
+        sizeLimitOverrides.delete(traceId)
 
         if (!trace || trace.audit_status !== 'clean') continue
         if (
@@ -562,7 +575,7 @@ export const useTunnelsStore = defineStore('tunnels', () => {
         }
 
         try {
-          const result = await detect(traceId)
+          const result = await detect(traceId, ignoreSizeLimit)
           failed.delete(traceId)
           if (viewTraceId.value === traceId) {
             file.value = result.file
@@ -601,12 +614,15 @@ export const useTunnelsStore = defineStore('tunnels', () => {
 
   /**
    * Demande explicite : relance même si le registre indique déjà une analyse.
-   * La trace passe en tête de file.
+   * La trace passe en tête de file. `ignoreSizeLimit` autorise le
+   * téléchargement des PBF au-dessus du plafond.
    */
-  function request(traceId: string): void {
+  function request(traceId: string, ignoreSizeLimit = false): void {
     if (currentTraceId.value === traceId) return
     failed.delete(traceId)
     forced.add(traceId)
+    if (ignoreSizeLimit) sizeLimitOverrides.add(traceId)
+    else sizeLimitOverrides.delete(traceId)
     if (queue.value.includes(traceId)) return
     queue.value.unshift(traceId)
     void runQueue()

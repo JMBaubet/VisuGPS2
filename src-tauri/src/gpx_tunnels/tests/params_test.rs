@@ -17,6 +17,7 @@ fn defaults_match_the_prototype() {
 
     let support = default_tunnel_support();
     assert!(support.actif);
+    assert_eq!(support.taille_max_pbf_mb, 500);
     assert_eq!(support.pbf_directory, None);
 }
 
@@ -32,6 +33,7 @@ fn default_toml() -> toml::Table {
 
         [Tunnels.Support]
         actif = true
+        tailleMaxPbf = 500
         dossierPbf = ""
         "#,
     )
@@ -51,6 +53,7 @@ fn user_overrides_take_precedence() {
 
         [Tunnels.Support]
         actif = false
+        tailleMaxPbf = 1200
         dossierPbf = "/Volumes/USB/osm-data"
         "#,
     )
@@ -67,6 +70,7 @@ fn user_overrides_take_precedence() {
     assert_eq!(params.bearing_window_m, 50.0);
     assert_eq!(params.min_run_length, 3);
     assert!(!support.actif);
+    assert_eq!(support.taille_max_pbf_mb, 1200);
     assert_eq!(
         support.pbf_directory.as_deref(),
         Some("/Volumes/USB/osm-data")

@@ -1092,15 +1092,15 @@ mod tests {
             }
         }
 
-        // 2. Huit paramètres, tous rattachés aux deux vues.
+        // 2. Neuf paramètres, tous rattachés aux deux vues.
         let tunnel_defs: Vec<_> = defs
             .iter()
             .filter(|definition| definition.path.starts_with("Tunnels."))
             .collect();
         assert_eq!(
             tunnel_defs.len(),
-            8,
-            "8 paramètres `Tunnels.*` attendus : {:?}",
+            9,
+            "9 paramètres `Tunnels.*` attendus : {:?}",
             tunnel_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
         );
         for definition in &tunnel_defs {
@@ -1155,6 +1155,15 @@ mod tests {
             .expect("paramètre `actif` déclaré");
         assert_eq!(active.setting_type, "bool");
         assert_eq!(active.default.as_bool(), Some(true));
+
+        let max_size = tunnel_defs
+            .iter()
+            .find(|definition| definition.path == "Tunnels.Support.tailleMaxPbf")
+            .expect("paramètre `tailleMaxPbf` déclaré");
+        assert_eq!(max_size.setting_type, "int");
+        assert_eq!(max_size.default.as_i64(), Some(500));
+        assert_eq!(max_size.min, Some(0.0));
+        assert_eq!(max_size.unit.as_deref(), Some("Mo"));
     }
 
     /// Le namespace `Communes.*` est déclaré et cohérent avec `_meta`.

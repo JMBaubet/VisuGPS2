@@ -51,6 +51,7 @@
         @split-tunnel="onSplitTunnel"
         @create-tunnel="onCreateTunnelRequested"
         @relaunch-tunnels="onRelaunchTunnels"
+        @force-download-tunnels="onForceDownloadTunnels"
       />
 
       <v-main>
@@ -794,6 +795,15 @@ function runTunnelDetection(): void {
   dialogTunnelDetectOpen.value = false
   if (!traceId.value) return
   tunnelsStore.request(traceId.value)
+}
+
+/**
+ * Passe outre le plafond de taille pour cette trace : les régions bloquées
+ * sont téléchargées, puis la détection est relancée.
+ */
+function onForceDownloadTunnels(): void {
+  if (!traceId.value) return
+  tunnelsStore.request(traceId.value, true)
 }
 
 async function onDeleteClimb(id: number): Promise<void> {

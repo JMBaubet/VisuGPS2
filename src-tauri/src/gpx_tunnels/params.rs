@@ -108,8 +108,20 @@ pub fn support_from_settings(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
 
+    let max_pbf_mb = get_toml_value_by_path(user_overrides, "Tunnels.Support.tailleMaxPbf")
+        .or_else(|| {
+            get_toml_value_by_path(default_toml, "Tunnels.Support.tailleMaxPbf")
+        })
+        .and_then(|value| match value {
+            toml::Value::Integer(value) => Some((*value).max(0) as u64),
+            toml::Value::Float(value) => Some(value.max(0.0).round() as u64),
+            _ => None,
+        })
+        .unwrap_or(fallback.taille_max_pbf_mb);
+
     TunnelSupport {
         actif: active,
+        taille_max_pbf_mb: max_pbf_mb,
         pbf_directory: directory,
     }
 }

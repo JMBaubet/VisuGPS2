@@ -89,6 +89,8 @@ impl Default for TunnelParams {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TunnelSupport {
     pub actif: bool,
+    /// Plafond de téléchargement d'un PBF (Mo) ; 0 = illimité.
+    pub taille_max_pbf_mb: u64,
     pub pbf_directory: Option<String>,
 }
 
@@ -96,6 +98,7 @@ impl Default for TunnelSupport {
     fn default() -> Self {
         Self {
             actif: true,
+            taille_max_pbf_mb: 500,
             pbf_directory: None,
         }
     }
@@ -220,6 +223,8 @@ pub struct TunnelRequirementRegion {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_mb: Option<f64>,
     pub present: bool,
+    /// PBF manquant dont la taille distante dépasse le plafond configuré.
+    pub too_large: bool,
 }
 
 /// Ressources OSM nécessaires à la détection d'une trace.

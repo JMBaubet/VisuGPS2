@@ -1318,6 +1318,25 @@ type = "bool"
 default = true
 icon = "mdi-toggle-switch"
 
+[Tunnels.Support.tailleMaxPbf]
+description = "Taille maximale d'un PBF téléchargé"
+documentation = """
+Plafond de téléchargement d'un fichier PBF, en Mo. **0** désactive le plafond.
+
+Une région requise dont le PBF manquant dépasse ce plafond n'est **pas**
+téléchargée silencieusement : elle apparaît dans le panneau « Données OSM » de
+l'onglet Tunnels avec sa taille, et un bouton « Télécharger quand même » permet
+de passer outre. Les PBF courants (PACA ~85 Mo, Monaco ~2 Mo) restent sous le
+plafond et sont téléchargés automatiquement.
+"""
+type = "int"
+default = 500
+min = 0
+max = 10000
+step = 50
+unit = "Mo"
+icon = "mdi-download"
+
 # ---------------------------------------------------------------------------
 # Détection des communes traversées (module Communes).
 # Une trace nettoyée est croisée avec les limites administratives communales

@@ -60,6 +60,7 @@
             :preparing="tunnelPreparing"
             :has-file="tunnelHasFile"
             :error="tunnelError"
+            @force-download="emit('force-download-tunnels')"
           />
 
           <template v-if="tunnels.length > 0">
@@ -219,6 +220,7 @@ const emit = defineEmits<{
   'split-tunnel': [id: string]
   'create-tunnel': []
   'relaunch-tunnels': []
+  'force-download-tunnels': []
 }>()
 
 const listRef = ref<HTMLDivElement | null>(null)

@@ -389,18 +389,52 @@ pub async fn tunnels_requirements(
 ) -> Result<TunnelRequirements, String> {
     let mode_dir = get_mode_dir(&app)?;
     let (_, gpx_path, _) = resolve_trace(&mode_dir, &trace_id)?;
-    let (params, support) = read_config(&app).await;
+    let (_, support) = read_config(&app).await;
     let points = pipeline::load_points(&gpx_path)?;
-    let bbox = geometry::bbox_with_margin(&points, params.bbox_margin_m);
     let folder = support.pbf_directory.as_deref().map(PathBuf::from);
     let regions_file = folder.as_deref().and_then(regions::load_regions);
 
-    Ok(regions::build_requirements(
+    let mut requirements = regions::build_requirements(
         support.actif,
         folder.as_deref(),
         regions_file.as_ref(),
-        bbox,
-    ))
+        &points,
+    );
+
+    let max_mb = support.taille_max_pbf_mb;
+    if let Some(folder_path) = folder.as_deref() {
+        let client = download::client().ok();
+        for region in &mut requirements.regions {
+            if region.present {
+                region.size_mb =
+                    regions::pbf_size_mb(folder_path, &region.pbf_filename);
+            } else if let Some(client) = &client {
+                let url = regions_file
+                    .as_ref()
+                    .and_then(|file| {
+                        file.regions
+                            .iter()
+                            .find(|entry| entry.id == region.id)
+                    })
+                    .map(|entry| entry.pbf_url.clone());
+                if let Some(url) = url {
+                    if let Some(bytes) = download::remote_size(client, &url).await {
+                        region.size_mb = Some(
+                            ((bytes as f64 / 1_048_576.0) * 10.0).round() / 10.0,
+                        );
+                    }
+                }
+            }
+            region.too_large = !region.present
+                && max_mb > 0
+                && region
+                    .size_mb
+                    .map(|size| size > max_mb as f64)
+                    .unwrap_or(false);
+        }
+    }
+
+    Ok(requirements)
 }
 
 /// Prépare les données OSM puis détecte les tunnels d'une trace.
@@ -412,10 +446,12 @@ pub async fn tunnels_requirements(
 pub async fn tunnels_prepare(
     app: tauri::AppHandle,
     trace_id: String,
+    ignore_size_limit: Option<bool>,
 ) -> Result<TunnelPrepareResult, String> {
     let _guard = PREPARE_LOCK
         .try_lock()
         .map_err(|_| "Une préparation de tunnels est déjà en cours.".to_string())?;
+    let ignore_size_limit = ignore_size_limit.unwrap_or(false);
 
     let mode_dir = get_mode_dir(&app)?;
     let (_, gpx_path, expected_hash) = resolve_trace(&mode_dir, &trace_id)?;
@@ -472,7 +508,7 @@ pub async fn tunnels_prepare(
     .await
     .map_err(|error| fail(&mode_dir, &trace_id, STATUS_NOT_CONFIGURED, error))?;
 
-    let required = regions::find_regions(&regions_file, bbox);
+    let required = regions::select_regions(&regions_file, &points);
     if required.is_empty() {
         return Err(fail(
             &mode_dir,
@@ -486,6 +522,28 @@ pub async fn tunnels_prepare(
         if regions::pbf_present(&folder, &region.pbf_filename) {
             continue;
         }
+
+        // Garde-fou de taille : une région au-dessus du plafond n'est pas
+        // téléchargée silencieusement. L'onglet Tunnels affiche sa taille et
+        // propose « Télécharger quand même » (qui relance avec l'option).
+        if !ignore_size_limit && support.taille_max_pbf_mb > 0 {
+            if let Some(bytes) = download::remote_size(&client, &region.pbf_url).await {
+                let max_bytes = support.taille_max_pbf_mb.saturating_mul(1_048_576);
+                if bytes > max_bytes {
+                    let size_mb = (bytes as f64 / 1_048_576.0).round();
+                    return Err(fail(
+                        &mode_dir,
+                        &trace_id,
+                        STATUS_MISSING_PBF,
+                        format!(
+                            "La région {} ({} Mo) dépasse le plafond de {} Mo. Utilisez « Télécharger quand même » dans l'onglet Tunnels.",
+                            region.name, size_mb, support.taille_max_pbf_mb
+                        ),
+                    ));
+                }
+            }
+        }
+
         let app_progress = app.clone();
         let trace_progress = trace_id.clone();
         let region_name = region.name.clone();
@@ -576,7 +634,7 @@ pub async fn tunnels_detect(
             "La liste des régions OSM (regions.json) est absente.".to_string(),
         ));
     };
-    let required = regions::find_regions(&regions_file, bbox);
+    let required = regions::select_regions(&regions_file, &points);
     if required.is_empty() {
         return Err(fail(
             &mode_dir,

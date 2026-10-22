@@ -9,6 +9,7 @@
 //! entièrement contenus dans une région plus grande (Monaco dans PACA). On ne
 //! suppose jamais qu'un PBF parent contient les données d'une sous-région.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -161,11 +162,69 @@ pub fn find_regions<'a>(regions: &'a RegionsFile, bbox: [f64; 4]) -> Vec<&'a Reg
         .collect()
 }
 
+/**
+ * Régions **les plus spécifiques** couvrant la trace.
+ *
+ * Pour chaque point de la trace, on retient la région dont la bbox est la plus
+ * petite qui contient ce point. Une trace en PACA sélectionne PACA, pas `alps`
+ * ni `france` ; une trace à Monaco sélectionne Monaco ; une trace
+ * transfrontalière sélectionne les plus petites régions de chaque côté.
+ *
+ * Le pré-filtre par la bbox de la trace limite les candidates à quelques
+ * entrées, si bien que le coût reste négligeable même sur une trace de 200 km :
+ * O(points × candidates), avec un nombre de candidates de l'ordre de 2 à 10.
+ */
+pub fn select_regions<'a>(
+    regions: &'a RegionsFile,
+    points: &[[f64; 2]],
+) -> Vec<&'a RegionEntry> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+
+    let bbox = geometry::bbox(points);
+    let mut candidates = find_regions(regions, bbox);
+    if candidates.is_empty() {
+        return candidates;
+    }
+    candidates.sort_by(|a, b| bbox_area(a.bbox).total_cmp(&bbox_area(b.bbox)));
+
+    let mut selected_ids: HashSet<&str> = HashSet::new();
+    let mut selected: Vec<&RegionEntry> = Vec::new();
+
+    for point in points {
+        for candidate in &candidates {
+            if geometry::bbox_contains_point(candidate.bbox, *point) {
+                if selected_ids.insert(candidate.id.as_str()) {
+                    selected.push(candidate);
+                }
+                // La première région contenante est la plus petite : la liste
+                // des candidates est triée par aire croissante.
+                break;
+            }
+        }
+    }
+
+    selected.sort_by(|a, b| bbox_area(a.bbox).total_cmp(&bbox_area(b.bbox)));
+    selected
+}
+
+fn bbox_area(bbox: [f64; 4]) -> f64 {
+    (bbox[2] - bbox[0]).abs() * (bbox[3] - bbox[1]).abs()
+}
+
 /// Un PBF est disponible s'il existe et n'est pas vide.
 pub fn pbf_present(pbf_dir: &Path, filename: &str) -> bool {
     std::fs::metadata(pbf_path(pbf_dir, filename))
         .map(|metadata| metadata.is_file() && metadata.len() > 0)
         .unwrap_or(false)
+}
+
+/// Taille locale d'un PBF en Mo, arrondie au dixième.
+pub fn pbf_size_mb(pbf_dir: &Path, filename: &str) -> Option<f64> {
+    std::fs::metadata(pbf_path(pbf_dir, filename))
+        .ok()
+        .map(|metadata| ((metadata.len() as f64 / 1_048_576.0) * 10.0).round() / 10.0)
 }
 
 /// Compte les `.osm.pbf` présents dans le dossier OSM.
@@ -191,7 +250,7 @@ pub fn build_requirements(
     active: bool,
     folder: Option<&Path>,
     regions: Option<&RegionsFile>,
-    bbox: [f64; 4],
+    points: &[[f64; 2]],
 ) -> TunnelRequirements {
     let folder_string = folder.map(|path| path.to_string_lossy().to_string());
 
@@ -239,7 +298,7 @@ pub fn build_requirements(
         };
     };
 
-    let required = find_regions(regions, bbox);
+    let required = select_regions(regions, points);
     if required.is_empty() {
         return TunnelRequirements {
             readiness: READINESS_NO_REGION.to_string(),
@@ -263,8 +322,13 @@ pub fn build_requirements(
             id: region.id.clone(),
             name: region.name.clone(),
             pbf_filename: region.pbf_filename.clone(),
-            size_mb: region.size_mb,
+            size_mb: if present {
+                pbf_size_mb(folder, &region.pbf_filename).or(region.size_mb)
+            } else {
+                region.size_mb
+            },
             present,
+            too_large: false,
         });
     }
 

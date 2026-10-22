@@ -29,6 +29,22 @@ pub fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Création du client HTTP : {}", e))
 }
 
+/// Taille distante d'un fichier, via une requête HEAD. `None` si le serveur
+/// refuse HEAD ou ne fournit pas `Content-Length`.
+pub async fn remote_size(client: &reqwest::Client, url: &str) -> Option<u64> {
+    let response = client.head(url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    // `Response::content_length()` peut valoir 0 pour une réponse HEAD (corps
+    // vide) ; on lit directement l'en-tête annoncé par le serveur.
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
 /// Chemin du fichier temporaire d'un téléchargement.
 pub fn part_path(target: &Path) -> PathBuf {
     let name = target

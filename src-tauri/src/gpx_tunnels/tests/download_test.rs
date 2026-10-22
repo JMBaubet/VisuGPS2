@@ -108,6 +108,23 @@ fn http_error_leaves_no_target_and_no_part() {
 }
 
 #[test]
+fn remote_size_reads_content_length() {
+    let url = serve_once("200 OK", "application/octet-stream", b"hello".to_vec());
+    let client = download::client().expect("client HTTP");
+
+    let size = block_on(download::remote_size(&client, &url));
+    assert_eq!(size, Some(5));
+}
+
+#[test]
+fn remote_size_returns_none_on_http_error() {
+    let url = serve_once("404 Not Found", "text/plain", b"absent".to_vec());
+    let client = download::client().expect("client HTTP");
+
+    assert_eq!(block_on(download::remote_size(&client, &url)), None);
+}
+
+#[test]
 fn ensure_regions_json_downloads_transforms_and_writes_atomically() {
     let index = r#"{
       "type": "FeatureCollection",
