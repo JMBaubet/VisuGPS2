@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (52 commandes)
+## Catalogue (58 commandes)
 
 ### Application
 
@@ -453,7 +453,7 @@ pub struct AltimetrieClimbEdit {
 **Principe** : une trace propre est confrontée aux ways OSM `tunnel` + `highway`
 des PBF régionaux. Le seul fichier écrit dans le dossier de la trace est
 `traces/{trace_id}/tunnels.json` ; `regions.json` et les `.osm.pbf` restent sur
-le support OSM (`Tunnels.Support.dossierPbf`). La détection est **silencieuse** :
+le support OSM (`Osm.Fichiers.dossierPbf`). La détection est **silencieuse** :
 `regions.json` est produit depuis Geofabrik si nécessaire, les PBF manquants sont
 téléchargés sans confirmation, et la progression est émise par l'événement
 `tunnels-progress` (`{ traceId, stage, region?, filename?, bytesDone, bytesTotal, percent }`).
@@ -466,7 +466,7 @@ téléchargés sans confirmation, et la progression est émise par l'événement
 | `tunnels_detect` | `async (app, trace_id: String) -> Result<TunnelPrepareResult, String>` | Même détection **sans téléchargement** ; refuse si `regions.json` ou un PBF requis manque. Utilisée par la relance de l'onglet Tunnels. |
 | `tunnels_save` | `async (app, trace_id: String, tunnels: Vec<Tunnel>) -> Result<TunnelFile, String>` | Valide et normalise les tunnels édités (bornes, longueur minimale 10 m, chevauchements, groupes ≥ 2, identifiants uniques), recalcule les longueurs, écrit atomiquement et pose `tunnels_status = "success"` : **la sauvegarde vaut validation opérateur**. |
 | `tunnels_support_status` | `async (app) -> Result<TunnelSupportStatus, String>` | État global du support OSM : activation, dossier configuré/lisible, présence et version de `regions.json`, nombre de PBF. Lu par la carte du circuit. |
-| `pick_directory` | `async (app) -> Result<Option<String>, String>` | Sélecteur natif de dossier, utilisé par le paramètre `Tunnels.Support.dossierPbf`. |
+| `pick_directory` | `async (app) -> Result<Option<String>, String>` | Sélecteur natif de dossier, utilisé par le paramètre `Osm.Fichiers.dossierPbf`. |
 
 **Type `TunnelFile`** — contenu de `traces/{trace_id}/tunnels.json` :
 ```rust
@@ -559,6 +559,23 @@ pub struct TraceMetadata {
 > `communes_completed` vaut `false` tant que la détection des communes n'a pas abouti : l'information **absente** vaut « non réalisée », ce qui permet la reprise des traces déjà nettoyées avant l'introduction du module.
 >
 > **Registres pré-audit (D1)** : `load_registry` détecte la présence de la clé `"cleaning_status"` (format des versions antérieures au module Audit) et retourne alors une liste **vide**, sans jamais réécrire le fichier. Les traces concernées disparaissent de l'interface, mais leurs fichiers GPX restent intacts sur disque — voir [DATA_STORAGE.md](./DATA_STORAGE.md). Le registre est réécrit au prochain import, au nouveau format.
+
+### Données OSM (`osm/commands.rs`)
+
+Gestion globale des fichiers `.osm.pbf` et de `regions.json`, partagée par les
+modules Tunnels et Communes. Les opérations manuelles sont sérialisées ; les
+téléchargements partagent le verrou du module Tunnels. La progression est émise
+par l'événement `osm-progress`
+(`{ stage, regionId?, regionName?, filename?, bytesDone, bytesTotal, percent }`).
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `osm_support_overview` | `async (app) -> Result<OsmSupportOverview, String>` | État global du support : configuration, lisibilité, `regions.json`, espace libre/total, liste des PBF avec âge, échéance de renouvellement, fin de vie et état `green`/`yellow`/`orange`. |
+| `osm_region_catalog` | `async (app) -> Result<OsmRegionCatalog, String>` | Catalogue `regions.json` avec pays (code ISO et libellé), filename, présence locale, taille et date. `present = false` si le catalogue ou le dossier manque. |
+| `osm_region_size` | `async (app, region_id: String) -> Result<OsmRegionProbe, String>` | Taille distante via HEAD `Content-Length` (peut être `null`) et espace disponible. |
+| `osm_download` | `async (app, region_id: String, renew: Option<bool>, ignore_size_limit: Option<bool>) -> Result<OsmDownloadResult, String>` | Télécharge ou renouvelle un PBF. Refuse si la taille distante est inconnue, si le plafond `Osm.Fichiers.tailleMaxPbf` est dépassé (sauf `ignoreSizeLimit`) ou si l'espace libre est insuffisant. |
+| `osm_delete` | `async (app, filename: String) -> Result<(), String>` | Supprime un PBF après validation stricte du nom (pas de chemin, extension `pbf`, aucun `regions.json`). |
+| `osm_catalog_refresh` | `async (app) -> Result<OsmRegionCatalog, String>` | Retélécharge l'index Geofabrik et réécrit `regions.json` atomiquement, avec progression. |
 
 ## Exemples d'appel côté frontend
 

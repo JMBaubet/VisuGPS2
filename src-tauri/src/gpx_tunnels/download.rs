@@ -19,6 +19,10 @@ use super::types::{RegionEntry, RegionsFile};
 /// Délai de connexion HTTP.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Sérialise tous les téléchargements (tunnels silencieux et gestion OSM) :
+/// deux flux concurrents écriraient le même `.part` et se corrompraient.
+static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Client HTTP commun. TLS portable (rustls), suivi des redirections par
 /// défaut.
 pub fn client() -> Result<reqwest::Client, String> {
@@ -67,6 +71,8 @@ pub async fn download_to_file<F>(
 where
     F: Fn(u64, u64) + Send + Sync,
 {
+    let _guard = DOWNLOAD_LOCK.lock().await;
+
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -140,6 +146,13 @@ where
         }
     }
 
+    if total > 0 && done != total {
+        return Err(format!(
+            "Téléchargement incomplet ({} / {} octets) pour {}.",
+            done, total, url
+        ));
+    }
+
     file.flush()
         .await
         .map_err(|e| format!("Finalisation du téléchargement ({}): {}", part.display(), e))?;
@@ -161,21 +174,24 @@ fn should_report(done: u64, total: u64, last_reported: u64) -> bool {
 
 /// Assure la présence de `regions.json` dans le dossier OSM.
 ///
-/// Si le fichier est absent ou illisible, l'index Geofabrik est téléchargé dans
-/// le dossier temporaire du système, transformé, puis `regions.json` est écrit
-/// atomiquement sur le support OSM. Le fichier temporaire est toujours
-/// supprimé.
+/// Si le fichier est absent ou illisible — ou si `force` est vrai — l'index
+/// Geofabrik est téléchargé dans le dossier temporaire du système, transformé,
+/// puis `regions.json` est écrit atomiquement sur le support OSM. Le fichier
+/// temporaire est toujours supprimé.
 pub async fn ensure_regions_json<F>(
     client: &reqwest::Client,
     pbf_dir: &Path,
     index_url: &str,
+    force: bool,
     on_progress: F,
 ) -> Result<RegionsFile, String>
 where
     F: Fn(u64, u64) + Send + Sync,
 {
-    if let Some(regions) = regions::load_regions(pbf_dir) {
-        return Ok(regions);
+    if !force {
+        if let Some(regions) = regions::load_regions(pbf_dir) {
+            return Ok(regions);
+        }
     }
     if !pbf_dir.is_dir() {
         return Err(format!(

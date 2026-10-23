@@ -6,8 +6,12 @@
 //! gestion des fichiers.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use crate::settings::get_toml_value_by_path;
+use tauri::Manager;
+use tokio::sync::RwLock;
+
+use crate::settings::{get_toml_value_by_path, SettingsState};
 
 /// Paramètres nécessaires à l'inventaire et aux commandes OSM.
 #[derive(Debug, Clone, PartialEq)]
@@ -69,4 +73,16 @@ pub fn settings_from_toml(
         )
         .clamp(4, 52),
     }
+}
+
+/// Lit les paramètres OSM depuis l'état de configuration managé. Ne panique
+/// jamais : en l'absence d'état (tests, démarrage incomplet), les défauts sont
+/// utilisés.
+pub async fn read_settings(app: &tauri::AppHandle) -> OsmSettings {
+    let Some(state) = app.try_state::<Arc<RwLock<SettingsState>>>() else {
+        return OsmSettings::default();
+    };
+    let state = state.inner().clone();
+    let guard = state.read().await;
+    settings_from_toml(&guard.default_toml, &guard.user_overrides)
 }

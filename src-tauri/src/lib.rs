@@ -8,9 +8,6 @@ mod gpx_multiride;
 mod gpx_communes;
 mod gpx_altimetrie;
 mod gpx_tunnels;
-// Le module est consommé par les commandes `osm_*` de la sous-étape suivante ;
-// l'attribut évite les avertissements `dead_code` entre les deux sous-étapes.
-#[allow(dead_code)]
 mod osm;
 mod trace_info;
 
@@ -96,6 +93,12 @@ pub fn run() {
             gpx_tunnels::commands::tunnels_save,
             gpx_tunnels::commands::tunnels_support_status,
             gpx_tunnels::commands::pick_directory,
+            osm::commands::osm_support_overview,
+            osm::commands::osm_region_catalog,
+            osm::commands::osm_region_size,
+            osm::commands::osm_download,
+            osm::commands::osm_delete,
+            osm::commands::osm_catalog_refresh,
             trace_info::get_trace_info
         ])
         .run(tauri::generate_context!())

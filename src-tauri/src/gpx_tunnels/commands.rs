@@ -493,6 +493,7 @@ pub async fn tunnels_prepare(
         &client,
         &folder,
         regions::INDEX_URL,
+        false,
         move |done, total| {
             emit_progress(
                 &app_progress,

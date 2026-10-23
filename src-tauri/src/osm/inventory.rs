@@ -251,7 +251,7 @@ fn empty_overview(
 }
 
 /// Date de création du fichier, avec repli sur la modification puis l'inconnu.
-fn file_date(metadata: &std::fs::Metadata) -> (Option<DateTime<Utc>>, &'static str) {
+pub fn file_date(metadata: &std::fs::Metadata) -> (Option<DateTime<Utc>>, &'static str) {
     if let Ok(created) = metadata.created() {
         return (
             Some(DateTime::<Utc>::from(created)),

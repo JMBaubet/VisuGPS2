@@ -71,3 +71,59 @@ pub struct OsmFileStatus {
     /// `green`, `yellow` ou `orange`.
     pub state: String,
 }
+
+/// Catalogue Geofabrik chargé depuis `regions.json`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsmRegionCatalog {
+    pub present: bool,
+    pub version: Option<String>,
+    pub regions: Vec<OsmRegionOption>,
+}
+
+/// Une région sélectionnable dans la fenêtre de gestion.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsmRegionOption {
+    pub id: String,
+    pub name: String,
+    pub country_code: Option<String>,
+    pub country_name: Option<String>,
+    pub pbf_filename: String,
+    pub size_mb: Option<f64>,
+    pub present: bool,
+    pub local_size_bytes: Option<u64>,
+    pub local_created_at: Option<String>,
+}
+
+/// Taille distante (HEAD) et espace disponible au moment du choix.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsmRegionProbe {
+    pub bytes: Option<u64>,
+    pub available_bytes: Option<u64>,
+}
+
+/// Résultat d'un téléchargement ou d'un renouvellement.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsmDownloadResult {
+    pub filename: String,
+    pub size_bytes: u64,
+}
+
+/// Progression d'un téléchargement ou du rafraîchissement du catalogue,
+/// émise par l'événement `osm-progress`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsmProgress {
+    /// `catalog` ou `download`.
+    pub stage: String,
+    pub region_id: Option<String>,
+    pub region_name: Option<String>,
+    pub filename: Option<String>,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    /// 0–100 ; 0 lorsque la taille totale est inconnue.
+    pub percent: f64,
+}

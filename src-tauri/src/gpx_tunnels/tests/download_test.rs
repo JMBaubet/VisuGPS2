@@ -23,16 +23,26 @@ fn cleanup(dir: &Path) {
 }
 
 fn serve_once(status: &'static str, content_type: &'static str, body: Vec<u8>) -> String {
+    serve_once_with_length(status, content_type, body, None)
+}
+
+fn serve_once_with_length(
+    status: &'static str,
+    content_type: &'static str,
+    body: Vec<u8>,
+    declared_length: Option<usize>,
+) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("port local");
     let address = listener.local_addr().expect("adresse locale");
     std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("connexion de test");
         let mut request = [0_u8; 2048];
         let _ = stream.read(&mut request);
+        let length = declared_length.unwrap_or(body.len());
         let header = format!(
             "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
             status,
-            body.len(),
+            length,
             content_type
         );
         stream
@@ -108,6 +118,33 @@ fn http_error_leaves_no_target_and_no_part() {
 }
 
 #[test]
+fn truncated_download_is_rejected_and_leaves_no_target() {
+    let url = serve_once_with_length(
+        "200 OK",
+        "application/octet-stream",
+        b"hello".to_vec(),
+        Some(10),
+    );
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).expect("dossier temporaire");
+    let target = dir.join("truncated.osm.pbf");
+    let client = download::client().expect("client HTTP");
+
+    let result = block_on(download::download_to_file(
+        &client,
+        &url,
+        &target,
+        |_, _| {},
+    ));
+
+    assert!(result.is_err());
+    assert!(!target.exists());
+    assert!(!download::part_path(&target).exists());
+
+    cleanup(&dir);
+}
+
+#[test]
 fn remote_size_reads_content_length() {
     let url = serve_once("200 OK", "application/octet-stream", b"hello".to_vec());
     let client = download::client().expect("client HTTP");
@@ -152,6 +189,7 @@ fn ensure_regions_json_downloads_transforms_and_writes_atomically() {
         &client,
         &dir,
         &url,
+        false,
         |_, _| {},
     ))
     .expect("préparation de regions.json");
@@ -227,11 +265,64 @@ fn regions_file_is_loaded_without_network_when_present() {
         &client,
         &dir,
         "http://127.0.0.1:1/invalid",
+        false,
         |_, _| {},
     ))
     .expect("chargement local");
 
     assert_eq!(loaded, initial);
+    cleanup(&dir);
+}
+
+#[test]
+fn force_redownloads_the_catalog_even_when_present() {
+    let index = r#"{
+      "type": "FeatureCollection",
+      "features": [{
+        "type": "Feature",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[[7.40, 43.72], [7.44, 43.72], [7.44, 43.75], [7.40, 43.75], [7.40, 43.72]]]
+        },
+        "properties": {
+          "id": "monaco",
+          "name": "Monaco",
+          "parent": "europe",
+          "iso3166-1:alpha2": ["MC"],
+          "urls": { "pbf": "https://example/monaco-latest.osm.pbf" }
+        }
+      }]
+    }"#;
+    let url = serve_once("200 OK", "application/json", index.as_bytes().to_vec());
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).expect("dossier temporaire");
+    regions::save_regions(
+        &dir,
+        &RegionsFile {
+            version: "old".to_string(),
+            regions: Vec::new(),
+        },
+    )
+    .expect("ancien regions.json");
+    let client = download::client().expect("client HTTP");
+
+    let regions = block_on(download::ensure_regions_json(
+        &client,
+        &dir,
+        &url,
+        true,
+        |_, _| {},
+    ))
+    .expect("rafraîchissement forcé");
+
+    assert_ne!(regions.version, "old");
+    assert_eq!(regions.regions.len(), 1);
+    assert_eq!(regions.regions[0].id, "monaco");
+    assert_eq!(regions.regions[0].country_code.as_deref(), Some("MC"));
+
+    let loaded = regions::load_regions(&dir).expect("regions.json relu");
+    assert_eq!(loaded, regions);
+
     cleanup(&dir);
 }
 
@@ -246,6 +337,7 @@ fn fetch_real_geofabrik_index() {
         &client,
         &dir,
         regions::INDEX_URL,
+        false,
         |_, _| {},
     ))
     .expect("index Geofabrik réel");

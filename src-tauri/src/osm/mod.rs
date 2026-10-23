@@ -8,8 +8,10 @@
 //!
 //! - `types` — contrats IPC ;
 //! - `params` — lecture des réglages `Osm.*` ;
-//! - `inventory` — état des fichiers et de l'espace disque.
+//! - `inventory` — état des fichiers et de l'espace disque ;
+//! - `commands` — commandes Tauri de la fenêtre de gestion.
 
+pub mod commands;
 pub mod inventory;
 pub mod params;
 pub mod types;
