@@ -25,6 +25,10 @@ fn defaults_match_the_prototype() {
 fn default_toml() -> toml::Table {
     toml::from_str(
         r#"
+        [Osm.Fichiers]
+        dossierPbf = ""
+        tailleMaxPbf = 500
+
         [Tunnels.Detection]
         distanceTolerance = 20
         angleTolerance = 25
@@ -35,8 +39,6 @@ fn default_toml() -> toml::Table {
 
         [Tunnels.Support]
         actif = true
-        tailleMaxPbf = 500
-        dossierPbf = ""
         "#,
     )
     .expect("TOML de défauts")
@@ -46,6 +48,10 @@ fn default_toml() -> toml::Table {
 fn user_overrides_take_precedence() {
     let overrides: toml::Table = toml::from_str(
         r#"
+        [Osm.Fichiers]
+        tailleMaxPbf = 1200
+        dossierPbf = "/Volumes/USB/osm-data"
+
         [Tunnels.Detection]
         distanceTolerance = 35
         angleTolerance = 40
@@ -56,8 +62,6 @@ fn user_overrides_take_precedence() {
 
         [Tunnels.Support]
         actif = false
-        tailleMaxPbf = 1200
-        dossierPbf = "/Volumes/USB/osm-data"
         "#,
     )
     .expect("TOML de surcharges");
@@ -120,7 +124,7 @@ fn missing_paths_fall_back_to_defaults() {
 fn blank_directory_is_none() {
     let overrides: toml::Table = toml::from_str(
         r#"
-        [Tunnels.Support]
+        [Osm.Fichiers]
         dossierPbf = "   "
         "#,
     )
@@ -128,6 +132,48 @@ fn blank_directory_is_none() {
 
     let support = support_from_settings(&toml::Table::new(), &overrides);
     assert_eq!(support.pbf_directory, None);
+}
+
+#[test]
+fn legacy_support_keys_are_read_when_the_new_keys_are_absent() {
+    let overrides: toml::Table = toml::from_str(
+        r#"
+        [Tunnels.Support]
+        tailleMaxPbf = 1200
+        dossierPbf = "/Volumes/USB/osm-data"
+        "#,
+    )
+    .expect("TOML de surcharges historiques");
+
+    let support = support_from_settings(&toml::Table::new(), &overrides);
+    assert_eq!(support.taille_max_pbf_mb, 1200);
+    assert_eq!(
+        support.pbf_directory.as_deref(),
+        Some("/Volumes/USB/osm-data")
+    );
+}
+
+#[test]
+fn new_support_keys_take_precedence_over_legacy_keys() {
+    let overrides: toml::Table = toml::from_str(
+        r#"
+        [Osm.Fichiers]
+        tailleMaxPbf = 300
+        dossierPbf = "/Volumes/NEW/osm-data"
+
+        [Tunnels.Support]
+        tailleMaxPbf = 1200
+        dossierPbf = "/Volumes/OLD/osm-data"
+        "#,
+    )
+    .expect("TOML de surcharges mixtes");
+
+    let support = support_from_settings(&toml::Table::new(), &overrides);
+    assert_eq!(support.taille_max_pbf_mb, 300);
+    assert_eq!(
+        support.pbf_directory.as_deref(),
+        Some("/Volumes/NEW/osm-data")
+    );
 }
 
 #[test]

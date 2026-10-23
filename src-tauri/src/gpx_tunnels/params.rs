@@ -1,4 +1,4 @@
-//! Lecture des paramètres `Tunnels.*`.
+//! Lecture des paramètres `Tunnels.*` et du support OSM (`Osm.Fichiers.*`).
 //!
 //! Même découpage que `gpx_altimetrie::params` : une fonction Tauri
 //! (`read_config`) qui ne panique jamais, et des fonctions pures
@@ -93,7 +93,9 @@ pub fn params_from_settings(
     }
 }
 
-/// Résout le support OSM depuis les tables TOML. Pure et testable.
+/// Résout le support OSM depuis les tables TOML : surcharges
+/// `Osm.Fichiers.*`, puis surcharges historiques `Tunnels.Support.*`, puis
+/// schéma par défaut. Pure et testable.
 pub fn support_from_settings(
     default_toml: &toml::Table,
     user_overrides: &toml::Table,
@@ -105,17 +107,22 @@ pub fn support_from_settings(
         .and_then(|value| value.as_bool())
         .unwrap_or(fallback.actif);
 
-    let directory = get_toml_value_by_path(user_overrides, "Tunnels.Support.dossierPbf")
-        .or_else(|| get_toml_value_by_path(default_toml, "Tunnels.Support.dossierPbf"))
+    // Le dossier et le plafond sont désormais partagés par les modules OSM
+    // (`Osm.Fichiers.*`). Les surcharges historiques `Tunnels.Support.*`
+    // restent lues en repli pour ne pas perdre la configuration existante.
+    let directory = get_toml_value_by_path(user_overrides, "Osm.Fichiers.dossierPbf")
+        .or_else(|| get_toml_value_by_path(user_overrides, "Tunnels.Support.dossierPbf"))
+        .or_else(|| get_toml_value_by_path(default_toml, "Osm.Fichiers.dossierPbf"))
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
 
-    let max_pbf_mb = get_toml_value_by_path(user_overrides, "Tunnels.Support.tailleMaxPbf")
+    let max_pbf_mb = get_toml_value_by_path(user_overrides, "Osm.Fichiers.tailleMaxPbf")
         .or_else(|| {
-            get_toml_value_by_path(default_toml, "Tunnels.Support.tailleMaxPbf")
+            get_toml_value_by_path(user_overrides, "Tunnels.Support.tailleMaxPbf")
         })
+        .or_else(|| get_toml_value_by_path(default_toml, "Osm.Fichiers.tailleMaxPbf"))
         .and_then(|value| match value {
             toml::Value::Integer(value) => Some((*value).max(0) as u64),
             toml::Value::Float(value) => Some(value.max(0.0).round() as u64),

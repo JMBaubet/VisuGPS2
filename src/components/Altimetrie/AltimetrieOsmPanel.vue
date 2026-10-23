@@ -189,7 +189,7 @@ const readinessMessage = computed(() => {
     case 'disabled':
       return 'La détection des tunnels est désactivée dans les paramètres.'
     case 'not_configured':
-      return "Support OSM non configuré. Ouvrez les paramètres (icône cog) pour choisir le dossier de la clé."
+      return "Support OSM non configuré. Choisissez le dossier dans les paramètres de l'Accueil (Données OSM — Fichiers)."
     case 'needs_regions':
       return 'La liste des régions OSM sera téléchargée automatiquement (environ 50 Mo, une seule fois).'
     case 'no_region':
@@ -201,7 +201,7 @@ const readinessMessage = computed(() => {
       if (
         props.requirements?.regions.some(region => region.tooLarge)
       ) {
-        return "Certaines régions dépassent le plafond de téléchargement. Utilisez « Télécharger quand même » ou augmentez Tunnels.Support.tailleMaxPbf."
+        return "Certaines régions dépassent le plafond de téléchargement. Utilisez « Télécharger quand même » ou augmentez Osm.Fichiers.tailleMaxPbf."
       }
       return props.pending
         ? null

@@ -764,7 +764,7 @@ pub async fn tunnels_support_status(
     })
 }
 
-/// Sélecteur natif de dossier, pour le paramètre `Tunnels.Support.dossierPbf`.
+/// Sélecteur natif de dossier, pour le paramètre `Osm.Fichiers.dossierPbf`.
 #[tauri::command]
 pub async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let folder = app

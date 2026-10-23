@@ -46,7 +46,7 @@ action = "openModes"
 [_meta.views.accueil]
 label = "Accueil"
 icon = "mdi-home"
-groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Communes.Detection", "Communes.Overpass", "Tunnels.Detection", "Tunnels.Support", "Exemples"]
+groups = ["Accueil", "Carte.Favoris", "Carte.Traces", "Carte.Clusters", "Communes.Detection", "Communes.Overpass", "Osm.Fichiers", "Osm.Validite", "Tunnels.Detection", "Tunnels.Support", "Exemples"]
 
 [_meta.views.editionCamera]
 label = "Édition"
@@ -98,6 +98,14 @@ icon = "mdi-home-city-outline"
 [_meta.groups."Communes.Overpass"]
 label = "Communes — Overpass"
 icon = "mdi-cloud-search-outline"
+
+[_meta.groups."Osm.Fichiers"]
+label = "Données OSM — Fichiers"
+icon = "mdi-database"
+
+[_meta.groups."Osm.Validite"]
+label = "Données OSM — Validité"
+icon = "mdi-calendar-clock"
 
 [_meta.groups."Affichage.moniteurs"]
 label = "Configuration des fenêtres"
@@ -176,8 +184,8 @@ label = "Tunnels — Détection"
 icon = "mdi-tunnel"
 
 [_meta.groups."Tunnels.Support"]
-label = "Tunnels — Données OSM"
-icon = "mdi-database"
+label = "Tunnels — Support"
+icon = "mdi-toggle-switch"
 
 [Accueil.nbrCircuits.list]
 description = "Nombre maximum de circuits présentés dans la liste."
@@ -1213,6 +1221,96 @@ unit = "m/px"
 icon = "mdi-cursor-move"
 
 # ---------------------------------------------------------------------------
+# Données OSM partagées (tunnels, communes).
+# `regions.json` et les `.osm.pbf` vivent sur le support externe configuré
+# ci-dessous, jamais dans le dossier d'une trace. La gestion globale (liste,
+# dates, renouvellement, suppression, téléchargement) est accessible depuis
+# l'icône OSM de la toolbar de l'Accueil.
+# ---------------------------------------------------------------------------
+
+[Osm.Fichiers.dossierPbf]
+description = "Dossier des données OSM"
+documentation = """
+Dossier du support externe (clé USB ou disque) qui contient `regions.json` et les
+fichiers régionaux `.osm.pbf`. Ces données sont partagées par les modules
+Tunnels et Communes.
+
+Les téléchargements Geofabrik sont silencieux : `regions.json` est produit si
+nécessaire, puis les PBF requis par une trace sont téléchargés avec affichage de
+la progression dans l'onglet Tunnels. La gestion globale des fichiers (état,
+renouvellement, suppression, téléchargement d'autres régions) est accessible
+depuis l'icône OSM de la toolbar de l'Accueil.
+
+Les fichiers ne sont **jamais** copiés dans le dossier de la trace : seul
+`tunnels.json` y est écrit.
+"""
+type = "directory"
+default = ""
+icon = "mdi-folder-open"
+
+[Osm.Fichiers.tailleMaxPbf]
+description = "Taille maximale d'un PBF téléchargé"
+documentation = """
+Plafond de téléchargement d'un fichier PBF, en Mo. **0** désactive le plafond.
+
+Une région requise dont le PBF manquant dépasse ce plafond n'est **pas**
+téléchargée silencieusement : elle apparaît dans le panneau « Données OSM » de
+l'onglet Tunnels avec sa taille, et un bouton « Télécharger quand même » permet
+de passer outre. La fenêtre de gestion OSM de l'Accueil applique le même
+plafond et propose la même dérogation.
+
+Les PBF courants (PACA ~85 Mo, Monaco ~2 Mo) restent sous le plafond et sont
+téléchargés automatiquement.
+"""
+type = "int"
+default = 500
+min = 0
+max = 10000
+step = 50
+unit = "Mo"
+icon = "mdi-download"
+
+[Osm.Validite.dureeMaxMois]
+description = "Durée maximale de validité des PBF"
+documentation = """
+Durée maximale, en mois, pendant laquelle un fichier PBF est considéré comme
+représentatif d'OpenStreetMap. Valeur par défaut : **12 mois** (bornes 6 à 36).
+
+L'icône `mdi-map-legend` de l'Accueil passe à l'**orange** dès qu'un fichier
+atteint **90 %** de cette durée (10,8 mois avec la valeur par défaut), y compris
+lorsque la durée est dépassée. Ce seuil est un indicateur de fraîcheur : il ne
+bloque pas la détection. Le renouvellement se déclenche depuis la fenêtre de
+gestion OSM.
+"""
+type = "int"
+default = 12
+min = 6
+max = 36
+step = 1
+unit = "mois"
+icon = "mdi-calendar-range"
+
+[Osm.Validite.renouvellementSemaines]
+description = "Durée de renouvellement souhaitée des PBF"
+documentation = """
+Âge, en semaines, à partir duquel un fichier PBF est considéré comme à
+renouveler. Valeur par défaut : **8 semaines** (bornes 4 à 52).
+
+L'icône `mdi-map-legend` passe au **jaune** dès qu'au moins un fichier atteint
+cet âge. La fenêtre de gestion OSM affiche, pour chaque fichier, le nombre de
+jours restants ou dépassés par rapport à cette échéance, calculée à partir de la
+date de création du fichier (ou de modification si la création n'est pas
+disponible).
+"""
+type = "int"
+default = 8
+min = 4
+max = 52
+step = 1
+unit = "semaines"
+icon = "mdi-calendar-refresh"
+
+# ---------------------------------------------------------------------------
 # Détection des tunnels (module Tunnels).
 # Une trace propre est confrontée aux ways OSM `tunnel` + `highway` des PBF
 # régionaux ; le résultat est écrit dans `traces/{trace_id}/tunnels.json` et
@@ -1329,21 +1427,6 @@ step = 5
 unit = "m"
 icon = "mdi-call-merge"
 
-[Tunnels.Support.dossierPbf]
-description = "Dossier des données OSM"
-documentation = """
-Dossier du support externe (clé USB ou disque) qui contient `regions.json` et les
-fichiers régionaux `.osm.pbf`. Les téléchargements Geofabrik sont silencieux :
-`regions.json` est produit si nécessaire, puis les PBF requis par la trace sont
-téléchargés avec affichage de la progression dans l'onglet Tunnels.
-
-Les fichiers ne sont **jamais** copiés dans le dossier de la trace : seul
-`tunnels.json` y est écrit.
-"""
-type = "directory"
-default = ""
-icon = "mdi-folder-open"
-
 [Tunnels.Support.actif]
 description = "Activer la détection des tunnels"
 documentation = """
@@ -1354,25 +1437,6 @@ déjà présents restent consultables et éditables dans l'onglet Tunnels.
 type = "bool"
 default = true
 icon = "mdi-toggle-switch"
-
-[Tunnels.Support.tailleMaxPbf]
-description = "Taille maximale d'un PBF téléchargé"
-documentation = """
-Plafond de téléchargement d'un fichier PBF, en Mo. **0** désactive le plafond.
-
-Une région requise dont le PBF manquant dépasse ce plafond n'est **pas**
-téléchargée silencieusement : elle apparaît dans le panneau « Données OSM » de
-l'onglet Tunnels avec sa taille, et un bouton « Télécharger quand même » permet
-de passer outre. Les PBF courants (PACA ~85 Mo, Monaco ~2 Mo) restent sous le
-plafond et sont téléchargés automatiquement.
-"""
-type = "int"
-default = 500
-min = 0
-max = 10000
-step = 50
-unit = "Mo"
-icon = "mdi-download"
 
 # ---------------------------------------------------------------------------
 # Détection des communes traversées (module Communes).

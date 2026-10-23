@@ -444,6 +444,59 @@ fn remove_toml_value_by_path(table: &mut toml::Table, path: &str) -> bool {
     false
 }
 
+/// Migre les surcharges historiques du support OSM (`Tunnels.Support.*`) vers
+/// le namespace partagé `Osm.Fichiers.*`.
+///
+/// - clé historique seule : la valeur est copiée vers la nouvelle clé ;
+/// - nouvelle clé déjà présente : l'ancienne surcharge, devenue morte, est
+///   supprimée (la nouvelle clé est prioritaire, comme dans le lecteur) ;
+/// - aucune clé : aucun changement.
+///
+/// Retourne `true` si la table a été modifiée.
+fn migrate_legacy_osm_overrides(overrides: &mut toml::Table) -> bool {
+    let mut changed = false;
+    for (old_path, new_path) in [
+        ("Tunnels.Support.dossierPbf", "Osm.Fichiers.dossierPbf"),
+        ("Tunnels.Support.tailleMaxPbf", "Osm.Fichiers.tailleMaxPbf"),
+    ] {
+        let Some(old_value) = get_toml_value_by_path(overrides, old_path).cloned() else {
+            continue;
+        };
+        if get_toml_value_by_path(overrides, new_path).is_none() {
+            set_toml_value_by_path(overrides, new_path, old_value);
+        }
+        remove_toml_value_by_path(overrides, old_path);
+        changed = true;
+    }
+    if changed {
+        prune_empty_tables(overrides);
+    }
+    changed
+}
+
+/// Supprime récursivement les tables TOML vides laissées par une migration.
+fn prune_empty_tables(table: &mut toml::Table) -> bool {
+    let mut changed = false;
+    let keys: Vec<String> = table.keys().cloned().collect();
+    for key in keys {
+        let remove = if let Some(sub_table) = table
+            .get_mut(&key)
+            .and_then(|value| value.as_table_mut())
+        {
+            let child_changed = prune_empty_tables(sub_table);
+            changed |= child_changed;
+            sub_table.is_empty()
+        } else {
+            false
+        };
+        if remove {
+            table.remove(&key);
+            changed = true;
+        }
+    }
+    changed
+}
+
 // Génère la liste des paramètres fusionnés (défaut + surcharges)
 fn get_merged_settings(
     default_table: &toml::Table,
@@ -513,7 +566,7 @@ pub fn init_settings_state(app_handle: &AppHandle) -> Result<Arc<RwLock<Settings
     let config_filename = if is_dev { "config-dev.toml" } else { "config.toml" };
     let config_path = mode_dir.join(config_filename);
     
-    let user_overrides = if config_path.exists() {
+    let mut user_overrides = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)
             .map_err(|e| format!("Impossible de lire {:?} : {}", config_path, e))?;
         toml::from_str(&content)
@@ -521,6 +574,33 @@ pub fn init_settings_state(app_handle: &AppHandle) -> Result<Arc<RwLock<Settings
     } else {
         toml::Table::new()
     };
+
+    // Le dossier et le plafond du support OSM sont passés de
+    // `Tunnels.Support.*` à `Osm.Fichiers.*`. La migration est faite au
+    // démarrage pour que le drawer affiche les valeurs réellement utilisées ;
+    // un échec d'écriture n'empêche pas l'application de démarrer, la table en
+    // mémoire étant déjà migrée.
+    if migrate_legacy_osm_overrides(&mut user_overrides) {
+        match toml::to_string(&user_overrides) {
+            Ok(toml_str) => {
+                if let Err(error) = std::fs::write(&config_path, toml_str) {
+                    eprintln!(
+                        "[settings] migration des clés OSM non écrite ({}): {}",
+                        config_path.display(),
+                        error
+                    );
+                } else {
+                    println!(
+                        "[settings] surcharges OSM migrées vers Osm.Fichiers.* ({})",
+                        config_path.display()
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!("[settings] sérialisation de la migration OSM : {}", error)
+            }
+        }
+    }
 
     let master_key = get_or_create_master_key()?;
 
@@ -1102,15 +1182,15 @@ mod tests {
             }
         }
 
-        // 2. Dix paramètres, tous rattachés aux deux vues.
+        // 2. Huit paramètres, tous rattachés aux deux vues.
         let tunnel_defs: Vec<_> = defs
             .iter()
             .filter(|definition| definition.path.starts_with("Tunnels."))
             .collect();
         assert_eq!(
             tunnel_defs.len(),
-            10,
-            "10 paramètres `Tunnels.*` attendus : {:?}",
+            8,
+            "8 paramètres `Tunnels.*` attendus : {:?}",
             tunnel_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
         );
         for definition in &tunnel_defs {
@@ -1162,28 +1242,202 @@ mod tests {
         assert_eq!(merge.min, Some(25.0));
         assert_eq!(merge.max, Some(250.0));
 
-        let folder = tunnel_defs
-            .iter()
-            .find(|definition| definition.path == "Tunnels.Support.dossierPbf")
-            .expect("paramètre `dossierPbf` déclaré");
-        assert_eq!(folder.setting_type, "directory");
-        assert_eq!(folder.default.as_str(), Some(""));
-
         let active = tunnel_defs
             .iter()
             .find(|definition| definition.path == "Tunnels.Support.actif")
             .expect("paramètre `actif` déclaré");
         assert_eq!(active.setting_type, "bool");
         assert_eq!(active.default.as_bool(), Some(true));
+    }
 
-        let max_size = tunnel_defs
+    /// Le namespace `Osm.*` est déclaré et cohérent avec `_meta`.
+    ///
+    /// Les fichiers OSM sont partagés par les modules Tunnels et Communes : leur
+    /// gestion vit dans les paramètres de la vue `accueil`, où se trouve
+    /// l'icône d'état de la toolbar. Le dossier et le plafond ont migré depuis
+    /// `Tunnels.Support.*` ; les anciennes surcharges restent lues par
+    /// `gpx_tunnels::params::support_from_settings`.
+    #[test]
+    fn osm_namespace_is_declared_and_consistent() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        let meta = extract_meta(&table);
+
+        // 1. Les deux groupes sont rattachés à l'accueil, avec leur métadonnée.
+        let view = meta
+            .views
+            .get("accueil")
+            .expect("vue `accueil` déclarée");
+        for group in ["Osm.Fichiers", "Osm.Validite"] {
+            assert!(
+                view.groups.iter().any(|candidate| candidate.as_str() == group),
+                "vue `accueil` sans groupe `{}`",
+                group
+            );
+            let metadata = meta
+                .groups
+                .get(group)
+                .unwrap_or_else(|| panic!("groupe `{}` sans métadonnée", group));
+            assert!(metadata.label.is_some(), "groupe `{}` sans libellé", group);
+            assert!(metadata.icon.is_some(), "groupe `{}` sans icône", group);
+        }
+
+        // 2. Les réglages OSM ne sont pas exposés dans l'Altimétrie : ils sont
+        //    gérés depuis l'Accueil, aux côtés de l'icône d'état.
+        let altimetrie = meta
+            .views
+            .get("altimetrie")
+            .expect("vue `altimetrie` déclarée");
+        assert!(
+            !altimetrie
+                .groups
+                .iter()
+                .any(|group| group.starts_with("Osm.")),
+            "les groupes `Osm.*` ne doivent pas apparaître dans l'Altimétrie"
+        );
+
+        // 3. Quatre paramètres, tous rattachés à l'accueil.
+        let osm_defs: Vec<_> = defs
             .iter()
-            .find(|definition| definition.path == "Tunnels.Support.tailleMaxPbf")
+            .filter(|definition| definition.path.starts_with("Osm."))
+            .collect();
+        assert_eq!(
+            osm_defs.len(),
+            4,
+            "4 paramètres `Osm.*` attendus : {:?}",
+            osm_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
+        );
+        for definition in &osm_defs {
+            let group = definition
+                .path
+                .split('.')
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(".");
+            assert!(
+                view.groups.contains(&group),
+                "paramètre `{}` absent de la vue accueil",
+                definition.path
+            );
+        }
+
+        // 4. Types, bornes, unités et défauts structurants.
+        let folder = osm_defs
+            .iter()
+            .find(|definition| definition.path == "Osm.Fichiers.dossierPbf")
+            .expect("paramètre `dossierPbf` déclaré");
+        assert_eq!(folder.setting_type, "directory");
+        assert_eq!(folder.default.as_str(), Some(""));
+
+        let max_size = osm_defs
+            .iter()
+            .find(|definition| definition.path == "Osm.Fichiers.tailleMaxPbf")
             .expect("paramètre `tailleMaxPbf` déclaré");
         assert_eq!(max_size.setting_type, "int");
         assert_eq!(max_size.default.as_i64(), Some(500));
         assert_eq!(max_size.min, Some(0.0));
+        assert_eq!(max_size.max, Some(10000.0));
         assert_eq!(max_size.unit.as_deref(), Some("Mo"));
+
+        let max_validity = osm_defs
+            .iter()
+            .find(|definition| definition.path == "Osm.Validite.dureeMaxMois")
+            .expect("paramètre `dureeMaxMois` déclaré");
+        assert_eq!(max_validity.setting_type, "int");
+        assert_eq!(max_validity.default.as_i64(), Some(12));
+        assert_eq!(max_validity.min, Some(6.0));
+        assert_eq!(max_validity.max, Some(36.0));
+        assert_eq!(max_validity.unit.as_deref(), Some("mois"));
+
+        let renewal = osm_defs
+            .iter()
+            .find(|definition| {
+                definition.path == "Osm.Validite.renouvellementSemaines"
+            })
+            .expect("paramètre `renouvellementSemaines` déclaré");
+        assert_eq!(renewal.setting_type, "int");
+        assert_eq!(renewal.default.as_i64(), Some(8));
+        assert_eq!(renewal.min, Some(4.0));
+        assert_eq!(renewal.max, Some(52.0));
+        assert_eq!(renewal.unit.as_deref(), Some("semaines"));
+    }
+
+    #[test]
+    fn legacy_osm_overrides_are_migrated_to_the_shared_namespace() {
+        let mut overrides: toml::Table = toml::from_str(
+            r#"
+            [Tunnels.Support]
+            dossierPbf = "/Volumes/USB/osm-data"
+            tailleMaxPbf = 1200
+            actif = false
+            "#,
+        )
+        .expect("TOML historique");
+
+        assert!(migrate_legacy_osm_overrides(&mut overrides));
+        assert_eq!(
+            get_toml_value_by_path(&overrides, "Osm.Fichiers.dossierPbf")
+                .and_then(|value| value.as_str()),
+            Some("/Volumes/USB/osm-data")
+        );
+        assert_eq!(
+            get_toml_value_by_path(&overrides, "Osm.Fichiers.tailleMaxPbf")
+                .and_then(|value| value.as_integer()),
+            Some(1200)
+        );
+        assert!(
+            get_toml_value_by_path(&overrides, "Tunnels.Support.dossierPbf").is_none()
+        );
+        assert!(
+            get_toml_value_by_path(&overrides, "Tunnels.Support.tailleMaxPbf").is_none()
+        );
+        assert_eq!(
+            get_toml_value_by_path(&overrides, "Tunnels.Support.actif")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert!(!migrate_legacy_osm_overrides(&mut overrides));
+    }
+
+    #[test]
+    fn new_osm_overrides_supersede_legacy_values() {
+        let mut overrides: toml::Table = toml::from_str(
+            r#"
+            [Osm.Fichiers]
+            dossierPbf = "/Volumes/NEW/osm-data"
+            tailleMaxPbf = 300
+
+            [Tunnels.Support]
+            dossierPbf = "/Volumes/OLD/osm-data"
+            tailleMaxPbf = 1200
+            "#,
+        )
+        .expect("TOML mixte");
+
+        assert!(migrate_legacy_osm_overrides(&mut overrides));
+        assert_eq!(
+            get_toml_value_by_path(&overrides, "Osm.Fichiers.dossierPbf")
+                .and_then(|value| value.as_str()),
+            Some("/Volumes/NEW/osm-data")
+        );
+        assert_eq!(
+            get_toml_value_by_path(&overrides, "Osm.Fichiers.tailleMaxPbf")
+                .and_then(|value| value.as_integer()),
+            Some(300)
+        );
+        assert!(
+            get_toml_value_by_path(&overrides, "Tunnels.Support.dossierPbf").is_none()
+        );
+        assert!(
+            overrides.get("Tunnels").is_none(),
+            "la table `Tunnels` devenue vide doit être supprimée"
+        );
     }
 
     /// Le namespace `Communes.*` est déclaré et cohérent avec `_meta`.
