@@ -2,10 +2,17 @@
 
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use uuid::Uuid;
 
-use crate::gpx_tunnels::types::{RegionEntry, RegionsFile};
-use crate::osm::commands::{catalog_from, check_download_limits, validate_filename};
+use crate::gpx_tunnels::regions;
+use crate::gpx_tunnels::types::{
+    RegionEntry, RegionGeometriesFile, RegionGeometryEntry, RegionsFile,
+};
+use crate::osm::commands::{
+    catalog_from, check_download_limits, present_region_geometries, validate_filename,
+};
+use crate::osm::params::OsmSettings;
 
 fn temp_dir() -> PathBuf {
     std::env::temp_dir().join(format!("visugps2-osm-cmd-{}", Uuid::new_v4()))
@@ -23,6 +30,8 @@ fn region(id: &str, name: &str, filename: &str) -> RegionEntry {
         parent: "france".to_string(),
         country_code: Some("FR".to_string()),
         country_name: Some("France".to_string()),
+        continent: Some("europe".to_string()),
+        continent_name: Some("Europe".to_string()),
         bbox: [4.65, 42.98, 7.72, 45.13],
         pbf_filename: filename.to_string(),
         pbf_url: format!("https://example/{}", filename),
@@ -79,6 +88,88 @@ fn download_limits_apply_the_cap_and_the_free_space() {
 }
 
 #[test]
+fn present_region_geometries_uses_catalog_and_geometry() {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).expect("dossier temporaire");
+    std::fs::write(dir.join("paca-latest.osm.pbf"), b"abc").expect("PBF");
+
+    let entry = region(
+        "provence-alpes-cote-d-azur",
+        "Provence-Alpes-Côte d'Azur",
+        "paca-latest.osm.pbf",
+    );
+    regions::save_regions(
+        &dir,
+        &RegionsFile {
+            version: "v1".to_string(),
+            regions: vec![entry],
+        },
+    )
+    .expect("catalogue");
+
+    let geometry = serde_json::json!({
+        "type": "Polygon",
+        "coordinates": [[[4.65, 42.98], [7.72, 42.98], [7.72, 45.13], [4.65, 45.13], [4.65, 42.98]]]
+    });
+    regions::save_region_geometries(
+        &dir,
+        &RegionGeometriesFile {
+            version: "v1".to_string(),
+            regions: vec![RegionGeometryEntry {
+                id: "provence-alpes-cote-d-azur".to_string(),
+                geometry: geometry.clone(),
+            }],
+        },
+    )
+    .expect("géométries");
+
+    let settings = OsmSettings {
+        pbf_directory: Some(dir.clone()),
+        ..OsmSettings::default()
+    };
+    let present = present_region_geometries(&settings, Utc::now());
+
+    assert_eq!(present.len(), 1);
+    assert_eq!(present[0].region_id, "provence-alpes-cote-d-azur");
+    assert_eq!(present[0].state, "green");
+    assert!(!present[0].approximate);
+    assert_eq!(present[0].geometry, geometry);
+
+    cleanup(&dir);
+}
+
+#[test]
+fn present_region_geometries_falls_back_to_bbox() {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).expect("dossier temporaire");
+    std::fs::write(dir.join("paca-latest.osm.pbf"), b"abc").expect("PBF");
+    regions::save_regions(
+        &dir,
+        &RegionsFile {
+            version: "v1".to_string(),
+            regions: vec![region(
+                "provence-alpes-cote-d-azur",
+                "Provence-Alpes-Côte d'Azur",
+                "paca-latest.osm.pbf",
+            )],
+        },
+    )
+    .expect("catalogue");
+
+    let settings = OsmSettings {
+        pbf_directory: Some(dir.clone()),
+        ..OsmSettings::default()
+    };
+    let present = present_region_geometries(&settings, Utc::now());
+
+    assert_eq!(present.len(), 1);
+    assert!(present[0].approximate);
+    assert_eq!(present[0].geometry["type"], "Polygon");
+
+    cleanup(&dir);
+}
+
+#[test]
 fn catalog_reports_present_files_and_country() {
     let dir = temp_dir();
     std::fs::create_dir_all(&dir).expect("dossier temporaire");
@@ -104,6 +195,8 @@ fn catalog_reports_present_files_and_country() {
     assert_eq!(paca.id, "provence-alpes-cote-d-azur");
     assert_eq!(paca.country_code.as_deref(), Some("FR"));
     assert_eq!(paca.country_name.as_deref(), Some("France"));
+    assert_eq!(paca.continent.as_deref(), Some("europe"));
+    assert_eq!(paca.continent_name.as_deref(), Some("Europe"));
     assert!(paca.present);
     assert_eq!(paca.local_size_bytes, Some(3));
     assert!(paca.local_created_at.is_some());

@@ -12,24 +12,37 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::geometry;
 use super::types::{
-    RegionEntry, RegionsFile, TunnelRequirementRegion, TunnelRequirements,
-    READINESS_DISABLED, READINESS_MISSING_PBF, READINESS_NEEDS_REGIONS,
-    READINESS_NOT_CONFIGURED, READINESS_NO_REGION, READINESS_READY,
+    RegionEntry, RegionGeometriesFile, RegionGeometryEntry, RegionsFile,
+    TunnelRequirementRegion, TunnelRequirements, READINESS_DISABLED, READINESS_MISSING_PBF,
+    READINESS_NEEDS_REGIONS, READINESS_NOT_CONFIGURED, READINESS_NO_REGION, READINESS_READY,
 };
 
 /// Nom du fichier d'index, sur le support OSM.
 pub const REGIONS_FILE_NAME: &str = "regions.json";
 
+/// Nom du fichier de géométries simplifiées, sur le support OSM.
+pub const REGION_GEOMETRIES_FILE_NAME: &str = "regions-geometry.json";
+
 /// URL officielle de l'index Geofabrik.
 pub const INDEX_URL: &str = "https://download.geofabrik.de/index-v1.json";
+
+/// Nombre maximal de points conservés par anneau dans l'aperçu cartographique.
+/// L'index Geofabrik contient au plus ~2 000 points par région : cette borne
+/// conserve donc la géométrie complète de l'index.
+const MAX_GEOMETRY_POINTS: usize = 10_000;
 
 /// Chemin de `regions.json` dans le dossier OSM.
 pub fn regions_path(pbf_dir: &Path) -> PathBuf {
     pbf_dir.join(REGIONS_FILE_NAME)
+}
+
+/// Chemin de `regions-geometry.json` dans le dossier OSM.
+pub fn region_geometries_path(pbf_dir: &Path) -> PathBuf {
+    pbf_dir.join(REGION_GEOMETRIES_FILE_NAME)
 }
 
 /// Chemin d'un PBF dans le dossier OSM.
@@ -65,7 +78,39 @@ pub fn save_regions(pbf_dir: &Path, regions: &RegionsFile) -> Result<(), String>
     )
 }
 
-/// Transforme `index-v1.json` en `regions.json` allégé.
+/// Lit `regions-geometry.json`. Retourne `None` si le fichier est absent,
+/// illisible ou vide.
+pub fn load_region_geometries(pbf_dir: &Path) -> Option<RegionGeometriesFile> {
+    let content = std::fs::read_to_string(region_geometries_path(pbf_dir)).ok()?;
+    let file: RegionGeometriesFile = serde_json::from_str(&content).ok()?;
+    if file.regions.is_empty() {
+        return None;
+    }
+    Some(file)
+}
+
+/// Écrit `regions-geometry.json` de manière atomique.
+pub fn save_region_geometries(
+    pbf_dir: &Path,
+    geometries: &RegionGeometriesFile,
+) -> Result<(), String> {
+    std::fs::create_dir_all(pbf_dir).map_err(|e| {
+        format!(
+            "Création du dossier OSM ({}): {}",
+            pbf_dir.display(),
+            e
+        )
+    })?;
+    let json = serde_json::to_string(geometries)
+        .map_err(|e| format!("Sérialisation des géométries OSM : {}", e))?;
+    crate::gpx_audit::pipeline::write_atomic(
+        &region_geometries_path(pbf_dir),
+        json.as_bytes(),
+    )
+}
+
+/// Transforme `index-v1.json` en `regions.json` allégé et en géométries
+/// GeoJSON simplifiées.
 ///
 /// Chaque géométrie (Polygon ou MultiPolygon) est aplatie en bbox
 /// `[minLon, minLat, maxLon, maxLat]`. Les features sans géométrie, sans
@@ -74,7 +119,10 @@ pub fn save_regions(pbf_dir: &Path, regions: &RegionsFile) -> Result<(), String>
 /// Le code et le nom du pays sont résolus via la chaîne `parent` : les
 /// sous-régions Geofabrik (`provence-alpes-cote-d-azur` → `france`) n'ont pas
 /// de propriété ISO, contrairement aux entrées pays.
-pub fn transform_index(content: &str, version: &str) -> Result<RegionsFile, String> {
+pub fn transform_all(
+    content: &str,
+    version: &str,
+) -> Result<(RegionsFile, RegionGeometriesFile), String> {
     let index: Value = serde_json::from_str(content)
         .map_err(|e| format!("Index Geofabrik illisible : {}", e))?;
     let features = index
@@ -152,32 +200,122 @@ pub fn transform_index(content: &str, version: &str) -> Result<RegionsFile, Stri
             bbox,
             pbf_filename: pbf_filename.to_string(),
             pbf_url: pbf_url.to_string(),
+            geometry: simplify_geometry(geometry, MAX_GEOMETRY_POINTS),
         });
     }
 
-    let regions = raw_regions
-        .into_iter()
-        .map(|raw| {
-            let (country_code, country_name) =
-                resolve_country(&parents, &raw.parent, raw.iso.as_deref(), &raw.name);
-            RegionEntry {
-                id: raw.id,
-                name: raw.name,
-                country: raw.parent.clone(),
-                parent: raw.parent,
-                country_code,
-                country_name,
-                bbox: raw.bbox,
-                pbf_filename: raw.pbf_filename,
-                pbf_url: raw.pbf_url,
-                size_mb: None,
-            }
-        })
-        .collect();
+    let mut regions = Vec::with_capacity(raw_regions.len());
+    let mut geometries = Vec::with_capacity(raw_regions.len());
+    for raw in raw_regions {
+        if let Some(geometry) = raw.geometry.clone() {
+            geometries.push(RegionGeometryEntry {
+                id: raw.id.clone(),
+                geometry,
+            });
+        }
 
-    Ok(RegionsFile {
-        version: version.to_string(),
-        regions,
+        let (country_code, country_name) =
+            resolve_country(&parents, &raw.parent, raw.iso.as_deref(), &raw.name);
+        let continent = resolve_continent(&parents, &raw.id, &raw.parent);
+        let continent_name = continent.as_deref().map(continent_label);
+        regions.push(RegionEntry {
+            id: raw.id,
+            name: raw.name,
+            country: raw.parent.clone(),
+            parent: raw.parent,
+            country_code,
+            country_name,
+            continent,
+            continent_name,
+            bbox: raw.bbox,
+            pbf_filename: raw.pbf_filename,
+            pbf_url: raw.pbf_url,
+            size_mb: None,
+        });
+    }
+
+    Ok((
+        RegionsFile {
+            version: version.to_string(),
+            regions,
+        },
+        RegionGeometriesFile {
+            version: version.to_string(),
+            regions: geometries,
+        },
+    ))
+}
+
+/// Simplifie une géométrie GeoJSON en échantillonnant chaque anneau.
+///
+/// Le but est un aperçu cartographique lisible, pas une géométrie exacte : on
+/// conserve au plus `max_points` points par anneau et on referme l'anneau.
+fn simplify_geometry(geometry: &Value, max_points: usize) -> Option<Value> {
+    let kind = geometry.get("type").and_then(Value::as_str)?;
+    let coordinates = geometry.get("coordinates")?;
+    let simplified = match kind {
+        "Polygon" => simplify_rings(coordinates, max_points)?,
+        "MultiPolygon" => {
+            let polygons = coordinates.as_array()?;
+            let mut out = Vec::new();
+            for polygon in polygons {
+                if let Some(rings) = simplify_rings(polygon, max_points) {
+                    out.push(rings);
+                }
+            }
+            if out.is_empty() {
+                return None;
+            }
+            Value::Array(out)
+        }
+        _ => return None,
+    };
+    Some(json!({ "type": kind, "coordinates": simplified }))
+}
+
+fn simplify_rings(value: &Value, max_points: usize) -> Option<Value> {
+    let rings = value.as_array()?;
+    let mut out = Vec::new();
+    for ring in rings {
+        let points = ring.as_array()?;
+        if points.len() < 3 {
+            continue;
+        }
+        let step = (points.len() as f64 / max_points.max(1) as f64).ceil() as usize;
+        let mut simplified: Vec<Value> = points
+            .iter()
+            .step_by(step.max(1))
+            .cloned()
+            .collect();
+        if let (Some(first), Some(last)) = (simplified.first(), simplified.last()) {
+            if first != last {
+                simplified.push(first.clone());
+            }
+        }
+        if simplified.len() >= 4 {
+            out.push(Value::Array(simplified));
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Array(out))
+    }
+}
+
+/// Polygone rectangulaire d'une bbox, utilisé quand les géométries simplifiées
+/// ne sont pas encore présentes sur le support.
+pub fn bbox_geometry(bbox: [f64; 4]) -> Value {
+    let [min_lon, min_lat, max_lon, max_lat] = bbox;
+    json!({
+        "type": "Polygon",
+        "coordinates": [[
+            [min_lon, min_lat],
+            [max_lon, min_lat],
+            [max_lon, max_lat],
+            [min_lon, max_lat],
+            [min_lon, min_lat]
+        ]]
     })
 }
 
@@ -190,6 +328,7 @@ struct RawRegion {
     bbox: [f64; 4],
     pbf_filename: String,
     pbf_url: String,
+    geometry: Option<Value>,
 }
 
 /// Résout le pays d'une région : sa propre propriété ISO, sinon la première
@@ -231,6 +370,62 @@ fn iso_country_code(properties: &Value) -> Option<String> {
     let code = code.trim().to_ascii_uppercase();
     (code.len() == 2 && code.chars().all(|character| character.is_ascii_alphabetic()))
         .then_some(code)
+}
+
+/// Résout le continent d'une région en remontant la chaîne `parent` jusqu'au
+/// dernier slug (les continents Geofabrik ne sont pas des features de l'index).
+/// Une entrée de niveau continent (`africa`, `europe`…) est son propre
+/// continent.
+fn resolve_continent(
+    parents: &HashMap<String, (String, String, Option<String>)>,
+    id: &str,
+    parent: &str,
+) -> Option<String> {
+    if parent.is_empty() {
+        return is_continent_slug(id).then(|| id.to_string());
+    }
+
+    let mut current = parent.to_string();
+    for _ in 0..16 {
+        let Some((next_parent, _, _)) = parents.get(&current) else {
+            return Some(current);
+        };
+        if next_parent.is_empty() || next_parent == &current {
+            return Some(current);
+        }
+        current = next_parent.clone();
+    }
+    Some(current)
+}
+
+fn is_continent_slug(slug: &str) -> bool {
+    matches!(
+        slug,
+        "africa"
+            | "antarctica"
+            | "asia"
+            | "australia-oceania"
+            | "central-america"
+            | "europe"
+            | "north-america"
+            | "south-america"
+    )
+}
+
+/// Libellé français d'un slug de continent Geofabrik.
+fn continent_label(slug: &str) -> String {
+    match slug {
+        "africa" => "Afrique",
+        "antarctica" => "Antarctique",
+        "asia" => "Asie",
+        "australia-oceania" => "Océanie",
+        "central-america" => "Amérique centrale",
+        "europe" => "Europe",
+        "north-america" => "Amérique du Nord",
+        "south-america" => "Amérique du Sud",
+        other => other,
+    }
+    .to_string()
 }
 
 /// Toutes les régions dont la bbox intersecte celle de la trace, y compris les
@@ -308,7 +503,15 @@ pub fn pbf_size_mb(pbf_dir: &Path, filename: &str) -> Option<f64> {
         .map(|metadata| ((metadata.len() as f64 / 1_048_576.0) * 10.0).round() / 10.0)
 }
 
-/// Compte les `.osm.pbf` présents dans le dossier OSM.
+/// Un nom de PBF visible : extension `.pbf` et pas un fichier caché.
+///
+/// Les supports exFAT créent des fichiers AppleDouble `._xxx.osm.pbf` qui ne
+/// sont pas des PBF valides et ne doivent pas apparaître dans l'inventaire.
+pub fn is_pbf_filename(filename: &str) -> bool {
+    !filename.starts_with('.') && filename.ends_with(".pbf")
+}
+
+/// Compte les `.osm.pbf` visibles dans le dossier OSM.
 pub fn count_pbfs(pbf_dir: &Path) -> usize {
     std::fs::read_dir(pbf_dir)
         .map(|entries| {
@@ -316,10 +519,10 @@ pub fn count_pbfs(pbf_dir: &Path) -> usize {
                 .flatten()
                 .filter(|entry| {
                     entry
-                        .path()
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        == Some("pbf")
+                        .file_name()
+                        .to_str()
+                        .map(is_pbf_filename)
+                        .unwrap_or(false)
                 })
                 .count()
         })

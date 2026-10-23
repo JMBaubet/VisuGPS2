@@ -195,6 +195,12 @@ pub struct RegionEntry {
     /// Nom du pays, résolu via la chaîne `parent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub country_name: Option<String>,
+    /// Slug du continent (ex. `europe`), résolu via la chaîne `parent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continent: Option<String>,
+    /// Libellé du continent (ex. `Europe`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continent_name: Option<String>,
     /// Bbox `[minLon, minLat, maxLon, maxLat]`.
     pub bbox: [f64; 4],
     pub pbf_filename: String,
@@ -210,6 +216,23 @@ pub struct RegionsFile {
     /// Date de génération, ISO 8601.
     pub version: String,
     pub regions: Vec<RegionEntry>,
+}
+
+/// Géométrie GeoJSON simplifiée d'une région, pour l'aperçu cartographique.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionGeometryEntry {
+    pub id: String,
+    /// Géométrie GeoJSON `Polygon` ou `MultiPolygon`.
+    pub geometry: serde_json::Value,
+}
+
+/// Racine de `regions-geometry.json`, sur le support OSM.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionGeometriesFile {
+    pub version: String,
+    pub regions: Vec<RegionGeometryEntry>,
 }
 
 // ─── États exposés à l'IHM ────────────────────────────────────────────

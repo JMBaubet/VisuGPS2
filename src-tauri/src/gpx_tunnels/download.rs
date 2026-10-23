@@ -220,11 +220,10 @@ where
         )
     })?;
 
-    let regions = regions::transform_index(
-        &content,
-        &crate::gpx_audit::export::iso_now(),
-    )?;
+    let version = crate::gpx_audit::export::iso_now();
+    let (regions, geometries) = regions::transform_all(&content, &version)?;
     regions::save_regions(pbf_dir, &regions)?;
+    regions::save_region_geometries(pbf_dir, &geometries)?;
     Ok(regions)
 }
 

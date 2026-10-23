@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useAppStore } from '../../stores/app'
 import { useOsmStore } from '../../stores/osm'
 import { describeOsmOverview } from '../../utils/osmFiles'
+import OsmFilesDialog from '../Osm/OsmFilesDialog.vue'
 
 const appStore = useAppStore()
 const osmStore = useOsmStore()
@@ -26,6 +27,11 @@ function onClick(): void {
   osmStore.openDialog()
 }
 
+function openSettings(): void {
+  osmStore.closeDialog()
+  appStore.isSettingsDrawerOpen = true
+}
+
 onMounted(() => {
   refresh()
   void osmStore.bindProgress()
@@ -39,6 +45,7 @@ onUnmounted(() => {
     refreshTimer = null
   }
   window.removeEventListener('focus', refresh)
+  osmStore.closeDialog()
 })
 
 watch(
@@ -69,6 +76,12 @@ watch(
       </div>
     </div>
   </v-tooltip>
+
+  <OsmFilesDialog
+    :model-value="osmStore.isDialogOpen"
+    @update:model-value="osmStore.isDialogOpen = $event"
+    @open-settings="openSettings"
+  />
 </template>
 
 <style scoped>

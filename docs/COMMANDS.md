@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (58 commandes)
+## Catalogue (60 commandes)
 
 ### Application
 
@@ -573,6 +573,8 @@ par l'événement `osm-progress`
 | `osm_support_overview` | `async (app) -> Result<OsmSupportOverview, String>` | État global du support : configuration, lisibilité, `regions.json`, espace libre/total, liste des PBF avec âge, échéance de renouvellement, fin de vie et état `green`/`yellow`/`orange`. |
 | `osm_region_catalog` | `async (app) -> Result<OsmRegionCatalog, String>` | Catalogue `regions.json` avec pays (code ISO et libellé), filename, présence locale, taille et date. `present = false` si le catalogue ou le dossier manque. |
 | `osm_region_size` | `async (app, region_id: String) -> Result<OsmRegionProbe, String>` | Taille distante via HEAD `Content-Length` (peut être `null`) et espace disponible. |
+| `osm_region_geometry` | `async (app, region_id: String) -> Result<Option<OsmRegionGeometry>, String>` | Géométrie GeoJSON simplifiée de la région (ou polygone de sa bbox si `regions-geometry.json` est absent), avec sa bbox pour le cadrage. |
+| `osm_present_region_geometries` | `async (app) -> Result<Vec<OsmPresentRegionGeometry>, String>` | Géométries des régions dont le PBF est présent, avec leur état `green`/`yellow`/`orange` pour l'aperçu cartographique. |
 | `osm_download` | `async (app, region_id: String, renew: Option<bool>, ignore_size_limit: Option<bool>) -> Result<OsmDownloadResult, String>` | Télécharge ou renouvelle un PBF. Refuse si la taille distante est inconnue, si le plafond `Osm.Fichiers.tailleMaxPbf` est dépassé (sauf `ignoreSizeLimit`) ou si l'espace libre est insuffisant. |
 | `osm_delete` | `async (app, filename: String) -> Result<(), String>` | Supprime un PBF après validation stricte du nom (pas de chemin, extension `pbf`, aucun `regions.json`). |
 | `osm_catalog_refresh` | `async (app) -> Result<OsmRegionCatalog, String>` | Retélécharge l'index Geofabrik et réécrit `regions.json` atomiquement, avec progression. |

@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::gpx_tunnels::regions::{
-    build_requirements, count_pbfs, find_regions, load_regions, pbf_present, save_regions,
-    select_regions, transform_index,
+    bbox_geometry, build_requirements, count_pbfs, find_regions, load_region_geometries,
+    load_regions, pbf_present, region_geometries_path, save_region_geometries,
+    save_regions, select_regions, transform_all,
 };
 use crate::gpx_tunnels::types::{
     RegionEntry, RegionsFile, READINESS_DISABLED, READINESS_MISSING_PBF,
@@ -30,6 +31,8 @@ fn region(id: &str, name: &str, bbox: [f64; 4], filename: &str) -> RegionEntry {
         parent: "europe".to_string(),
         country_code: None,
         country_name: None,
+        continent: None,
+        continent_name: None,
         bbox,
         pbf_filename: filename.to_string(),
         pbf_url: format!("https://example/{}", filename),
@@ -84,6 +87,19 @@ fn index_json() -> &'static str {
         },
         {
           "type": "Feature",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[-10.0, -10.0], [-5.0, -10.0], [-5.0, -5.0], [-10.0, -5.0], [-10.0, -10.0]]]
+          },
+          "properties": {
+            "id": "africa",
+            "name": "Africa",
+            "parent": "",
+            "urls": { "pbf": "https://example/africa-latest.osm.pbf" }
+          }
+        },
+        {
+          "type": "Feature",
           "geometry": null,
           "properties": {
             "id": "null-geometry",
@@ -110,11 +126,20 @@ fn index_json() -> &'static str {
 
 #[test]
 fn transforms_a_geofabrik_index_into_light_regions() {
-    let regions = transform_index(index_json(), "2026-10-22T10:00:00Z")
-        .expect("transformation de l'index");
+    let regions = transform_all(index_json(), "2026-10-22T10:00:00Z")
+        .expect("transformation de l'index")
+        .0;
 
     assert_eq!(regions.version, "2026-10-22T10:00:00Z");
-    assert_eq!(regions.regions.len(), 3);
+    assert_eq!(regions.regions.len(), 4);
+
+    let africa = regions
+        .regions
+        .iter()
+        .find(|entry| entry.id == "africa")
+        .expect("Afrique");
+    assert_eq!(africa.continent.as_deref(), Some("africa"));
+    assert_eq!(africa.continent_name.as_deref(), Some("Afrique"));
 
     let france = regions
         .regions
@@ -125,6 +150,8 @@ fn transforms_a_geofabrik_index_into_light_regions() {
     assert_eq!(france.parent, "europe");
     assert_eq!(france.country_code.as_deref(), Some("FR"));
     assert_eq!(france.country_name.as_deref(), Some("France"));
+    assert_eq!(france.continent.as_deref(), Some("europe"));
+    assert_eq!(france.continent_name.as_deref(), Some("Europe"));
 
     let paca = regions
         .regions
@@ -136,6 +163,8 @@ fn transforms_a_geofabrik_index_into_light_regions() {
     assert_eq!(paca.country, "france");
     assert_eq!(paca.country_code.as_deref(), Some("FR"));
     assert_eq!(paca.country_name.as_deref(), Some("France"));
+    assert_eq!(paca.continent.as_deref(), Some("europe"));
+    assert_eq!(paca.continent_name.as_deref(), Some("Europe"));
     assert_eq!(paca.pbf_filename, "paca-latest.osm.pbf");
     assert_eq!(paca.bbox, [4.65, 42.98, 7.72, 45.13]);
 
@@ -148,11 +177,59 @@ fn transforms_a_geofabrik_index_into_light_regions() {
     assert_eq!(monaco.bbox, [7.40, 43.72, 7.44, 43.75]);
     assert_eq!(monaco.country_code.as_deref(), Some("MC"));
     assert_eq!(monaco.country_name.as_deref(), Some("Monaco"));
+    assert_eq!(monaco.continent.as_deref(), Some("europe"));
+    assert_eq!(monaco.continent_name.as_deref(), Some("Europe"));
+}
+
+#[test]
+fn transform_all_returns_simplified_geometries() {
+    let (regions, geometries) =
+        transform_all(index_json(), "v").expect("transformation complète");
+    assert_eq!(regions.regions.len(), 4);
+    assert_eq!(geometries.regions.len(), 4);
+
+    let paca = geometries
+        .regions
+        .iter()
+        .find(|entry| entry.id == "provence-alpes-cote-d-azur")
+        .expect("géométrie PACA");
+    assert_eq!(paca.geometry["type"], "Polygon");
+    let ring = paca.geometry["coordinates"][0]
+        .as_array()
+        .expect("anneau extérieur");
+    assert!(ring.len() >= 4);
+    assert_eq!(ring.first(), ring.last());
+}
+
+#[test]
+fn geometry_file_round_trip() {
+    let dir = temp_dir();
+    let (_, geometries) = transform_all(index_json(), "v").expect("géométries");
+    save_region_geometries(&dir, &geometries).expect("écriture des géométries");
+    let loaded = load_region_geometries(&dir).expect("relecture des géométries");
+    assert_eq!(loaded, geometries);
+    assert!(region_geometries_path(&dir).exists());
+    cleanup(&dir);
+}
+
+#[test]
+fn bbox_geometry_is_a_closed_rectangle() {
+    let geometry = bbox_geometry([1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(geometry["type"], "Polygon");
+    let ring = geometry["coordinates"][0]
+        .as_array()
+        .expect("anneau extérieur");
+    assert_eq!(ring.len(), 5);
+    assert_eq!(ring.first(), ring.last());
+    assert_eq!(ring[0], serde_json::json!([1.0, 2.0]));
+    assert_eq!(ring[2], serde_json::json!([3.0, 4.0]));
 }
 
 #[test]
 fn find_regions_is_exhaustive_including_sub_regions() {
-    let regions = transform_index(index_json(), "v").expect("transformation");
+    let regions = transform_all(index_json(), "v")
+        .expect("transformation")
+        .0;
 
     let in_monaco = find_regions(&regions, [7.41, 43.73, 7.42, 43.74]);
     let ids: Vec<&str> = in_monaco.iter().map(|region| region.id.as_str()).collect();
@@ -262,6 +339,8 @@ fn legacy_regions_json_without_country_codes_is_read() {
         serde_json::from_str(json).expect("ancien regions.json sans codes pays");
     assert_eq!(file.regions[0].country_code, None);
     assert_eq!(file.regions[0].country_name, None);
+    assert_eq!(file.regions[0].continent, None);
+    assert_eq!(file.regions[0].continent_name, None);
 }
 
 #[test]
@@ -391,6 +470,7 @@ fn count_pbfs_ignores_other_files() {
     std::fs::write(dir.join("a.osm.pbf"), b"x").expect("PBF A");
     std::fs::write(dir.join("b.osm.pbf"), b"x").expect("PBF B");
     std::fs::write(dir.join("a.osm.pbf.part"), b"x").expect("partiel");
+    std::fs::write(dir.join("._a.osm.pbf"), b"x").expect("métadonnées macOS");
     std::fs::write(dir.join("regions.json"), b"{}").expect("index");
 
     assert_eq!(count_pbfs(&dir), 2);

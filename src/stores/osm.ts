@@ -21,7 +21,7 @@ export type OsmState =
   | 'orange'
 
 export type OsmFileState = 'green' | 'yellow' | 'orange'
-export type OsmDateSource = 'created' | 'modified' | 'unknown'
+export type OsmDateSource = 'pbf' | 'created' | 'modified' | 'unknown'
 
 export interface OsmFileStatus {
   filename: string
@@ -29,6 +29,8 @@ export interface OsmFileStatus {
   regionName: string | null
   countryCode: string | null
   countryName: string | null
+  continent: string | null
+  continentName: string | null
   sizeBytes: number
   createdAt: string | null
   dateSource: OsmDateSource
@@ -62,6 +64,8 @@ export interface OsmRegionOption {
   name: string
   countryCode: string | null
   countryName: string | null
+  continent: string | null
+  continentName: string | null
   pbfFilename: string
   sizeMb: number | null
   present: boolean
@@ -78,6 +82,21 @@ export interface OsmRegionCatalog {
 export interface OsmRegionProbe {
   bytes: number | null
   availableBytes: number | null
+}
+
+export interface OsmRegionGeometry {
+  regionId: string
+  bbox: [number, number, number, number]
+  geometry: GeoJSON.Geometry
+  approximate: boolean
+}
+
+export interface OsmPresentRegionGeometry {
+  regionId: string
+  state: OsmFileState
+  bbox: [number, number, number, number]
+  geometry: GeoJSON.Geometry
+  approximate: boolean
 }
 
 export interface OsmDownloadResult {
@@ -119,9 +138,15 @@ export const useOsmStore = defineStore('osm', () => {
   const progress = ref<OsmProgress | null>(null)
   const lastError = ref<string | null>(null)
   const isDialogOpen = ref(false)
+  const previewGeometry = ref<GeoJSON.Geometry | null>(null)
+  const previewBounds = ref<[number, number, number, number] | null>(null)
+  const previewApproximate = ref(false)
+  const previewRegionId = ref<string | null>(null)
+  const presentRegions = ref<OsmPresentRegionGeometry[]>([])
 
   let progressBound = false
   let probeToken = 0
+  let previewToken = 0
 
   // ─── Getters ────────────────────────────────────────────────────────
   const isBusy = computed(() => downloading.value || catalogLoading.value)
@@ -129,6 +154,7 @@ export const useOsmStore = defineStore('osm', () => {
   // ─── Actions ────────────────────────────────────────────────────────
   async function refreshOverview(): Promise<void> {
     loading.value = true
+    lastError.value = null
     try {
       overview.value = await invoke<OsmSupportOverview>('osm_support_overview')
       lastError.value = null
@@ -264,6 +290,63 @@ export const useOsmStore = defineStore('osm', () => {
 
   function closeDialog(): void {
     isDialogOpen.value = false
+    clearPreview()
+    clearPresentRegions()
+  }
+
+  async function loadPresentRegions(): Promise<void> {
+    try {
+      presentRegions.value = await invoke<OsmPresentRegionGeometry[]>(
+        'osm_present_region_geometries',
+      )
+    } catch (error) {
+      presentRegions.value = []
+      console.error(
+        '[osm] Géométries des régions présentes illisibles :',
+        error,
+      )
+    }
+  }
+
+  function clearPresentRegions(): void {
+    presentRegions.value = []
+  }
+
+  async function loadRegionGeometry(regionId: string): Promise<void> {
+    const token = ++previewToken
+    try {
+      const result = await invoke<OsmRegionGeometry | null>(
+        'osm_region_geometry',
+        { regionId },
+      )
+      if (token !== previewToken) return
+      if (!result) {
+        previewGeometry.value = null
+        previewBounds.value = null
+        previewApproximate.value = false
+        previewRegionId.value = null
+        return
+      }
+      previewBounds.value = result.bbox
+      previewGeometry.value = result.geometry
+      previewApproximate.value = result.approximate
+      previewRegionId.value = regionId
+    } catch (error) {
+      if (token !== previewToken) return
+      previewGeometry.value = null
+      previewBounds.value = null
+      previewApproximate.value = false
+      previewRegionId.value = null
+      console.error('[osm] Géométrie de région illisible :', error)
+    }
+  }
+
+  function clearPreview(): void {
+    previewToken += 1
+    previewGeometry.value = null
+    previewBounds.value = null
+    previewApproximate.value = false
+    previewRegionId.value = null
   }
 
   return {
@@ -278,6 +361,11 @@ export const useOsmStore = defineStore('osm', () => {
     progress,
     lastError,
     isDialogOpen,
+    previewGeometry,
+    previewBounds,
+    previewApproximate,
+    previewRegionId,
+    presentRegions,
     // Getters
     isBusy,
     // Actions
@@ -285,6 +373,10 @@ export const useOsmStore = defineStore('osm', () => {
     loadCatalog,
     refreshCatalog,
     probeRegion,
+    loadRegionGeometry,
+    clearPreview,
+    loadPresentRegions,
+    clearPresentRegions,
     downloadRegion,
     deleteFile,
     bindProgress,

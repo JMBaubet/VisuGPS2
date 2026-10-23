@@ -198,7 +198,13 @@ fn ensure_regions_json_downloads_transforms_and_writes_atomically() {
     assert_eq!(regions.regions[0].id, "monaco");
     assert_eq!(regions.regions[0].country_code.as_deref(), Some("MC"));
     assert_eq!(regions.regions[0].country_name.as_deref(), Some("Monaco"));
+    assert_eq!(regions.regions[0].continent.as_deref(), Some("europe"));
+    assert_eq!(regions.regions[0].continent_name.as_deref(), Some("Europe"));
     assert!(regions::regions_path(&dir).exists());
+    assert!(regions::region_geometries_path(&dir).exists());
+    let geometries =
+        regions::load_region_geometries(&dir).expect("géométries relues");
+    assert!(geometries.regions.iter().any(|entry| entry.id == "monaco"));
     let loaded = regions::load_regions(&dir).expect("regions.json relu");
     assert_eq!(loaded, regions);
 
@@ -217,6 +223,8 @@ fn download_pbf_skips_an_existing_file_and_writes_a_missing_one() {
         parent: "europe".to_string(),
         country_code: None,
         country_name: None,
+        continent: None,
+        continent_name: None,
         bbox: [7.40, 43.72, 7.44, 43.75],
         pbf_filename: "monaco-latest.osm.pbf".to_string(),
         pbf_url: url,
@@ -251,6 +259,8 @@ fn regions_file_is_loaded_without_network_when_present() {
             parent: "europe".to_string(),
             country_code: Some("MC".to_string()),
             country_name: Some("Monaco".to_string()),
+            continent: Some("europe".to_string()),
+            continent_name: Some("Europe".to_string()),
             bbox: [7.40, 43.72, 7.44, 43.75],
             pbf_filename: "monaco-latest.osm.pbf".to_string(),
             pbf_url: "https://example/monaco-latest.osm.pbf".to_string(),

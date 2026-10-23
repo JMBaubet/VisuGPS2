@@ -9,6 +9,7 @@
 //! `gpx_tunnels::download`, partagé avec la préparation silencieuse des
 //! tunnels.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -17,8 +18,8 @@ use tauri::Emitter;
 use super::inventory;
 use super::params::{read_settings, OsmSettings};
 use super::types::{
-    OsmDownloadResult, OsmProgress, OsmRegionCatalog, OsmRegionOption, OsmRegionProbe,
-    OsmSupportOverview,
+    OsmDownloadResult, OsmPresentRegionGeometry, OsmProgress, OsmRegionCatalog,
+    OsmRegionGeometry, OsmRegionOption, OsmRegionProbe, OsmSupportOverview,
 };
 use crate::gpx_tunnels::download;
 use crate::gpx_tunnels::regions;
@@ -76,6 +77,105 @@ pub async fn osm_region_size(
         bytes,
         available_bytes,
     })
+}
+
+/// Géométrie GeoJSON simplifiée d'une région pour l'aperçu cartographique.
+///
+/// Retourne le polygone de la bbox si `regions-geometry.json` n'est pas encore
+/// présent (catalogue généré avant l'ajout des géométries).
+#[tauri::command]
+pub async fn osm_region_geometry(
+    app: tauri::AppHandle,
+    region_id: String,
+) -> Result<Option<OsmRegionGeometry>, String> {
+    let settings = read_settings(&app).await;
+    let Some(folder) = settings.pbf_directory.as_deref() else {
+        return Ok(None);
+    };
+    let Some(catalog) = regions::load_regions(folder) else {
+        return Ok(None);
+    };
+    let Some(region) = catalog
+        .regions
+        .iter()
+        .find(|region| region.id == region_id)
+    else {
+        return Ok(None);
+    };
+
+    let from_file = regions::load_region_geometries(folder).and_then(|file| {
+        file.regions
+            .into_iter()
+            .find(|entry| entry.id == region_id)
+            .map(|entry| entry.geometry)
+    });
+    let approximate = from_file.is_none();
+    let geometry = from_file.unwrap_or_else(|| regions::bbox_geometry(region.bbox));
+
+    Ok(Some(OsmRegionGeometry {
+        region_id,
+        bbox: region.bbox,
+        geometry,
+        approximate,
+    }))
+}
+
+/// Géométries de toutes les régions dont le PBF est présent, avec leur état.
+///
+/// Utilisé à l'ouverture de la fenêtre « Données OSM » pour colorer les
+/// régions présentes en vert/jaune/orange sur la carte.
+#[tauri::command]
+pub async fn osm_present_region_geometries(
+    app: tauri::AppHandle,
+) -> Result<Vec<OsmPresentRegionGeometry>, String> {
+    let settings = read_settings(&app).await;
+    Ok(present_region_geometries(&settings, Utc::now()))
+}
+
+/// Construit les géométries des régions présentes (fonction pure hors disque).
+pub fn present_region_geometries(
+    settings: &OsmSettings,
+    now: chrono::DateTime<Utc>,
+) -> Vec<OsmPresentRegionGeometry> {
+    let Some(folder) = settings.pbf_directory.as_deref() else {
+        return Vec::new();
+    };
+    let overview = inventory::build_overview(settings, now);
+    let Some(catalog) = regions::load_regions(folder) else {
+        return Vec::new();
+    };
+
+    let mut geometry_by_id: HashMap<String, serde_json::Value> = HashMap::new();
+    if let Some(geometries) = regions::load_region_geometries(folder) {
+        for entry in geometries.regions {
+            geometry_by_id.insert(entry.id, entry.geometry);
+        }
+    }
+
+    let mut out = Vec::new();
+    for file in overview.files {
+        let Some(region_id) = file.region_id else {
+            continue;
+        };
+        let Some(region) = catalog
+            .regions
+            .iter()
+            .find(|region| region.id == region_id)
+        else {
+            continue;
+        };
+        let from_file = geometry_by_id.get(&region_id).cloned();
+        let approximate = from_file.is_none();
+        let geometry = from_file.unwrap_or_else(|| regions::bbox_geometry(region.bbox));
+        out.push(OsmPresentRegionGeometry {
+            region_id,
+            state: file.state,
+            bbox: region.bbox,
+            geometry,
+            approximate,
+        });
+    }
+    out
 }
 
 /// Télécharge ou renouvelle un PBF après contrôle du plafond et de l'espace.
@@ -266,13 +366,15 @@ pub fn catalog_from(folder: &Path, file: &RegionsFile) -> OsmRegionCatalog {
                 .filter(|metadata| metadata.is_file());
             let local_created_at = metadata
                 .as_ref()
-                .and_then(|metadata| inventory::file_date(metadata).0)
+                .and_then(|metadata| inventory::file_date(&path, metadata).0)
                 .map(|date| date.to_rfc3339());
             OsmRegionOption {
                 id: region.id.clone(),
                 name: region.name.clone(),
                 country_code: region.country_code.clone(),
                 country_name: region.country_name.clone(),
+                continent: region.continent.clone(),
+                continent_name: region.continent_name.clone(),
                 pbf_filename: region.pbf_filename.clone(),
                 size_mb: region.size_mb,
                 present: metadata

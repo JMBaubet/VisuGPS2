@@ -78,6 +78,21 @@ export function formatDateTime(iso: string | null): string {
 }
 
 /**
+ * Formate un horodatage ISO 8601 en date locale française (sans l'heure).
+ * Exemple : "2026-10-20T14:32:00Z" → "20/10/2026"
+ */
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleDateString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  })
+}
+
+/**
  * Formate une taille en octets vers une chaîne lisible.
  * Exemple : 89128960 → "85 Mo", 1288490188 → "1,20 Go"
  */

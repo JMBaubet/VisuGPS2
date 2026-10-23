@@ -26,6 +26,8 @@ pub const FILE_STATE_ORANGE: &str = "orange";
 pub const DATE_SOURCE_CREATED: &str = "created";
 pub const DATE_SOURCE_MODIFIED: &str = "modified";
 pub const DATE_SOURCE_UNKNOWN: &str = "unknown";
+/// Date extraite de l'en-tête PBF (`osmosis_replication_timestamp`).
+pub const DATE_SOURCE_PBF: &str = "pbf";
 
 /// État global du support OSM, consommé par l'icône de la toolbar.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -58,6 +60,8 @@ pub struct OsmFileStatus {
     pub region_name: Option<String>,
     pub country_code: Option<String>,
     pub country_name: Option<String>,
+    pub continent: Option<String>,
+    pub continent_name: Option<String>,
     pub size_bytes: u64,
     pub created_at: Option<String>,
     /// `created`, `modified` ou `unknown`.
@@ -89,6 +93,8 @@ pub struct OsmRegionOption {
     pub name: String,
     pub country_code: Option<String>,
     pub country_name: Option<String>,
+    pub continent: Option<String>,
+    pub continent_name: Option<String>,
     pub pbf_filename: String,
     pub size_mb: Option<f64>,
     pub present: bool,
@@ -102,6 +108,29 @@ pub struct OsmRegionOption {
 pub struct OsmRegionProbe {
     pub bytes: Option<u64>,
     pub available_bytes: Option<u64>,
+}
+
+/// Géométrie GeoJSON simplifiée d'une région, pour l'aperçu sur la carte.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsmRegionGeometry {
+    pub region_id: String,
+    pub bbox: [f64; 4],
+    pub geometry: serde_json::Value,
+    /// Vrai lorsque la géométrie réelle est absente et que la bbox est utilisée.
+    pub approximate: bool,
+}
+
+/// Géométrie d'une région dont le PBF est présent, avec son état de fraîcheur.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsmPresentRegionGeometry {
+    pub region_id: String,
+    /// `green`, `yellow` ou `orange`.
+    pub state: String,
+    pub bbox: [f64; 4],
+    pub geometry: serde_json::Value,
+    pub approximate: bool,
 }
 
 /// Résultat d'un téléchargement ou d'un renouvellement.

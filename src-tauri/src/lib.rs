@@ -96,6 +96,8 @@ pub fn run() {
             osm::commands::osm_support_overview,
             osm::commands::osm_region_catalog,
             osm::commands::osm_region_size,
+            osm::commands::osm_region_geometry,
+            osm::commands::osm_present_region_geometries,
             osm::commands::osm_download,
             osm::commands::osm_delete,
             osm::commands::osm_catalog_refresh,

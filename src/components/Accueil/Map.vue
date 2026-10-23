@@ -26,6 +26,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
 import { useAppStore } from '../../stores/app'
+import { useOsmStore } from '../../stores/osm'
 import { hexToRgbaString } from '../../utils/materialColors'
 
 // --- Stores ---
@@ -33,6 +34,7 @@ import { hexToRgbaString } from '../../utils/materialColors'
 const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const appStore = useAppStore()
+const osmStore = useOsmStore()
 
 // --- Références ---
 
@@ -42,6 +44,13 @@ let moveEndTimer: ReturnType<typeof setTimeout> | null = null
 const MOVE_END_DEBOUNCE_MS = 150
 /** Observer du redimensionnement du conteneur (changement de thème, drawer…). */
 let resizeObserver: ResizeObserver | null = null
+
+const OSM_PREVIEW_SOURCE = 'osm-region-preview'
+const OSM_PREVIEW_FILL = 'osm-region-preview-fill'
+const OSM_PREVIEW_LINE = 'osm-region-preview-line'
+const OSM_PRESENT_SOURCE = 'osm-present-regions'
+const OSM_PRESENT_FILL = 'osm-present-regions-fill'
+const OSM_PRESENT_LINE = 'osm-present-regions-line'
 
 // --- Lecture des paramètres (avec fallback sur les valeurs par défaut) ---
 
@@ -290,6 +299,144 @@ function addFocusTracesLayer() {
       'line-gradient': buildGradientExpression(),
     },
   })
+}
+
+/**
+ * Ajoute les couches d'aperçu OSM : régions présentes colorées selon leur
+ * fraîcheur, puis région sélectionnée en bleu.
+ */
+function addOsmPreviewLayer() {
+  if (!map) return
+
+  const stateColor: mapboxgl.Expression = [
+    'match',
+    ['get', 'state'],
+    'green',
+    '#4CAF50',
+    'yellow',
+    '#FFC107',
+    'orange',
+    '#FF9800',
+    '#9E9E9E',
+  ]
+
+  map.addSource(OSM_PRESENT_SOURCE, {
+    type: 'geojson',
+    data: emptyCollection(),
+  })
+  map.addLayer({
+    id: OSM_PRESENT_FILL,
+    type: 'fill',
+    source: OSM_PRESENT_SOURCE,
+    paint: {
+      'fill-color': stateColor,
+      'fill-opacity': 0.5,
+    },
+  })
+  map.addLayer({
+    id: OSM_PRESENT_LINE,
+    type: 'line',
+    source: OSM_PRESENT_SOURCE,
+    paint: {
+      'line-color': stateColor,
+      'line-width': 1,
+      'line-opacity': 0.8,
+    },
+  })
+
+  map.addSource(OSM_PREVIEW_SOURCE, {
+    type: 'geojson',
+    data: emptyCollection(),
+  })
+  map.addLayer({
+    id: OSM_PREVIEW_FILL,
+    type: 'fill',
+    source: OSM_PREVIEW_SOURCE,
+    paint: {
+      'fill-color': '#2196F3',
+      'fill-opacity': 0.5,
+    },
+  })
+  map.addLayer({
+    id: OSM_PREVIEW_LINE,
+    type: 'line',
+    source: OSM_PREVIEW_SOURCE,
+    paint: {
+      'line-color': '#1976D2',
+      'line-width': 2,
+      'line-opacity': 0.9,
+    },
+  })
+}
+
+/** Applique les géométries des régions présentes, colorées par état. */
+function applyPresentRegions() {
+  if (!map || !mapReady) return
+
+  const source = map.getSource(OSM_PRESENT_SOURCE) as
+    | mapboxgl.GeoJSONSource
+    | undefined
+  if (!source) return
+
+  const selectedId = osmStore.previewRegionId
+  const features: GeoJSON.Feature[] = osmStore.presentRegions
+    .filter(region => region.regionId !== selectedId)
+    .map(region => ({
+      type: 'Feature',
+      properties: {
+        regionId: region.regionId,
+        state: region.state,
+      },
+      geometry: region.geometry,
+    }))
+  source.setData({ type: 'FeatureCollection', features })
+
+  // À l'ouverture de la fenêtre, cadrer sur l'ensemble des régions présentes.
+  if (!selectedId && features.length > 0) {
+    const bounds = new mapboxgl.LngLatBounds()
+    for (const region of osmStore.presentRegions) {
+      bounds.extend([region.bbox[0], region.bbox[1]])
+      bounds.extend([region.bbox[2], region.bbox[3]])
+    }
+    map.fitBounds(bounds, { padding: 80, duration: 600, essential: true })
+  }
+}
+
+/** Applique la géométrie de région courante et cadre la carte dessus. */
+function applyOsmPreview() {
+  if (!map || !mapReady) return
+
+  const source = map.getSource(OSM_PREVIEW_SOURCE) as
+    | mapboxgl.GeoJSONSource
+    | undefined
+  if (!source) return
+
+  const geometry = osmStore.previewGeometry
+  const data: GeoJSON.FeatureCollection = geometry
+    ? {
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            properties: {},
+            geometry,
+          },
+        ],
+      }
+    : emptyCollection()
+  source.setData(data)
+
+  const bounds = osmStore.previewBounds
+  if (geometry && bounds) {
+    const [minLon, minLat, maxLon, maxLat] = bounds
+    map.fitBounds(
+      [
+        [minLon, minLat],
+        [maxLon, maxLat],
+      ],
+      { padding: 80, duration: 600, essential: true },
+    )
+  }
 }
 
 /**
@@ -884,11 +1031,17 @@ function initializeMap(initialView: { center: [number, number]; zoom: number }) 
     addFavoritesLayer()
     addDisplayedTracesLayer()
     addFocusTracesLayer()
+    addOsmPreviewLayer()
     addCursorHandlers()
 
     // Les couches personnalisées sont en place : on autorise les watchers
     // à appliquer setPaintProperty / setData sans erreur « layer does not exist ».
     mapReady = true
+
+    // Une région OSM sélectionnée avant le chargement de la carte est
+    // appliquée dès que les couches existent.
+    applyOsmPreview()
+    applyPresentRegions()
 
     // Un signal de cadrage armé avant que la carte soit prête (import lancé
     // pendant le chargement du style) est honoré ici : le watch n'étant pas
@@ -1005,10 +1158,21 @@ watch(
   { deep: true },
 )
 
+// Région OSM sélectionnée dans la fenêtre de gestion : aperçu sur la carte.
+watch(
+  () => osmStore.previewGeometry,
+  () => applyOsmPreview(),
+)
+
+// Régions présentes : coloration par état et exclusion de la sélection.
+watch(
+  () => [osmStore.presentRegions, osmStore.previewRegionId] as const,
+  () => applyPresentRegions(),
+)
+
 // Focus temporaire sur un circuit (clic Info) : isoler la trace et la cadrer.
 watch(
-  () => tracesStore.focusedTraceId,
-  async (newId) => {
+  () => tracesStore.focusedTraceId,  async (newId) => {
     if (!map || !mapReady) return
     const epoch = ++focusEpoch
     const duration = getParam('Carte.Traces.dureeFlyTo') ?? 500

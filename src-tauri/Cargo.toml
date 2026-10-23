@@ -44,6 +44,10 @@ hex = "0.4"
 regex = "1"
 # Espace disponible sur le support OSM (clé USB).
 fs4 = "1.1"
+# Lecture de l'en-tête PBF (date de génération) : mêmes versions que
+# `osmpbfreader`, utilisées directement pour parser `HeaderBlock` et `Blob`.
+flate2 = "1"
+protobuf = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
