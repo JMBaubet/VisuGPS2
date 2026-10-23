@@ -513,8 +513,8 @@ restaurable de la vue `/altimetrie`.
 ### `tunnels.json` — Tunnels détectés et édités
 
 Fichier **unique** du module Tunnels, dans `traces/{trace_id}/tunnels.json`. Les
-`regions.json` et les `.osm.pbf` restent sur le support OSM
-(`Tunnels.Support.dossierPbf`) et ne sont **jamais** copiés dans le dossier de la
+`regions.json`, `regions-geometry.json` et les `.osm.pbf` restent sur le support
+OSM (`Osm.Fichiers.dossierPbf`) et ne sont **jamais** copiés dans le dossier de la
 trace. Les fichiers temporaires de téléchargement (`.part`) et l'index Geofabrik
 téléchargé vivent hors du dossier de la trace (temporaire système pour l'index,
 support OSM pour les `.part`).
@@ -533,7 +533,8 @@ support OSM pour les `.part`).
     "angleToleranceDeg": 25,
     "bboxMarginM": 500,
     "bearingWindowM": 30,
-    "minRunLength": 2
+    "minRunLength": 2,
+    "minLengthM": 25
   },
   "tunnels": [
     {
@@ -574,11 +575,12 @@ support OSM pour les `.part`).
 - **Suppression** : le fichier disparaît avec le dossier de la trace
   (`delete_trace`).
 
-**Support OSM** (dossier `Tunnels.Support.dossierPbf`) :
+**Support OSM** (dossier `Osm.Fichiers.dossierPbf`) :
 
 ```
 {clé USB}/osm-data/
-├── regions.json                       # produit depuis Geofabrik, ~554 régions
+├── regions.json                       # catalogue Geofabrik allégé, 554 régions
+├── regions-geometry.json              # géométries GeoJSON des régions (~2,8 Mo)
 ├── provence-alpes-cote-d-azur-latest.osm.pbf
 ├── monaco-latest.osm.pbf
 └── …                                   # PBF régionaux requis par les traces
@@ -588,6 +590,81 @@ Les téléchargements sont **silencieux** : `regions.json` est produit au premie
 besoin ; les PBF manquants requis par une trace sont téléchargés en tâche de
 fond. La progression est émise par l'événement `tunnels-progress` et affichée
 dans l'onglet Tunnels. Aucun fichier OSM n'est embarqué dans le binaire.
+
+**`regions.json`** — catalogue allégé produit depuis `index-v1.json` :
+
+```json
+{
+  "version": "2026-10-23T15:27:46Z",
+  "regions": [
+    {
+      "id": "provence-alpes-cote-d-azur",
+      "name": "Provence-Alpes-Côte d'Azur",
+      "country": "france",
+      "parent": "france",
+      "countryCode": "FR",
+      "countryName": "France",
+      "continent": "europe",
+      "continentName": "Europe",
+      "bbox": [4.65, 42.98, 7.72, 45.13],
+      "pbfFilename": "provence-alpes-cote-d-azur-latest.osm.pbf",
+      "pbfUrl": "https://download.geofabrik.de/…"
+    }
+  ]
+}
+```
+
+- `version` est la date de génération du catalogue (ISO 8601).
+- `countryCode` / `countryName` sont résolus via la chaîne `parent` et
+  `iso3166-1:alpha2` ; `continent` / `continentName` remontent la chaîne jusqu'au
+  slug de continent. Les anciens catalogues sans ces champs restent lisibles
+  (`null`), avec un aperçu approximatif et un bandeau de mise à jour.
+- `bbox` sert à la sélection des régions, au cadrage et au repli géométrique.
+
+**`regions-geometry.json`** — géométries GeoJSON de l'index, produites en même
+temps que `regions.json` :
+
+```json
+{
+  "version": "2026-10-23T15:27:46Z",
+  "regions": [
+    {
+      "id": "provence-alpes-cote-d-azur",
+      "geometry": { "type": "Polygon", "coordinates": [[[4.65, 42.98], "…"]] }
+    }
+  ]
+}
+```
+
+Les polygones de l'index Geofabrik (≤ 2 016 points par région) sont conservés en
+entier ; le fichier ne contient que l'identifiant et la géométrie. Il est lu à la
+sélection d'une région et pour l'aperçu des régions présentes. S'il est absent,
+la commande `osm_region_geometry` renvoie le rectangle de la bbox avec
+`approximate = true`.
+
+**Dates et fraîcheur** : l'âge d'un PBF est calculé à partir de
+`osmosis_replication_timestamp` lu dans le premier bloc `OSMHeader` du fichier
+(brut ou compressé zlib), avec repli sur la date de création puis de modification
+du système de fichiers. Le renouvellement est dû à
+`Osm.Validite.renouvellementSemaines` (8 semaines par défaut) ; la fin de vie est
+à `Osm.Validite.dureeMaxMois` (12 mois), l'orange étant atteint à 90 %. Les
+fichiers cachés (`._*.osm.pbf` AppleDouble, noms commençant par `.`) sont ignorés.
+
+**Gestion manuelle** : la fenêtre « Données OSM » de l'Accueil liste les PBF
+visibles triés par continent/pays, permet de renouveler ou supprimer un fichier
+et de télécharger une autre région. La taille distante est lue en HEAD ; le
+plafond `Osm.Fichiers.tailleMaxPbf` et l'espace libre de la clé sont vérifiés
+avant tout téléchargement. Les téléchargements écrivent un `.part` puis
+renomment atomiquement ; une réponse tronquée est rejetée et le `.part` supprimé.
+
+**Paramètres et migration** : `Osm.Fichiers.dossierPbf`,
+`Osm.Fichiers.tailleMaxPbf`, `Osm.Validite.dureeMaxMois` et
+`Osm.Validite.renouvellementSemaines` remplacent les anciennes clés
+`Tunnels.Support.dossierPbf` / `tailleMaxPbf`. Au démarrage,
+`init_settings_state` copie ces surcharges vers `Osm.Fichiers.*` et les retire de
+la configuration ; le lecteur conserve un repli pour les configurations non
+migrées. `Tunnels.Support.actif` reste le seul réglage du groupe
+`Tunnels.Support`.
 
 > Les paramètres et commandes sont décrits dans
 > [COMMANDS.md](./COMMANDS.md#tunnels-gpx_tunnelscommandsrs).
@@ -618,6 +695,16 @@ Situé dans `src-tauri/settings.default.toml`, **embarqué dans l'exécutable** 
 Ce fichier contient également une **table spéciale `[_meta]`** (placée en tête, avant les tables de paramètres) qui décrit l'organisation du drawer : vues (associées aux noms de routes Vue Router), groupes système communs à toutes les vues, actions (entrées non-paramètres), handlers (catégories à carte dédiée) et libellés/icônes des catégories. Cette table est **exclue du « flatten »** des paramètres (`flatten_settings` ignore la clé `_meta`) et n'est lue que par la commande `get_settings_meta`.
 
 > **Paramètres « cachés »** : un paramètre n'apparaît pas dans le drawer s'il n'est listé dans **aucun** groupe `_meta` (`system.groups` ou `views.<route>.groups`). C'est le cas du groupe `Carte.Vue.*` (centreLat / centreLng / zoom), écrit automatiquement par la carte Accueil à chaque déplacement/zoom et lu à son montage pour restaurer la dernière vue.
+
+Le schéma compte notamment **18** paramètres `Altimetrie.*`, **8** `Tunnels.*`
+(7 de détection + `Tunnels.Support.actif`), **4** `Osm.*`
+(`Osm.Fichiers.dossierPbf`, `Osm.Fichiers.tailleMaxPbf`,
+`Osm.Validite.dureeMaxMois`, `Osm.Validite.renouvellementSemaines`) et **9**
+`Communes.*`. Les groupes `Osm.Fichiers` / `Osm.Validite` ne sont exposés que
+dans `[_meta.views.accueil]` ; `Tunnels.Detection` / `Tunnels.Support` restent
+visibles dans Accueil **et** Altimétrie. Les anciennes surcharges
+`Tunnels.Support.dossierPbf` / `tailleMaxPbf` sont migrées vers `Osm.Fichiers.*`
+au démarrage (voir la section `regions.json` ci-dessus).
 
 ## Résolution des chemins (backend)
 
@@ -670,4 +757,4 @@ Tout passe par les commandes Tauri, car **seul le backend connaît le mode d'ex�
 
 ---
 
-**Dernière mise à jour** : 2026-10-21
+**Dernière mise à jour** : 2026-10-23

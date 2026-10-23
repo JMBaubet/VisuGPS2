@@ -253,11 +253,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            // 52 commandes : voir COMMANDS.md pour le catalogue complet
+            // 60 commandes : voir COMMANDS.md pour le catalogue complet
             exit_app, get_displays, open_second_window, close_second_window,
             gestionMode::*, settings::*, import_gpx::*, gpx_audit::commands::*,
             gpx_multiride::commands::*, gpx_communes::commands::*,
-            gpx_altimetrie::commands::*
+            gpx_altimetrie::commands::*, gpx_tunnels::commands::*, osm::commands::*
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -277,6 +277,8 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `gpx_multiride/` : Module Multiride (détection des portions parcourues plusieurs fois, ajustements, fichier de description) — voir § « Passage multiples » ci-dessous
 - `gpx_communes/` : Module Communes (croisement avec les limites administratives OSM via Overpass, description des passages) — voir § « Détection des communes » ci-dessous
 - `gpx_altimetrie/` : Module Altimétrie (profil lissé, segments de pente, détection et reconstruction des montées) — voir § « Altimétrie » ci-dessous
+- `gpx_tunnels/` : Module Tunnels (matching OSM, acquisition Geofabrik, portails, édition) — voir § « Tunnels et gestion des données OSM » ci-dessous
+- `osm/` : Gestion partagée des données OSM (inventaire des PBF, dates de génération, catalogue, géométries, commandes) — voir le même §
 - `trace_info.rs` : Agrégation **en lecture seule** des artefacts d'une trace pour le volet Info de la carte (compteurs d'audit et de passages multiples, montées, profil sous-échantillonné, communes) — voir § « Informations de circuit » ci-dessous
 
 Chaque module peut être étendu sans surcharger `lib.rs`.
@@ -344,6 +346,8 @@ src/
 │   ├── multiride.ts  # Store du module Multiride (détection, ajustements, validation)
 │   ├── communes.ts   # Store des communes traversées (file d'attente, consultation)
 │   ├── altimetrie.ts # Store Altimétrie (analyse, montées, édition, sauvegarde)
+│   ├── tunnels.ts    # Store Tunnels (fichier, édition, file d'attente)
+│   ├── osm.ts        # Store gestion OSM (inventaire, catalogue, aperçu carte)
 │   └── ui.ts         # Store des notifications (snackbar)
 ├── algorithms/       # Logique métier isolée, sans dépendance UI
 │   ├── keyframeGenerator.ts  # Génération + interpolation des keyframes caméra (simple + délégation frustum)
@@ -354,7 +358,10 @@ src/
 │   ├── geo.ts        # Utilitaires géographiques (Haversine, bearing, cap)
 │   ├── altimetrieCategories.ts # Catégories et couleurs de pente
 │   ├── altimetrieClimbs.ts     # Contraintes de bornes, segments minimaux, projections
-│   └── altimetrieDiagnostics.ts # Diagnostic de cohérence des paramètres
+│   ├── altimetrieDiagnostics.ts # Diagnostic de cohérence des paramètres
+│   ├── altimetrieTunnels.ts    # Contraintes, groupes et libellés des tunnels
+│   ├── altimetrieMapPick.ts    # Sélection d'un passage proche de la carte
+│   └── osmFiles.ts            # États, libellés et infobulle de l'icône OSM
 ├── plugins/          # Plugins Vue (Vuetify, etc.)
 │   └── vuetify.ts
 ├── views/            # Pages complètes (routes)
@@ -370,11 +377,18 @@ src/
 │   │   ├── CircuitsDrawer.vue   # Panneau latéral liste des circuits (triée par distance)
 │   │   ├── Circuit.vue          # Carte d'un circuit (2 lignes d'icônes d'action, extension Info, focus carte, édition caméra)
 │   │   ├── CircuitAltitudeProfile.vue # Sparkline du profil d'altitude avec les montées surlignées (volet Info)
-│   │   ├── Map.vue              # Carte Mapbox GL (clusters, favoris, traces affichées, focus)
+│   │   ├── Map.vue              # Carte Mapbox GL (clusters, favoris, traces affichées, focus, aperçu OSM)
+│   │   ├── OsmStatusButton.vue  # Icône d'état OSM de la toolbar (usb/map-legend, infobulle)
 │   │   ├── AppBar.vue
 │   │   ├── ModeExecutionCard.vue
 │   │   ├── SettingsDrawer.vue   # Drawer de paramètres (dynamique, piloté par [_meta])
 │   │   └── SettingsCategory.vue # Rendu d'une catégorie (accordéon / aplati / handler)
+│   ├── Osm/          # Fenêtre de gestion OSM
+│   │   ├── OsmFilesDialog.vue        # Dialogue translucide à deux zones
+│   │   ├── OsmFileRow.vue            # Ligne d'un PBF présent (date, état, actions)
+│   │   ├── OsmRegionDownloadPanel.vue# Arborescence Continent/pays/région et téléchargement
+│   │   ├── OsmDeleteDialog.vue       # Confirmation de suppression
+│   │   └── OsmFlag.vue               # Drapeau de pays (flag-icons) avec repli MDI
    │   ├── Edition/      # Composants de la vue d'édition caméra
    │   │   ├── EditionMap.vue       # Carte Mapbox GL satellite + terrain (trace, curseur GL CircleLayer, lecture rAF)
 	   │   │   ├── EditionToolbar.vue   # Barre d'outils supérieure (Home, toggle cadre ViewPort, sélecteur Algorithme, Gap min)
@@ -451,6 +465,8 @@ src-tauri/
 │   ├── gpx_multiride/    # Module Multiride (11 fichiers + tests)
 │   ├── gpx_communes/     # Module Communes (7 fichiers + tests)
 │   ├── gpx_altimetrie/   # Module Altimétrie (6 fichiers + tests)
+│   ├── gpx_tunnels/      # Module Tunnels (11 fichiers + tests)
+│   ├── osm/              # Gestion partagée des données OSM (types, params, inventory, commands)
 │   └── main.rs           # Point d'entrée (auto-généré)
 ├── capabilities/
 │   │   └── default.json  # Permissions pour les fenêtres
@@ -472,6 +488,8 @@ src-tauri/
 - `gpx_multiride/` : Module Multiride (détection des portions répétées, ajustements, fichier de description) — 11 fichiers : `types.rs`, `projection.rs`, `resample.rs`, `runs.rs`, `direction.rs`, `segments.rs`, `adjustments.rs`, `file.rs`, `detection.rs`, `commands.rs`, plus `tests/`. Détails au § « Passage multiples » ci-dessous.
 - `gpx_communes/` : Module Communes (croisement OSM/Overpass, écriture de la description) — 7 fichiers : `types.rs`, `geometry.rs`, `osm.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Détection des communes » ci-dessous.
 - `gpx_altimetrie/` : Module Altimétrie (profil, segments de pente, montées) — 6 fichiers : `types.rs`, `params.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Altimétrie » ci-dessous.
+- `gpx_tunnels/` : Module Tunnels (matching OSM, acquisition Geofabrik, portails) — `types.rs`, `geometry.rs`, `params.rs`, `file.rs`, `pbf.rs`, `regions.rs`, `download.rs`, `pipeline.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Tunnels et gestion des données OSM ».
+- `osm/` : Gestion partagée des données OSM — `types.rs`, `params.rs`, `inventory.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au même §.
 - `trace_info.rs` : Agrégation **en lecture seule** (`get_trace_info`) pour le volet Info de la carte — compteurs d'audit AR, segments Multiride, montées Altimétrie avec profil sous-échantillonné, communes distinctes. Aucun fichier n'est écrit ; chaque bloc est `None` si son artefact manque.
 
 **Capacités Tauri** :
@@ -1060,7 +1078,7 @@ l'absorption des faux positifs imbriqués de rester cohérentes après plusieurs
 | `audit_save_state(trace_id, params, total_distance_m, points, findings, validated)` | Écrit l'**archive d'audit** (`audit.json`, écriture atomique) et retourne son horodatage. Appelée après la détection puis après **chaque** traitement ; `validated = true` après une validation réussie. Jamais appelée par les aperçus. |
 | `audit_load_archive(trace_id)` | Relit l'archive d'une trace (`None` si absente, illisible, d'une version inconnue ou d'une autre trace) — reprise d'une session interrompue et consultation d'un audit appliqué. |
 
-> Référence complète des **52 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des **60 commandes** Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ### Paramètres (`Audit.*`)
 
@@ -1428,7 +1446,7 @@ l'état éditable et le résultat :
   non séparée porte `mergedParts` — c'est ce qui rend le fichier restaurable ;
 - `legend` : la note et les bornes des catégories.
 
-Les **3 réglages de visualisation** (`Altimetrie.Visualisation`) sont des
+Les **4 réglages de visualisation** (`Altimetrie.Visualisation`) sont des
 paramètres applicatifs : ils ne sont pas enregistrés dans ce fichier et
 s'appliquent en direct à la carte.
 
@@ -1553,6 +1571,117 @@ Import propre / validation d'audit
 Les paramètres `preview`/`save` sont ceux du fichier, jamais ceux du drawer :
 un changement de réglage ne s'applique qu'après « Recalculer ».
 
+## Tunnels et gestion des données OSM
+
+### Module Tunnels (`gpx_tunnels/`)
+
+Le module confronte une trace **propre** aux ways OSM portant les tags `tunnel`
+et `highway` :
+
+1. lecture du GPX et distances cumulées (`pipeline::load_points`) ;
+2. construction d'un R-tree des segments OSM (`rstar`) et calcul du cap de la
+   trace sur une fenêtre glissante (`geometry::cap_at`) ;
+3. appariement par distance et écart de cap **bidirectionnel**, puis regroupement
+   en runs contigus par `way_id` ;
+4. filtrage des runs trop courts (`minRunLength`) et des tunnels sous la longueur
+   minimale (`Tunnels.Detection.minLength`, 25 m par défaut) ;
+5. écriture de `traces/{trace_id}/tunnels.json` et mise à jour du registre
+   (`tunnels_status`, `tunnels_count`).
+
+- **Acquisition OSM** : `pbf.rs` lit les PBF avec `osmpbfreader` (deux passes
+  pour ne charger que les nœuds utiles) ; `regions.rs` transforme l'index
+  Geofabrik en `regions.json` ; `download.rs` télécharge les PBF manquants.
+  `merge_ways` déduplique les ways entre PBF régionaux.
+- **Détection silencieuse** : `tunnels_prepare` produit `regions.json` si besoin,
+  télécharge les PBF manquants (dans la limite de `Osm.Fichiers.tailleMaxPbf`),
+  puis détecte. La progression est émise par `tunnels-progress`. Une seule
+  préparation à la fois (`PREPARE_LOCK`) ; le hash du GPX est revérifié avant
+  l'écriture.
+- **Validation** : une détection avec tunnels pose `waiting_validate` ; le bouton
+  « Valider » ou « Sauvegarder » de l'onglet Tunnels écrit le fichier et pose
+  `success`. Une détection sans tunnel pose directement `success`.
+- **Édition** : `tunnels_save` valide les bornes, la longueur minimale
+  structurelle (10 m), les chevauchements, les groupes (≥ 2) et les identifiants ;
+  il recalcule les longueurs. La sauvegarde vaut validation.
+- **Frontend** : `src/stores/tunnels.ts` porte le fichier, l'édition, la file
+  d'attente et le support. L'onglet Tunnels de `/altimetrie` liste les groupes,
+  `AltimetrieMap` affiche les portails (cercles blanc/noir, pins vert/rouge pour
+  la sélection) et `AltimetrieProfileWidget` gère la sélection, la création en
+  deux clics, le glissement horizontal des bornes et la fusion/séparation.
+
+### Gestion OSM partagée (`osm/`)
+
+Le module `osm` est la couche de gestion des fichiers utilisée par les modules
+Tunnels et Communes :
+
+| Fichier | Rôle |
+|---|---|
+| `types.rs` | Contrats IPC (`OsmSupportOverview`, `OsmFileStatus`, `OsmRegionCatalog`, `OsmRegionGeometry`, `OsmPresentRegionGeometry`, `OsmProgress`…). |
+| `params.rs` | Lecture de `Osm.Fichiers.*` et `Osm.Validite.*`, avec repli historique. |
+| `inventory.rs` | Listing des PBF visibles, dates, états, espace disque, tri continent/pays, lecture de l'en-tête PBF. |
+| `commands.rs` | Commandes `osm_*`, verrous, téléchargements, suppression, catalogue, géométries. |
+
+- **Paramètres** : `Osm.Fichiers.dossierPbf` (dossier du support),
+  `Osm.Fichiers.tailleMaxPbf` (0 = illimité), `Osm.Validite.dureeMaxMois`
+  (6–36, défaut 12), `Osm.Validite.renouvellementSemaines` (4–52, défaut 8).
+  `Tunnels.Support.actif` reste propre aux tunnels.
+- **Migration** : au démarrage, `init_settings_state` déplace les surcharges
+  historiques `Tunnels.Support.dossierPbf` / `tailleMaxPbf` vers
+  `Osm.Fichiers.*` et élague les tables vides. Le lecteur
+  `gpx_tunnels::params::support_from_settings` conserve un repli pour les
+  configurations non encore migrées.
+- **Fichiers du support** : `regions.json` (catalogue allégé, 554 régions),
+  `regions-geometry.json` (géométries GeoJSON de l'index, ~2,8 Mo) et les
+  `.osm.pbf`. Les fichiers AppleDouble `._*.pbf` et tout nom commençant par `.`
+  sont ignorés. `regions.json` et `regions-geometry.json` sont générés ensemble
+  par `ensure_regions_json` lors d'une mise à jour du catalogue (index Geofabrik
+  ~3,6 Mo) ou d'un premier téléchargement de tunnels.
+- **Date de génération** : `inventory::pbf_generation_date` lit le premier bloc
+  `OSMHeader` (brut ou zlib) et extrait `osmosis_replication_timestamp` ; à
+  défaut, la date de création puis de modification du fichier est utilisée.
+  Cette date pilote l'âge, les jours restants/dépassés, les états
+  `green`/`yellow`/`orange` et la couleur de l'icône.
+- **États** : vert si l'âge est inférieur au renouvellement ; jaune dès qu'il
+  l'atteint ; orange à partir de 90 % de la durée de validité (ou date inconnue).
+  L'état global d'un fichier prime dans l'ordre orange > jaune > vert ; aucun
+  fichier donne `empty`.
+- **Téléchargements** : la taille distante est lue en HEAD ; elle est
+  obligatoire pour un téléchargement manuel. Le plafond
+  `Osm.Fichiers.tailleMaxPbf` peut être franchi avec « Télécharger quand même » ;
+  l'espace libre (`fs4::available_space`) est toujours vérifié et bloque le
+  téléchargement s'il est insuffisant. `download_to_file` écrit un `.part` puis
+  renomme atomiquement, vérifie la troncature (`done != total`) et est sérialisé
+  par `DOWNLOAD_LOCK` (partagé avec les téléchargements silencieux des tunnels).
+  `OSM_LOCK` sérialise les opérations manuelles (téléchargement, suppression,
+  rafraîchissement du catalogue).
+- **Catalogue et géométries** : `transform_all` parse l'index une seule fois,
+  écrit `regions.json` et `regions-geometry.json`. Les polygones de l'index
+  (≤ 2 016 points par région) sont conservés en entier ; à défaut de fichier de
+  géométries, `bbox_geometry` fournit un rectangle et la commande renvoie
+  `approximate = true`.
+- **Interface** : `OsmStatusButton.vue` affiche `mdi-usb` rouge (support absent
+  ou non configuré) ou `mdi-map-legend` vert/jaune/orange, avec une infobulle
+  détaillée. `OsmFilesDialog.vue` (translucide à 50 %, sans scrim) contient les
+  fichiers présents et le panneau de téléchargement. `OsmFileRow.vue` affiche la
+  date de génération, les jours restants et les actions ; `OsmRegionDownloadPanel`
+  propose une arborescence Continent / pays / région avec recherche, taille HEAD,
+  plafond et espace libre ; `OsmFlag.vue` affiche les drapeaux (`flag-icons`,
+  repli `mdi-flag`) ; `OsmDeleteDialog.vue` confirme la suppression.
+- **Carte** : `Accueil/Map.vue` ajoute deux sources/layers au-dessus des traces :
+  `osm-present-regions` (remplissage vert `#4CAF50`, jaune `#FFC107` ou orange
+  `#FF9800` à 50 %) et `osm-region-preview` (bleu `#2196F3` à 50 % pour la région
+  sélectionnée). La carte se cadre sur l'ensemble des régions présentes à
+  l'ouverture, puis sur la région sélectionnée ; la région sélectionnée est
+  retirée de la couche des présentes.
+- **Commandes** : `osm_support_overview`, `osm_region_catalog`,
+  `osm_region_size`, `osm_region_geometry`, `osm_present_region_geometries`,
+  `osm_download`, `osm_delete`, `osm_catalog_refresh`. L'événement
+  `osm-progress` (`stage`, `regionId`, `regionName`, `filename`, octets,
+  pourcentage) suit le catalogue et les téléchargements.
+- **Dépendances ajoutées** : `fs4` pour l'espace libre du support, `flate2` et
+  `protobuf` pour lire l'en-tête PBF (`osmosis_replication_timestamp`), et
+  `flag-icons` côté frontend pour les drapeaux (repli `mdi-flag`).
+
 ## Vue d'édition caméra (`/edition-camera`)
 
 La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox ») est l'interface de réglage de la caméra qui suit une trace. Elle dispose d'un **playback fonctionnel** avec : génération de keyframes, boucle d'animation `requestAnimationFrame`, contrôles de lecture (Composant A), **graphe SVG d'avancement (§4.6)** et HUD de télémétrie (Composant C). S'y ajoutent le **Composant B** (édition fine des keyframes via `CameraEditor`) et l'**algorithme intelligent de frustum** (spec §3.3) — le tout décrit ci-dessous.
@@ -1663,10 +1792,10 @@ La vue d'édition caméra (Phase 2 de la spec « Visualisation GPX sur MapBox »
 | `get_keyframes` | Charge les keyframes persistés d'une trace pour un ratio (`None` si absent). |
 | `delete_keyframes` | Supprime le fichier keyframes d'un ratio (tolérant si absent). |
 
-> Référence complète des 52 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
+> Référence complète des 60 commandes Tauri dans [COMMANDS.md](./COMMANDS.md).
 
 ---
 
 **Note** : Cette architecture est conçue pour être simple et extensible. Suivez ces patterns pour maintenir la cohérence du projet.
 
-**Dernière mise à jour** : 2026-10-21
+**Dernière mise à jour** : 2026-10-23

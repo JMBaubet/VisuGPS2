@@ -462,7 +462,7 @@ téléchargés sans confirmation, et la progression est émise par l'événement
 |---|---|---|
 | `tunnels_load` | `async (app, trace_id: String) -> Result<Option<TunnelFile>, String>` | Relit `tunnels.json`. `null` si le fichier est absent, illisible, d'une version inconnue ou rattaché à une autre trace. |
 | `tunnels_requirements` | `async (app, trace_id: String) -> Result<TunnelRequirements, String>` | Décrit les ressources OSM nécessaires à la trace : état (`disabled`, `not_configured`, `needs_regions`, `no_region`, `missing_pbf`, `ready`), dossier, régions Geofabrik requises et présence de chaque PBF. Ne télécharge rien. |
-| `tunnels_prepare` | `async (app, trace_id: String) -> Result<TunnelPrepareResult, String>` | Produit `regions.json` si absent, télécharge silencieusement les PBF manquants requis (progression), lit les PBF en Rust pur, apparie la trace, écrit `tunnels.json` et pose le statut du registre. Une seule préparation à la fois. Garde de hash : si le GPX a changé pendant les téléchargements, rien n'est écrit. |
+| `tunnels_prepare` | `async (app, trace_id: String, ignore_size_limit: Option<bool>) -> Result<TunnelPrepareResult, String>` | Produit `regions.json` si absent, télécharge silencieusement les PBF manquants requis (progression), lit les PBF en Rust pur, apparie la trace, écrit `tunnels.json` et pose le statut du registre. Une seule préparation à la fois. Garde de hash : si le GPX a changé pendant les téléchargements, rien n'est écrit. |
 | `tunnels_detect` | `async (app, trace_id: String) -> Result<TunnelPrepareResult, String>` | Même détection **sans téléchargement** ; refuse si `regions.json` ou un PBF requis manque. Utilisée par la relance de l'onglet Tunnels. |
 | `tunnels_save` | `async (app, trace_id: String, tunnels: Vec<Tunnel>) -> Result<TunnelFile, String>` | Valide et normalise les tunnels édités (bornes, longueur minimale 10 m, chevauchements, groupes ≥ 2, identifiants uniques), recalcule les longueurs, écrit atomiquement et pose `tunnels_status = "success"` : **la sauvegarde vaut validation opérateur**. |
 | `tunnels_support_status` | `async (app) -> Result<TunnelSupportStatus, String>` | État global du support OSM : activation, dossier configuré/lisible, présence et version de `regions.json`, nombre de PBF. Lu par la carte du circuit. |
@@ -504,9 +504,10 @@ pub struct Tunnel {
   fois). `get_traces` fait un rattrapage pour les fichiers existants sans statut.
 
 **Réglages** : `Tunnels.Detection.*` (distance, angle, marge bbox, fenêtre de cap,
-longueur minimale de run, écart de fusion) et `Tunnels.Support.*` (dossier OSM,
-activation). Le type `directory` est accepté par `update_setting` comme une
-chaîne libre.
+longueur minimale de run, longueur minimale de tunnel, écart de fusion) et
+`Tunnels.Support.actif` (activation). Le dossier OSM et le plafond PBF sont
+partagés : `Osm.Fichiers.dossierPbf` / `Osm.Fichiers.tailleMaxPbf`. Le type
+`directory` est accepté par `update_setting` comme une chaîne libre.
 
 ### Paramètres / Settings (`settings.rs`)
 
@@ -562,22 +563,102 @@ pub struct TraceMetadata {
 
 ### Données OSM (`osm/commands.rs`)
 
-Gestion globale des fichiers `.osm.pbf` et de `regions.json`, partagée par les
-modules Tunnels et Communes. Les opérations manuelles sont sérialisées ; les
-téléchargements partagent le verrou du module Tunnels. La progression est émise
+Gestion globale des fichiers `.osm.pbf`, de `regions.json` et de
+`regions-geometry.json`, partagée par les modules Tunnels et Communes. Les
+opérations manuelles sont sérialisées par `OSM_LOCK` ; les téléchargements
+partagent le verrou `DOWNLOAD_LOCK` du module Tunnels. La progression est émise
 par l'événement `osm-progress`
 (`{ stage, regionId?, regionName?, filename?, bytesDone, bytesTotal, percent }`).
+
+- **Fichiers visibles** : seuls les noms `.pbf` ne commençant pas par `.` sont
+  listés (les AppleDouble `._*.osm.pbf` sont ignorés).
+- **Dates** : `osm_support_overview` lit `osmosis_replication_timestamp` dans
+  l'en-tête PBF (`pbf`), avec repli sur la création (`created`), la modification
+  (`modified`) ou `unknown`. L'âge, les jours restants et l'état
+  `green`/`yellow`/`orange` en découlent.
+- **Catalogue** : `regions.json` (554 régions) et `regions-geometry.json`
+  (géométries GeoJSON de l'index, ~2,8 Mo) sont écrits ensemble par
+  `osm_catalog_refresh` ; l'index Geofabrik fait ~3,6 Mo.
+- **Téléchargement** : la taille distante (HEAD) est obligatoire pour un
+  téléchargement manuel ; le plafond `Osm.Fichiers.tailleMaxPbf` (0 = illimité)
+  peut être franchi avec `ignoreSizeLimit` ; l'espace libre de la clé est
+  toujours vérifié et bloquant. L'écriture est atomique (`.part` → cible) et une
+  réponse tronquée est rejetée.
+- **Paramètres** : `Osm.Fichiers.dossierPbf`, `Osm.Fichiers.tailleMaxPbf`,
+  `Osm.Validite.dureeMaxMois` (6–36, défaut 12),
+  `Osm.Validite.renouvellementSemaines` (4–52, défaut 8). Le dossier et le
+  plafond sont lus aussi par les tunnels ; les surcharges historiques
+  `Tunnels.Support.dossierPbf` / `tailleMaxPbf` sont migrées vers
+  `Osm.Fichiers.*` au démarrage et restent lues en repli.
 
 | Commande | Signature Rust | Retour |
 |---|---|---|
 | `osm_support_overview` | `async (app) -> Result<OsmSupportOverview, String>` | État global du support : configuration, lisibilité, `regions.json`, espace libre/total, liste des PBF avec âge, échéance de renouvellement, fin de vie et état `green`/`yellow`/`orange`. |
-| `osm_region_catalog` | `async (app) -> Result<OsmRegionCatalog, String>` | Catalogue `regions.json` avec pays (code ISO et libellé), filename, présence locale, taille et date. `present = false` si le catalogue ou le dossier manque. |
+| `osm_region_catalog` | `async (app) -> Result<OsmRegionCatalog, String>` | Catalogue `regions.json` avec pays (code ISO et libellé), continent, filename, présence locale, taille et date. `present = false` si le catalogue ou le dossier manque. |
 | `osm_region_size` | `async (app, region_id: String) -> Result<OsmRegionProbe, String>` | Taille distante via HEAD `Content-Length` (peut être `null`) et espace disponible. |
-| `osm_region_geometry` | `async (app, region_id: String) -> Result<Option<OsmRegionGeometry>, String>` | Géométrie GeoJSON simplifiée de la région (ou polygone de sa bbox si `regions-geometry.json` est absent), avec sa bbox pour le cadrage. |
+| `osm_region_geometry` | `async (app, region_id: String) -> Result<Option<OsmRegionGeometry>, String>` | Géométrie GeoJSON de la région (géométrie complète de l'index, ou polygone de sa bbox si `regions-geometry.json` est absent), avec sa bbox pour le cadrage et `approximate`. |
 | `osm_present_region_geometries` | `async (app) -> Result<Vec<OsmPresentRegionGeometry>, String>` | Géométries des régions dont le PBF est présent, avec leur état `green`/`yellow`/`orange` pour l'aperçu cartographique. |
 | `osm_download` | `async (app, region_id: String, renew: Option<bool>, ignore_size_limit: Option<bool>) -> Result<OsmDownloadResult, String>` | Télécharge ou renouvelle un PBF. Refuse si la taille distante est inconnue, si le plafond `Osm.Fichiers.tailleMaxPbf` est dépassé (sauf `ignoreSizeLimit`) ou si l'espace libre est insuffisant. |
 | `osm_delete` | `async (app, filename: String) -> Result<(), String>` | Supprime un PBF après validation stricte du nom (pas de chemin, extension `pbf`, aucun `regions.json`). |
-| `osm_catalog_refresh` | `async (app) -> Result<OsmRegionCatalog, String>` | Retélécharge l'index Geofabrik et réécrit `regions.json` atomiquement, avec progression. |
+| `osm_catalog_refresh` | `async (app) -> Result<OsmRegionCatalog, String>` | Retélécharge l'index Geofabrik et réécrit `regions.json` **et** `regions-geometry.json` atomiquement, avec progression. |
+
+**Types principaux** :
+
+```rust
+pub struct OsmSupportOverview {
+    pub configured: bool, pub readable: bool, pub usb_missing: bool,
+    pub folder: Option<String>, pub regions_present: bool,
+    pub regions_version: Option<String>, pub free_bytes: Option<u64>,
+    pub total_bytes: Option<u64>, pub max_pbf_mb: u64,
+    pub max_validity_months: u32, pub renewal_weeks: u32,
+    pub state: String,              // not_configured, usb_missing, empty, green, yellow, orange
+    pub files: Vec<OsmFileStatus>, pub total_size_bytes: u64,
+    pub message: Option<String>,
+}
+
+pub struct OsmFileStatus {
+    pub filename: String, pub region_id: Option<String>,
+    pub region_name: Option<String>, pub country_code: Option<String>,
+    pub country_name: Option<String>, pub continent: Option<String>,
+    pub continent_name: Option<String>, pub size_bytes: u64,
+    pub created_at: Option<String>,
+    pub date_source: String,        // pbf, created, modified, unknown
+    pub age_days: i64, pub renewal_days: i64, pub days_remaining: i64,
+    pub validity_days_remaining: Option<i64>, pub state: String, // green, yellow, orange
+}
+
+pub struct OsmRegionOption {
+    pub id: String, pub name: String,
+    pub country_code: Option<String>, pub country_name: Option<String>,
+    pub continent: Option<String>, pub continent_name: Option<String>,
+    pub pbf_filename: String, pub size_mb: Option<f64>,
+    pub present: bool, pub local_size_bytes: Option<u64>,
+    pub local_created_at: Option<String>,
+}
+
+pub struct OsmRegionGeometry {
+    pub region_id: String, pub bbox: [f64; 4],
+    pub geometry: serde_json::Value,     // GeoJSON Polygon/MultiPolygon
+    pub approximate: bool,               // true si repli bbox
+}
+
+pub struct OsmPresentRegionGeometry {
+    pub region_id: String, pub state: String,
+    pub bbox: [f64; 4], pub geometry: serde_json::Value,
+    pub approximate: bool,
+}
+
+pub struct OsmRegionProbe { pub bytes: Option<u64>, pub available_bytes: Option<u64> }
+pub struct OsmDownloadResult { pub filename: String, pub size_bytes: u64 }
+pub struct OsmProgress {
+    pub stage: String,                    // catalog, download
+    pub region_id: Option<String>, pub region_name: Option<String>,
+    pub filename: Option<String>, pub bytes_done: u64,
+    pub bytes_total: u64, pub percent: f64,
+}
+```
+
+**Événement** : `osm-progress` (`{ stage, regionId, regionName, filename, bytesDone, bytesTotal, percent }`).
 
 ## Exemples d'appel côté frontend
 
@@ -608,4 +689,4 @@ await invoke('update_trace', {
 
 ---
 
-**Dernière mise à jour** : 2026-10-20
+**Dernière mise à jour** : 2026-10-23

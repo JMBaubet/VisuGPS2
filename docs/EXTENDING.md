@@ -380,7 +380,7 @@ pub fn run() {
 
 > ⚠️ **Ne pas modifier `main.rs`** : il se contente d'appeler `tauri_app_lib::run()`. Les commandes sont enregistrées dans **`lib.rs`** (ou dans un module déclaré via `mod mon_module;` dans `lib.rs`). Voir [COMMANDS.md](./COMMANDS.md) pour la procédure complète.
 >
-> **Exemple dans le projet** : le catalogue compte actuellement **52 commandes**. Le module **`gpx_audit`** illustre le pattern complet — module déclaré (`mod gpx_audit;` dans `lib.rs`), commandes exposées par un sous-module dédié (`gpx_audit::commands::*` : 12 commandes enregistrées dans `invoke_handler`, de `audit_run_detection` à `audit_load_archive`), appelées depuis `src/stores/audit.ts` via `invoke()`. Le module sépare volontairement les **commandes** (`commands.rs`, seules à recevoir un `AppHandle`) des **implémentations testables** (`detection_impl`, `validate_impl`) et des **calculs purs** (`audit_map_overlay`, `audit_delete_preview`, `audit_routes_identical`).
+> **Exemple dans le projet** : le catalogue compte actuellement **60 commandes**. Le module **`gpx_audit`** illustre le pattern complet — module déclaré (`mod gpx_audit;` dans `lib.rs`), commandes exposées par un sous-module dédié (`gpx_audit::commands::*` : 12 commandes enregistrées dans `invoke_handler`, de `audit_run_detection` à `audit_load_archive`), appelées depuis `src/stores/audit.ts` via `invoke()`. Le module sépare volontairement les **commandes** (`commands.rs`, seules à recevoir un `AppHandle`) des **implémentations testables** (`detection_impl`, `validate_impl`) et des **calculs purs** (`audit_map_overlay`, `audit_delete_preview`, `audit_routes_identical`).
 
 ### Côté Frontend
 
@@ -882,7 +882,7 @@ Ajoutez-le dans `src-tauri/settings.default.toml` :
 [MaNouvelle.Section.monParametre]
 description = "Description courte de ce paramètre"
 documentation = "Explication Markdown détaillée pour l'utilisateur"
-type = "int" # Actuellement gérés: "int", "float", "bool", "secret", "list", "rgba", "material_primary", "material_extended", "monitor"
+type = "int" # Actuellement gérés: "int", "float", "bool", "string", "directory", "secret", "list", "rgba", "material_primary", "material_extended", "monitor"
 default = 42
 min = 0 # Optionnel
 max = 100 # Optionnel
@@ -915,6 +915,8 @@ icon = "mdi-tune"
 > **Exemple dans le projet** : le paramètre **`Audit.AR.toleranceDeg`** (float, défaut 20.0, min 0.0, max 90.0, step 1.0, unité `°`) suit exactement ce pattern : déclaré dans `src-tauri/settings.default.toml`, référencé sur la vue `audit` (`[_meta.views.audit]`, icône `mdi-map-marker-path`, `groups = ["Audit.AR", …]`) et affiché via `[_meta.groups."Audit.AR"]` (« Audit — Détecteur aller-retours »).
 >
 > Le module Audit illustre aussi le **type `"string"`** (ajouté au système de paramètres pour ce besoin) avec **`Audit.Application.nom`** : texte libre, non chiffré, sans borne — à distinguer du type `"secret"` (chiffré AES-256-GCM) utilisé par les deux clés OpenRouteService `Systeme.Key.openRouteServiceClePrimaire` / `Systeme.Key.openRouteServiceCleSecondaire`. Le composant d'entrée correspondant est `InputString.vue`, branché dans `ParameterCard.vue`.
+>
+> Le **type `"directory"`** est un chemin de dossier saisi en texte libre, avec un sélecteur natif fourni par `InputDirectory.vue` (commande `pick_directory`). Exemple : `Osm.Fichiers.dossierPbf`, qui pointe vers le support OSM partagé par les modules Tunnels et Communes. Le texte reste éditable à la main ; l'existence du dossier est vérifiée à l'usage, pas à la saisie.
 >
 > **Clés de licence regroupées** : ces deux clés ORS ne sont pas dans le namespace `Audit.*` — elles forment, avec `Systeme.Key.mapBox`, le groupe **système** `Systeme.Key` (« Licences »), déclaré dans `[_meta.system.groups]` et donc saisissable **uniquement depuis le drawer de la vue Accueil** (les vues Audit et Édition passent `show-system=false` à `SettingsDrawer`). Le code qui les consomme les lit par chemin, sans passer par le drawer : `useAuditOrs.ts` pour le routage, `Map.vue` / `AuditMap.vue` / `EditionMap.vue` pour le token Mapbox.
 
@@ -951,4 +953,4 @@ const monParam = computed(() => {
 
 ---
 
-**Dernière mise à jour** : 2026-09-17
+**Dernière mise à jour** : 2026-10-23
