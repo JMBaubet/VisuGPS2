@@ -135,9 +135,10 @@ fn ensure_regions_json_downloads_transforms_and_writes_atomically() {
           "coordinates": [[[7.40, 43.72], [7.44, 43.72], [7.44, 43.75], [7.40, 43.75], [7.40, 43.72]]]
         },
         "properties": {
-          "id": "europe/monaco",
+          "id": "monaco",
           "name": "Monaco",
           "parent": "europe",
+          "iso3166-1:alpha2": ["MC"],
           "urls": { "pbf": "https://example/monaco-latest.osm.pbf" }
         }
       }]
@@ -156,7 +157,9 @@ fn ensure_regions_json_downloads_transforms_and_writes_atomically() {
     .expect("préparation de regions.json");
 
     assert_eq!(regions.regions.len(), 1);
-    assert_eq!(regions.regions[0].id, "europe/monaco");
+    assert_eq!(regions.regions[0].id, "monaco");
+    assert_eq!(regions.regions[0].country_code.as_deref(), Some("MC"));
+    assert_eq!(regions.regions[0].country_name.as_deref(), Some("Monaco"));
     assert!(regions::regions_path(&dir).exists());
     let loaded = regions::load_regions(&dir).expect("regions.json relu");
     assert_eq!(loaded, regions);
@@ -174,6 +177,8 @@ fn download_pbf_skips_an_existing_file_and_writes_a_missing_one() {
         name: "Monaco".to_string(),
         country: "europe".to_string(),
         parent: "europe".to_string(),
+        country_code: None,
+        country_name: None,
         bbox: [7.40, 43.72, 7.44, 43.75],
         pbf_filename: "monaco-latest.osm.pbf".to_string(),
         pbf_url: url,
@@ -202,10 +207,12 @@ fn regions_file_is_loaded_without_network_when_present() {
     let initial = RegionsFile {
         version: "v1".to_string(),
         regions: vec![RegionEntry {
-            id: "europe/monaco".to_string(),
+            id: "monaco".to_string(),
             name: "Monaco".to_string(),
             country: "europe".to_string(),
             parent: "europe".to_string(),
+            country_code: Some("MC".to_string()),
+            country_name: Some("Monaco".to_string()),
             bbox: [7.40, 43.72, 7.44, 43.75],
             pbf_filename: "monaco-latest.osm.pbf".to_string(),
             pbf_url: "https://example/monaco-latest.osm.pbf".to_string(),

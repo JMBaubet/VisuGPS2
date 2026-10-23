@@ -9,7 +9,7 @@
 //! entièrement contenus dans une région plus grande (Monaco dans PACA). On ne
 //! suppose jamais qu'un PBF parent contient les données d'une sous-région.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -70,6 +70,10 @@ pub fn save_regions(pbf_dir: &Path, regions: &RegionsFile) -> Result<(), String>
 /// Chaque géométrie (Polygon ou MultiPolygon) est aplatie en bbox
 /// `[minLon, minLat, maxLon, maxLat]`. Les features sans géométrie, sans
 /// identifiant ou sans URL de PBF sont ignorées.
+///
+/// Le code et le nom du pays sont résolus via la chaîne `parent` : les
+/// sous-régions Geofabrik (`provence-alpes-cote-d-azur` → `france`) n'ont pas
+/// de propriété ISO, contrairement aux entrées pays.
 pub fn transform_index(content: &str, version: &str) -> Result<RegionsFile, String> {
     let index: Value = serde_json::from_str(content)
         .map_err(|e| format!("Index Geofabrik illisible : {}", e))?;
@@ -78,8 +82,32 @@ pub fn transform_index(content: &str, version: &str) -> Result<RegionsFile, Stri
         .and_then(Value::as_array)
         .ok_or_else(|| "Index Geofabrik invalide : tableau « features » absent.".to_string())?;
 
-    let mut regions = Vec::new();
+    // La carte des parents inclut toutes les features, même celles qui seront
+    // écartées faute de géométrie ou d'URL : une région retenue peut avoir un
+    // pays parent dont l'entrée est incomplète.
+    let mut parents: HashMap<String, (String, String, Option<String>)> = HashMap::new();
+    let mut raw_regions = Vec::new();
+
     for feature in features {
+        let Some(properties) = feature.get("properties") else {
+            continue;
+        };
+        let Some(id) = properties.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let parent = properties
+            .get("parent")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let name = properties
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(id)
+            .to_string();
+        let iso = iso_country_code(properties);
+        parents.insert(id.to_string(), (parent.clone(), name.clone(), iso.clone()));
+
         let Some(geometry) = feature.get("geometry") else {
             continue;
         };
@@ -93,13 +121,6 @@ pub fn transform_index(content: &str, version: &str) -> Result<RegionsFile, Stri
         if points.is_empty() {
             continue;
         }
-
-        let Some(properties) = feature.get("properties") else {
-            continue;
-        };
-        let Some(id) = properties.get("id").and_then(Value::as_str) else {
-            continue;
-        };
         let Some(pbf_url) = properties
             .get("urls")
             .and_then(|urls| urls.get("pbf"))
@@ -123,33 +144,93 @@ pub fn transform_index(content: &str, version: &str) -> Result<RegionsFile, Stri
             bbox[3] = bbox[3].max(*lat);
         }
 
-        let parent = properties
-            .get("parent")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let name = properties
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or(id)
-            .to_string();
-
-        regions.push(RegionEntry {
+        raw_regions.push(RawRegion {
             id: id.to_string(),
             name,
-            country: parent.clone(),
             parent,
+            iso,
             bbox,
             pbf_filename: pbf_filename.to_string(),
             pbf_url: pbf_url.to_string(),
-            size_mb: None,
         });
     }
+
+    let regions = raw_regions
+        .into_iter()
+        .map(|raw| {
+            let (country_code, country_name) =
+                resolve_country(&parents, &raw.parent, raw.iso.as_deref(), &raw.name);
+            RegionEntry {
+                id: raw.id,
+                name: raw.name,
+                country: raw.parent.clone(),
+                parent: raw.parent,
+                country_code,
+                country_name,
+                bbox: raw.bbox,
+                pbf_filename: raw.pbf_filename,
+                pbf_url: raw.pbf_url,
+                size_mb: None,
+            }
+        })
+        .collect();
 
     Ok(RegionsFile {
         version: version.to_string(),
         regions,
     })
+}
+
+/// Entrée brute de l'index, avant résolution du pays.
+struct RawRegion {
+    id: String,
+    name: String,
+    parent: String,
+    iso: Option<String>,
+    bbox: [f64; 4],
+    pbf_filename: String,
+    pbf_url: String,
+}
+
+/// Résout le pays d'une région : sa propre propriété ISO, sinon la première
+/// entrée de la chaîne `parent` qui en porte une.
+fn resolve_country(
+    parents: &HashMap<String, (String, String, Option<String>)>,
+    parent: &str,
+    own_iso: Option<&str>,
+    own_name: &str,
+) -> (Option<String>, Option<String>) {
+    if let Some(code) = own_iso {
+        return (Some(code.to_string()), Some(own_name.to_string()));
+    }
+
+    let mut current = parent.to_string();
+    for _ in 0..16 {
+        let Some((next_parent, name, iso)) = parents.get(&current) else {
+            break;
+        };
+        if let Some(code) = iso {
+            return (Some(code.clone()), Some(name.clone()));
+        }
+        if next_parent.is_empty() || next_parent == &current {
+            break;
+        }
+        current = next_parent.clone();
+    }
+    (None, None)
+}
+
+/// Extrait `iso3166-1:alpha2` (tableau ou chaîne) et le normalise.
+fn iso_country_code(properties: &Value) -> Option<String> {
+    let value = properties.get("iso3166-1:alpha2")?;
+    let code = match value {
+        Value::Array(items) => items.first()?.as_str()?,
+        Value::String(code) => code.as_str(),
+        _ => return None,
+    };
+    let code = code.trim().to_ascii_uppercase();
+    (code.len() == 2 && code.chars().all(|character| character.is_ascii_alphabetic()))
+        .then_some(code)
 }
 
 /// Toutes les régions dont la bbox intersecte celle de la trace, y compris les

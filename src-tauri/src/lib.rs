@@ -8,6 +8,10 @@ mod gpx_multiride;
 mod gpx_communes;
 mod gpx_altimetrie;
 mod gpx_tunnels;
+// Le module est consommé par les commandes `osm_*` de la sous-étape suivante ;
+// l'attribut évite les avertissements `dead_code` entre les deux sous-étapes.
+#[allow(dead_code)]
+mod osm;
 mod trace_info;
 
 use display::{get_displays, open_second_window, close_second_window};

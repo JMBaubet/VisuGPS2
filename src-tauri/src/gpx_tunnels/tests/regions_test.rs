@@ -28,6 +28,8 @@ fn region(id: &str, name: &str, bbox: [f64; 4], filename: &str) -> RegionEntry {
         name: name.to_string(),
         country: "europe".to_string(),
         parent: "europe".to_string(),
+        country_code: None,
+        country_name: None,
         bbox,
         pbf_filename: filename.to_string(),
         pbf_url: format!("https://example/{}", filename),
@@ -43,12 +45,26 @@ fn index_json() -> &'static str {
           "type": "Feature",
           "geometry": {
             "type": "Polygon",
+            "coordinates": [[[4.0, 42.0], [8.0, 42.0], [8.0, 46.0], [4.0, 46.0], [4.0, 42.0]]]
+          },
+          "properties": {
+            "id": "france",
+            "name": "France",
+            "parent": "europe",
+            "iso3166-1:alpha2": ["FR"],
+            "urls": { "pbf": "https://example/france-latest.osm.pbf" }
+          }
+        },
+        {
+          "type": "Feature",
+          "geometry": {
+            "type": "Polygon",
             "coordinates": [[[4.65, 42.98], [7.72, 42.98], [7.72, 45.13], [4.65, 45.13], [4.65, 42.98]]]
           },
           "properties": {
-            "id": "europe/france/paca",
+            "id": "provence-alpes-cote-d-azur",
             "name": "Provence-Alpes-Côte d'Azur",
-            "parent": "europe/france",
+            "parent": "france",
             "urls": { "pbf": "https://example/paca-latest.osm.pbf" }
           }
         },
@@ -59,9 +75,10 @@ fn index_json() -> &'static str {
             "coordinates": [[[[7.40, 43.72], [7.44, 43.72], [7.44, 43.75], [7.40, 43.75], [7.40, 43.72]]]]
           },
           "properties": {
-            "id": "europe/monaco",
+            "id": "monaco",
             "name": "Monaco",
             "parent": "europe",
+            "iso3166-1:alpha2": ["MC"],
             "urls": { "pbf": "https://example/monaco-latest.osm.pbf" }
           }
         },
@@ -97,20 +114,40 @@ fn transforms_a_geofabrik_index_into_light_regions() {
         .expect("transformation de l'index");
 
     assert_eq!(regions.version, "2026-10-22T10:00:00Z");
-    assert_eq!(regions.regions.len(), 2);
+    assert_eq!(regions.regions.len(), 3);
 
-    let paca = &regions.regions[0];
-    assert_eq!(paca.id, "europe/france/paca");
+    let france = regions
+        .regions
+        .iter()
+        .find(|entry| entry.id == "france")
+        .expect("France");
+    assert_eq!(france.country, "europe");
+    assert_eq!(france.parent, "europe");
+    assert_eq!(france.country_code.as_deref(), Some("FR"));
+    assert_eq!(france.country_name.as_deref(), Some("France"));
+
+    let paca = regions
+        .regions
+        .iter()
+        .find(|entry| entry.id == "provence-alpes-cote-d-azur")
+        .expect("PACA");
     assert_eq!(paca.name, "Provence-Alpes-Côte d'Azur");
-    assert_eq!(paca.parent, "europe/france");
-    assert_eq!(paca.country, "europe/france");
+    assert_eq!(paca.parent, "france");
+    assert_eq!(paca.country, "france");
+    assert_eq!(paca.country_code.as_deref(), Some("FR"));
+    assert_eq!(paca.country_name.as_deref(), Some("France"));
     assert_eq!(paca.pbf_filename, "paca-latest.osm.pbf");
     assert_eq!(paca.bbox, [4.65, 42.98, 7.72, 45.13]);
 
-    let monaco = &regions.regions[1];
-    assert_eq!(monaco.id, "europe/monaco");
+    let monaco = regions
+        .regions
+        .iter()
+        .find(|entry| entry.id == "monaco")
+        .expect("Monaco");
     assert_eq!(monaco.pbf_filename, "monaco-latest.osm.pbf");
     assert_eq!(monaco.bbox, [7.40, 43.72, 7.44, 43.75]);
+    assert_eq!(monaco.country_code.as_deref(), Some("MC"));
+    assert_eq!(monaco.country_name.as_deref(), Some("Monaco"));
 }
 
 #[test]
@@ -119,11 +156,17 @@ fn find_regions_is_exhaustive_including_sub_regions() {
 
     let in_monaco = find_regions(&regions, [7.41, 43.73, 7.42, 43.74]);
     let ids: Vec<&str> = in_monaco.iter().map(|region| region.id.as_str()).collect();
-    assert_eq!(ids, vec!["europe/france/paca", "europe/monaco"]);
+    assert_eq!(
+        ids,
+        vec!["france", "provence-alpes-cote-d-azur", "monaco"]
+    );
 
     let in_paca_only = find_regions(&regions, [5.0, 44.0, 5.1, 44.1]);
-    assert_eq!(in_paca_only.len(), 1);
-    assert_eq!(in_paca_only[0].id, "europe/france/paca");
+    let ids: Vec<&str> = in_paca_only
+        .iter()
+        .map(|region| region.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["france", "provence-alpes-cote-d-azur"]);
 
     assert!(find_regions(&regions, [2.0, 41.0, 3.0, 42.0]).is_empty());
 }
@@ -198,6 +241,27 @@ fn save_and_load_round_trip() {
     assert_eq!(loaded, regions);
 
     cleanup(&dir);
+}
+
+#[test]
+fn legacy_regions_json_without_country_codes_is_read() {
+    let json = r#"{
+      "version": "v1",
+      "regions": [{
+        "id": "monaco",
+        "name": "Monaco",
+        "country": "europe",
+        "parent": "europe",
+        "bbox": [7.40, 43.72, 7.44, 43.75],
+        "pbfFilename": "monaco-latest.osm.pbf",
+        "pbfUrl": "https://example/monaco-latest.osm.pbf"
+      }]
+    }"#;
+
+    let file: RegionsFile =
+        serde_json::from_str(json).expect("ancien regions.json sans codes pays");
+    assert_eq!(file.regions[0].country_code, None);
+    assert_eq!(file.regions[0].country_name, None);
 }
 
 #[test]

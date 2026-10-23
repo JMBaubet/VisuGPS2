@@ -189,6 +189,12 @@ pub struct RegionEntry {
     pub country: String,
     #[serde(default)]
     pub parent: String,
+    /// Code ISO 3166-1 alpha-2 du pays, résolu via la chaîne `parent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country_code: Option<String>,
+    /// Nom du pays, résolu via la chaîne `parent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country_name: Option<String>,
     /// Bbox `[minLon, minLat, maxLon, maxLat]`.
     pub bbox: [f64; 4],
     pub pbf_filename: String,
