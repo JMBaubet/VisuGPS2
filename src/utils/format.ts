@@ -76,3 +76,20 @@ export function formatDateTime(iso: string | null): string {
     minute: '2-digit',
   })
 }
+
+/**
+ * Formate une taille en octets vers une chaîne lisible.
+ * Exemple : 89128960 → "85 Mo", 1288490188 → "1,20 Go"
+ */
+export function formatFileSize(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return '—'
+  if (bytes < 1024) return `${bytes} o`
+
+  const ko = bytes / 1024
+  if (ko < 1024) return `${Math.round(ko)} Ko`
+
+  const mo = ko / 1024
+  if (mo < 1024) return `${Math.round(mo).toLocaleString('fr-FR')} Mo`
+
+  return `${(mo / 1024).toFixed(2).replace('.', ',')} Go`
+}
