@@ -33,7 +33,8 @@
  *
  * En mode Tunnels, les bornes de montée sont masquées et un layer de tunnels
  * est affiché : ligne blanche bordée de noir sur la trace, halo bleu pour le
- * groupe sélectionné. Les tronçons fusionnés restent des lignes distinctes.
+ * groupe sélectionné. Un groupe fusionné est peint en une seule bande continue,
+ * du premier au dernier portail.
  *
  * Le terrain Mapbox est activé (relief, pitch 60) et les couches sont drapées
  * sur le relief. Le composant ne connaît ni le store ni la vue : il reçoit ses
@@ -55,6 +56,7 @@ import {
   buildMarkerFeatures,
   buildSegmentFeatures,
   buildSelectedClimbFeature,
+  buildTunnelEndpointFeatures,
   buildTunnelFeatures,
   buildTracePath,
   coordinateAtDistance,
@@ -73,7 +75,7 @@ const props = defineProps<{
   /** Géométrie complète de la trace (`trace.geojson`). */
   traceGeometry: GeoJSON.Feature | null
   selectedClimbId: number | null
-  /** Tunnels physiques ; les groupes restent des tronçons distincts. */
+  /** Tunnels physiques ; un groupe fusionné est peint comme une bande unique. */
   tunnels: Tunnel[]
   selectedTunnelIds: string[]
 }>()
@@ -202,6 +204,10 @@ function render(fit = false): void {
     const markersSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.markers)
     const selectedSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.selected)
     const tunnelsSource = geojsonSource(instance, ALTIMETRIE_SOURCE_IDS.tunnels)
+    const tunnelEndpointsSource = geojsonSource(
+      instance,
+      ALTIMETRIE_SOURCE_IDS.tunnelEndpoints,
+    )
 
     // Les segments ne changent pas pendant un glissement : on ne reconstruit
     // la géométrie complète que lorsque le fichier ou le chemin change.
@@ -229,10 +235,21 @@ function render(fit = false): void {
             )
           : emptyFC(),
       )
+      tunnelEndpointsSource?.setData(
+        file
+          ? buildTunnelEndpointFeatures(
+              file,
+              props.tunnels,
+              props.selectedTunnelIds,
+              path,
+            )
+          : emptyFC(),
+      )
       markersSource?.setData(emptyFC())
       selectedSource?.setData(emptyFC())
     } else {
       tunnelsSource?.setData(emptyFC())
+      tunnelEndpointsSource?.setData(emptyFC())
       if (file) {
         markersSource?.setData(
           buildMarkerFeatures(file, props.selectedClimbId, path),

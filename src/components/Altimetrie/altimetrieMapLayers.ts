@@ -6,8 +6,11 @@
 //   trace nettoyée (`trace.geojson`) ;
 // - les bornes vallée/sommet de chaque montée ;
 // - la montée sélectionnée, en halo sous les segments ;
-// - en mode Tunnels, les tronçons de tunnels en blanc bordé de noir, avec un
-//   halo bleu pour le groupe sélectionné (les tronçons restent disjoints).
+// - en mode Tunnels, les tunnels en blanc bordé de noir, avec un halo bleu et
+//   une paire entrée/sortie pour le groupe sélectionné. Un groupe fusionné est
+//   peint comme une seule bande continue : l'écart n'est pas dessiné comme du
+//   tunnel dans `tunnels.json`, mais il l'est à l'écran pour donner une
+//   représentation unique de la fusion.
 //
 // Les couleurs viennent de `altimetrieCategories` : elles sont identiques dans
 // la liste, le graphe et la carte.
@@ -18,12 +21,14 @@ import type {
   GeoJSONSource,
   LineLayerSpecification,
   Map,
+  SymbolLayerSpecification,
 } from 'mapbox-gl'
 import type {
   AltimetrieFile,
   AltimetrieProfilePoint,
 } from '../../stores/altimetrie'
 import type { Tunnel } from '../../stores/tunnels'
+import { groupTunnels } from '../../utils/altimetrieTunnels'
 import { colorForCategoryId } from '../../utils/altimetrieCategories'
 import { haversineMeters } from '../../utils/geo'
 
@@ -35,6 +40,7 @@ export const ALTIMETRIE_SOURCE_IDS = {
   markers: 'altimetrie-markers',
   selected: 'altimetrie-selected',
   tunnels: 'altimetrie-tunnels',
+  tunnelEndpoints: 'altimetrie-tunnel-endpoints',
 } as const
 
 export const ALTIMETRIE_LAYER_IDS = {
@@ -46,10 +52,64 @@ export const ALTIMETRIE_LAYER_IDS = {
   tunnelsCasing: 'altimetrie-tunnels-casing',
   tunnels: 'altimetrie-tunnels-line',
   markers: 'altimetrie-climb-markers',
+  tunnelEndpointCircles: 'altimetrie-tunnel-endpoint-circles',
+  tunnelEndpointPins: 'altimetrie-tunnel-endpoint-pins',
 } as const
+
+const TUNNEL_ENTRY_PIN_IMAGE = 'altimetrie-tunnel-entry-pin'
+const TUNNEL_EXIT_PIN_IMAGE = 'altimetrie-tunnel-exit-pin'
 
 export function emptyFC(): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features: [] }
+}
+
+/**
+ * Dessine un pin dans un canvas et le retourne en `ImageData`.
+ *
+ * Le canvas est produit en 2× pour rester net sur les écrans Retina ; les
+ * couleurs sont celles de Material Design, avec un liseré blanc pour tenir sur
+ * le fond satellite.
+ */
+function createTunnelPinImage(color: string): ImageData | null {
+  const canvas = document.createElement('canvas')
+  canvas.width = 48
+  canvas.height = 60
+  const context = canvas.getContext('2d')
+  if (!context) return null
+
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  context.beginPath()
+  context.moveTo(24, 58)
+  context.bezierCurveTo(20, 50, 6, 38, 6, 22)
+  context.bezierCurveTo(6, 12, 14, 4, 24, 4)
+  context.bezierCurveTo(34, 4, 42, 12, 42, 22)
+  context.bezierCurveTo(42, 38, 28, 50, 24, 58)
+  context.closePath()
+  context.fillStyle = color
+  context.fill()
+  context.lineWidth = 4
+  context.strokeStyle = '#FFFFFF'
+  context.stroke()
+
+  context.beginPath()
+  context.arc(24, 22, 7, 0, Math.PI * 2)
+  context.fillStyle = '#FFFFFF'
+  context.fill()
+
+  return context.getImageData(0, 0, canvas.width, canvas.height)
+}
+
+/** Ajoute les images des pins d'entrée et de sortie, une seule fois. */
+function addTunnelEndpointImages(map: Map): void {
+  const entry = createTunnelPinImage('#4CAF50')
+  const exit = createTunnelPinImage('#F44336')
+
+  if (entry && !map.hasImage(TUNNEL_ENTRY_PIN_IMAGE)) {
+    map.addImage(TUNNEL_ENTRY_PIN_IMAGE, entry, { pixelRatio: 2 })
+  }
+  if (exit && !map.hasImage(TUNNEL_EXIT_PIN_IMAGE)) {
+    map.addImage(TUNNEL_EXIT_PIN_IMAGE, exit, { pixelRatio: 2 })
+  }
 }
 
 /** Ajoute les sources et les couches, une seule fois, après le `load`. */
@@ -60,6 +120,12 @@ export function addAltimetrieLayers(map: Map): void {
   map.addSource(ALTIMETRIE_SOURCE_IDS.markers, { type: 'geojson', data: empty })
   map.addSource(ALTIMETRIE_SOURCE_IDS.selected, { type: 'geojson', data: empty })
   map.addSource(ALTIMETRIE_SOURCE_IDS.tunnels, { type: 'geojson', data: empty })
+  map.addSource(ALTIMETRIE_SOURCE_IDS.tunnelEndpoints, {
+    type: 'geojson',
+    data: empty,
+  })
+
+  addTunnelEndpointImages(map)
 
   // Ordre d'empilement (bas → haut) : les segments de pente restent au-dessus
   // de la montée sélectionnée, qui ne sert plus que de halo coloré.
@@ -187,6 +253,72 @@ export function addAltimetrieLayers(map: Map): void {
     },
   }
   map.addLayer(markers)
+
+  // Portails non sélectionnés : cercles blanc (entrée) / noir (sortie), au
+  // même diamètre que les bornes de montée (4 px, 6 px lorsque sélectionnée).
+  const tunnelEndpointCircles: CircleLayerSpecification = {
+    id: ALTIMETRIE_LAYER_IDS.tunnelEndpointCircles,
+    type: 'circle',
+    source: ALTIMETRIE_SOURCE_IDS.tunnelEndpoints,
+    filter: [
+      '==',
+      ['get', 'selected'],
+      false,
+    ] as unknown as ExpressionSpecification,
+    paint: {
+      'circle-radius': [
+        'case',
+        ['get', 'selected'],
+        6,
+        4,
+      ] as unknown as ExpressionSpecification,
+      'circle-color': [
+        'match',
+        ['get', 'role'],
+        'entry',
+        '#FFFFFF',
+        '#000000',
+      ] as unknown as ExpressionSpecification,
+      'circle-stroke-color': [
+        'match',
+        ['get', 'role'],
+        'entry',
+        '#000000',
+        '#FFFFFF',
+      ] as unknown as ExpressionSpecification,
+      'circle-stroke-width': 2,
+      'circle-opacity': 1,
+    },
+  }
+  map.addLayer(tunnelEndpointCircles)
+
+  // Portails du groupe sélectionné : pins Material Design, ancrés au portail.
+  const tunnelEndpointPins: SymbolLayerSpecification = {
+    id: ALTIMETRIE_LAYER_IDS.tunnelEndpointPins,
+    type: 'symbol',
+    source: ALTIMETRIE_SOURCE_IDS.tunnelEndpoints,
+    filter: [
+      '==',
+      ['get', 'selected'],
+      true,
+    ] as unknown as ExpressionSpecification,
+    layout: {
+      'icon-image': [
+        'match',
+        ['get', 'role'],
+        'entry',
+        TUNNEL_ENTRY_PIN_IMAGE,
+        TUNNEL_EXIT_PIN_IMAGE,
+      ] as unknown as ExpressionSpecification,
+      'icon-size': 1,
+      'icon-anchor': 'bottom',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'icon-pitch-alignment': 'viewport',
+      'icon-rotation-alignment': 'viewport',
+    },
+  }
+  map.addLayer(tunnelEndpointPins)
 }
 
 /** Géométrie d'origine d'une trace et distances cumulées 2D. */
@@ -407,12 +539,13 @@ export function buildSelectedClimbFeature(
 }
 
 /**
- * Tronçons de tunnels, prêts pour la source GeoJSON.
+ * Tunnels, prêts pour la source GeoJSON.
  *
- * Chaque tunnel physique est une LineString découpée sur la géométrie
- * d'origine. `selected` porte la sélection du groupe dans son ensemble : le
- * halo bleu de la couche sélectionnée couvre donc tous les tronçons du groupe,
- * jamais l'écart qui les sépare.
+ * Un tunnel isolé est une LineString découpée sur la géométrie d'origine. Un
+ * groupe fusionné est peint comme **une seule bande continue** du début du
+ * premier tronçon à la fin du dernier : l'écart est visuellement absorbé pour
+ * donner une représentation unique de la fusion. Les tronçons individuels
+ * restent dans `tunnels.json`, seule source de vérité pour la séparation.
  */
 export function buildTunnelFeatures(
   file: AltimetrieFile,
@@ -423,24 +556,65 @@ export function buildTunnelFeatures(
   const selected = new Set(selectedIds)
   const features: GeoJSON.Feature<GeoJSON.LineString>[] = []
 
-  for (const tunnel of tunnels) {
+  for (const group of groupTunnels(tunnels)) {
     const coordinates = sliceCoordinates(
       file,
       path,
-      tunnel.startKm * 1000,
-      tunnel.endKm * 1000,
+      group.startKm * 1000,
+      group.endKm * 1000,
     )
     if (coordinates.length < 2) continue
 
     features.push({
       type: 'Feature',
       properties: {
-        tunnelId: tunnel.id,
-        groupId: tunnel.groupId ?? null,
-        selected: selected.has(tunnel.id),
+        tunnelId: group.id,
+        groupId: group.groupId,
+        selected: group.tunnels.some(tunnel => selected.has(tunnel.id)),
       },
       geometry: { type: 'LineString', coordinates },
     })
+  }
+
+  return { type: 'FeatureCollection', features }
+}
+
+/**
+ * Portails des tunnels : une entrée et une sortie par tunnel logique.
+ *
+ * Un groupe fusionné ne produit qu'une paire, placée aux bornes extérieures
+ * (`group.startKm` / `group.endKm`). `selected` porte sur le groupe entier.
+ */
+export function buildTunnelEndpointFeatures(
+  file: AltimetrieFile,
+  tunnels: Tunnel[],
+  selectedIds: string[],
+  path: TracePath | null = null,
+): GeoJSON.FeatureCollection {
+  const selected = new Set(selectedIds)
+  const features: GeoJSON.Feature<GeoJSON.Point>[] = []
+
+  for (const group of groupTunnels(tunnels)) {
+    const isSelected = group.tunnels.some(tunnel => selected.has(tunnel.id))
+    const endpoints: Array<{ role: 'entry' | 'exit'; km: number }> = [
+      { role: 'entry', km: group.startKm },
+      { role: 'exit', km: group.endKm },
+    ]
+
+    for (const endpoint of endpoints) {
+      const coordinates = coordinateAt(file, path, endpoint.km * 1000)
+      if (!coordinates) continue
+
+      features.push({
+        type: 'Feature',
+        properties: {
+          role: endpoint.role,
+          groupId: group.groupId,
+          selected: isSelected,
+        },
+        geometry: { type: 'Point', coordinates },
+      })
+    }
   }
 
   return { type: 'FeatureCollection', features }
