@@ -53,13 +53,14 @@ export const ALTIMETRIE_LAYER_IDS = {
   tunnelsCasing: 'altimetrie-tunnels-casing',
   tunnels: 'altimetrie-tunnels-line',
   markers: 'altimetrie-climb-markers',
+  climbPins: 'altimetrie-climb-pins',
   tunnelEndpointCircles: 'altimetrie-tunnel-endpoint-circles',
   tunnelEndpointPins: 'altimetrie-tunnel-endpoint-pins',
   creationPick: 'altimetrie-creation-pick',
 } as const
 
-const TUNNEL_ENTRY_PIN_IMAGE = 'altimetrie-tunnel-entry-pin'
-const TUNNEL_EXIT_PIN_IMAGE = 'altimetrie-tunnel-exit-pin'
+const GREEN_PIN_IMAGE = 'altimetrie-green-pin'
+const RED_PIN_IMAGE = 'altimetrie-red-pin'
 
 export function emptyFC(): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features: [] }
@@ -72,7 +73,7 @@ export function emptyFC(): GeoJSON.FeatureCollection {
  * couleurs sont celles de Material Design, avec un liseré blanc pour tenir sur
  * le fond satellite.
  */
-function createTunnelPinImage(color: string): ImageData | null {
+function createPinImage(color: string): ImageData | null {
   const canvas = document.createElement('canvas')
   canvas.width = 48
   canvas.height = 60
@@ -102,15 +103,15 @@ function createTunnelPinImage(color: string): ImageData | null {
 }
 
 /** Ajoute les images des pins d'entrée et de sortie, une seule fois. */
-function addTunnelEndpointImages(map: Map): void {
-  const entry = createTunnelPinImage('#4CAF50')
-  const exit = createTunnelPinImage('#F44336')
+function addPinImages(map: Map): void {
+  const entry = createPinImage('#4CAF50')
+  const exit = createPinImage('#F44336')
 
-  if (entry && !map.hasImage(TUNNEL_ENTRY_PIN_IMAGE)) {
-    map.addImage(TUNNEL_ENTRY_PIN_IMAGE, entry, { pixelRatio: 2 })
+  if (entry && !map.hasImage(GREEN_PIN_IMAGE)) {
+    map.addImage(GREEN_PIN_IMAGE, entry, { pixelRatio: 2 })
   }
-  if (exit && !map.hasImage(TUNNEL_EXIT_PIN_IMAGE)) {
-    map.addImage(TUNNEL_EXIT_PIN_IMAGE, exit, { pixelRatio: 2 })
+  if (exit && !map.hasImage(RED_PIN_IMAGE)) {
+    map.addImage(RED_PIN_IMAGE, exit, { pixelRatio: 2 })
   }
 }
 
@@ -131,7 +132,7 @@ export function addAltimetrieLayers(map: Map): void {
     data: empty,
   })
 
-  addTunnelEndpointImages(map)
+  addPinImages(map)
 
   // Ordre d'empilement (bas → haut) : les segments de pente restent au-dessus
   // de la montée sélectionnée, qui ne sert plus que de halo coloré.
@@ -237,6 +238,11 @@ export function addAltimetrieLayers(map: Map): void {
     id: ALTIMETRIE_LAYER_IDS.markers,
     type: 'circle',
     source: ALTIMETRIE_SOURCE_IDS.markers,
+    filter: [
+      '==',
+      ['get', 'selected'],
+      false,
+    ] as unknown as ExpressionSpecification,
     paint: {
       'circle-pitch-alignment': 'map',
       'circle-pitch-scale': 'map',
@@ -259,6 +265,35 @@ export function addAltimetrieLayers(map: Map): void {
     },
   }
   map.addLayer(markers)
+
+  // Montée sélectionnée : mêmes pins que les portails de tunnel. Les autres
+  // montées conservent leurs cercles.
+  const climbPins: SymbolLayerSpecification = {
+    id: ALTIMETRIE_LAYER_IDS.climbPins,
+    type: 'symbol',
+    source: ALTIMETRIE_SOURCE_IDS.markers,
+    filter: [
+      '==',
+      ['get', 'selected'],
+      true,
+    ] as unknown as ExpressionSpecification,
+    layout: {
+      'icon-image': [
+        'match',
+        ['get', 'role'],
+        'valley',
+        GREEN_PIN_IMAGE,
+        RED_PIN_IMAGE,
+      ] as unknown as ExpressionSpecification,
+      'icon-size': 1,
+      'icon-anchor': 'bottom',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'icon-pitch-alignment': 'viewport',
+      'icon-rotation-alignment': 'viewport',
+    },
+  }
+  map.addLayer(climbPins)
 
   // Portails non sélectionnés : cercles blanc (entrée) / noir (sortie), au
   // même diamètre que les bornes de montée (4 px, 6 px lorsque sélectionnée).
@@ -313,8 +348,8 @@ export function addAltimetrieLayers(map: Map): void {
         'match',
         ['get', 'role'],
         'entry',
-        TUNNEL_ENTRY_PIN_IMAGE,
-        TUNNEL_EXIT_PIN_IMAGE,
+        GREEN_PIN_IMAGE,
+        RED_PIN_IMAGE,
       ] as unknown as ExpressionSpecification,
       'icon-size': 1,
       'icon-anchor': 'bottom',

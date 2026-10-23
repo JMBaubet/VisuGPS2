@@ -489,11 +489,14 @@ function dragStepM(): number {
 /** Borne sélectionnée sous le point, ou null. */
 function dragTargetAt(point: mapboxgl.Point): DragTarget | null {
   const instance = map.value
-  if (!instance) return null
+  if (!instance || !mapReady.value) return null
 
   if (props.mode === 'climbs') {
     const features = instance.queryRenderedFeatures(point, {
-      layers: [ALTIMETRIE_LAYER_IDS.markers],
+      layers: [
+        ALTIMETRIE_LAYER_IDS.markers,
+        ALTIMETRIE_LAYER_IDS.climbPins,
+      ],
     })
     for (const feature of features) {
       if (feature.properties?.selected !== true) continue
@@ -542,32 +545,51 @@ function dragTargetAt(point: mapboxgl.Point): DragTarget | null {
   return null
 }
 
-/** Démarre le glissement d'une borne sélectionnée. */
-function onMapMouseDown(event: MapMouseEvent): void {
-  if (event.originalEvent.button !== 0) return
+/**
+ * Démarre le glissement d'une borne sélectionnée.
+ *
+ * L'écouteur est posé sur le canvas en phase **capture** : il intercepte le
+ * mousedown avant le `dragPan` de Mapbox. Sans cela, la carte commence à se
+ * déplacer avant que notre handler ne puisse désactiver le panoramique.
+ */
+function onCanvasMouseDown(event: MouseEvent): void {
+  if (event.button !== 0) return
   if (props.creationKind || dragState) return
-  const target = dragTargetAt(event.point)
+
+  const instance = map.value
+  const canvas = instance?.getCanvas()
+  if (!instance || !canvas) return
+
+  const rect = canvas.getBoundingClientRect()
+  const point = new mapboxgl.Point(
+    event.clientX - rect.left,
+    event.clientY - rect.top,
+  )
+  const target = dragTargetAt(point)
   if (!target) return
 
+  event.preventDefault()
+  event.stopPropagation()
+
   dragState = target
-  dragStartX = event.point.x
+  dragStartX = event.clientX
   dragLastKm = target.startKm
   dragMoved = false
   hoverDraggable = false
 
-  map.value?.dragPan.disable()
-  map.value?.on('mousemove', onDragMove)
+  instance.dragPan.disable()
+  window.addEventListener('mousemove', onDragMove)
   window.addEventListener('mouseup', onDragEnd)
   window.addEventListener('blur', onDragEnd)
   updateCursor()
 }
 
 /** Applique le delta horizontal au brouillon, sans écriture. */
-function onDragMove(event: MapMouseEvent): void {
+function onDragMove(event: MouseEvent): void {
   const target = dragState
   if (!target) return
 
-  const deltaX = event.point.x - dragStartX
+  const deltaX = event.clientX - dragStartX
   if (Math.abs(deltaX) >= 1) dragMoved = true
 
   // Option B : tirer à droite allonge toujours. L'entrée se rapproche du
@@ -622,9 +644,8 @@ function onDragEnd(): void {
 function cleanupDrag(): void {
   dragState = null
   dragMoved = false
-  const instance = map.value
-  instance?.off('mousemove', onDragMove)
-  instance?.dragPan.enable()
+  map.value?.dragPan.enable()
+  window.removeEventListener('mousemove', onDragMove)
   window.removeEventListener('mouseup', onDragEnd)
   window.removeEventListener('blur', onDragEnd)
   updateCursor()
@@ -869,9 +890,11 @@ async function initializeMap(token: string): Promise<void> {
   map.value = instance
 
   instance.on('click', onMapClick)
-  instance.on('mousedown', onMapMouseDown)
   instance.on('mousemove', onMapHoverMove)
   instance.on('movestart', closeCandidates)
+  instance
+    .getCanvas()
+    .addEventListener('mousedown', onCanvasMouseDown, true)
   instance.getCanvas().addEventListener('mouseleave', onCanvasLeave)
 
   instance.addControl(
@@ -928,12 +951,16 @@ function destroyMap(): void {
   creationKm.value = null
   candidates.value = []
   candidatePoint.value = null
+  window.removeEventListener('mousemove', onDragMove)
   window.removeEventListener('mouseup', onDragEnd)
   window.removeEventListener('blur', onDragEnd)
   dragState = null
   dragMoved = false
   hoverDraggable = false
   if (map.value) {
+    const canvas = map.value.getCanvas()
+    canvas.removeEventListener('mousedown', onCanvasMouseDown, true)
+    canvas.removeEventListener('mouseleave', onCanvasLeave)
     try {
       map.value.remove()
     } catch {
@@ -1015,10 +1042,14 @@ watch(
 )
 
 watch(
-  () => props.selectedTunnelIds,
-  ids => {
+  // Le tableau est recréé à chaque brouillon de borne ; seul un vrai
+  // changement d'identifiants doit recadrer la caméra.
+  () => props.selectedTunnelIds.join('|'),
+  (key, previous) => {
     render(false)
-    if (props.mode === 'tunnels' && ids.length > 0) fitSelectedTunnels()
+    if (props.mode === 'tunnels' && key && key !== previous) {
+      fitSelectedTunnels()
+    }
   },
 )
 
