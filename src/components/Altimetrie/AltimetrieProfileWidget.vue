@@ -475,6 +475,23 @@ function cycleYScale(): void {
   setYScale(Y_SCALES[(index + 1) % Y_SCALES.length])
 }
 
+/**
+ * Recentre la fenêtre de défilement sur une plage kilométrique, sans changer
+ * l'échelle X choisie par l'opérateur.
+ */
+function scrollToRange(startKm: number, endKm: number): void {
+  const container = scrollContainer.value
+  if (!container) return
+
+  const centerM = ((startKm + endKm) / 2) * 1000
+  const centerX = PLOT_LEFT + centerM / xScale.value
+  container.scrollLeft = Math.max(
+    0,
+    centerX - container.clientWidth / 2,
+  )
+  requestAxesDraw()
+}
+
 function requestDraw(): void {
   if (drawFrame) return
   drawFrame = requestAnimationFrame(() => {
@@ -942,8 +959,16 @@ function drawTunnelsOverlay(
     const x1 = xOf(tunnel.startKm * 1000)
     const x2 = xOf(tunnel.endKm * 1000)
     const selected = props.selectedTunnelIds.includes(tunnel.id)
+    const short = isShortTunnelOnWidget(
+      tunnel.startKm,
+      tunnel.endKm,
+      xScale.value,
+    )
 
-    if (isShortTunnelOnWidget(tunnel.startKm, tunnel.endKm, xScale.value)) {
+    // Le repère vertical reste visible pour les tunnels non sélectionnés même
+    // lorsqu'ils deviennent assez larges pour être dessinés en bande : à
+    // l'échelle X étendue, la bande seule se confond avec l'axe.
+    if (short || !selected) {
       const mid = (x1 + x2) / 2
       ctx.save()
       ctx.strokeStyle = TUNNEL_COLOR
@@ -955,7 +980,9 @@ function drawTunnelsOverlay(
       ctx.lineTo(mid, axisY)
       ctx.stroke()
       ctx.restore()
-    } else {
+    }
+
+    if (!short) {
       const barHeight = selected ? 6 : 4
       const barY = axisY - barHeight
       const barWidth = Math.max(1, x2 - x1)
@@ -1678,6 +1705,10 @@ watch(
     requestDraw()
   },
 )
+
+defineExpose({
+  scrollToRange,
+})
 </script>
 
 <style scoped>

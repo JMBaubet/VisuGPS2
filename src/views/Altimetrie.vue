@@ -40,12 +40,12 @@
         :merge-gap-m="mergeGapM"
         :tunnel-error="tunnelError"
         @update:active-tab="onTabChange"
-        @select="altimetrieStore.selectClimb"
+        @select="onSelectClimb"
         @delete="onDeleteClimb"
         @split="onSplitClimb"
         @merge="onMergeClimb"
         @create="onCreateRequested"
-        @select-tunnel="onSelectTunnel"
+        @select-tunnel="onSelectTunnelFromList"
         @delete-tunnel="onDeleteTunnel"
         @merge-tunnel="onMergeTunnel"
         @split-tunnel="onSplitTunnel"
@@ -95,6 +95,7 @@
 
           <AltimetrieProfileWidget
             v-if="altimetrieStore.displayFile"
+            ref="widgetRef"
             :mode="activeTab"
             :file="altimetrieStore.displayFile"
             :selected-climb-id="
@@ -267,6 +268,8 @@ const dialogTunnelDetectOpen = ref(false)
 const traceGeometry = ref<GeoJSON.Feature | null>(null)
 /** Instance de la carte, exposée pour le widget de profil. */
 const mapRef = ref<InstanceType<typeof AltimetrieMap> | null>(null)
+/** Widget de profil, pour recentrer le graphe sur la sélection. */
+const widgetRef = ref<InstanceType<typeof AltimetrieProfileWidget> | null>(null)
 /** Valeurs du dernier clic sur le profil, affichées 5 s sur la carte. */
 const inspectPoint = ref<InspectPoint | null>(null)
 let inspectTimer: ReturnType<typeof setTimeout> | null = null
@@ -690,6 +693,30 @@ function onStartTunnelCreation(): void {
   creatingTunnel.value = true
 }
 
+/** Sélectionne une montée et recentre le graphe sur ses bornes. */
+function onSelectClimb(id: number | null): void {
+  altimetrieStore.selectClimb(id)
+  if (id === null) return
+
+  const climb = altimetrieStore.climbs.find(candidate => candidate.id === id)
+  if (climb) {
+    widgetRef.value?.scrollToRange(climb.startKm, climb.endKm)
+  }
+}
+
+/** Sélection depuis la liste : recentre aussi le graphe. */
+function onSelectTunnelFromList(id: string): void {
+  tunnelsStore.selectTunnel(id)
+
+  const group = tunnelsStore.groups.find(candidate =>
+    candidate.tunnels.some(tunnel => tunnel.id === id),
+  )
+  if (group) {
+    widgetRef.value?.scrollToRange(group.startKm, group.endKm)
+  }
+}
+
+/** Sélection depuis le widget : le segment est déjà à l'écran. */
 function onSelectTunnel(id: string): void {
   tunnelsStore.selectTunnel(id)
 }
