@@ -1193,6 +1193,25 @@ type = "material_extended"
 default = "#607D8BFF"
 icon = "mdi-palette"
 
+[Altimetrie.Visualisation.pasDeplacementBornes]
+description = "Pas de déplacement des bornes (m/px)"
+documentation = """
+Pas de déplacement, en mètres par pixel, appliqué au glissement horizontal
+d'une borne de montée ou d'un portail de tunnel sur la carte.
+
+Tirer vers la droite allonge toujours le segment : la sortie s'éloigne du
+km 0, l'entrée s'en rapproche. Le pas est indépendant du zoom.
+
+Valeur par défaut : 5 m/px.
+"""
+type = "int"
+default = 5
+min = 1
+max = 25
+step = 1
+unit = "m/px"
+icon = "mdi-cursor-move"
+
 # ---------------------------------------------------------------------------
 # Détection des tunnels (module Tunnels).
 # Une trace propre est confrontée aux ways OSM `tunnel` + `highway` des PBF

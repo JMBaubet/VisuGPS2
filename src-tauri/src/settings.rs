@@ -958,7 +958,7 @@ mod tests {
             assert!(g.label.is_some(), "groupe `{}` sans libellé", group);
         }
 
-        // 3. Les 14 paramètres de traitement et les 3 de visualisation, tous
+        // 3. Les 14 paramètres de traitement et les 4 de visualisation, tous
         //    rattachés à un groupe affiché.
         let altimetrie_defs: Vec<_> = defs
             .iter()
@@ -966,8 +966,8 @@ mod tests {
             .collect();
         assert_eq!(
             altimetrie_defs.len(),
-            17,
-            "17 paramètres `Altimetrie.*` attendus : {:?}",
+            18,
+            "18 paramètres `Altimetrie.*` attendus : {:?}",
             altimetrie_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
         );
         for def in &altimetrie_defs {
@@ -1032,6 +1032,16 @@ mod tests {
             .expect("paramètre `couleurTraceSelectionnee` déclaré");
         assert_eq!(couleur_selection.setting_type, "material_extended");
         assert_eq!(couleur_selection.default.as_str(), Some("#607D8BFF"));
+
+        let pas_deplacement = altimetrie_defs
+            .iter()
+            .find(|d| d.path == "Altimetrie.Visualisation.pasDeplacementBornes")
+            .expect("paramètre `pasDeplacementBornes` déclaré");
+        assert_eq!(pas_deplacement.setting_type, "int");
+        assert_eq!(pas_deplacement.default.as_i64(), Some(5));
+        assert_eq!(pas_deplacement.min, Some(1.0));
+        assert_eq!(pas_deplacement.max, Some(25.0));
+        assert_eq!(pas_deplacement.unit.as_deref(), Some("m/px"));
 
         // 6. Les valeurs 0 qui désactivent une étape sont admises.
         for path in [

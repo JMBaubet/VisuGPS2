@@ -618,9 +618,21 @@ export function buildTunnelEndpointFeatures(
 
   for (const group of groupTunnels(tunnels)) {
     const isSelected = group.tunnels.some(tunnel => selected.has(tunnel.id))
-    const endpoints: Array<{ role: 'entry' | 'exit'; km: number }> = [
-      { role: 'entry', km: group.startKm },
-      { role: 'exit', km: group.endKm },
+    const endpoints: Array<{
+      role: 'entry' | 'exit'
+      km: number
+      tunnelId: string
+    }> = [
+      {
+        role: 'entry',
+        km: group.startKm,
+        tunnelId: group.tunnels[0]?.id ?? group.id,
+      },
+      {
+        role: 'exit',
+        km: group.endKm,
+        tunnelId: group.tunnels[group.tunnels.length - 1]?.id ?? group.id,
+      },
     ]
 
     for (const endpoint of endpoints) {
@@ -632,7 +644,9 @@ export function buildTunnelEndpointFeatures(
         properties: {
           role: endpoint.role,
           groupId: group.groupId,
+          tunnelId: endpoint.tunnelId,
           selected: isSelected,
+          draggable: !group.merged,
         },
         geometry: { type: 'Point', coordinates },
       })
