@@ -121,7 +121,33 @@ const emit = defineEmits<{
   'create-tunnel': [payload: { startKm: number; endKm: number }]
   'create-error': [message: string]
   'create-tunnel-error': [message: string]
+  'draft-bounds': [
+    payload: { climbId: number; handle: 'valley' | 'summit'; km: number },
+  ]
+  'edit-bounds': [
+    payload: { climbId: number; handle: 'valley' | 'summit'; km: number },
+  ]
+  'draft-tunnel-bounds': [
+    payload: { tunnelId: string; handle: 'entrance' | 'exit'; km: number },
+  ]
+  'edit-tunnel-bounds': [
+    payload: { tunnelId: string; handle: 'entrance' | 'exit'; km: number },
+  ]
 }>()
+
+type DragTarget =
+  | {
+      kind: 'climb'
+      climbId: number
+      handle: 'valley' | 'summit'
+      startKm: number
+    }
+  | {
+      kind: 'tunnel'
+      tunnelId: string
+      handle: 'entrance' | 'exit'
+      startKm: number
+    }
 
 const settingsStore = useSettingsStore()
 
@@ -139,6 +165,14 @@ const creationKm = ref<number | null>(null)
 const candidates = ref<TracePickCandidate[]>([])
 /** Position écran du menu de candidats. */
 const candidatePoint = ref<{ x: number; y: number } | null>(null)
+
+/** Glissement en cours d'une borne sélectionnée. */
+let dragState: DragTarget | null = null
+let dragStartX = 0
+let dragMoved = false
+let dragLastKm = 0
+/** Le curseur survole-t-il une borne déplaçable ? */
+let hoverDraggable = false
 
 const candidateStyle = computed(() => {
   const point = candidatePoint.value
@@ -283,10 +317,19 @@ function formatPickKm(km: number): string {
   return `${km.toFixed(3).replace('.', ',')} km`
 }
 
-/** Curseur de création sur la carte. */
-function updateCreationCursor(): void {
+/** Curseur de la carte selon création, glissement ou survol. */
+function updateCursor(): void {
   const canvas = map.value?.getCanvas()
-  if (canvas) canvas.style.cursor = props.creationKind ? 'crosshair' : ''
+  if (!canvas) return
+  if (dragState) {
+    canvas.style.cursor = 'grabbing'
+    return
+  }
+  if (props.creationKind) {
+    canvas.style.cursor = 'crosshair'
+    return
+  }
+  canvas.style.cursor = hoverDraggable ? 'ew-resize' : ''
 }
 
 /** Ferme le menu de candidats sans changer le premier point. */
@@ -428,6 +471,180 @@ function resetCreation(): void {
   candidates.value = []
   candidatePoint.value = null
   render(false)
+}
+
+/** Longueur totale de la trace, en kilomètres. */
+function totalKm(): number {
+  return (props.file?.trace.totalDistanceM ?? 0) / 1000
+}
+
+/** Pas de déplacement horizontal, borné aux valeurs du paramètre. */
+function dragStepM(): number {
+  const value = Number(
+    getParam('Altimetrie.Visualisation.pasDeplacementBornes') ?? 5,
+  )
+  return Number.isFinite(value) ? Math.min(25, Math.max(1, value)) : 5
+}
+
+/** Borne sélectionnée sous le point, ou null. */
+function dragTargetAt(point: mapboxgl.Point): DragTarget | null {
+  const instance = map.value
+  if (!instance) return null
+
+  if (props.mode === 'climbs') {
+    const features = instance.queryRenderedFeatures(point, {
+      layers: [ALTIMETRIE_LAYER_IDS.markers],
+    })
+    for (const feature of features) {
+      if (feature.properties?.selected !== true) continue
+      const role = String(feature.properties?.role ?? '')
+      if (role !== 'valley' && role !== 'summit') continue
+      const climbId = Number(feature.properties?.climbId)
+      if (!Number.isFinite(climbId)) continue
+      const climb = props.file?.climbs.find(
+        candidate => candidate.id === climbId,
+      )
+      if (!climb) continue
+      return {
+        kind: 'climb',
+        climbId,
+        handle: role,
+        startKm: role === 'valley' ? climb.startKm : climb.endKm,
+      }
+    }
+    return null
+  }
+
+  const features = instance.queryRenderedFeatures(point, {
+    layers: [
+      ALTIMETRIE_LAYER_IDS.tunnelEndpointCircles,
+      ALTIMETRIE_LAYER_IDS.tunnelEndpointPins,
+    ],
+  })
+  for (const feature of features) {
+    if (feature.properties?.selected !== true) continue
+    if (feature.properties?.draggable !== true) continue
+    const role = String(feature.properties?.role ?? '')
+    if (role !== 'entry' && role !== 'exit') continue
+    const tunnelId = String(feature.properties?.tunnelId ?? '')
+    if (!tunnelId) continue
+    const tunnel = props.tunnels.find(
+      candidate => candidate.id === tunnelId,
+    )
+    if (!tunnel) continue
+    return {
+      kind: 'tunnel',
+      tunnelId,
+      handle: role === 'entry' ? 'entrance' : 'exit',
+      startKm: role === 'entry' ? tunnel.startKm : tunnel.endKm,
+    }
+  }
+  return null
+}
+
+/** Démarre le glissement d'une borne sélectionnée. */
+function onMapMouseDown(event: MapMouseEvent): void {
+  if (event.originalEvent.button !== 0) return
+  if (props.creationKind || dragState) return
+  const target = dragTargetAt(event.point)
+  if (!target) return
+
+  dragState = target
+  dragStartX = event.point.x
+  dragLastKm = target.startKm
+  dragMoved = false
+  hoverDraggable = false
+
+  map.value?.dragPan.disable()
+  map.value?.on('mousemove', onDragMove)
+  window.addEventListener('mouseup', onDragEnd)
+  window.addEventListener('blur', onDragEnd)
+  updateCursor()
+}
+
+/** Applique le delta horizontal au brouillon, sans écriture. */
+function onDragMove(event: MapMouseEvent): void {
+  const target = dragState
+  if (!target) return
+
+  const deltaX = event.point.x - dragStartX
+  if (Math.abs(deltaX) >= 1) dragMoved = true
+
+  // Option B : tirer à droite allonge toujours. L'entrée se rapproche du
+  // km 0, la sortie s'en éloigne.
+  const direction =
+    target.handle === 'valley' || target.handle === 'entrance' ? -1 : 1
+  const rawKm =
+    target.startKm + (deltaX * dragStepM() * direction) / 1000
+  const total = totalKm()
+  const km = total > 0 ? Math.max(0, Math.min(total, rawKm)) : rawKm
+  dragLastKm = km
+
+  if (target.kind === 'climb') {
+    emit('draft-bounds', {
+      climbId: target.climbId,
+      handle: target.handle,
+      km,
+    })
+  } else {
+    emit('draft-tunnel-bounds', {
+      tunnelId: target.tunnelId,
+      handle: target.handle,
+      km,
+    })
+  }
+}
+
+/** Termine le glissement et valide la borne si la souris a bougé. */
+function onDragEnd(): void {
+  const target = dragState
+  const moved = dragMoved
+  const km = dragLastKm
+  cleanupDrag()
+  if (!target || !moved) return
+
+  if (target.kind === 'climb') {
+    emit('edit-bounds', {
+      climbId: target.climbId,
+      handle: target.handle,
+      km,
+    })
+  } else {
+    emit('edit-tunnel-bounds', {
+      tunnelId: target.tunnelId,
+      handle: target.handle,
+      km,
+    })
+  }
+}
+
+/** Réactive le déplacement de carte et détache les écouteurs. */
+function cleanupDrag(): void {
+  dragState = null
+  dragMoved = false
+  const instance = map.value
+  instance?.off('mousemove', onDragMove)
+  instance?.dragPan.enable()
+  window.removeEventListener('mouseup', onDragEnd)
+  window.removeEventListener('blur', onDragEnd)
+  updateCursor()
+}
+
+/** Curseur de survol d'une borne sélectionnée. */
+function onMapHoverMove(event: MapMouseEvent): void {
+  if (dragState || props.creationKind) return
+  const next = dragTargetAt(event.point) !== null
+  if (next !== hoverDraggable) {
+    hoverDraggable = next
+    updateCursor()
+  }
+}
+
+/** Quitte la carte : le curseur redevient normal. */
+function onCanvasLeave(): void {
+  if (dragState || !hoverDraggable) return
+  hoverDraggable = false
+  updateCursor()
 }
 
 /** Pousse les données courantes dans les sources de la carte. */
@@ -652,7 +869,10 @@ async function initializeMap(token: string): Promise<void> {
   map.value = instance
 
   instance.on('click', onMapClick)
+  instance.on('mousedown', onMapMouseDown)
+  instance.on('mousemove', onMapHoverMove)
   instance.on('movestart', closeCandidates)
+  instance.getCanvas().addEventListener('mouseleave', onCanvasLeave)
 
   instance.addControl(
     new mapboxgl.NavigationControl({ showCompass: true, visualizePitch: true }),
@@ -686,7 +906,7 @@ async function initializeMap(token: string): Promise<void> {
 
     addAltimetrieLayers(instance)
     applyLayerStyle()
-    updateCreationCursor()
+    updateCursor()
 
     const queue = readyQueue.splice(0)
     for (const fn of queue) {
@@ -708,6 +928,11 @@ function destroyMap(): void {
   creationKm.value = null
   candidates.value = []
   candidatePoint.value = null
+  window.removeEventListener('mouseup', onDragEnd)
+  window.removeEventListener('blur', onDragEnd)
+  dragState = null
+  dragMoved = false
+  hoverDraggable = false
   if (map.value) {
     try {
       map.value.remove()
@@ -769,13 +994,14 @@ watch(
   () => props.creationKind,
   () => {
     resetCreation()
-    updateCreationCursor()
+    updateCursor()
   },
 )
 
 watch(
   () => props.mode,
   () => {
+    if (dragState) cleanupDrag()
     render(false)
     if (props.mode === 'tunnels' && props.selectedTunnelIds.length > 0) {
       fitSelectedTunnels()

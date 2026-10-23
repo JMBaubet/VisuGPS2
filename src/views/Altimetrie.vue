@@ -87,6 +87,10 @@
             @create-tunnel="onCreateTunnel"
             @create-error="onCreateError"
             @create-tunnel-error="onTunnelCreateError"
+            @draft-bounds="onDraftBounds"
+            @edit-bounds="onEditBounds"
+            @draft-tunnel-bounds="onDraftTunnelBounds"
+            @edit-tunnel-bounds="onEditTunnelBounds"
           />
 
           <AltimetrieProfileWidget
