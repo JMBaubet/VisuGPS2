@@ -68,6 +68,13 @@ pub struct TunnelParams {
     pub bearing_window_m: f64,
     /// Nombre minimal de points consécutifs appariés pour retenir un tunnel.
     pub min_run_length: usize,
+    /// Longueur minimale d'un tunnel détecté sur la trace (m).
+    #[serde(default = "default_min_length_m")]
+    pub min_length_m: f64,
+}
+
+fn default_min_length_m() -> f64 {
+    25.0
 }
 
 impl Default for TunnelParams {
@@ -78,6 +85,7 @@ impl Default for TunnelParams {
             bbox_margin_m: 500.0,
             bearing_window_m: 30.0,
             min_run_length: 2,
+            min_length_m: default_min_length_m(),
         }
     }
 }

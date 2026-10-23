@@ -14,6 +14,7 @@ fn defaults_match_the_prototype() {
     assert_eq!(params.bbox_margin_m, 500.0);
     assert_eq!(params.bearing_window_m, 30.0);
     assert_eq!(params.min_run_length, 2);
+    assert_eq!(params.min_length_m, 25.0);
 
     let support = default_tunnel_support();
     assert!(support.actif);
@@ -30,6 +31,7 @@ fn default_toml() -> toml::Table {
         bboxMargin = 500
         bearingWindow = 30
         minRunLength = 2
+        minLength = 25
 
         [Tunnels.Support]
         actif = true
@@ -50,6 +52,7 @@ fn user_overrides_take_precedence() {
         bboxMargin = 1200
         bearingWindow = 50
         minRunLength = 3
+        minLength = 40
 
         [Tunnels.Support]
         actif = false
@@ -69,6 +72,7 @@ fn user_overrides_take_precedence() {
     assert_eq!(params.bbox_margin_m, 1200.0);
     assert_eq!(params.bearing_window_m, 50.0);
     assert_eq!(params.min_run_length, 3);
+    assert_eq!(params.min_length_m, 40.0);
     assert!(!support.actif);
     assert_eq!(support.taille_max_pbf_mb, 1200);
     assert_eq!(
@@ -97,6 +101,7 @@ fn unoverridden_values_fall_back_to_the_schema() {
     assert_eq!(params.distance_tolerance_m, 30.0);
     assert_eq!(params.angle_tolerance_deg, 25.0);
     assert_eq!(params.min_run_length, 2);
+    assert_eq!(params.min_length_m, 25.0);
     assert!(!support.actif);
     assert_eq!(support.pbf_directory, None);
 }
@@ -123,6 +128,22 @@ fn blank_directory_is_none() {
 
     let support = support_from_settings(&toml::Table::new(), &overrides);
     assert_eq!(support.pbf_directory, None);
+}
+
+#[test]
+fn legacy_tunnel_params_default_to_25_m() {
+    let json = r#"{
+        "distanceToleranceM": 20.0,
+        "angleToleranceDeg": 25.0,
+        "bboxMarginM": 500.0,
+        "bearingWindowM": 30.0,
+        "minRunLength": 2
+    }"#;
+
+    let params: TunnelParams =
+        serde_json::from_str(json).expect("ancien fichier sans minLengthM");
+
+    assert_eq!(params.min_length_m, 25.0);
 }
 
 #[test]

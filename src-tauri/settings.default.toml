@@ -1276,6 +1276,24 @@ step = 1
 unit = "pts"
 icon = "mdi-counter"
 
+[Tunnels.Detection.minLength]
+description = "Longueur minimale d'un tunnel détecté"
+documentation = """
+Longueur minimale, en mètres, d'un tunnel retenu par la détection OSM. Les runs
+dont l'emprise sur la trace est plus courte sont ignorés : ils proviennent le
+plus souvent d'un portail effleuré ou d'un fragment de tunnel, pas d'une
+traversée réelle. Le seuil s'applique **uniquement à la détection** ; la
+création manuelle et la sauvegarde conservent leur minimum structurel de 10 m.
+Valeur par défaut : **25 m**.
+"""
+type = "int"
+default = 25
+min = 10
+max = 100
+step = 5
+unit = "m"
+icon = "mdi-ruler"
+
 [Tunnels.Detection.mergeGap]
 description = "Écart maximal pour proposer une fusion"
 documentation = """

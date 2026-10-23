@@ -205,6 +205,9 @@ pub fn match_tunnels(
             continue;
         }
         let length_m = round_to((cumul[run.end_idx] - cumul[run.start_idx]).max(0.0), 1);
+        if length_m < params.min_length_m {
+            continue;
+        }
 
         tunnels.push(Tunnel {
             id: format!("t-{:03}", index + 1),

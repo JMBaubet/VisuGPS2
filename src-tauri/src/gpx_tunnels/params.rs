@@ -86,6 +86,10 @@ pub fn params_from_settings(
             "Tunnels.Detection.minRunLength",
             fallback.min_run_length,
         ),
+        min_length_m: number(
+            "Tunnels.Detection.minLength",
+            fallback.min_length_m,
+        ),
     }
 }
 

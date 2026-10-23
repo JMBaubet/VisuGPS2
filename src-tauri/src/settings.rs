@@ -1092,15 +1092,15 @@ mod tests {
             }
         }
 
-        // 2. Neuf paramètres, tous rattachés aux deux vues.
+        // 2. Dix paramètres, tous rattachés aux deux vues.
         let tunnel_defs: Vec<_> = defs
             .iter()
             .filter(|definition| definition.path.starts_with("Tunnels."))
             .collect();
         assert_eq!(
             tunnel_defs.len(),
-            9,
-            "9 paramètres `Tunnels.*` attendus : {:?}",
+            10,
+            "10 paramètres `Tunnels.*` attendus : {:?}",
             tunnel_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
         );
         for definition in &tunnel_defs {
@@ -1132,6 +1132,16 @@ mod tests {
         assert_eq!(distance.min, Some(5.0));
         assert_eq!(distance.max, Some(50.0));
         assert_eq!(distance.unit.as_deref(), Some("m"));
+
+        let min_length = tunnel_defs
+            .iter()
+            .find(|definition| definition.path == "Tunnels.Detection.minLength")
+            .expect("paramètre `minLength` déclaré");
+        assert_eq!(min_length.setting_type, "int");
+        assert_eq!(min_length.default.as_i64(), Some(25));
+        assert_eq!(min_length.min, Some(10.0));
+        assert_eq!(min_length.max, Some(100.0));
+        assert_eq!(min_length.unit.as_deref(), Some("m"));
 
         let merge = tunnel_defs
             .iter()

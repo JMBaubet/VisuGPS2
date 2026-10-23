@@ -79,6 +79,8 @@ fn filters_runs_shorter_than_the_minimum() {
     ];
 
     let mut params = TunnelParams::default();
+    // On isole la règle de run : le seuil de longueur a son propre test.
+    params.min_length_m = 0.0;
     let tunnels = match_tunnels(&points, &[way.clone()], &params);
     assert_eq!(tunnels.len(), 1, "deux points consécutifs suffisent");
 
@@ -86,6 +88,30 @@ fn filters_runs_shorter_than_the_minimum() {
     assert!(
         match_tunnels(&points, &[way], &params).is_empty(),
         "un run de deux points doit être écarté avec minRunLength = 3"
+    );
+}
+
+#[test]
+fn rejects_tunnels_shorter_than_the_minimum_length() {
+    let way = east_way("w1", 45.0, 2.0, 2.001);
+    let points = vec![
+        [2.0005, 45.00002],
+        [2.0006, 45.00002],
+        [2.0007, 45.00002],
+    ];
+    let mut params = TunnelParams::default();
+
+    params.min_length_m = 20.0;
+    assert!(
+        match_tunnels(&points, &[way.clone()], &params).is_empty(),
+        "un tunnel de moins de 20 m doit être écarté"
+    );
+
+    params.min_length_m = 10.0;
+    assert_eq!(
+        match_tunnels(&points, &[way], &params).len(),
+        1,
+        "un tunnel d'environ 16 m doit être retenu avec un seuil de 10 m"
     );
 }
 
@@ -104,6 +130,8 @@ fn splits_two_disjoint_runs_on_the_same_way() {
     // Le saut nord fait sortir de la tolérance de distance ; on neutralise le
     // cap pour isoler la logique de runs.
     params.angle_tolerance_deg = 180.0;
+    // Les deux runs sont courts : on neutralise aussi le seuil de longueur.
+    params.min_length_m = 0.0;
 
     let tunnels = match_tunnels(&points, &[way], &params);
 

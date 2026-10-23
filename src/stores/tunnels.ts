@@ -35,6 +35,8 @@ export interface TunnelParams {
   bboxMarginM: number
   bearingWindowM: number
   minRunLength: number
+  /** Longueur minimale d'un tunnel détecté (m). */
+  minLengthM: number
 }
 
 export interface PbfFileRef {
@@ -137,6 +139,7 @@ const DEFAULT_TUNNEL_PARAMS: TunnelParams = {
   bboxMarginM: 500,
   bearingWindowM: 30,
   minRunLength: 2,
+  minLengthM: 25,
 }
 
 const DEFAULT_SUPPORT: TunnelSupportStatus = {

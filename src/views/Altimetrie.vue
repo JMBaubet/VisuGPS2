@@ -307,6 +307,7 @@ const currentTunnelParams = computed(() => ({
   bboxMarginM: settingNumber('Tunnels.Detection.bboxMargin', 500),
   bearingWindowM: settingNumber('Tunnels.Detection.bearingWindow', 30),
   minRunLength: settingNumber('Tunnels.Detection.minRunLength', 2),
+  minLengthM: settingNumber('Tunnels.Detection.minLength', 25),
 }))
 
 const tunnelParamsOutdated = computed(() => {
