@@ -2,6 +2,24 @@
   <div class="alt-map">
     <div ref="mapContainer" class="alt-map__canvas" />
 
+    <v-card
+      v-if="candidates.length > 0 && candidatePoint"
+      class="alt-map__candidates"
+      :style="candidateStyle"
+      @click.stop
+    >
+      <v-list density="compact" nav>
+        <v-list-subheader>Choisir le passage</v-list-subheader>
+        <v-list-item
+          v-for="(candidate, index) in candidates"
+          :key="`${candidate.km}-${index}`"
+          @click="chooseCandidate(candidate)"
+        >
+          <v-list-item-title>{{ formatPickKm(candidate.km) }}</v-list-item-title>
+        </v-list-item>
+      </v-list>
+    </v-card>
+
     <v-progress-circular
       v-if="mapLoading"
       class="alt-map__loading"
@@ -36,16 +54,31 @@
  * groupe sélectionné. Un groupe fusionné est peint en une seule bande continue,
  * du premier au dernier portail.
  *
+ * En mode création, un clic près de la trace est projeté sur le segment le plus
+ * proche et alimente la création d'une montée ou d'un tunnel ; les passages
+ * superposés sont proposés dans un petit menu avec leur kilomètre.
+ *
  * Le terrain Mapbox est activé (relief, pitch 60) et les couches sont drapées
  * sur le relief. Le composant ne connaît ni le store ni la vue : il reçoit ses
- * données en props et expose `centerOnDistance` au widget de profil.
+ * données en props, émet les créations et expose `centerOnDistance` au widget
+ * de profil.
  */
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
+import type { MapMouseEvent } from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import type { AltimetrieFile } from '../../stores/altimetrie'
 import type { Tunnel } from '../../stores/tunnels'
 import { useSettingsStore } from '../../stores/settings'
+import { MIN_CLIMB_LENGTH_KM } from '../../utils/altimetrieClimbs'
+import {
+  pickTraceCandidates,
+  type TracePickCandidate,
+} from '../../utils/altimetrieMapPick'
+import {
+  MIN_TUNNEL_LENGTH_KM,
+  tunnelRangeOverlaps,
+} from '../../utils/altimetrieTunnels'
 import { hexToRgbaString } from '../../utils/materialColors'
 import {
   ALTIMETRIE_LAYER_IDS,
@@ -53,6 +86,7 @@ import {
   ALTIMETRIE_SOURCE_IDS,
   ALTIMETRIE_TERRAIN_SOURCE,
   addAltimetrieLayers,
+  buildCreationPickFeature,
   buildMarkerFeatures,
   buildSegmentFeatures,
   buildSelectedClimbFeature,
@@ -78,6 +112,15 @@ const props = defineProps<{
   /** Tunnels physiques ; un groupe fusionné est peint comme une bande unique. */
   tunnels: Tunnel[]
   selectedTunnelIds: string[]
+  /** Création en cours : montée, tunnel, ou aucune. */
+  creationKind: 'climb' | 'tunnel' | null
+}>()
+
+const emit = defineEmits<{
+  'create-climb': [payload: { startKm: number; endKm: number }]
+  'create-tunnel': [payload: { startKm: number; endKm: number }]
+  'create-error': [message: string]
+  'create-tunnel-error': [message: string]
 }>()
 
 const settingsStore = useSettingsStore()
@@ -86,6 +129,34 @@ const mapContainer = ref<HTMLDivElement | null>(null)
 const map = shallowRef<mapboxgl.Map | null>(null)
 const mapReady = ref(false)
 const hasMapboxKey = ref(false)
+
+/** Rayon écran de sélection d'un passage autour du clic (pixels). */
+const PICK_RADIUS_PX = 24
+
+/** Premier point de la création en cours, en kilomètres. */
+const creationKm = ref<number | null>(null)
+/** Passages proposés quand plusieurs points se superposent. */
+const candidates = ref<TracePickCandidate[]>([])
+/** Position écran du menu de candidats. */
+const candidatePoint = ref<{ x: number; y: number } | null>(null)
+
+const candidateStyle = computed(() => {
+  const point = candidatePoint.value
+  const container = mapContainer.value
+  if (!point || !container) return {}
+
+  const width = 220
+  const height = Math.min(48 + candidates.value.length * 36, 280)
+  const left = Math.max(
+    8,
+    Math.min(point.x + 8, container.clientWidth - width - 8),
+  )
+  const top = Math.max(
+    8,
+    Math.min(point.y + 8, container.clientHeight - height - 8),
+  )
+  return { left: `${left}px`, top: `${top}px`, width: `${width}px` }
+})
 
 /** File d'attente des rendus demandés avant que la carte soit prête. */
 const readyQueue: Array<() => void> = []
@@ -189,6 +260,176 @@ function usableTracePath(): TracePath | null {
   return path
 }
 
+/** Chemin utilisé pour la sélection, avec repli sur le profil échantillonné. */
+function creationPath(): {
+  coordinates: [number, number][]
+  cumulative: number[]
+} | null {
+  const path = usableTracePath()
+  if (path) {
+    return { coordinates: path.coordinates, cumulative: path.cumulative }
+  }
+
+  const profile = props.file?.profile
+  if (!profile || profile.length < 2) return null
+  return {
+    coordinates: profile.map(point => [point.lon, point.lat]),
+    cumulative: profile.map(point => point.d),
+  }
+}
+
+/** Kilomètre affiché dans le menu de choix d'un passage. */
+function formatPickKm(km: number): string {
+  return `${km.toFixed(3).replace('.', ',')} km`
+}
+
+/** Curseur de création sur la carte. */
+function updateCreationCursor(): void {
+  const canvas = map.value?.getCanvas()
+  if (canvas) canvas.style.cursor = props.creationKind ? 'crosshair' : ''
+}
+
+/** Ferme le menu de candidats sans changer le premier point. */
+function closeCandidates(): void {
+  candidates.value = []
+  candidatePoint.value = null
+}
+
+/** Signale une erreur au parent, avec le bon événement selon le mode. */
+function emitCreationError(message: string): void {
+  if (props.creationKind === 'tunnel') {
+    emit('create-tunnel-error', message)
+  } else if (props.creationKind === 'climb') {
+    emit('create-error', message)
+  }
+}
+
+/** Le point tombe-t-il déjà dans un tunnel ou une montée existante ? */
+function isInsideExisting(km: number): boolean {
+  if (props.creationKind === 'tunnel') {
+    return props.tunnels.some(
+      tunnel => km >= tunnel.startKm && km <= tunnel.endKm,
+    )
+  }
+  if (props.creationKind === 'climb') {
+    return (props.file?.climbs ?? []).some(
+      climb => km >= climb.startKm && km <= climb.endKm,
+    )
+  }
+  return false
+}
+
+/** La plage sélectionnée chevauche-t-elle un élément existant ? */
+function hasCreationOverlap(startKm: number, endKm: number): boolean {
+  if (props.creationKind === 'tunnel') {
+    return tunnelRangeOverlaps(props.tunnels, startKm, endKm)
+  }
+  if (props.creationKind === 'climb') {
+    return (props.file?.climbs ?? []).some(
+      climb => startKm < climb.endKm && endKm > climb.startKm,
+    )
+  }
+  return false
+}
+
+/** Enregistre un point de création, puis émet la création au second. */
+function selectCreationPoint(candidate: TracePickCandidate): void {
+  const kind = props.creationKind
+  if (!kind) return
+
+  if (creationKm.value === null) {
+    if (isInsideExisting(candidate.km)) {
+      emitCreationError(
+        kind === 'climb'
+          ? "Le point de vallée doit être en dehors d'une montée existante."
+          : "Le point d'entrée doit être en dehors d'un tunnel existant.",
+      )
+      return
+    }
+    creationKm.value = candidate.km
+    render(false)
+    return
+  }
+
+  const startKm = Math.min(creationKm.value, candidate.km)
+  const endKm = Math.max(creationKm.value, candidate.km)
+  const minimum = kind === 'climb' ? MIN_CLIMB_LENGTH_KM : MIN_TUNNEL_LENGTH_KM
+
+  if (endKm - startKm < minimum) {
+    emitCreationError(
+      kind === 'climb'
+        ? 'La montée doit couvrir au moins 50 m.'
+        : 'Le tunnel doit couvrir au moins 10 m.',
+    )
+    return
+  }
+  if (hasCreationOverlap(startKm, endKm)) {
+    emitCreationError(
+      kind === 'climb'
+        ? 'La montée chevauche une montée existante.'
+        : 'Le tunnel chevauche un tunnel existant.',
+    )
+    return
+  }
+
+  if (kind === 'climb') {
+    emit('create-climb', { startKm, endKm })
+  } else {
+    emit('create-tunnel', { startKm, endKm })
+  }
+}
+
+/** Retient le passage choisi dans le menu. */
+function chooseCandidate(candidate: TracePickCandidate): void {
+  closeCandidates()
+  selectCreationPoint(candidate)
+}
+
+/** Clic sur la carte en mode création. */
+function onMapClick(event: MapMouseEvent): void {
+  if (!props.creationKind) return
+  if (candidates.value.length > 0) {
+    closeCandidates()
+    return
+  }
+
+  const instance = map.value
+  const path = creationPath()
+  if (!instance || !path) return
+
+  const screenCoordinates = path.coordinates.map(coordinate => {
+    const point = instance.project(coordinate)
+    return [point.x, point.y] as [number, number]
+  })
+  const picks = pickTraceCandidates(
+    path.coordinates,
+    screenCoordinates,
+    path.cumulative,
+    { x: event.point.x, y: event.point.y },
+    PICK_RADIUS_PX,
+  )
+
+  if (picks.length === 0) {
+    emitCreationError('Cliquez plus près de la trace.')
+    return
+  }
+  if (picks.length === 1) {
+    selectCreationPoint(picks[0])
+    return
+  }
+
+  candidates.value = picks
+  candidatePoint.value = { x: event.point.x, y: event.point.y }
+}
+
+/** Réinitialise la sélection de création en cours. */
+function resetCreation(): void {
+  creationKm.value = null
+  candidates.value = []
+  candidatePoint.value = null
+  render(false)
+}
+
 /** Pousse les données courantes dans les sources de la carte. */
 function render(fit = false): void {
   whenMapReady(() => {
@@ -207,6 +448,10 @@ function render(fit = false): void {
     const tunnelEndpointsSource = geojsonSource(
       instance,
       ALTIMETRIE_SOURCE_IDS.tunnelEndpoints,
+    )
+    const creationSource = geojsonSource(
+      instance,
+      ALTIMETRIE_SOURCE_IDS.creationPick,
     )
 
     // Les segments ne changent pas pendant un glissement : on ne reconstruit
@@ -262,6 +507,12 @@ function render(fit = false): void {
         selectedSource?.setData(emptyFC())
       }
     }
+
+    creationSource?.setData(
+      file && creationKm.value !== null
+        ? buildCreationPickFeature(file, creationKm.value, path)
+        : emptyFC(),
+    )
 
     if (fit && !framed && fitTrace()) {
       framed = true
@@ -400,6 +651,9 @@ async function initializeMap(token: string): Promise<void> {
   })
   map.value = instance
 
+  instance.on('click', onMapClick)
+  instance.on('movestart', closeCandidates)
+
   instance.addControl(
     new mapboxgl.NavigationControl({ showCompass: true, visualizePitch: true }),
     'top-right',
@@ -432,6 +686,7 @@ async function initializeMap(token: string): Promise<void> {
 
     addAltimetrieLayers(instance)
     applyLayerStyle()
+    updateCreationCursor()
 
     const queue = readyQueue.splice(0)
     for (const fn of queue) {
@@ -450,6 +705,9 @@ function destroyMap(): void {
   lastSegmentsSource = null
   lastSegmentsPath = null
   readyQueue.length = 0
+  creationKm.value = null
+  candidates.value = []
+  candidatePoint.value = null
   if (map.value) {
     try {
       map.value.remove()
@@ -508,6 +766,14 @@ watch(
 )
 
 watch(
+  () => props.creationKind,
+  () => {
+    resetCreation()
+    updateCreationCursor()
+  },
+)
+
+watch(
   () => props.mode,
   () => {
     render(false)
@@ -552,6 +818,13 @@ defineExpose({
 .alt-map__canvas {
   position: absolute;
   inset: 0;
+}
+
+.alt-map__candidates {
+  position: absolute;
+  z-index: 5;
+  max-height: 280px;
+  overflow-y: auto;
 }
 
 .alt-map__loading {

@@ -41,6 +41,7 @@ export const ALTIMETRIE_SOURCE_IDS = {
   selected: 'altimetrie-selected',
   tunnels: 'altimetrie-tunnels',
   tunnelEndpoints: 'altimetrie-tunnel-endpoints',
+  creationPick: 'altimetrie-creation-pick',
 } as const
 
 export const ALTIMETRIE_LAYER_IDS = {
@@ -54,6 +55,7 @@ export const ALTIMETRIE_LAYER_IDS = {
   markers: 'altimetrie-climb-markers',
   tunnelEndpointCircles: 'altimetrie-tunnel-endpoint-circles',
   tunnelEndpointPins: 'altimetrie-tunnel-endpoint-pins',
+  creationPick: 'altimetrie-creation-pick',
 } as const
 
 const TUNNEL_ENTRY_PIN_IMAGE = 'altimetrie-tunnel-entry-pin'
@@ -121,6 +123,10 @@ export function addAltimetrieLayers(map: Map): void {
   map.addSource(ALTIMETRIE_SOURCE_IDS.selected, { type: 'geojson', data: empty })
   map.addSource(ALTIMETRIE_SOURCE_IDS.tunnels, { type: 'geojson', data: empty })
   map.addSource(ALTIMETRIE_SOURCE_IDS.tunnelEndpoints, {
+    type: 'geojson',
+    data: empty,
+  })
+  map.addSource(ALTIMETRIE_SOURCE_IDS.creationPick, {
     type: 'geojson',
     data: empty,
   })
@@ -319,6 +325,22 @@ export function addAltimetrieLayers(map: Map): void {
     },
   }
   map.addLayer(tunnelEndpointPins)
+
+  // Premier point de la création en cours : simple repère bleu, au-dessus des
+  // couches de données pour rester visible pendant la sélection.
+  const creationPick: CircleLayerSpecification = {
+    id: ALTIMETRIE_LAYER_IDS.creationPick,
+    type: 'circle',
+    source: ALTIMETRIE_SOURCE_IDS.creationPick,
+    paint: {
+      'circle-radius': 6,
+      'circle-color': '#1976D2',
+      'circle-stroke-color': '#FFFFFF',
+      'circle-stroke-width': 2,
+      'circle-opacity': 1,
+    },
+  }
+  map.addLayer(creationPick)
 }
 
 /** Géométrie d'origine d'une trace et distances cumulées 2D. */
@@ -618,6 +640,28 @@ export function buildTunnelEndpointFeatures(
   }
 
   return { type: 'FeatureCollection', features }
+}
+
+/** Repère du premier point d'une création en cours, ou collection vide. */
+export function buildCreationPickFeature(
+  file: AltimetrieFile,
+  km: number | null,
+  path: TracePath | null = null,
+): GeoJSON.FeatureCollection {
+  if (km === null) return emptyFC()
+  const coordinate = coordinateAt(file, path, km * 1000)
+  if (!coordinate) return emptyFC()
+
+  return {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Point', coordinates: coordinate },
+      },
+    ],
+  }
 }
 
 /** Découpe sur la géométrie d'origine, avec repli sur le profil échantillonné. */

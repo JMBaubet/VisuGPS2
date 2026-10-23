@@ -82,6 +82,11 @@
             :selected-climb-id="
               activeTab === 'climbs' ? altimetrieStore.selectedClimbId : null
             "
+            :creation-kind="creationKind"
+            @create-climb="onCreateClimb"
+            @create-tunnel="onCreateTunnel"
+            @create-error="onCreateError"
+            @create-tunnel-error="onTunnelCreateError"
           />
 
           <AltimetrieProfileWidget
@@ -276,6 +281,10 @@ const isLoading = computed(
 const tunnelGroups = computed(() => tunnelsStore.groups)
 const selectedTunnelIds = computed(() => tunnelsStore.selectedTunnelIds)
 const tunnelCount = computed(() => tunnelsStore.tunnelCount)
+/** Mode de création actif, transmis à la carte. */
+const creationKind = computed<'climb' | 'tunnel' | null>(() =>
+  creating.value ? 'climb' : creatingTunnel.value ? 'tunnel' : null,
+)
 const mergeGapM = computed(() =>
   settingNumber('Tunnels.Detection.mergeGap', 100),
 )
