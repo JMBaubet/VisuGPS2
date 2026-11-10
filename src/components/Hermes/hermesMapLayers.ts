@@ -88,6 +88,24 @@ export const HERMES_RING_LAYER_IDS = {
 /** Mauve Material (purple-600) de l'outil « marqueur distance ». */
 export const HERMES_DISTANCE_COLOR = '#8E24AA'
 
+/**
+ * Style du polygone en cours d'édition, appliqué aux couches internes de
+ * Mapbox Draw. Centralisé ici pour les essais de contraste :
+ * - `fillColor` / `fillOpacity` : fond ;
+ * - `lineColor` / `lineWidth` / `lineDasharray` : bordure ;
+ * - `vertexOuterColor` / `vertexColor` / `midpointColor` : poignées.
+ */
+export const HERMES_DRAW_POLYGON_STYLE = {
+  fillColor: '#80CBC4',
+  fillOpacity: 0.4,
+  lineColor: '#009688',
+  lineWidth: 3,
+  lineDasharray: [1, 0] as number[],
+  vertexOuterColor: '#FFFFFF',
+  vertexColor: '#009688',
+  midpointColor: '#009688',
+}
+
 /** Style des traces, lu dans les paramètres de la carte de l'Accueil. */
 export interface HermesTraceStyle {
   favoriteColor: string

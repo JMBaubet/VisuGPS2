@@ -95,6 +95,7 @@ import {
   datasetsFeatureCollection,
   emptyFC,
   HERMES_DISTANCE_COLOR,
+  HERMES_DRAW_POLYGON_STYLE,
   HERMES_LAYER_IDS,
   HERMES_MAP_STYLE,
   HERMES_RING_SOURCE_IDS,
@@ -218,6 +219,56 @@ function applyDrawMode(): void {
     return
   }
   drawControl.changeMode('simple_select')
+}
+
+/**
+ * Couche du thème Mapbox Draw. Les types publiés décrivent une ancienne
+ * nomenclature de couches ; le thème runtime de la version installée utilise
+ * les identifiants `gl-draw-*`.
+ */
+interface DrawThemeLayer {
+  id: string
+  paint?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+/**
+ * Construit le thème de Mapbox Draw avec les couleurs de
+ * `HERMES_DRAW_POLYGON_STYLE`. Le thème est fourni au constructeur : Draw
+ * applique les peintures au moment où il crée ses couches. Un
+ * `setPaintProperty` immédiat serait ignoré, car Draw diffère `addLayers`
+ * tant que la carte n'est pas complètement `loaded()`.
+ */
+function buildDrawStyles(): DrawThemeLayer[] {
+  const drawStyle = HERMES_DRAW_POLYGON_STYLE
+  const theme = MapboxDraw.lib.theme as unknown as DrawThemeLayer[]
+
+  return theme.map(layer => {
+    const paint = { ...(layer.paint ?? {}) }
+    switch (layer.id) {
+      case 'gl-draw-polygon-fill':
+        paint['fill-color'] = drawStyle.fillColor
+        paint['fill-opacity'] = drawStyle.fillOpacity
+        break
+      case 'gl-draw-lines':
+        paint['line-color'] = drawStyle.lineColor
+        paint['line-width'] = drawStyle.lineWidth
+        paint['line-dasharray'] = drawStyle.lineDasharray
+        break
+      case 'gl-draw-vertex-outer':
+        paint['circle-color'] = drawStyle.vertexOuterColor
+        break
+      case 'gl-draw-vertex-inner':
+        paint['circle-color'] = drawStyle.vertexColor
+        break
+      case 'gl-draw-midpoint':
+        paint['circle-color'] = drawStyle.midpointColor
+        break
+      default:
+        return layer
+    }
+    return { ...layer, paint }
+  })
 }
 
 function render(): void {
@@ -599,6 +650,7 @@ async function initializeMap(token: string): Promise<void> {
       displayControlsDefault: false,
       controls: {},
       defaultMode: 'simple_select',
+      styles: buildDrawStyles(),
     })
     draw = drawControl
     instance.addControl(drawControl)
