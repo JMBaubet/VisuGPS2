@@ -1673,7 +1673,9 @@ valeur et `Hermes.Connexion.orsBaseUrl`.
 
 Le client Rust retire une éventuelle barre oblique finale avant de composer
 les routes. Aucun `X-Admin-Token` n'est stocké ni envoyé : les routes admin
-(`/regions` en écriture, `/geofabrik`, `/aux/prepare`) restent hors périmètre.
+(`/regions` en écriture, `/geofabrik`) restent hors périmètre. En revanche,
+`POST /datasets/{id}/aux/prepare` est exposé sans jeton : la vue Hermes peut
+lancer la préparation des artefacts aux et suit ensuite `GET /aux`.
 """
 type = "string"
 default = "http://10.15.58.131:9000/api/v1"

@@ -201,6 +201,19 @@ pub struct HermesAuxStatus {
     pub active_dataset: Option<String>,
 }
 
+/// Réponse de `POST /datasets/{id}/aux/prepare` (202, tâche de fond).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesAuxPrepareResponse {
+    #[serde(alias = "dataset_id")]
+    pub dataset_id: String,
+    pub status: String,
+    #[serde(alias = "started_at")]
+    pub started_at: String,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
 // ─── Réveil ───────────────────────────────────────────────────────────
 
 /// Résultat de `hermes_wake`.

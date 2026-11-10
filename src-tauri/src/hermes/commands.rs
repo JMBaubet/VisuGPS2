@@ -2,8 +2,10 @@
 //!
 //! Toutes les E/S réseau passent par ce module : le frontend ne fait aucun
 //! `fetch`, et aucun jeton administratif n'est stocké ni transmis. Les routes
-//! admin (`POST/PUT/DELETE /regions`, `/geofabrik`, `/aux/prepare`) ne sont
-//! volontairement pas exposées.
+//! de gestion des régions et Geofabrik (`POST/PUT/DELETE /regions`,
+//! `/geofabrik`) restent hors périmètre. `POST /datasets/{id}/aux/prepare`
+//! est exposé : le serveur l'autorise sans jeton et le store suit ensuite
+//! `GET /datasets/{id}/aux`.
 
 use std::time::Duration;
 
@@ -12,8 +14,9 @@ use serde_json::Value;
 use super::client::{validate_id, HermesClient};
 use super::config::{self, HermesConfig};
 use super::types::{
-    coded, codes, HermesAuxStatus, HermesCreateDatasetRequest, HermesDataset, HermesIdStatus,
-    HermesPolygon, HermesPolygonInput, HermesRegion, HermesStatusResponse, HermesWakeResult,
+    coded, codes, HermesAuxPrepareResponse, HermesAuxStatus, HermesCreateDatasetRequest,
+    HermesDataset, HermesIdStatus, HermesPolygon, HermesPolygonInput, HermesRegion,
+    HermesStatusResponse, HermesWakeResult,
 };
 use super::wake;
 
@@ -169,6 +172,33 @@ pub async fn hermes_aux_status(
     client
         .get::<HermesAuxStatus>(
             &format!("/datasets/{}/aux", dataset_id),
+            config.request_timeout,
+        )
+        .await
+}
+
+/// `POST /datasets/{id}/aux/prepare` — lance la génération des artefacts aux.
+///
+/// Le serveur répond 202 et poursuit en tâche de fond : le store suit ensuite
+/// `GET /datasets/{id}/aux`. `force` régénère les artefacts existants,
+/// `skip_mm` saute la génération du dossier `mm/`.
+#[tauri::command]
+pub async fn hermes_prepare_aux(
+    app: tauri::AppHandle,
+    dataset_id: String,
+    force: bool,
+    skip_mm: bool,
+) -> Result<HermesAuxPrepareResponse, String> {
+    validate_id(&dataset_id, "dataset")?;
+    let (config, client) = open(&app).await?;
+    let body = serde_json::json!({
+        "force": force,
+        "skipMm": skip_mm,
+    });
+    client
+        .post(
+            &format!("/datasets/{}/aux/prepare", dataset_id),
+            &body,
             config.request_timeout,
         )
         .await

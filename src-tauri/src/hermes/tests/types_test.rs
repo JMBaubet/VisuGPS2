@@ -7,8 +7,8 @@
 use serde_json::json;
 
 use crate::hermes::types::{
-    HermesAuxStatus, HermesDataset, HermesIdStatus, HermesPolygon, HermesPolygonInput,
-    HermesRegion,
+    HermesAuxPrepareResponse, HermesAuxStatus, HermesDataset, HermesIdStatus, HermesPolygon,
+    HermesPolygonInput, HermesRegion,
 };
 
 #[test]
@@ -142,6 +142,28 @@ fn aux_status_accepts_camel_case() {
     let out = serde_json::to_value(&aux).expect("aux sérialisable");
     assert_eq!(out["datasetId"], "provence-alpes-cote-dazur");
     assert_eq!(out["loadedInMemory"], false);
+}
+
+#[test]
+fn aux_prepare_response_accepts_camel_case_and_serializes_camel_case() {
+    let raw = json!({
+        "datasetId": "test-monaco-ds",
+        "status": "preparing",
+        "startedAt": "2026-11-09T20:40:44Z",
+        "message": "Préparation en tâche de fond. Consulter GET /datasets/{id}/aux"
+    });
+
+    let response: HermesAuxPrepareResponse =
+        serde_json::from_value(raw).expect("réponse aux/prepare lisible");
+    assert_eq!(response.dataset_id, "test-monaco-ds");
+    assert_eq!(response.status, "preparing");
+    assert_eq!(response.started_at, "2026-11-09T20:40:44Z");
+    assert!(response.message.is_some());
+
+    let out = serde_json::to_value(&response).expect("réponse aux/prepare sérialisable");
+    assert_eq!(out["datasetId"], "test-monaco-ds");
+    assert_eq!(out["startedAt"], "2026-11-09T20:40:44Z");
+    assert_eq!(out["status"], "preparing");
 }
 
 #[test]

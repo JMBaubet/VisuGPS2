@@ -84,6 +84,56 @@
         </v-chip>
       </div>
 
+      <div
+        v-if="hermesStore.activeDataset"
+        class="d-flex align-center ga-2 mt-2"
+      >
+        <v-tooltip location="bottom" max-width="320">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              size="x-small"
+              variant="tonal"
+              prepend-icon="mdi-hammer-wrench"
+              :loading="auxBusyActive"
+              :disabled="
+                auxBusyActive ||
+                hermesStore.auxPreparing ||
+                hermesStore.activeDataset.status !== 'ready'
+              "
+              @click="onPrepareAux"
+            >
+              {{ auxActionLabel }}
+            </v-btn>
+          </template>
+          <span>{{ auxActionHint }}</span>
+        </v-tooltip>
+        <span
+          v-if="hermesStore.activeDataset.status !== 'ready'"
+          class="text-caption text-medium-emphasis"
+        >
+          Dataset non prêt
+        </span>
+        <span
+          v-else-if="
+            hermesStore.auxPreparing &&
+            !auxBusyActive &&
+            hermesStore.auxPreparingDatasetId
+          "
+          class="text-caption text-medium-emphasis"
+        >
+          Aux en cours : {{ hermesStore.auxPreparingDatasetId }}
+        </span>
+      </div>
+
+      <div
+        v-if="hermesStore.activeAux?.lastError && !allAuxPresent"
+        class="text-caption text-error mt-1"
+        :title="hermesStore.activeAux.lastError"
+      >
+        {{ hermesStore.activeAux.lastError }}
+      </div>
+
       <div class="hermes-line mt-2">
         <span class="hermes-line__label">Instance ORS</span>
         <span class="hermes-line__value">{{ orsLabel }}</span>
@@ -138,7 +188,9 @@
  *
  * Elle est toujours visible, quel que soit l'onglet actif. Le choix du dataset
  * est persisté dans `Hermes.Dataset.actif` ; seuls les datasets `ready` sont
- * sélectionnables.
+ * sélectionnables. Le bouton de préparation aux lance
+ * `POST /datasets/{id}/aux/prepare` pour le dataset actif et suit son
+ * avancement.
  */
 import { computed } from 'vue'
 import { useHermesStore } from '../../stores/hermes'
@@ -176,6 +228,30 @@ const auxChips = computed(() => {
   ]
 })
 
+const allAuxPresent = computed(() => {
+  const aux = hermesStore.activeAux
+  return !!aux && aux.communes.exists && aux.tunnels.exists && aux.mm.exists
+})
+
+/** Une préparation est en cours pour le dataset actif (locale ou serveur). */
+const auxBusyActive = computed(
+  () =>
+    (hermesStore.auxPreparing &&
+      hermesStore.auxPreparingDatasetId === hermesStore.activeDatasetId) ||
+    hermesStore.activeAux?.preparing === true,
+)
+
+const auxActionLabel = computed(() => {
+  if (auxBusyActive.value) return 'Préparation en cours…'
+  return allAuxPresent.value ? 'Relancer la préparation' : 'Préparer les aux'
+})
+
+const auxActionHint = computed(() =>
+  allAuxPresent.value
+    ? 'Régénère communes, tunnels et mm (force).'
+    : 'Génère les artefacts aux manquants pour le dataset actif.',
+)
+
 const orsLabel = computed(() => {
   const instance = hermesStore.activeInstance
   const health = hermesStore.orsHealth
@@ -191,6 +267,12 @@ async function onSelectDataset(value: string | null): Promise<void> {
   } catch (error) {
     ui.showError(parseHermesError(error).message)
   }
+}
+
+async function onPrepareAux(): Promise<void> {
+  const dataset = hermesStore.activeDataset
+  if (!dataset || dataset.status !== 'ready' || auxBusyActive.value) return
+  await hermesStore.prepareAux(dataset.id, allAuxPresent.value)
 }
 
 async function refresh(): Promise<void> {

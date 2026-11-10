@@ -102,6 +102,7 @@ pub fn run() {
             hermes::commands::hermes_create_dataset,
             hermes::commands::hermes_delete_dataset,
             hermes::commands::hermes_aux_status,
+            hermes::commands::hermes_prepare_aux,
             hermes::commands::hermes_list_instances,
             hermes::commands::hermes_start_instance,
             hermes::commands::hermes_stop_instance,

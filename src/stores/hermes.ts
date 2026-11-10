@@ -92,6 +92,14 @@ export interface HermesAuxStatus {
   activeDataset: string | null
 }
 
+/** Réponse de `POST /datasets/{id}/aux/prepare` (202, tâche de fond). */
+export interface HermesAuxPrepareResponse {
+  datasetId: string
+  status: string
+  startedAt: string
+  message: string | null
+}
+
 export interface HermesWakeResult {
   sent: boolean
   address: string
@@ -140,7 +148,9 @@ const DEFAULT_WAKE_TIMEOUT_SEC = 120
 const BUILD_POLL_INTERVAL_MS = 5000
 const WAKE_POLL_INTERVAL_MS = 3000
 const ORS_POLL_INTERVAL_MS = 3000
+const AUX_POLL_INTERVAL_MS = 3000
 const BUILD_BUDGET_MS = 45 * 60 * 1000
+const AUX_BUDGET_MS = 45 * 60 * 1000
 const ORS_READY_TIMEOUT_SEC = 120
 
 function delay(ms: number): Promise<void> {
@@ -171,6 +181,8 @@ export const useHermesStore = defineStore('hermes', () => {
   const auxLoading = ref(false)
   const wakeProgress = ref<HermesWakeProgress | null>(null)
   const pollingDatasetId = ref<string | null>(null)
+  const auxPreparing = ref(false)
+  const auxPreparingDatasetId = ref<string | null>(null)
   const keepAliveActive = ref(false)
   const orsHealth = ref<string | null>(null)
   const orsStarting = ref(false)
@@ -181,6 +193,7 @@ export const useHermesStore = defineStore('hermes', () => {
   let pollToken = 0
   let pollingActive = false
   let auxToken = 0
+  let auxPrepareToken = 0
 
   // ─── Getters ───────────────────────────────────────────────────────
 
@@ -531,6 +544,9 @@ export const useHermesStore = defineStore('hermes', () => {
           lastErrorCode.value = null
           if (dataset.status === 'ready') {
             ui.showSuccess(`Dataset ${dataset.id} prêt.`)
+            // Le serveur peut déjà préparer les aux : un 409 est absorbé par
+            // prepareAux, qui se contente alors de suivre le statut.
+            void prepareAux(dataset.id, false)
             return
           }
           if (dataset.status === 'failed') {
@@ -587,6 +603,96 @@ export const useHermesStore = defineStore('hermes', () => {
     } finally {
       if (token === auxToken) {
         auxLoading.value = false
+      }
+    }
+  }
+
+  /** Suit la préparation aux jusqu'à la fin (poll 3 s, budget 45 min). */
+  async function pollAuxPreparation(
+    datasetId: string,
+    token: number,
+  ): Promise<boolean> {
+    const deadline = Date.now() + AUX_BUDGET_MS
+    while (Date.now() < deadline && token === auxPrepareToken) {
+      await delay(AUX_POLL_INTERVAL_MS)
+      if (token !== auxPrepareToken) return false
+
+      try {
+        const status = await invoke<HermesAuxStatus>('hermes_aux_status', {
+          datasetId,
+        })
+        if (activeDatasetId.value === datasetId) {
+          activeAux.value = status
+        }
+        if (status.preparing) continue
+        if (
+          status.communes.exists &&
+          status.tunnels.exists &&
+          status.mm.exists
+        ) {
+          ui.showSuccess(`Artefacts aux prêts pour ${datasetId}.`)
+          return true
+        }
+        if (status.lastError) {
+          ui.showError(
+            `Préparation aux de ${datasetId} échouée : ${status.lastError}`,
+          )
+          return false
+        }
+        ui.showWarning(`Artefacts aux incomplets pour ${datasetId}.`)
+        return false
+      } catch {
+        // Erreur transitoire : la préparation continue côté serveur.
+      }
+    }
+
+    if (token === auxPrepareToken) {
+      ui.showWarning(
+        `Préparation aux de ${datasetId} toujours en cours après 45 min.`,
+      )
+    }
+    return false
+  }
+
+  /**
+   * Lance la préparation des artefacts aux d'un dataset et suit son avancement.
+   *
+   * `force` régénère les fichiers existants. Un 409 signifie qu'une
+   * préparation (ou un build) est déjà en cours : on se contente de suivre le
+   * statut. Un seul suivi à la fois, le serveur ne lançant qu'une préparation.
+   */
+  async function prepareAux(
+    datasetId: string,
+    force = false,
+  ): Promise<boolean> {
+    if (auxPreparing.value) return false
+
+    auxPreparing.value = true
+    auxPreparingDatasetId.value = datasetId
+    const token = ++auxPrepareToken
+    void beginActivity()
+
+    try {
+      try {
+        await invoke<HermesAuxPrepareResponse>('hermes_prepare_aux', {
+          datasetId,
+          force,
+          skipMm: false,
+        })
+      } catch (error) {
+        const parsed = parseHermesError(error)
+        if (parsed.code !== 'HERMES_CONFLICT') {
+          recordError(error)
+          ui.showError(parsed.message)
+          return false
+        }
+      }
+      return await pollAuxPreparation(datasetId, token)
+    } finally {
+      endActivity()
+      if (token === auxPrepareToken) {
+        auxPreparing.value = false
+        auxPreparingDatasetId.value = null
       }
     }
   }
@@ -856,6 +962,8 @@ export const useHermesStore = defineStore('hermes', () => {
     auxLoading,
     wakeProgress,
     pollingDatasetId,
+    auxPreparing,
+    auxPreparingDatasetId,
     keepAliveActive,
     orsHealth,
     orsStarting,
@@ -875,6 +983,7 @@ export const useHermesStore = defineStore('hermes', () => {
     loadPolygons,
     loadInstances,
     loadAux,
+    prepareAux,
     ensureCoverageData,
     createDataset,
     deleteDataset,

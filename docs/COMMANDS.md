@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (84 commandes)
+## Catalogue (85 commandes)
 
 ### Application
 
@@ -116,6 +116,7 @@ pub struct ModeInfo {
 | `hermes_create_dataset` | `async (app, name: Option<String>, regions: Option<Vec<String>>, zones: Option<Vec<String>>) -> Result<HermesIdStatus, String>` | `POST /datasets` (202). XOR strict `regions`/`zones` validé localement. |
 | `hermes_delete_dataset` | `async (app, dataset_id: String) -> Result<(), String>` | `DELETE /datasets/{id}` (204). Irréversible. |
 | `hermes_aux_status` | `async (app, dataset_id: String) -> Result<HermesAuxStatus, String>` | `GET /datasets/{id}/aux` : artefacts communes/tunnels/mm, `preparing`, `lastError`, index en mémoire. |
+| `hermes_prepare_aux` | `async (app, dataset_id: String, force: bool, skip_mm: bool) -> Result<HermesAuxPrepareResponse, String>` | `POST /datasets/{id}/aux/prepare` (202) : lance la génération des artefacts aux en tâche de fond. `force` régénère, `skip_mm` saute `mm/`. Le store suit ensuite `GET /aux`. |
 | `hermes_list_instances` | `async (app) -> Result<Vec<HermesIdStatus>, String>` | `GET /instances` (0 ou 1 instance). |
 | `hermes_start_instance` | `async (app, dataset_id: String) -> Result<HermesIdStatus, String>` | `POST /instances/{id}/start` (`starting` ≠ `ready`). |
 | `hermes_stop_instance` | `async (app, dataset_id: String) -> Result<HermesIdStatus, String>` | `POST /instances/{id}/stop` : arrête ORS et décharge les index communes/tunnels. |
@@ -132,6 +133,7 @@ pub struct ModeInfo {
 - `HermesDataset` : `id`, `regions`, `zones`, `createdAt`, `status`, `sizeBytes`, `orsVersion`, `stale`, `lastLogTail`.
 - `HermesIdStatus` : `{ id, status }` (création de dataset, instances ORS).
 - `HermesRegion` : `id`, `bbox`, `hasPoly`, `geojson`, `geofabrikId`, `updatedAt`.
+- `HermesAuxPrepareResponse` : `datasetId`, `status`, `startedAt`, `message`.
 - `HermesPolygon` : `id`, `name`, `description`, `color`, `geometry`, `bbox`, `createdAt`, `updatedAt`, `revision`.
 - `HermesAuxStatus` : `datasetId`, `communes`, `tunnels`, `mm`, `preparing`, `startedAt`, `lastError`, `loadedInMemory`, `activeDataset` ; chaque artefact porte `name`, `exists`, `sizeBytes`, `modifiedAt`.
 - `HermesWakeResult` : `sent`, `address`, `mac`, `port`.
