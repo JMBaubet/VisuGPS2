@@ -26,13 +26,28 @@
       />
     </div>
 
-    <v-alert
-      type="info"
-      variant="tonal"
+    <v-text-field
+      v-model="search"
       density="compact"
-      class="mb-2"
-      text="Un dataset assemble des régions ou des zones existantes ; la création ne dessine rien."
+      variant="outlined"
+      hide-details
+      clearable
+      prepend-inner-icon="mdi-magnify"
+      placeholder="Filtrer les datasets…"
+      class="mb-1 hermes-section__filter"
     />
+
+    <div class="hermes-section__hint">
+      <v-icon
+        icon="mdi-information-outline"
+        size="14"
+        class="hermes-section__hint-icon"
+      />
+      <span>
+        Un dataset assemble des régions ou des zones existantes ; la création
+        ne dessine rien.
+      </span>
+    </div>
 
     <div
       v-if="hermesStore.datasetsLoading && hermesStore.datasets.length === 0"
@@ -42,13 +57,13 @@
     </div>
 
     <v-list
-      v-else-if="hermesStore.datasets.length > 0"
+      v-else-if="filteredDatasets.length > 0"
       density="compact"
       nav
       class="hermes-list"
     >
       <v-list-item
-        v-for="dataset in hermesStore.datasets"
+        v-for="dataset in filteredDatasets"
         :key="dataset.id"
         @mouseenter="emit('hover-dataset', dataset.id)"
         @mouseleave="emit('hover-dataset', null)"
@@ -180,8 +195,16 @@
     <v-empty-state
       v-else
       icon="mdi-database-off-outline"
-      title="Aucun dataset"
-      text="Aucun dataset sur le serveur."
+      :title="
+        hermesStore.datasets.length > 0
+          ? 'Aucun dataset correspondant'
+          : 'Aucun dataset'
+      "
+      :text="
+        hermesStore.datasets.length > 0
+          ? 'Le filtre ne correspond à aucun dataset.'
+          : 'Aucun dataset sur le serveur.'
+      "
     />
 
     <v-dialog v-model="orsDialogOpen" max-width="480" persistent>
@@ -214,7 +237,7 @@
  * (`loadDatasets` relance le polling). ORS ne maintient qu'une instance :
  * démarrer un autre dataset demande confirmation.
  */
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   useHermesStore,
   type HermesDataset,
@@ -234,6 +257,22 @@ const ui = useUiStore()
 
 const orsDialogOpen = ref(false)
 const orsCandidate = ref<HermesDataset | null>(null)
+const search = ref('')
+
+/** Filtre sur l'identifiant, les régions et les zones assemblées. */
+const filteredDatasets = computed(() => {
+  const query = search.value.trim().toLowerCase()
+  if (!query) return hermesStore.datasets
+  return hermesStore.datasets.filter(dataset => {
+    const regions = (dataset.regions ?? []).join(' ').toLowerCase()
+    const zones = (dataset.zones ?? []).join(' ').toLowerCase()
+    return (
+      dataset.id.toLowerCase().includes(query) ||
+      regions.includes(query) ||
+      zones.includes(query)
+    )
+  })
+})
 
 function statusColor(status: string): string {
   switch (status) {
@@ -336,6 +375,50 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
   margin-bottom: 8px;
+}
+
+.hermes-section__filter {
+  --v-input-control-height: 32px;
+  flex: 0 0 auto;
+  min-height: 32px;
+}
+
+.hermes-section__filter :deep(.v-field) {
+  height: 32px;
+  min-height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.hermes-section__filter :deep(.v-field__input) {
+  height: 32px;
+  min-height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 0.8125rem;
+}
+
+.hermes-section__hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 8px;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.hermes-section__hint-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+/* L'état vide de Vuetify se centre et déborde du panneau : on l'aligne en
+   haut, juste sous le filtre et l'encart d'information. */
+.hermes-section :deep(.v-empty-state) {
+  min-height: 0;
+  justify-content: flex-start;
+  padding-top: 16px;
 }
 
 .hermes-list {
