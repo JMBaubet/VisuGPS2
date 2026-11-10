@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '../../stores/app'
 import ModeExecutionBtnToggle from '../ModeExecutionBtnToggle.vue'
+import HermesStatusChip from './HermesStatusChip.vue'
 import OsmStatusButton from './OsmStatusButton.vue'
 
 const appStore = useAppStore()
@@ -58,6 +59,8 @@ onUnmounted(() => {
       color="green"
       icon="mdi-web-check"
     ></v-icon>
+
+    <HermesStatusChip />
 
     <OsmStatusButton />
 

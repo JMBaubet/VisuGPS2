@@ -42,6 +42,13 @@ const router = createRouter({
       component: () => import('../views/Altimetrie.vue')
     },
     {
+      // Vue Hermes (carte Mapbox) — lazy loading pour ne pas alourdir le
+      // bundle principal.
+      path: '/hermes',
+      name: 'hermes',
+      component: () => import('../views/Hermes.vue')
+    },
+    {
       path: '/screen-bis',
       name: 'screenBis',
       component: ScreenBis
