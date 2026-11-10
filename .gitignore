@@ -50,3 +50,10 @@ coverage
 .claude
 
 mockup
+
+# +Obsidian
+.obsidian
+
+features/altimetrie
+
+.zcode
