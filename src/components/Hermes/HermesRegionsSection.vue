@@ -54,6 +54,8 @@
         :key="region.id"
         :active="region.id === selectedRegionId"
         @click="toggle(region.id)"
+        @mouseenter="emit('hover-region', region.id)"
+        @mouseleave="emit('hover-region', null)"
       >
         <template #prepend>
           <v-icon icon="mdi-map-outline" size="18" />
@@ -102,6 +104,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'select-region': [id: string | null]
+  'hover-region': [id: string | null]
 }>()
 
 const hermesStore = useHermesStore()

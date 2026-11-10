@@ -63,6 +63,8 @@
         :key="polygon.id"
         :active="polygon.id === selectedPolygonId"
         @click="toggle(polygon.id)"
+        @mouseenter="emit('hover-polygon', polygon.id)"
+        @mouseleave="emit('hover-polygon', null)"
       >
         <template #prepend>
           <span
@@ -110,11 +112,10 @@
 
 <script setup lang="ts">
 /**
- * Onglet « Polygones » : liste en lecture pour la sous-étape 1.4.
+ * Onglet « Polygones » : liste, création, édition et suppression.
  *
- * La création par dessin (Mapbox Draw), l'édition des sommets et la
- * suppression sont ajoutées en 1.5. Cliquer un polygone le sélectionne et
- * cadre la carte ; un second clic désélectionne.
+ * Cliquer un polygone le sélectionne et cadre la carte ; un second clic
+ * désélectionne. Le survol est remonté à la vue, qui le transmet à la carte.
  */
 import { computed, onMounted, ref } from 'vue'
 import { useHermesStore, type HermesPolygon } from '../../stores/hermes'
@@ -131,6 +132,7 @@ const emit = defineEmits<{
   'create-polygon': []
   'edit-polygon': [polygon: HermesPolygon]
   'delete-polygon': [polygon: HermesPolygon]
+  'hover-polygon': [id: string | null]
 }>()
 
 const hermesStore = useHermesStore()

@@ -1,14 +1,16 @@
-// Contrat de rendu de la carte Hermes : sources, couches et conversions
-// GeoJSON des régions et des polygones custom.
+// Contrat de rendu de la carte Hermes : sources, couches, styles et
+// conversions GeoJSON des datasets, régions et polygones custom.
 //
-// La carte affiche deux familles de données :
-// - les **régions** indexées par l'administrateur (`GET /regions`), en vert,
-//   avec leur contour réel ou le rectangle de leur bbox ;
-// - les **polygones custom** (`GET /polygons`), remplis de leur couleur.
+// La carte est pilotée par l'onglet actif du panneau :
+// - **Datasets** : dataset actif en vert, autres datasets en gris ;
+// - **Régions** : contour du dataset actif en vert, régions en jaune ;
+// - **Polygones** : contour du dataset actif en vert, polygones en orange.
 //
-// La sélection est portée par une propriété `selected` : le composant carte
-// recharge les FeatureCollections à chaque changement, sans recréer les
-// couches.
+// Dans tous les cas, l'élément survolé (ou sélectionné) passe en bleu. Les
+// couleurs sont des nuances de la palette Material Design.
+//
+// Les données sont rechargées à chaque changement (FeatureCollections) sans
+// recréer les couches ; seule leur visibilité dépend de l'onglet.
 
 import type {
   ExpressionSpecification,
@@ -17,66 +19,141 @@ import type {
   LineLayerSpecification,
   Map,
 } from 'mapbox-gl'
-import type { HermesPolygon, HermesRegion } from '../../stores/hermes'
+import type { HermesTab } from '../../utils/hermes'
+import {
+  datasetGeometries,
+  regionGeometry,
+  type DatasetScope,
+  type PolygonShape,
+  type RegionShape,
+} from '../../utils/hermesGeometry'
 
 export const HERMES_MAP_STYLE = 'mapbox://styles/mapbox/outdoors-v12'
 
 export const HERMES_SOURCE_IDS = {
+  coverage: 'hermes-coverage',
+  datasets: 'hermes-datasets',
   regions: 'hermes-regions',
   polygons: 'hermes-polygons',
 } as const
 
 export const HERMES_LAYER_IDS = {
+  coverageFill: 'hermes-coverage-fill',
+  coverageLine: 'hermes-coverage-line',
+  datasetsFill: 'hermes-datasets-fill',
+  datasetsLine: 'hermes-datasets-line',
   regionsFill: 'hermes-regions-fill',
   regionsLine: 'hermes-regions-line',
   polygonsFill: 'hermes-polygons-fill',
   polygonsLine: 'hermes-polygons-line',
 } as const
 
-const DEFAULT_POLYGON_COLOR = '#3B82F6'
+/**
+ * Palette Material Design (nuances 500 pour les remplissages, 800/900 pour
+ * les traits). Le bleu marque le survol et la sélection.
+ */
+export const HERMES_MAP_COLORS = {
+  activeFill: '#4CAF50',
+  activeLine: '#2E7D32',
+  otherFill: '#9E9E9E',
+  otherLine: '#757575',
+  highlightFill: '#2196F3',
+  highlightLine: '#0D47A1',
+  regionFill: '#FFC107',
+  regionLine: '#F9A825',
+  polygonFill: '#FF9800',
+  polygonLine: '#EF6C00',
+} as const
 
 export function emptyFC(): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features: [] }
 }
 
-/** Rectangle GeoJSON d'une bbox `[lon_min, lat_min, lon_max, lat_max]`. */
-export function bboxPolygon(
-  bbox: [number, number, number, number],
-): GeoJSON.Polygon {
-  const [minLon, minLat, maxLon, maxLat] = bbox
+/** Couleur selon la propriété booléenne `highlight`. */
+function stateColor(
+  highlighted: string,
+  normal: string,
+): ExpressionSpecification {
+  return [
+    'case',
+    ['==', ['get', 'highlight'], true],
+    highlighted,
+    normal,
+  ] as unknown as ExpressionSpecification
+}
+
+/** Opacité de remplissage selon la propriété booléenne `highlight`. */
+function stateOpacity(
+  highlighted: number,
+  normal: number,
+): ExpressionSpecification {
+  return [
+    'case',
+    ['==', ['get', 'highlight'], true],
+    highlighted,
+    normal,
+  ] as unknown as ExpressionSpecification
+}
+
+/** Épaisseur de trait selon la propriété booléenne `highlight`. */
+function stateWidth(
+  highlighted: number,
+  normal: number,
+): ExpressionSpecification {
+  return [
+    'case',
+    ['==', ['get', 'highlight'], true],
+    highlighted,
+    normal,
+  ] as unknown as ExpressionSpecification
+}
+
+/** Couverture du dataset actif (vert, ou bleu s'il est survolé). */
+export function coverageFeatureCollection(
+  dataset: DatasetScope,
+  regions: RegionShape[],
+  polygons: PolygonShape[],
+  highlighted: boolean,
+): GeoJSON.FeatureCollection {
   return {
-    type: 'Polygon',
-    coordinates: [
-      [
-        [minLon, minLat],
-        [maxLon, minLat],
-        [maxLon, maxLat],
-        [minLon, maxLat],
-        [minLon, minLat],
-      ],
-    ],
+    type: 'FeatureCollection',
+    features: datasetGeometries(dataset, regions, polygons).map(
+      (geometry): GeoJSON.Feature => ({
+        type: 'Feature',
+        properties: { highlight: highlighted },
+        geometry,
+      }),
+    ),
   }
 }
 
-/**
- * Géométrie affichable d'une région : son contour réel s'il est un polygone,
- * sinon le rectangle de sa bbox (`has_poly=false`).
- */
-function regionGeometry(region: HermesRegion): GeoJSON.Geometry {
-  const geometry = region.geojson
-  if (
-    geometry &&
-    (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon')
-  ) {
-    return geometry
+/** Couverture des autres datasets, chacun identifiable pour le survol. */
+export function datasetsFeatureCollection(
+  datasets: DatasetScope[],
+  regions: RegionShape[],
+  polygons: PolygonShape[],
+  highlightedId: string | null,
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = []
+  for (const dataset of datasets) {
+    const highlighted = dataset.id === highlightedId
+    for (const geometry of datasetGeometries(dataset, regions, polygons)) {
+      features.push({
+        type: 'Feature',
+        properties: { id: dataset.id, highlight: highlighted },
+        geometry,
+      })
+    }
   }
-  return bboxPolygon(region.bbox)
+  return { type: 'FeatureCollection', features }
 }
 
+/** Régions affichables ; `highlight` couvre sélection, aperçu et survol. */
 export function regionsFeatureCollection(
-  regions: HermesRegion[],
+  regions: RegionShape[],
   selectedId: string | null,
   previewIds: string[] = [],
+  hoveredId: string | null = null,
 ): GeoJSON.FeatureCollection {
   const preview = new Set(previewIds)
   const features: GeoJSON.Feature[] = regions.map(
@@ -84,8 +161,10 @@ export function regionsFeatureCollection(
       type: 'Feature',
       properties: {
         id: region.id,
-        selected: region.id === selectedId || preview.has(region.id),
-        hasPoly: region.hasPoly,
+        highlight:
+          region.id === selectedId ||
+          preview.has(region.id) ||
+          region.id === hoveredId,
       },
       geometry: regionGeometry(region),
     }),
@@ -93,59 +172,143 @@ export function regionsFeatureCollection(
   return { type: 'FeatureCollection', features }
 }
 
+/**
+ * Polygones custom affichables.
+ *
+ * `excludeId` retire le polygone en cours d'édition : Mapbox Draw le dessine
+ * déjà avec ses propres couches, un doublon décalerait les contours.
+ */
 export function polygonsFeatureCollection(
-  polygons: HermesPolygon[],
+  polygons: PolygonShape[],
   selectedId: string | null,
   previewIds: string[] = [],
+  hoveredId: string | null = null,
+  excludeId: string | null = null,
 ): GeoJSON.FeatureCollection {
   const preview = new Set(previewIds)
-  const features: GeoJSON.Feature[] = polygons.map(
-    (polygon): GeoJSON.Feature => ({
-      type: 'Feature',
-      properties: {
-        id: polygon.id,
-        selected: polygon.id === selectedId || preview.has(polygon.id),
-        color: polygon.color ?? DEFAULT_POLYGON_COLOR,
-      },
-      geometry: polygon.geometry,
-    }),
-  )
+  const features: GeoJSON.Feature[] = polygons
+    .filter(polygon => polygon.id !== excludeId)
+    .map(
+      (polygon): GeoJSON.Feature => ({
+        type: 'Feature',
+        properties: {
+          id: polygon.id,
+          highlight:
+            polygon.id === selectedId ||
+            preview.has(polygon.id) ||
+            polygon.id === hoveredId,
+        },
+        geometry: polygon.geometry,
+      }),
+    )
   return { type: 'FeatureCollection', features }
 }
 
-export function setRegionsData(
+export function setSourceData(
   map: Map,
+  sourceId: string,
   data: GeoJSON.FeatureCollection,
 ): void {
-  const source = map.getSource(HERMES_SOURCE_IDS.regions) as
-    | GeoJSONSource
-    | undefined
+  const source = map.getSource(sourceId) as GeoJSONSource | undefined
   source?.setData(data)
 }
 
-export function setPolygonsData(
+/** Rend visibles les seules couches utiles à l'onglet courant. */
+export function applyHermesVisibility(
   map: Map,
-  data: GeoJSON.FeatureCollection,
+  tab: HermesTab,
+  hasRegionPreview: boolean,
+  hasPolygonPreview: boolean,
 ): void {
-  const source = map.getSource(HERMES_SOURCE_IDS.polygons) as
-    | GeoJSONSource
-    | undefined
-  source?.setData(data)
+  setLayerVisibility(map, [HERMES_LAYER_IDS.coverageFill], tab === 'datasets')
+  // Le contour vert reste visible sur tous les onglets : il matérialise le
+  // périmètre du dataset actif sans masquer les remplissages jaune/orange.
+  setLayerVisibility(map, [HERMES_LAYER_IDS.coverageLine], true)
+  setLayerVisibility(
+    map,
+    [HERMES_LAYER_IDS.datasetsFill, HERMES_LAYER_IDS.datasetsLine],
+    tab === 'datasets',
+  )
+  setLayerVisibility(
+    map,
+    [HERMES_LAYER_IDS.regionsFill, HERMES_LAYER_IDS.regionsLine],
+    tab === 'regions' || hasRegionPreview,
+  )
+  setLayerVisibility(
+    map,
+    [HERMES_LAYER_IDS.polygonsFill, HERMES_LAYER_IDS.polygonsLine],
+    tab === 'polygons' || hasPolygonPreview,
+  )
+}
+
+function setLayerVisibility(
+  map: Map,
+  layerIds: string[],
+  visible: boolean,
+): void {
+  const visibility = visible ? 'visible' : 'none'
+  for (const layerId of layerIds) {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, 'visibility', visibility)
+    }
+  }
 }
 
 /** Ajoute sources et couches si elles n'existent pas encore. */
 export function addHermesLayers(map: Map): void {
-  if (!map.getSource(HERMES_SOURCE_IDS.regions)) {
-    map.addSource(HERMES_SOURCE_IDS.regions, {
-      type: 'geojson',
-      data: emptyFC(),
-    })
+  addSourceIfMissing(map, HERMES_SOURCE_IDS.coverage)
+  addSourceIfMissing(map, HERMES_SOURCE_IDS.datasets)
+  addSourceIfMissing(map, HERMES_SOURCE_IDS.regions)
+  addSourceIfMissing(map, HERMES_SOURCE_IDS.polygons)
+
+  // Ordre de superposition : les remplissages d'abord, le contour vert du
+  // dataset au-dessus d'eux, puis les traits de sélection/survol.
+  if (!map.getLayer(HERMES_LAYER_IDS.coverageFill)) {
+    const coverageFill: FillLayerSpecification = {
+      id: HERMES_LAYER_IDS.coverageFill,
+      type: 'fill',
+      source: HERMES_SOURCE_IDS.coverage,
+      paint: {
+        'fill-color': stateColor(
+          HERMES_MAP_COLORS.highlightFill,
+          HERMES_MAP_COLORS.activeFill,
+        ),
+        'fill-opacity': stateOpacity(0.35, 0.28),
+      },
+    }
+    map.addLayer(coverageFill)
   }
-  if (!map.getSource(HERMES_SOURCE_IDS.polygons)) {
-    map.addSource(HERMES_SOURCE_IDS.polygons, {
-      type: 'geojson',
-      data: emptyFC(),
-    })
+
+  if (!map.getLayer(HERMES_LAYER_IDS.datasetsFill)) {
+    const datasetsFill: FillLayerSpecification = {
+      id: HERMES_LAYER_IDS.datasetsFill,
+      type: 'fill',
+      source: HERMES_SOURCE_IDS.datasets,
+      paint: {
+        'fill-color': stateColor(
+          HERMES_MAP_COLORS.highlightFill,
+          HERMES_MAP_COLORS.otherFill,
+        ),
+        'fill-opacity': stateOpacity(0.35, 0.1),
+      },
+    }
+    map.addLayer(datasetsFill)
+  }
+
+  if (!map.getLayer(HERMES_LAYER_IDS.datasetsLine)) {
+    const datasetsLine: LineLayerSpecification = {
+      id: HERMES_LAYER_IDS.datasetsLine,
+      type: 'line',
+      source: HERMES_SOURCE_IDS.datasets,
+      paint: {
+        'line-color': stateColor(
+          HERMES_MAP_COLORS.highlightLine,
+          HERMES_MAP_COLORS.otherLine,
+        ),
+        'line-width': stateWidth(2.5, 1),
+      },
+    }
+    map.addLayer(datasetsLine)
   }
 
   if (!map.getLayer(HERMES_LAYER_IDS.regionsFill)) {
@@ -154,44 +317,14 @@ export function addHermesLayers(map: Map): void {
       type: 'fill',
       source: HERMES_SOURCE_IDS.regions,
       paint: {
-        'fill-color': [
-          'case',
-          ['==', ['get', 'selected'], true],
-          '#2196F3',
-          '#4CAF50',
-        ] as unknown as ExpressionSpecification,
-        'fill-opacity': [
-          'case',
-          ['==', ['get', 'selected'], true],
-          0.35,
-          0.12,
-        ] as unknown as ExpressionSpecification,
+        'fill-color': stateColor(
+          HERMES_MAP_COLORS.highlightFill,
+          HERMES_MAP_COLORS.regionFill,
+        ),
+        'fill-opacity': stateOpacity(0.4, 0.18),
       },
     }
     map.addLayer(regionsFill)
-  }
-
-  if (!map.getLayer(HERMES_LAYER_IDS.regionsLine)) {
-    const regionsLine: LineLayerSpecification = {
-      id: HERMES_LAYER_IDS.regionsLine,
-      type: 'line',
-      source: HERMES_SOURCE_IDS.regions,
-      paint: {
-        'line-color': [
-          'case',
-          ['==', ['get', 'selected'], true],
-          '#0D47A1',
-          '#2E7D32',
-        ] as unknown as ExpressionSpecification,
-        'line-width': [
-          'case',
-          ['==', ['get', 'selected'], true],
-          2.5,
-          1,
-        ] as unknown as ExpressionSpecification,
-      },
-    }
-    map.addLayer(regionsLine)
   }
 
   if (!map.getLayer(HERMES_LAYER_IDS.polygonsFill)) {
@@ -200,20 +333,46 @@ export function addHermesLayers(map: Map): void {
       type: 'fill',
       source: HERMES_SOURCE_IDS.polygons,
       paint: {
-        'fill-color': [
-          'coalesce',
-          ['get', 'color'],
-          DEFAULT_POLYGON_COLOR,
-        ] as unknown as ExpressionSpecification,
-        'fill-opacity': [
-          'case',
-          ['==', ['get', 'selected'], true],
-          0.45,
-          0.15,
-        ] as unknown as ExpressionSpecification,
+        'fill-color': stateColor(
+          HERMES_MAP_COLORS.highlightFill,
+          HERMES_MAP_COLORS.polygonFill,
+        ),
+        'fill-opacity': stateOpacity(0.4, 0.18),
       },
     }
     map.addLayer(polygonsFill)
+  }
+
+  if (!map.getLayer(HERMES_LAYER_IDS.coverageLine)) {
+    const coverageLine: LineLayerSpecification = {
+      id: HERMES_LAYER_IDS.coverageLine,
+      type: 'line',
+      source: HERMES_SOURCE_IDS.coverage,
+      paint: {
+        'line-color': stateColor(
+          HERMES_MAP_COLORS.highlightLine,
+          HERMES_MAP_COLORS.activeLine,
+        ),
+        'line-width': stateWidth(3, 2.5),
+      },
+    }
+    map.addLayer(coverageLine)
+  }
+
+  if (!map.getLayer(HERMES_LAYER_IDS.regionsLine)) {
+    const regionsLine: LineLayerSpecification = {
+      id: HERMES_LAYER_IDS.regionsLine,
+      type: 'line',
+      source: HERMES_SOURCE_IDS.regions,
+      paint: {
+        'line-color': stateColor(
+          HERMES_MAP_COLORS.highlightLine,
+          HERMES_MAP_COLORS.regionLine,
+        ),
+        'line-width': stateWidth(2.5, 1),
+      },
+    }
+    map.addLayer(regionsLine)
   }
 
   if (!map.getLayer(HERMES_LAYER_IDS.polygonsLine)) {
@@ -222,20 +381,19 @@ export function addHermesLayers(map: Map): void {
       type: 'line',
       source: HERMES_SOURCE_IDS.polygons,
       paint: {
-        'line-color': [
-          'case',
-          ['==', ['get', 'selected'], true],
-          '#0D47A1',
-          ['coalesce', ['get', 'color'], DEFAULT_POLYGON_COLOR],
-        ] as unknown as ExpressionSpecification,
-        'line-width': [
-          'case',
-          ['==', ['get', 'selected'], true],
-          2.5,
-          1,
-        ] as unknown as ExpressionSpecification,
+        'line-color': stateColor(
+          HERMES_MAP_COLORS.highlightLine,
+          HERMES_MAP_COLORS.polygonLine,
+        ),
+        'line-width': stateWidth(2.5, 1),
       },
     }
     map.addLayer(polygonsLine)
+  }
+}
+
+function addSourceIfMissing(map: Map, sourceId: string): void {
+  if (!map.getSource(sourceId)) {
+    map.addSource(sourceId, { type: 'geojson', data: emptyFC() })
   }
 }

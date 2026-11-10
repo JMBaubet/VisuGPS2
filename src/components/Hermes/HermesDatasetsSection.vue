@@ -47,7 +47,12 @@
       nav
       class="hermes-list"
     >
-      <v-list-item v-for="dataset in hermesStore.datasets" :key="dataset.id">
+      <v-list-item
+        v-for="dataset in hermesStore.datasets"
+        :key="dataset.id"
+        @mouseenter="emit('hover-dataset', dataset.id)"
+        @mouseleave="emit('hover-dataset', null)"
+      >
         <template #prepend>
           <v-icon
             :icon="
@@ -221,6 +226,7 @@ import { parseHermesError } from '../../utils/hermes'
 const emit = defineEmits<{
   'create-dataset': []
   'delete-dataset': [dataset: HermesDataset]
+  'hover-dataset': [id: string | null]
 }>()
 
 const hermesStore = useHermesStore()

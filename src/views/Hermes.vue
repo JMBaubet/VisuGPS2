@@ -10,9 +10,11 @@
       />
 
       <HermesPanel
+        :tab="activeTab"
         :selected-region-id="selectedRegionId"
         :selected-polygon-id="selectedPolygonId"
         :polygon-busy="polygonBusy"
+        @update:tab="onTabUpdate"
         @select-region="onSelectRegion"
         @select-polygon="onSelectPolygon"
         @create-polygon="startCreatePolygon"
@@ -20,14 +22,23 @@
         @delete-polygon="requestDeletePolygon"
         @create-dataset="startCreateDataset"
         @delete-dataset="requestDeleteDataset"
+        @hover-dataset="hoveredDatasetId = $event"
+        @hover-region="hoveredRegionId = $event"
+        @hover-polygon="hoveredPolygonId = $event"
       />
 
       <v-main>
         <HermesMap
           :regions="hermesStore.regions"
           :polygons="hermesStore.polygons"
+          :datasets="hermesStore.datasets"
+          :active-dataset-id="hermesStore.activeDatasetId"
+          :active-tab="activeTab"
           :selected-region-id="selectedRegionId"
           :selected-polygon-id="selectedPolygonId"
+          :hovered-dataset-id="hoveredDatasetId"
+          :hovered-region-id="hoveredRegionId"
+          :hovered-polygon-id="hoveredPolygonId"
           :draw-mode="drawMode"
           :editing-polygon="editingPolygon"
           :draw-session="drawSession"
@@ -167,7 +178,7 @@ import HermesMap from '../components/Hermes/HermesMap.vue'
 import HermesPanel from '../components/Hermes/HermesPanel.vue'
 import HermesPolygonForm from '../components/Hermes/HermesPolygonForm.vue'
 import HermesToolbar from '../components/Hermes/HermesToolbar.vue'
-import { parseHermesError, type HermesDrawMode } from '../utils/hermes'
+import { parseHermesError, type HermesDrawMode, type HermesTab } from '../utils/hermes'
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -178,6 +189,12 @@ const ui = useUiStore()
 const selectedRegionId = ref<string | null>(null)
 /** Polygone custom sélectionné, ou `null`. */
 const selectedPolygonId = ref<string | null>(null)
+/** Onglet actif du panneau : la carte adapte ses couches. */
+const activeTab = ref<HermesTab>('datasets')
+/** Élément survolé dans la liste de l'onglet courant. */
+const hoveredDatasetId = ref<string | null>(null)
+const hoveredRegionId = ref<string | null>(null)
+const hoveredPolygonId = ref<string | null>(null)
 /** Mode de l'outil de dessin Mapbox. */
 const drawMode = ref<HermesDrawMode>('idle')
 /** Compteur de session de dessin (ré-applique l'outil après une annulation). */
@@ -240,6 +257,14 @@ function onSelectRegion(id: string | null): void {
 function onSelectPolygon(id: string | null): void {
   selectedPolygonId.value = id
   if (id) selectedRegionId.value = null
+}
+
+/** Change d'onglet et efface le survol de l'onglet précédent. */
+function onTabUpdate(tab: HermesTab): void {
+  activeTab.value = tab
+  hoveredDatasetId.value = null
+  hoveredRegionId.value = null
+  hoveredPolygonId.value = null
 }
 
 // ─── Création / édition ─────────────────────────────────────────────

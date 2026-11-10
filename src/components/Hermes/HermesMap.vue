@@ -14,40 +14,67 @@
 
 <script setup lang="ts">
 /**
- * Carte de la vue Hermes : régions indexées et polygones custom.
+ * Carte de la vue Hermes : datasets, régions indexées et polygones custom.
+ *
+ * Les couches dépendent de l'onglet actif du panneau : dataset actif en vert
+ * (contour sur les onglets Régions/Polygones, remplissage sur l'onglet
+ * Datasets), autres datasets en gris, régions en jaune, polygones en orange.
+ * L'élément survolé dans la liste — ou sélectionné au clic — passe en bleu.
  *
  * Le style `outdoors-v12` est volontairement classique (pas le style Standard
- * de l'Accueil) : les couches GeoJSON et, à la sous-étape 1.5, l'outil de
- * dessin Mapbox s'y ajoutent sans configuration de « slots ».
+ * de l'Accueil) : les couches GeoJSON et l'outil de dessin Mapbox s'y ajoutent
+ * sans configuration de « slots ».
  *
  * La sélection est remontée au parent (`select-region` / `select-polygon`) ;
  * le parent la renvoie en props, ce qui recharge les FeatureCollections et
  * cadre la carte sur l'objet choisi.
  */
-import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import type { MapMouseEvent } from 'mapbox-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
 import { useSettingsStore } from '../../stores/settings'
-import type { HermesPolygon, HermesRegion } from '../../stores/hermes'
-import { unionBboxes, type HermesDrawMode } from '../../utils/hermes'
+import type {
+  HermesDataset,
+  HermesPolygon,
+  HermesRegion,
+} from '../../stores/hermes'
+import {
+  unionBboxes,
+  type HermesDrawMode,
+  type HermesTab,
+} from '../../utils/hermes'
 import {
   addHermesLayers,
+  applyHermesVisibility,
+  coverageFeatureCollection,
+  datasetsFeatureCollection,
+  emptyFC,
   HERMES_LAYER_IDS,
   HERMES_MAP_STYLE,
+  HERMES_SOURCE_IDS,
   polygonsFeatureCollection,
   regionsFeatureCollection,
-  setPolygonsData,
-  setRegionsData,
+  setSourceData,
 } from './hermesMapLayers'
 
 const props = defineProps<{
   regions: HermesRegion[]
   polygons: HermesPolygon[]
+  /** Tous les datasets : l'actif est en vert, les autres en gris. */
+  datasets: HermesDataset[]
+  /** Dataset actif, dont la couverture est dessinée sur tous les onglets. */
+  activeDatasetId: string | null
+  /** Onglet du panneau : détermine les couches visibles. */
+  activeTab: HermesTab
   selectedRegionId: string | null
   selectedPolygonId: string | null
+  /** Identifiants survolés dans l'onglet courant. */
+  hoveredDatasetId: string | null
+  hoveredRegionId: string | null
+  hoveredPolygonId: string | null
   drawMode: HermesDrawMode
   editingPolygon: HermesPolygon | null
   /** Régions surlignées par le formulaire de dataset (sélection multiple). */
@@ -80,6 +107,15 @@ const hasMapboxKey = ref(false)
 let resizeObserver: ResizeObserver | null = null
 let draw: MapboxDraw | null = null
 let hasFitted = false
+
+/** Dataset actif, résolu dans la liste complète pour dessiner sa couverture. */
+const activeDataset = computed<HermesDataset | null>(() => {
+  if (!props.activeDatasetId) return null
+  return (
+    props.datasets.find(dataset => dataset.id === props.activeDatasetId) ??
+    null
+  )
+})
 
 /** Première géométrie `Polygon` d'un événement Mapbox Draw. */
 function firstPolygon(features: GeoJSON.Feature[]): GeoJSON.Polygon | null {
@@ -120,21 +156,73 @@ function render(): void {
   const instance = map.value
   if (!instance || !mapReady.value) return
 
-  setRegionsData(
+  const active = activeDataset.value
+  setSourceData(
     instance,
-    regionsFeatureCollection(
+    HERMES_SOURCE_IDS.coverage,
+    active
+      ? coverageFeatureCollection(
+          active,
+          props.regions,
+          props.polygons,
+          props.hoveredDatasetId === active.id,
+        )
+      : emptyFC(),
+  )
+
+  setSourceData(
+    instance,
+    HERMES_SOURCE_IDS.datasets,
+    datasetsFeatureCollection(
+      props.datasets.filter(dataset => dataset.id !== active?.id),
       props.regions,
-      props.selectedRegionId,
-      props.previewRegionIds,
+      props.polygons,
+      props.hoveredDatasetId,
     ),
   )
-  setPolygonsData(
+
+  // Hors de l'onglet Régions, seuls les aperçus du formulaire de dataset
+  // doivent rester visibles (le formulaire s'ouvre depuis l'onglet Datasets).
+  const previewRegions = new Set(props.previewRegionIds)
+  const drawnRegions =
+    props.activeTab === 'regions'
+      ? props.regions
+      : props.regions.filter(region => previewRegions.has(region.id))
+  setSourceData(
     instance,
+    HERMES_SOURCE_IDS.regions,
+    regionsFeatureCollection(
+      drawnRegions,
+      props.selectedRegionId,
+      props.previewRegionIds,
+      props.hoveredRegionId,
+    ),
+  )
+
+  const previewPolygons = new Set(props.previewPolygonIds)
+  const drawnPolygons =
+    props.activeTab === 'polygons'
+      ? props.polygons
+      : props.polygons.filter(polygon => previewPolygons.has(polygon.id))
+  const editingId =
+    props.drawMode === 'edit' ? props.editingPolygon?.id ?? null : null
+  setSourceData(
+    instance,
+    HERMES_SOURCE_IDS.polygons,
     polygonsFeatureCollection(
-      props.polygons,
+      drawnPolygons,
       props.selectedPolygonId,
       props.previewPolygonIds,
+      props.hoveredPolygonId,
+      editingId,
     ),
+  )
+
+  applyHermesVisibility(
+    instance,
+    props.activeTab,
+    props.previewRegionIds.length > 0,
+    props.previewPolygonIds.length > 0,
   )
 
   if (!hasFitted && (props.regions.length > 0 || props.polygons.length > 0)) {
@@ -180,15 +268,26 @@ function fitSelection(): void {
   )
 }
 
+/** Couches cliquables : seules celles de l'onglet courant. */
+function selectionLayers(): string[] {
+  if (props.activeTab === 'regions') return [HERMES_LAYER_IDS.regionsFill]
+  if (props.activeTab === 'polygons') return [HERMES_LAYER_IDS.polygonsFill]
+  return []
+}
+
 function onMapClick(event: MapMouseEvent): void {
   const instance = map.value
   if (!instance || !mapReady.value || props.drawMode !== 'idle') return
-  const features = instance.queryRenderedFeatures(event.point, {
-    layers: [HERMES_LAYER_IDS.regionsFill, HERMES_LAYER_IDS.polygonsFill],
-  })
+  const layers = selectionLayers()
+  if (layers.length === 0) return
+
+  const features = instance.queryRenderedFeatures(event.point, { layers })
   if (features.length === 0) {
-    emit('select-region', null)
-    emit('select-polygon', null)
+    if (props.activeTab === 'regions') {
+      emit('select-region', null)
+    } else {
+      emit('select-polygon', null)
+    }
     return
   }
 
@@ -205,9 +304,12 @@ function onMapClick(event: MapMouseEvent): void {
 function onMouseMove(event: MapMouseEvent): void {
   const instance = map.value
   if (!instance || !mapReady.value || props.drawMode !== 'idle') return
-  const features = instance.queryRenderedFeatures(event.point, {
-    layers: [HERMES_LAYER_IDS.regionsFill, HERMES_LAYER_IDS.polygonsFill],
-  })
+  const layers = selectionLayers()
+  if (layers.length === 0) {
+    instance.getCanvas().style.cursor = ''
+    return
+  }
+  const features = instance.queryRenderedFeatures(event.point, { layers })
   instance.getCanvas().style.cursor = features.length > 0 ? 'pointer' : ''
 }
 
@@ -315,6 +417,12 @@ watch(
     [
       props.regions,
       props.polygons,
+      props.datasets,
+      props.activeDatasetId,
+      props.activeTab,
+      props.hoveredDatasetId,
+      props.hoveredRegionId,
+      props.hoveredPolygonId,
       props.previewRegionIds,
       props.previewPolygonIds,
     ] as const,
@@ -333,7 +441,10 @@ watch(
 
 watch(
   () => [props.drawMode, props.editingPolygon, props.drawSession] as const,
-  () => applyDrawMode(),
+  () => {
+    applyDrawMode()
+    render()
+  },
 )
 </script>
 

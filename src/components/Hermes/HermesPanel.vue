@@ -25,12 +25,14 @@
           <HermesDatasetsSection
             @create-dataset="emit('create-dataset')"
             @delete-dataset="emit('delete-dataset', $event)"
+            @hover-dataset="emit('hover-dataset', $event)"
           />
         </v-window-item>
         <v-window-item value="regions">
           <HermesRegionsSection
             :selected-region-id="selectedRegionId"
             @select-region="emit('select-region', $event)"
+            @hover-region="emit('hover-region', $event)"
           />
         </v-window-item>
         <v-window-item value="polygons">
@@ -41,6 +43,7 @@
             @create-polygon="emit('create-polygon')"
             @edit-polygon="emit('edit-polygon', $event)"
             @delete-polygon="emit('delete-polygon', $event)"
+            @hover-polygon="emit('hover-polygon', $event)"
           />
         </v-window-item>
       </v-window>
@@ -53,9 +56,10 @@
  * Panneau gauche de la vue Hermes : carte Serveur persistante + onglets
  * Datasets / Régions / Polygones.
  *
- * La sélection est contrôlée par la vue, qui la partage avec la carte.
+ * L'onglet, la sélection et l'élément survolé sont contrôlés par la vue, qui
+ * les partage avec la carte.
  */
-import { ref } from 'vue'
+import { computed } from 'vue'
 import HermesServerCard from './HermesServerCard.vue'
 import HermesDatasetsSection from './HermesDatasetsSection.vue'
 import HermesRegionsSection from './HermesRegionsSection.vue'
@@ -64,14 +68,17 @@ import type {
   HermesDataset,
   HermesPolygon,
 } from '../../stores/hermes'
+import type { HermesTab } from '../../utils/hermes'
 
-defineProps<{
+const props = defineProps<{
+  tab: HermesTab
   selectedRegionId: string | null
   selectedPolygonId: string | null
   polygonBusy: boolean
 }>()
 
 const emit = defineEmits<{
+  'update:tab': [tab: HermesTab]
   'select-region': [id: string | null]
   'select-polygon': [id: string | null]
   'create-polygon': []
@@ -79,9 +86,22 @@ const emit = defineEmits<{
   'delete-polygon': [polygon: HermesPolygon]
   'create-dataset': []
   'delete-dataset': [dataset: HermesDataset]
+  'hover-dataset': [id: string | null]
+  'hover-region': [id: string | null]
+  'hover-polygon': [id: string | null]
 }>()
 
-const tab = ref<'datasets' | 'regions' | 'polygons'>('datasets')
+/** Onglet contrôlé par la vue : la carte dépend de l'onglet actif. */
+const tab = computed<HermesTab>({
+  get: () => props.tab,
+  set: value => {
+    // Vuetify peut émettre une valeur vide au démontage d'un onglet : on ne
+    // propage que les trois onglets connus.
+    if (value === 'datasets' || value === 'regions' || value === 'polygons') {
+      emit('update:tab', value)
+    }
+  },
+})
 </script>
 
 <style scoped>

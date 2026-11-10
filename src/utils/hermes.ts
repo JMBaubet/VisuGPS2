@@ -41,6 +41,9 @@ export type HermesServerState = 'unknown' | 'online' | 'offline' | 'waking'
 /** Mode de l'outil de dessin de polygones sur la carte Hermes. */
 export type HermesDrawMode = 'idle' | 'create' | 'edit'
 
+/** Onglet actif du panneau Hermes ; la carte adapte ses couches. */
+export type HermesTab = 'datasets' | 'regions' | 'polygons'
+
 /** Vue minimale d'un dataset nécessaire à l'affichage du chip. */
 export interface HermesDatasetStatusLike {
   id: string
