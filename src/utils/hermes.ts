@@ -286,6 +286,33 @@ export function validatePolygonGeometry(
   return { ok: true, message: null }
 }
 
+/** Formate une bbox `[lon_min, lat_min, lon_max, lat_max]` pour l'affichage. */
+export function formatBbox(
+  bbox: [number, number, number, number],
+): string {
+  const [minLon, minLat, maxLon, maxLat] = bbox
+  return `${minLon.toFixed(2)}, ${minLat.toFixed(2)} → ${maxLon.toFixed(2)}, ${maxLat.toFixed(2)}`
+}
+
+/** Union de plusieurs bbox, ou `null` si la liste est vide. */
+export function unionBboxes(
+  bboxes: [number, number, number, number][],
+): [number, number, number, number] | null {
+  if (bboxes.length === 0) return null
+  let minLon = Number.POSITIVE_INFINITY
+  let minLat = Number.POSITIVE_INFINITY
+  let maxLon = Number.NEGATIVE_INFINITY
+  let maxLat = Number.NEGATIVE_INFINITY
+  for (const bbox of bboxes) {
+    minLon = Math.min(minLon, bbox[0])
+    minLat = Math.min(minLat, bbox[1])
+    maxLon = Math.max(maxLon, bbox[2])
+    maxLat = Math.max(maxLat, bbox[3])
+  }
+  if (!Number.isFinite(minLon) || !Number.isFinite(minLat)) return null
+  return [minLon, minLat, maxLon, maxLat]
+}
+
 /** Formate une durée en secondes pour les progressions (build, réveil). */
 export function formatSeconds(value: number): string {
   if (!Number.isFinite(value) || value < 0) return '—'

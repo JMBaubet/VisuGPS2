@@ -431,6 +431,13 @@ export const useHermesStore = defineStore('hermes', () => {
           await setActiveDataset(ready[0].id)
         }
       }
+
+      // Un build peut être en cours au moment de l'ouverture de la vue : on
+      // reprend son suivi sans attendre une action utilisateur.
+      const preparing = list.find(dataset => dataset.status === 'preparing')
+      if (preparing && pollingDatasetId.value === null) {
+        void pollDataset(preparing.id)
+      }
     } catch (error) {
       recordError(error)
     } finally {
