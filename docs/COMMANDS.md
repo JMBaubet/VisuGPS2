@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (60 commandes)
+## Catalogue (84 commandes)
 
 ### Application
 
@@ -91,6 +91,62 @@ pub struct ModeInfo {
 | `save_keyframes` | `async (app, trace_id, viewport_aspect: String, keyframes_json: Value) -> Result<(), String>` | Sauvegarde un jeu de keyframes dans `keyframes/{trace_id}_{ratio}.json` (`_169` pour `"16:9"`, `_43` pour `"4:3"` ; écriture atomique tmp + rename). |
 | `get_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<Option<Value>, String>` | Charge les keyframes persistés d'une trace **pour un ratio donné** (`"16:9"`/`"4:3"`). Retourne `None` si le fichier est absent. |
 | `delete_keyframes` | `async (app, trace_id, viewport_aspect: String) -> Result<(), String>` | Supprime le fichier `keyframes/{trace_id}_{ratio}.json` d'un ratio donné (tolérant si absent). |
+
+### Client hermes (`hermes/commands.rs`)
+
+> Client du serveur `hermes` (ZeroTier, `http://10.15.58.131:9000/api/v1`).
+> **Toutes les requêtes HTTP vivent en Rust** : `hermes-api` n'expose pas de
+> middleware CORS et le réveil WoL exige un socket UDP. Le frontend ne fait
+> jamais de `fetch` et ne stocke ni n'envoie de `X-Admin-Token`.
+>
+> Politique de reprise : trois tentatives (backoff 1 s, 2 s) sur les erreurs
+> réseau et les 5xx des routes **idempotentes** (`GET`, `DELETE`). Les `POST`
+> ne sont jamais rejoués : `POST /datasets` crée un dataset, un rejeu
+> produirait un doublon. Les erreurs sont préfixées par un code machine
+> (`HERMES_OFFLINE: …`) que le store exploite pour choisir le message et
+> l'action.
+
+| Commande | Signature Rust | Retour |
+|---|---|---|
+| `hermes_ping` | `async (app) -> Result<HermesStatusResponse, String>` | `GET /ping`, timeout 2 s, sans reprise. |
+| `hermes_ors_health` | `async (app) -> Result<HermesStatusResponse, String>` | `GET {orsBaseUrl}/health`, timeout 2 s. |
+| `hermes_wake` | `async (app) -> Result<HermesWakeResult, String>` | Envoie le paquet magique WoL trois fois (UDP). Le polling de disponibilité est piloté par le store. |
+| `hermes_list_datasets` | `async (app) -> Result<Vec<HermesDataset>, String>` | `GET /datasets`. |
+| `hermes_get_dataset` | `async (app, dataset_id: String) -> Result<HermesDataset, String>` | `GET /datasets/{id}` (polling de build). |
+| `hermes_create_dataset` | `async (app, name: Option<String>, regions: Option<Vec<String>>, zones: Option<Vec<String>>) -> Result<HermesIdStatus, String>` | `POST /datasets` (202). XOR strict `regions`/`zones` validé localement. |
+| `hermes_delete_dataset` | `async (app, dataset_id: String) -> Result<(), String>` | `DELETE /datasets/{id}` (204). Irréversible. |
+| `hermes_aux_status` | `async (app, dataset_id: String) -> Result<HermesAuxStatus, String>` | `GET /datasets/{id}/aux` : artefacts communes/tunnels/mm, `preparing`, `lastError`, index en mémoire. |
+| `hermes_list_instances` | `async (app) -> Result<Vec<HermesIdStatus>, String>` | `GET /instances` (0 ou 1 instance). |
+| `hermes_start_instance` | `async (app, dataset_id: String) -> Result<HermesIdStatus, String>` | `POST /instances/{id}/start` (`starting` ≠ `ready`). |
+| `hermes_stop_instance` | `async (app, dataset_id: String) -> Result<HermesIdStatus, String>` | `POST /instances/{id}/stop` : arrête ORS et décharge les index communes/tunnels. |
+| `hermes_list_regions` | `async (app) -> Result<Vec<HermesRegion>, String>` | `GET /regions` — lecture seule, le CRUD des régions est admin. |
+| `hermes_list_polygons` | `async (app) -> Result<Vec<HermesPolygon>, String>` | `GET /polygons`. |
+| `hermes_get_polygon` | `async (app, polygon_id: String) -> Result<HermesPolygon, String>` | `GET /polygons/{id}`. |
+| `hermes_create_polygon` | `async (app, id: String, name: String, description: Option<String>, color: Option<String>, geometry: Value) -> Result<HermesPolygon, String>` | `POST /polygons` (201). `id` slug, `index` réservé ; géométrie `Polygon` uniquement. |
+| `hermes_update_polygon` | `async (app, polygon_id: String, name: String, description: Option<String>, color: Option<String>, geometry: Value) -> Result<HermesPolygon, String>` | `PUT /polygons/{id}` (200), remplacement complet. |
+| `hermes_delete_polygon` | `async (app, polygon_id: String) -> Result<(), String>` | `DELETE /polygons/{id}` (204). |
+
+**Types IPC** (camelCase côté frontend, alias snake_case à la lecture) :
+
+- `HermesStatusResponse` : `{ status }`.
+- `HermesDataset` : `id`, `regions`, `zones`, `createdAt`, `status`, `sizeBytes`, `orsVersion`, `stale`, `lastLogTail`.
+- `HermesIdStatus` : `{ id, status }` (création de dataset, instances ORS).
+- `HermesRegion` : `id`, `bbox`, `hasPoly`, `geojson`, `geofabrikId`, `updatedAt`.
+- `HermesPolygon` : `id`, `name`, `description`, `color`, `geometry`, `bbox`, `createdAt`, `updatedAt`, `revision`.
+- `HermesAuxStatus` : `datasetId`, `communes`, `tunnels`, `mm`, `preparing`, `startedAt`, `lastError`, `loadedInMemory`, `activeDataset` ; chaque artefact porte `name`, `exists`, `sizeBytes`, `modifiedAt`.
+- `HermesWakeResult` : `sent`, `address`, `mac`, `port`.
+
+**Codes d'erreur** (préfixe de la chaîne `Result::Err`) :
+
+- `HERMES_OFFLINE` : connexion refusée, DNS, ZeroTier absent.
+- `HERMES_TIMEOUT` : délai dépassé.
+- `HERMES_NOT_FOUND` : dataset/polygone/route inconnu (404 générique).
+- `HERMES_NOT_PREPARED` : artefacts aux absents (réservé aux détections, étapes 2 et 3).
+- `HERMES_NO_DATASET` : aucun dataset actif (réservé aux détections).
+- `HERMES_CONFLICT` : build ORS ou préparation aux en cours (409).
+- `HERMES_FORBIDDEN` : action réservée à l'administrateur (401/403).
+- `HERMES_INVALID` : payload invalide (400/405/422) ou validation locale.
+- `HERMES_SERVER` : erreur interne ou réponse illisible (500).
 
 ### Informations de circuit (`trace_info.rs`)
 

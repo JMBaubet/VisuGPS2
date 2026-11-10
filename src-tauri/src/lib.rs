@@ -8,6 +8,7 @@ mod gpx_multiride;
 mod gpx_communes;
 mod gpx_altimetrie;
 mod gpx_tunnels;
+mod hermes;
 mod osm;
 mod trace_info;
 
@@ -93,6 +94,23 @@ pub fn run() {
             gpx_tunnels::commands::tunnels_save,
             gpx_tunnels::commands::tunnels_support_status,
             gpx_tunnels::commands::pick_directory,
+            hermes::commands::hermes_ping,
+            hermes::commands::hermes_ors_health,
+            hermes::commands::hermes_wake,
+            hermes::commands::hermes_list_datasets,
+            hermes::commands::hermes_get_dataset,
+            hermes::commands::hermes_create_dataset,
+            hermes::commands::hermes_delete_dataset,
+            hermes::commands::hermes_aux_status,
+            hermes::commands::hermes_list_instances,
+            hermes::commands::hermes_start_instance,
+            hermes::commands::hermes_stop_instance,
+            hermes::commands::hermes_list_regions,
+            hermes::commands::hermes_list_polygons,
+            hermes::commands::hermes_get_polygon,
+            hermes::commands::hermes_create_polygon,
+            hermes::commands::hermes_update_polygon,
+            hermes::commands::hermes_delete_polygon,
             osm::commands::osm_support_overview,
             osm::commands::osm_region_catalog,
             osm::commands::osm_region_size,
