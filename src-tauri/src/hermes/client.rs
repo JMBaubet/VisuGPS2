@@ -34,6 +34,12 @@ fn http_client() -> Result<reqwest::Client, String> {
     let client = reqwest::Client::builder()
         .user_agent(format!("VisuGPS2/{}", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(5))
+        // uvicorn ferme ses connexions keep-alive inactives après ~5 s. Le
+        // polling des datasets est à 5 s : sans expiration plus courte, le
+        // client peut réutiliser une connexion que le serveur vient de fermer
+        // (`error sending request`). On ferme donc les connexions inactives
+        // avant ce délai.
+        .pool_idle_timeout(Duration::from_secs(3))
         .build()
         .map_err(|error| {
             coded(
@@ -225,9 +231,16 @@ fn backoff(attempt: usize) -> Duration {
     Duration::from_secs(1u64 << attempt.min(2))
 }
 
-/// Une requête réseau est rejouable uniquement si l'échec est transitoire.
+/// Une requête réseau est rejouable si l'échec est transitoire. Les erreurs
+/// `is_request`/`is_body` couvrent les connexions fermées ou réinitialisées
+/// (keep-alive expiré, coupure ZeroTier) : rejouer un `GET` ou un `DELETE` est
+/// sans risque. Les `POST`/`PUT` ne passent jamais par cette branche
+/// (`retry = false`).
 fn is_retryable(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect()
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error.is_body()
 }
 
 pub(crate) fn map_status(status: u16) -> &'static str {
@@ -241,21 +254,40 @@ pub(crate) fn map_status(status: u16) -> &'static str {
     }
 }
 
+/// Message d'erreur enrichi de la chaîne de causes (`connection reset by peer`,
+/// `connection closed before message completed`, etc.).
+fn reqwest_error_text(error: &reqwest::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        message.push_str(" : ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
 fn map_reqwest_error(error: &reqwest::Error) -> (&'static str, String) {
     if error.is_timeout() {
         (
             codes::TIMEOUT,
-            format!("Délai dépassé vers hermes : {}", error),
+            format!("Délai dépassé vers hermes : {}", reqwest_error_text(error)),
         )
     } else if error.is_connect() {
         (
             codes::OFFLINE,
-            format!("Connexion à hermes impossible : {}", error),
+            format!(
+                "Connexion à hermes impossible : {}",
+                reqwest_error_text(error)
+            ),
         )
     } else {
         (
             codes::SERVER,
-            format!("Requête hermes impossible : {}", error),
+            format!(
+                "Requête hermes impossible : {}",
+                reqwest_error_text(error)
+            ),
         )
     }
 }

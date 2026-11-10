@@ -525,6 +525,10 @@ export const useHermesStore = defineStore('hermes', () => {
             datasetId,
           })
           upsertDataset(dataset)
+          // Une réponse valide efface l'erreur transitoire d'un polling
+          // précédent : le build a continué côté serveur.
+          lastError.value = null
+          lastErrorCode.value = null
           if (dataset.status === 'ready') {
             ui.showSuccess(`Dataset ${dataset.id} prêt.`)
             return
