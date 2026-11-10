@@ -65,6 +65,74 @@ export const HERMES_MAP_COLORS = {
   polygonLine: '#EF6C00',
 } as const
 
+export const HERMES_TRACE_SOURCE_IDS = {
+  favorites: 'hermes-trace-favorites',
+  displayed: 'hermes-trace-displayed',
+} as const
+
+export const HERMES_TRACE_LAYER_IDS = {
+  favorites: 'hermes-trace-favorites-line',
+  displayed: 'hermes-trace-displayed-line',
+} as const
+
+/** Style des traces, lu dans les paramètres de la carte de l'Accueil. */
+export interface HermesTraceStyle {
+  favoriteColor: string
+  favoriteWidth: number
+  displayedWidth: number
+  displayedGradient: ExpressionSpecification
+}
+
+/**
+ * Ajoute les couches des traces favorites et affichées, dans le même ordre que
+ * la carte de l'Accueil. Elles restent visibles sur tous les onglets, au-dessus
+ * des remplissages de datasets, régions et polygones.
+ */
+export function addHermesTraceLayers(
+  map: Map,
+  style: HermesTraceStyle,
+): void {
+  if (!map.getSource(HERMES_TRACE_SOURCE_IDS.favorites)) {
+    map.addSource(HERMES_TRACE_SOURCE_IDS.favorites, {
+      type: 'geojson',
+      data: emptyFC(),
+    })
+  }
+  if (!map.getSource(HERMES_TRACE_SOURCE_IDS.displayed)) {
+    map.addSource(HERMES_TRACE_SOURCE_IDS.displayed, {
+      type: 'geojson',
+      data: emptyFC(),
+      lineMetrics: true,
+    })
+  }
+
+  if (!map.getLayer(HERMES_TRACE_LAYER_IDS.favorites)) {
+    map.addLayer({
+      id: HERMES_TRACE_LAYER_IDS.favorites,
+      type: 'line',
+      source: HERMES_TRACE_SOURCE_IDS.favorites,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': style.favoriteColor,
+        'line-width': style.favoriteWidth,
+      },
+    })
+  }
+
+  if (!map.getLayer(HERMES_TRACE_LAYER_IDS.displayed)) {
+    map.addLayer({
+      id: HERMES_TRACE_LAYER_IDS.displayed,
+      type: 'line',
+      source: HERMES_TRACE_SOURCE_IDS.displayed,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-width': style.displayedWidth,
+        'line-gradient': style.displayedGradient,
+      },
+    })
+  }
+}
+
 export function emptyFC(): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features: [] }
 }

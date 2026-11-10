@@ -20,6 +20,8 @@
  * (contour sur les onglets Régions/Polygones, remplissage sur l'onglet
  * Datasets), autres datasets en gris, régions en jaune, polygones en orange.
  * L'élément survolé dans la liste — ou sélectionné au clic — passe en bleu.
+ * Les traces favorites et affichées de l'Accueil restent visibles sur tous les
+ * onglets, avec la même représentation que sur la carte principale.
  *
  * Le style `outdoors-v12` est volontairement classique (pas le style Standard
  * de l'Accueil) : les couches GeoJSON et l'outil de dessin Mapbox s'y ajoutent
@@ -32,10 +34,11 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import type { MapMouseEvent } from 'mapbox-gl'
+import type { ExpressionSpecification, MapMouseEvent } from 'mapbox-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
 import { useSettingsStore } from '../../stores/settings'
+import { useTracesStore } from '../../stores/traces'
 import type {
   HermesDataset,
   HermesPolygon,
@@ -46,8 +49,10 @@ import {
   type HermesDrawMode,
   type HermesTab,
 } from '../../utils/hermes'
+import { hexToRgbaString } from '../../utils/materialColors'
 import {
   addHermesLayers,
+  addHermesTraceLayers,
   applyHermesVisibility,
   coverageFeatureCollection,
   datasetsFeatureCollection,
@@ -55,6 +60,7 @@ import {
   HERMES_LAYER_IDS,
   HERMES_MAP_STYLE,
   HERMES_SOURCE_IDS,
+  HERMES_TRACE_SOURCE_IDS,
   polygonsFeatureCollection,
   regionsFeatureCollection,
   setSourceData,
@@ -98,6 +104,7 @@ const emit = defineEmits<{
 }>()
 
 const settingsStore = useSettingsStore()
+const tracesStore = useTracesStore()
 
 const mapContainer = ref<HTMLDivElement | null>(null)
 const map = shallowRef<mapboxgl.Map | null>(null)
@@ -107,6 +114,8 @@ const hasMapboxKey = ref(false)
 let resizeObserver: ResizeObserver | null = null
 let draw: MapboxDraw | null = null
 let hasFitted = false
+/** Jeton d'invalidation des chargements de géométries de traces. */
+let traceRefreshToken = 0
 
 /** Dataset actif, résolu dans la liste complète pour dessiner sa couverture. */
 const activeDataset = computed<HermesDataset | null>(() => {
@@ -275,6 +284,87 @@ function selectionLayers(): string[] {
   return []
 }
 
+/** Valeur d'un paramètre de la carte (undefined tant que les settings ne sont pas chargés). */
+function getParam(path: string): any {
+  return settingsStore.getParamDef(path)?.value
+}
+
+/** Couleur d'un paramètre convertie en rgba(), avec fallback #RRGGBBAA. */
+function getColor(path: string, fallback: string): string {
+  return hexToRgbaString(getParam(path) ?? fallback)
+}
+
+/** Dégradé des traces affichées, identique à celui de la carte de l'Accueil. */
+function buildDisplayedGradient(): ExpressionSpecification {
+  const debut = getColor('Carte.Traces.couleurDebut', '#2196F3FF')
+  const fin = getColor('Carte.Traces.couleurFin', '#F44336FF')
+  const activerMilieu = getParam('Carte.Traces.activerCouleurMilieu') ?? true
+  const mid = getParam('Carte.Traces.positionCouleurMilieu') ?? 0.5
+
+  if (activerMilieu) {
+    const couleurMilieu = getColor('Carte.Traces.couleurMilieu', '#9C27B0FF')
+    return [
+      'interpolate',
+      ['linear'],
+      ['line-progress'],
+      0, debut,
+      mid, couleurMilieu,
+      1, fin,
+    ] as unknown as ExpressionSpecification
+  }
+  return [
+    'interpolate',
+    ['linear'],
+    ['line-progress'],
+    0, debut,
+    1, fin,
+  ] as unknown as ExpressionSpecification
+}
+
+/**
+ * Recharge les géométries des traces favorites et affichées. Les deux sources
+ * sont indépendantes : une trace à la fois favorite et affichée est dessinée
+ * dans les deux, comme sur la carte de l'Accueil.
+ */
+async function refreshTraceLayers(): Promise<void> {
+  const instance = map.value
+  if (!instance || !mapReady.value) return
+
+  const token = ++traceRefreshToken
+  const favorites: GeoJSON.Feature[] = []
+  const displayed: GeoJSON.Feature[] = []
+
+  for (const trace of tracesStore.traces) {
+    if (!trace.favorite && !trace.is_displayed) continue
+    try {
+      const geometry = await tracesStore.getTraceGeometry(trace.id)
+      if (
+        token !== traceRefreshToken ||
+        map.value !== instance ||
+        !mapReady.value
+      ) {
+        return
+      }
+      if (trace.favorite) favorites.push(geometry)
+      if (trace.is_displayed) displayed.push(geometry)
+    } catch (error) {
+      console.error(
+        `[Hermes] Géométrie introuvable pour la trace ${trace.id} :`,
+        error,
+      )
+    }
+  }
+
+  setSourceData(instance, HERMES_TRACE_SOURCE_IDS.favorites, {
+    type: 'FeatureCollection',
+    features: favorites,
+  })
+  setSourceData(instance, HERMES_TRACE_SOURCE_IDS.displayed, {
+    type: 'FeatureCollection',
+    features: displayed,
+  })
+}
+
 function onMapClick(event: MapMouseEvent): void {
   const instance = map.value
   if (!instance || !mapReady.value || props.drawMode !== 'idle') return
@@ -349,6 +439,12 @@ async function initializeMap(token: string): Promise<void> {
   instance.on('load', () => {
     mapReady.value = true
     addHermesLayers(instance)
+    addHermesTraceLayers(instance, {
+      favoriteColor: getColor('Carte.Favoris.couleurTrace', '#FFEB3BFF'),
+      favoriteWidth: Number(getParam('Carte.Favoris.epaisseur') ?? 6),
+      displayedWidth: Number(getParam('Carte.Traces.epaisseur') ?? 4),
+      displayedGradient: buildDisplayedGradient(),
+    })
 
     const drawControl = new MapboxDraw({
       displayControlsDefault: false,
@@ -369,10 +465,12 @@ async function initializeMap(token: string): Promise<void> {
 
     render()
     applyDrawMode()
+    void refreshTraceLayers()
   })
 }
 
 function destroyMap(): void {
+  traceRefreshToken += 1
   if (map.value) {
     try {
       map.value.remove()
@@ -387,6 +485,13 @@ function destroyMap(): void {
 }
 
 onMounted(async () => {
+  if (tracesStore.traces.length === 0) {
+    void tracesStore.loadTraces()
+  }
+  // Les couleurs et épaisseurs des traces viennent des paramètres Carte.* :
+  // ils doivent être chargés avant la création des couches.
+  await settingsStore.loadSettings()
+
   let token = ''
   try {
     token = String(
@@ -444,6 +549,13 @@ watch(
   () => {
     applyDrawMode()
     render()
+  },
+)
+
+watch(
+  () => tracesStore.traces,
+  () => {
+    void refreshTraceLayers()
   },
 )
 </script>
