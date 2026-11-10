@@ -1563,4 +1563,160 @@ mod tests {
         assert_eq!(delai.min, Some(30.0), "borne basse du délai");
         assert_eq!(delai.max, Some(300.0), "borne haute du délai");
     }
+
+    /// Le namespace `Hermes.*` est déclaré et cohérent avec la vue `_meta`.
+    ///
+    /// La vue `/hermes` porte ses deux groupes de réglages (connexion et
+    /// réveil). Les huit paramètres visibles doivent être rattachés à l'un
+    /// d'eux ; `Hermes.Dataset.actif` est un paramètre **caché**, piloté par la
+    /// vue Hermes et volontairement absent de `_meta` — comme `Carte.Vue.*`.
+    #[test]
+    fn hermes_namespace_is_declared_and_consistent() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let toml_str = std::fs::read_to_string(format!("{}/settings.default.toml", manifest_dir))
+            .expect("settings.default.toml doit être lisible");
+        let table: toml::Table = toml::from_str(&toml_str)
+            .expect("settings.default.toml doit être du TOML valide");
+
+        let mut defs = Vec::new();
+        flatten_settings(&table, "", &mut defs);
+        let meta = extract_meta(&table);
+
+        // 1. La vue `/hermes` est déclarée, avec ses deux groupes et leurs
+        //    métadonnées d'affichage.
+        let hermes = meta.views.get("hermes").expect("vue `hermes` déclarée");
+        assert_eq!(hermes.label, "Hermes");
+        assert_eq!(hermes.icon, "mdi-server-network");
+        assert_eq!(hermes.groups.len(), 2);
+        for group_id in ["Hermes.Connexion", "Hermes.Reveil"] {
+            assert!(
+                hermes.groups.contains(&group_id.to_string()),
+                "groupe `{group_id}` absent de la vue hermes : {:?}",
+                hermes.groups
+            );
+            let group = meta
+                .groups
+                .get(group_id)
+                .unwrap_or_else(|| panic!("groupe `{group_id}` affiché sans métadonnée"));
+            assert!(group.label.is_some(), "groupe `{group_id}` sans libellé");
+            assert!(group.icon.is_some(), "groupe `{group_id}` sans icône");
+        }
+
+        // 2. Neuf paramètres `Hermes.*` : huit visibles + le dataset actif
+        //    caché.
+        let hermes_defs: Vec<_> = defs
+            .iter()
+            .filter(|d| d.path.starts_with("Hermes."))
+            .collect();
+        assert_eq!(
+            hermes_defs.len(),
+            9,
+            "9 paramètres `Hermes.*` attendus : {:?}",
+            hermes_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
+        );
+
+        // 3. Chaque paramètre visible appartient à un groupe de la vue ; le
+        //    dataset actif est le seul hors `_meta`.
+        for def in &hermes_defs {
+            let group_path = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
+            if def.path == "Hermes.Dataset.actif" {
+                assert!(
+                    !hermes.groups.contains(&group_path),
+                    "`Hermes.Dataset.actif` doit rester caché (groupe `{group_path}`)"
+                );
+                assert!(
+                    meta.views
+                        .values()
+                        .all(|view| !view.groups.contains(&group_path)),
+                    "`Hermes.Dataset.actif` ne doit être rattaché à aucune vue"
+                );
+                continue;
+            }
+            assert!(
+                hermes.groups.contains(&group_path),
+                "paramètre `{}` rattaché au groupe `{}`, absent de la vue hermes",
+                def.path,
+                group_path
+            );
+        }
+
+        // 4. Types, défauts et bornes structurants.
+        let base_url = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Connexion.baseUrl")
+            .expect("paramètre `Hermes.Connexion.baseUrl` déclaré");
+        assert_eq!(base_url.setting_type, "string");
+        assert_eq!(
+            base_url.default.as_str(),
+            Some("http://10.15.58.131:9000/api/v1")
+        );
+
+        let ors_url = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Connexion.orsBaseUrl")
+            .expect("paramètre `Hermes.Connexion.orsBaseUrl` déclaré");
+        assert_eq!(ors_url.setting_type, "string");
+        assert_eq!(
+            ors_url.default.as_str(),
+            Some("http://10.15.58.131:8002/ors/v2")
+        );
+
+        let delai = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Connexion.delaiSec")
+            .expect("paramètre `Hermes.Connexion.delaiSec` déclaré");
+        assert_eq!(delai.setting_type, "int");
+        assert_eq!(delai.default.as_i64(), Some(30));
+        assert_eq!(delai.min, Some(2.0));
+        assert_eq!(delai.max, Some(60.0));
+        assert_eq!(delai.unit.as_deref(), Some("s"));
+
+        let keep_alive = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Connexion.keepAliveSec")
+            .expect("paramètre `Hermes.Connexion.keepAliveSec` déclaré");
+        assert_eq!(keep_alive.setting_type, "int");
+        assert_eq!(keep_alive.default.as_i64(), Some(30));
+        assert_eq!(keep_alive.min, Some(0.0), "0 doit désactiver le keep-alive");
+        assert_eq!(keep_alive.max, Some(300.0));
+
+        let adresse = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Reveil.adresse")
+            .expect("paramètre `Hermes.Reveil.adresse` déclaré");
+        assert_eq!(adresse.setting_type, "string");
+        assert_eq!(adresse.default.as_str(), Some("87.91.31.205"));
+
+        let mac = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Reveil.mac")
+            .expect("paramètre `Hermes.Reveil.mac` déclaré");
+        assert_eq!(mac.setting_type, "string");
+        assert_eq!(mac.default.as_str(), Some("68:5b:35:a8:5c:65"));
+
+        let port = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Reveil.port")
+            .expect("paramètre `Hermes.Reveil.port` déclaré");
+        assert_eq!(port.setting_type, "int");
+        assert_eq!(port.default.as_i64(), Some(9));
+        assert_eq!(port.min, Some(1.0));
+        assert_eq!(port.max, Some(65535.0));
+
+        let delai_max = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Reveil.delaiMaxSec")
+            .expect("paramètre `Hermes.Reveil.delaiMaxSec` déclaré");
+        assert_eq!(delai_max.setting_type, "int");
+        assert_eq!(delai_max.default.as_i64(), Some(120));
+        assert_eq!(delai_max.min, Some(30.0));
+        assert_eq!(delai_max.max, Some(300.0));
+
+        let dataset = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Dataset.actif")
+            .expect("paramètre `Hermes.Dataset.actif` déclaré");
+        assert_eq!(dataset.setting_type, "string");
+        assert_eq!(dataset.default.as_str(), Some(""));
+    }
 }

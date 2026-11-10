@@ -81,6 +81,14 @@ groups = [
   "Tunnels.Support",
 ]
 
+[_meta.views.hermes]
+label = "Hermes"
+icon = "mdi-server-network"
+groups = [
+  "Hermes.Connexion",
+  "Hermes.Reveil",
+]
+
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
 # Optionnel : à défaut, le libellé est le dernier segment du path du groupe.
 [_meta.groups."Systeme.Key"]
@@ -106,6 +114,14 @@ icon = "mdi-database"
 [_meta.groups."Osm.Validite"]
 label = "Données OSM — Validité"
 icon = "mdi-calendar-clock"
+
+[_meta.groups."Hermes.Connexion"]
+label = "Hermes — Connexion"
+icon = "mdi-server-network"
+
+[_meta.groups."Hermes.Reveil"]
+label = "Hermes — Réveil"
+icon = "mdi-power-sleep"
 
 [_meta.groups."Affichage.moniteurs"]
 label = "Configuration des fenêtres"
@@ -1631,6 +1647,186 @@ max = 300
 step = 10
 unit = "s"
 icon = "mdi-timer-sand"
+
+# ---------------------------------------------------------------------------
+# HERMES — Serveur d'enrichissement géographique et de routage.
+# ---------------------------------------------------------------------------
+#
+# L'application M1 est un client du serveur `hermes` (ZeroTier, port 9000).
+# Les réglages ci-dessous sont utilisés par le module Rust `hermes` et la vue
+# `/hermes` ; ils ne concernent ni l'ORS public (routage de l'audit), ni les
+# seuils de détection des communes/tunnels, qui vivent côté serveur.
+#
+# Comme tous les paramètres, ils sont surchargés par mode d'exécution : un mode
+# EVAL peut pointer vers un serveur de test, un mode OPE vers la production.
+# ---------------------------------------------------------------------------
+
+[Hermes.Connexion.baseUrl]
+description = "URL de base de l'API hermes"
+documentation = """
+URL du contrôleur `hermes-api`, préfixe `/api/v1` compris :
+`http://10.15.58.131:9000/api/v1` par défaut.
+
+Le serveur n'est joignable que par le réseau privé **ZeroTier** (aucune
+exposition publique). Si l'adresse ou le port changent, mettre à jour cette
+valeur et `Hermes.Connexion.orsBaseUrl`.
+
+Le client Rust retire une éventuelle barre oblique finale avant de composer
+les routes. Aucun `X-Admin-Token` n'est stocké ni envoyé : les routes admin
+(`/regions` en écriture, `/geofabrik`, `/aux/prepare`) restent hors périmètre.
+"""
+type = "string"
+default = "http://10.15.58.131:9000/api/v1"
+icon = "mdi-server-network"
+
+[Hermes.Connexion.orsBaseUrl]
+description = "URL de base d'ORS sur hermes"
+documentation = """
+URL du moteur ORS hébergé par `hermes`, préfixe `/ors/v2` compris :
+`http://10.15.58.131:8002/ors/v2` par défaut.
+
+Elle sert uniquement à la **gestion de l'instance ORS** depuis la vue Hermes :
+démarrage, arrêt et vérification de santé (`/health`). Le routage de l'Audit
+utilise l'API publique OpenRouteService et ses clés (`Systeme.Key.*`), pas cette
+instance.
+"""
+type = "string"
+default = "http://10.15.58.131:8002/ors/v2"
+icon = "mdi-directions-fork"
+
+[Hermes.Connexion.delaiSec]
+description = "Délai des requêtes hermes (s)"
+documentation = """
+Délai maximal accordé à une requête HTTP vers `hermes-api`.
+
+- Les routes courtes (`/ping`, `/datasets`, `/regions`, `/polygons`, `/aux`)
+  doivent répondre en quelques millisecondes : **30 s** laisse une marge
+  confortable sur ZeroTier.
+- `POST /communes/detect` peut charger l'index d'un dataset au premier appel
+  (~2,2 s pour la PACA) : **30 s** suffit.
+- `POST /tunnels/detect` exécute `map_matching_2` : le client utilise un délai
+  interne plus large (150 s), indépendant de ce réglage.
+- Le **polling** de `GET /datasets/{id}` n'est pas limité par ce délai : chaque
+  requête est courte, la boucle de polling a son propre budget (45 min).
+
+Un délai trop bas fait échouer une détection sur un réseau lent ; trop haut, il
+retarde le message d'erreur.
+"""
+type = "int"
+default = 30
+min = 2
+max = 60
+step = 1
+unit = "s"
+icon = "mdi-timer-outline"
+
+[Hermes.Connexion.keepAliveSec]
+description = "Ping de maintien d'activité (s)"
+documentation = """
+Période du `GET /ping` envoyé **uniquement pendant un travail actif** : polling
+d'un dataset, démarrage d'ORS, file de détection des communes/tunnels. Valeur
+par défaut : **30 s** ; **0** désactive le keep-alive.
+
+Le ping est un signal d'activité du veilleur `hermes` : un keep-alive permanent
+empêcherait la mise en veille automatique (grâce de 15 min) et maintiendrait le
+serveur éveillé sans raison. C'est pourquoi il ne tourne jamais en dehors d'une
+opération en cours.
+
+Le réveil du serveur (WoL) et les actions de la vue Hermes ne dépendent pas de
+ce réglage.
+"""
+type = "int"
+default = 30
+min = 0
+max = 300
+step = 10
+unit = "s"
+icon = "mdi-heart-pulse"
+
+[Hermes.Reveil.adresse]
+description = "Adresse de réveil WoL"
+documentation = """
+Adresse à laquelle envoyer le paquet magique Wake-on-LAN :
+`87.91.31.205` (box FAI Bouygues) par défaut.
+
+Le paquet UDP est émis vers cette adresse et le port
+`Hermes.Reveil.port` ; la box le relaie au serveur. Le réveil est **manuel** :
+aucun paquet n'est envoyé au lancement de l'application ni pendant le
+rattrapage des détections.
+"""
+type = "string"
+default = "87.91.31.205"
+icon = "mdi-power-plug-outline"
+
+[Hermes.Reveil.mac]
+description = "Adresse MAC du serveur hermes"
+documentation = """
+Adresse MAC de l'interface Ethernet du serveur (`enp1s0f0`) :
+`68:5b:35:a8:5c:65` par défaut.
+
+Format attendu : six octets hexadécimaux séparés par `:` ou `-`. Le client
+construit le paquet magique `FF FF FF FF FF FF` suivi de seize répétitions de
+la MAC, puis l'envoie trois fois.
+"""
+type = "string"
+default = "68:5b:35:a8:5c:65"
+icon = "mdi-ethernet"
+
+[Hermes.Reveil.port]
+description = "Port UDP du réveil WoL"
+documentation = """
+Port UDP du paquet magique : **9** (port `discard`) par défaut. Le port `7`
+est également courant. La box doit relayer ce port vers le serveur.
+"""
+type = "int"
+default = 9
+min = 1
+max = 65535
+step = 1
+icon = "mdi-numeric"
+
+[Hermes.Reveil.delaiMaxSec]
+description = "Attente maximale après réveil (s)"
+documentation = """
+Durée maximale d'attente de la disponibilité du serveur après un réveil WoL :
+**120 s** par défaut (bornes 30 à 300).
+
+Le client interroge `GET /ping` toutes les 3 s. La reprise mesurée est de ~50 s
+à ~1 min 52 s (démarrage + services). Au-delà du délai, l'utilisateur reçoit un
+message d'échec explicite et peut relancer le réveil.
+"""
+type = "int"
+default = 120
+min = 30
+max = 300
+step = 10
+unit = "s"
+icon = "mdi-timer-sand"
+
+# --- Sélection du dataset actif ---
+# Paramètre **caché** du drawer : le groupe `Hermes.Dataset` n'est listé dans
+# aucune catégorie `_meta`. Il est écrit par la vue `/hermes` (carte Serveur ou
+# onglet Datasets) et relu par les stores de détection pour choisir le dataset
+# envoyé à `POST /communes/detect` et `POST /tunnels/detect`.
+
+[Hermes.Dataset.actif]
+description = "Dataset hermes actif"
+documentation = """
+Identifiant du dataset `hermes` utilisé par les détections de communes et de
+tunnels. Valeur vide : aucun dataset actif — les détections sont bloquées avec
+un message invitant à en choisir un dans la vue Hermes.
+
+Le dataset est choisi manuellement parmi les datasets `ready` (`GET /datasets`).
+Il est persisté par mode d'exécution, comme tous les paramètres : un mode EVAL
+peut utiliser un dataset de test, un mode OPE le dataset de production.
+
+Le serveur ne conserve qu'**un seul dataset en mémoire** : changer de dataset
+décharge le précédent, et le premier appel de détection sur le nouveau coûte
+~2 s (rechargement de l'index).
+"""
+type = "string"
+default = ""
+icon = "mdi-database-check"
 
 # ---------------------------------------------------------------------------
 # Paramètres d'exemple — illustrent chaque type pris en charge par ParameterCard.
