@@ -691,6 +691,23 @@ export const useHermesStore = defineStore('hermes', () => {
     }
   }
 
+  /**
+   * Charge les données nécessaires au calcul de la couverture du dataset
+   * actif sur la carte de l'Accueil : datasets, régions et polygones.
+   *
+   * `loadDatasets` est appelé même sans dataset actif : il peut sélectionner
+   * automatiquement l'unique dataset prêt. Sans dataset actif ensuite, aucun
+   * chargement de géométries n'est fait. Les erreurs sont absorbées par les
+   * chargements unitaires : la carte reste simplement sans couverture si le
+   * serveur est indisponible.
+   */
+  async function ensureCoverageData(): Promise<void> {
+    await loadActiveDataset()
+    await loadDatasets()
+    if (!activeDatasetId.value) return
+    await Promise.all([loadRegions(), loadPolygons()])
+  }
+
   async function createPolygon(
     input: HermesPolygonInput,
   ): Promise<HermesPolygon> {
@@ -858,6 +875,7 @@ export const useHermesStore = defineStore('hermes', () => {
     loadPolygons,
     loadInstances,
     loadAux,
+    ensureCoverageData,
     createDataset,
     deleteDataset,
     pollDataset,

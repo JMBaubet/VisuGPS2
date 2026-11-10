@@ -27,6 +27,8 @@ import { useTracesStore } from '../../stores/traces'
 import type { TraceMetadata } from '../../stores/traces'
 import { useAppStore } from '../../stores/app'
 import { useOsmStore } from '../../stores/osm'
+import { useHermesStore } from '../../stores/hermes'
+import { datasetGeometries } from '../../utils/hermesGeometry'
 import { hexToRgbaString } from '../../utils/materialColors'
 
 // --- Stores ---
@@ -35,6 +37,7 @@ const settingsStore = useSettingsStore()
 const tracesStore = useTracesStore()
 const appStore = useAppStore()
 const osmStore = useOsmStore()
+const hermesStore = useHermesStore()
 
 // --- Références ---
 
@@ -51,6 +54,10 @@ const OSM_PREVIEW_LINE = 'osm-region-preview-line'
 const OSM_PRESENT_SOURCE = 'osm-present-regions'
 const OSM_PRESENT_FILL = 'osm-present-regions-fill'
 const OSM_PRESENT_LINE = 'osm-present-regions-line'
+
+const HERMES_COVERAGE_SOURCE = 'hermes-dataset-coverage'
+const HERMES_COVERAGE_FILL = 'hermes-dataset-coverage-fill'
+const HERMES_COVERAGE_LINE = 'hermes-dataset-coverage-line'
 
 // --- Lecture des paramètres (avec fallback sur les valeurs par défaut) ---
 
@@ -367,6 +374,77 @@ function addOsmPreviewLayer() {
       'line-opacity': 0.9,
     },
   })
+}
+
+/**
+ * Couverture du dataset hermes actif : une nappe bleue insérée sous les
+ * clusters et les traces, à partir des régions et polygones déjà chargés.
+ */
+function addHermesCoverageLayer() {
+  if (!map) return
+
+  if (!map.getSource(HERMES_COVERAGE_SOURCE)) {
+    map.addSource(HERMES_COVERAGE_SOURCE, {
+      type: 'geojson',
+      data: emptyCollection(),
+    })
+  }
+
+  const beforeId = map.getLayer('clusters') ? 'clusters' : undefined
+  if (!map.getLayer(HERMES_COVERAGE_FILL)) {
+    map.addLayer(
+      {
+        id: HERMES_COVERAGE_FILL,
+        type: 'fill',
+        source: HERMES_COVERAGE_SOURCE,
+        paint: {
+          'fill-color': '#2196F3',
+          'fill-opacity': 0.18,
+        },
+      },
+      beforeId,
+    )
+  }
+  if (!map.getLayer(HERMES_COVERAGE_LINE)) {
+    map.addLayer(
+      {
+        id: HERMES_COVERAGE_LINE,
+        type: 'line',
+        source: HERMES_COVERAGE_SOURCE,
+        paint: {
+          'line-color': '#1976D2',
+          'line-width': 2,
+          'line-opacity': 0.9,
+        },
+      },
+      beforeId,
+    )
+  }
+}
+
+/** Applique la couverture du dataset actif, ou vide la source s'il n'y en a pas. */
+function applyHermesCoverage() {
+  if (!map || !mapReady) return
+
+  const source = map.getSource(HERMES_COVERAGE_SOURCE) as
+    | mapboxgl.GeoJSONSource
+    | undefined
+  if (!source) return
+
+  const dataset = hermesStore.activeDataset
+  const features: GeoJSON.Feature[] = dataset
+    ? datasetGeometries(
+        dataset,
+        hermesStore.regions,
+        hermesStore.polygons,
+      ).map(geometry => ({
+        type: 'Feature',
+        properties: {},
+        geometry,
+      }))
+    : []
+
+  source.setData({ type: 'FeatureCollection', features })
 }
 
 /** Applique les géométries des régions présentes, colorées par état. */
@@ -1028,6 +1106,8 @@ function initializeMap(initialView: { center: [number, number]; zoom: number }) 
     // Ordre d'ajout des couches respecte le z-order (cf. spec §8) :
     // 1. points de départ (clusters), 2. favoris, 3. traces affichées (au-dessus).
     addClusterLayers()
+    // Couverture hermes insérée avant les clusters : elle reste sous les traces.
+    addHermesCoverageLayer()
     addFavoritesLayer()
     addDisplayedTracesLayer()
     addFocusTracesLayer()
@@ -1042,6 +1122,7 @@ function initializeMap(initialView: { center: [number, number]; zoom: number }) 
     // appliquée dès que les couches existent.
     applyOsmPreview()
     applyPresentRegions()
+    applyHermesCoverage()
 
     // Un signal de cadrage armé avant que la carte soit prête (import lancé
     // pendant le chargement du style) est honoré ici : le watch n'étant pas
@@ -1168,6 +1249,19 @@ watch(
 watch(
   () => [osmStore.presentRegions, osmStore.previewRegionId] as const,
   () => applyPresentRegions(),
+)
+
+// Couverture du dataset hermes actif : recalculée quand le dataset actif ou
+// les géométries de régions/polygones changent.
+watch(
+  () =>
+    [
+      hermesStore.activeDatasetId,
+      hermesStore.datasets,
+      hermesStore.regions,
+      hermesStore.polygons,
+    ] as const,
+  () => applyHermesCoverage(),
 )
 
 // Focus temporaire sur un circuit (clic Info) : isoler la trace et la cadrer.
@@ -1326,6 +1420,10 @@ watch(
 // --- Cycle de vie ---
 
 onMounted(async () => {
+  // Charger la couverture hermes en parallèle du reste ; elle s'affichera dès
+  // que la carte et les listes seront prêtes.
+  void hermesStore.ensureCoverageData()
+
   // Appliquer la classe sombre dès le montage si le thème actif est sombre.
   if (mapContainer.value && appStore.isDarkMode) {
     mapContainer.value.classList.add('map-dark')
