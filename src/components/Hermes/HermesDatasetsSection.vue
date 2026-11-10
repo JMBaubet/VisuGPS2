@@ -8,6 +8,15 @@
       </v-chip>
       <v-spacer />
       <v-btn
+        size="x-small"
+        variant="tonal"
+        prepend-icon="mdi-plus"
+        :disabled="hermesStore.orsStarting"
+        @click="emit('create-dataset')"
+      >
+        Nouveau
+      </v-btn>
+      <v-btn
         icon="mdi-refresh"
         size="x-small"
         variant="text"
@@ -22,7 +31,7 @@
       variant="tonal"
       density="compact"
       class="mb-2"
-      text="La création, la suppression et la gestion ORS arrivent à la sous-étape 1.6."
+      text="Un dataset assemble des régions ou des zones existantes ; la création ne dessine rien."
     />
 
     <div
@@ -38,10 +47,7 @@
       nav
       class="hermes-list"
     >
-      <v-list-item
-        v-for="dataset in hermesStore.datasets"
-        :key="dataset.id"
-      >
+      <v-list-item v-for="dataset in hermesStore.datasets" :key="dataset.id">
         <template #prepend>
           <v-icon
             :icon="
@@ -89,22 +95,13 @@
         <v-list-item-subtitle>
           {{ formatFileSize(dataset.sizeBytes) }} · ORS
           {{ dataset.orsVersion || '—' }}
+          <span v-if="isActiveInstance(dataset)">
+            · instance active
+          </span>
         </v-list-item-subtitle>
 
         <template #append>
           <div class="d-flex align-center ga-1">
-            <v-btn
-              v-if="
-                dataset.status === 'ready' &&
-                dataset.id !== hermesStore.activeDatasetId
-              "
-              size="x-small"
-              variant="text"
-              prepend-icon="mdi-check-circle-outline"
-              @click.stop="activate(dataset.id)"
-            >
-              Activer
-            </v-btn>
             <v-tooltip
               v-if="dataset.status === 'failed' && dataset.lastLogTail"
               location="left"
@@ -120,6 +117,56 @@
               </template>
               <div class="hermes-log-tail">{{ dataset.lastLogTail }}</div>
             </v-tooltip>
+
+            <v-menu location="bottom end">
+              <template #activator="{ props }">
+                <v-btn
+                  v-bind="props"
+                  icon="mdi-dots-vertical"
+                  size="small"
+                  variant="text"
+                  :title="`Actions pour ${dataset.id}`"
+                  :disabled="hermesStore.orsStarting"
+                />
+              </template>
+              <v-list density="compact">
+                <v-list-item
+                  v-if="
+                    dataset.status === 'ready' &&
+                    dataset.id !== hermesStore.activeDatasetId
+                  "
+                  prepend-icon="mdi-check-circle-outline"
+                  title="Définir comme actif"
+                  @click="activate(dataset.id)"
+                />
+                <v-list-item
+                  v-if="dataset.status === 'ready'"
+                  :prepend-icon="
+                    isActiveInstance(dataset)
+                      ? 'mdi-stop-circle-outline'
+                      : 'mdi-play-circle-outline'
+                  "
+                  :title="
+                    isActiveInstance(dataset)
+                      ? 'Arrêter ORS'
+                      : 'Démarrer ORS'
+                  "
+                  :disabled="hermesStore.orsStarting"
+                  @click="
+                    isActiveInstance(dataset)
+                      ? stopOrs(dataset)
+                      : requestStartOrs(dataset)
+                  "
+                />
+                <v-divider />
+                <v-list-item
+                  prepend-icon="mdi-delete-outline"
+                  title="Supprimer"
+                  class="text-error"
+                  @click="emit('delete-dataset', dataset)"
+                />
+              </v-list>
+            </v-menu>
           </div>
         </template>
       </v-list-item>
@@ -131,18 +178,38 @@
       title="Aucun dataset"
       text="Aucun dataset sur le serveur."
     />
+
+    <v-dialog v-model="orsDialogOpen" max-width="480" persistent>
+      <v-card>
+        <v-card-title class="text-h6">Démarrer ORS ?</v-card-title>
+        <v-card-text>
+          Une instance ORS est déjà active pour
+          <b>{{ hermesStore.activeInstance?.id }}</b>. Démarrer
+          <b>{{ orsCandidate?.id }}</b> arrêtera la précédente : le serveur ne
+          maintient qu'une instance à la fois.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="cancelStartOrs">Annuler</v-btn>
+          <v-btn color="primary" variant="flat" @click="confirmStartOrs">
+            Démarrer
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * Onglet « Datasets » : liste et activation du dataset courant.
+ * Onglet « Datasets » : liste, activation, suppression et gestion ORS.
  *
- * La création (régions/zones), la suppression et la gestion des instances ORS
- * sont ajoutées en 1.6. Un dataset en préparation est suivi automatiquement
- * par le store (`loadDatasets` relance le polling).
+ * La création ouvre `HermesDatasetForm`, qui assemble des régions ou des
+ * polygones existants. Un build en préparation est suivi par le store
+ * (`loadDatasets` relance le polling). ORS ne maintient qu'une instance :
+ * démarrer un autre dataset demande confirmation.
  */
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import {
   useHermesStore,
   type HermesDataset,
@@ -151,8 +218,16 @@ import { useUiStore } from '../../stores/ui'
 import { formatFileSize } from '../../utils/format'
 import { parseHermesError } from '../../utils/hermes'
 
+const emit = defineEmits<{
+  'create-dataset': []
+  'delete-dataset': [dataset: HermesDataset]
+}>()
+
 const hermesStore = useHermesStore()
 const ui = useUiStore()
+
+const orsDialogOpen = ref(false)
+const orsCandidate = ref<HermesDataset | null>(null)
 
 function statusColor(status: string): string {
   switch (status) {
@@ -177,11 +252,56 @@ function scope(dataset: HermesDataset): string {
   return 'périmètre inconnu'
 }
 
+function isActiveInstance(dataset: HermesDataset): boolean {
+  return hermesStore.activeInstance?.id === dataset.id
+}
+
 async function activate(datasetId: string): Promise<void> {
   try {
     await hermesStore.setActiveDataset(datasetId)
   } catch (error) {
     ui.showError(parseHermesError(error).message)
+  }
+}
+
+function requestStartOrs(dataset: HermesDataset): void {
+  const current = hermesStore.activeInstance
+  if (current && current.id !== dataset.id) {
+    orsCandidate.value = dataset
+    orsDialogOpen.value = true
+    return
+  }
+  void startOrs(dataset)
+}
+
+async function startOrs(dataset: HermesDataset): Promise<void> {
+  try {
+    await hermesStore.startInstance(dataset.id)
+  } catch (error) {
+    ui.showError(parseHermesError(error).message)
+  }
+}
+
+async function stopOrs(dataset: HermesDataset): Promise<void> {
+  try {
+    await hermesStore.stopInstance(dataset.id)
+    ui.showSuccess(`ORS arrêté pour ${dataset.id}.`)
+  } catch (error) {
+    ui.showError(parseHermesError(error).message)
+  }
+}
+
+function cancelStartOrs(): void {
+  orsDialogOpen.value = false
+  orsCandidate.value = null
+}
+
+function confirmStartOrs(): void {
+  const dataset = orsCandidate.value
+  orsDialogOpen.value = false
+  orsCandidate.value = null
+  if (dataset) {
+    void startOrs(dataset)
   }
 }
 

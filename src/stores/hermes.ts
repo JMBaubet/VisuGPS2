@@ -474,7 +474,10 @@ export const useHermesStore = defineStore('hermes', () => {
         zones: payload.zones ?? null,
       })
       await loadDatasets()
-      if (result.status === 'preparing') {
+      if (
+        result.status === 'preparing' &&
+        pollingDatasetId.value !== result.id
+      ) {
         void pollDataset(result.id)
       }
       return result
@@ -487,10 +490,13 @@ export const useHermesStore = defineStore('hermes', () => {
   async function deleteDataset(datasetId: string): Promise<void> {
     try {
       await invoke('hermes_delete_dataset', { datasetId })
+      if (pollingDatasetId.value === datasetId) {
+        cancelPolling()
+      }
       if (activeDatasetId.value === datasetId) {
         await setActiveDataset(null)
       }
-      await loadDatasets()
+      await Promise.all([loadDatasets(), loadInstances()])
     } catch (error) {
       recordError(error)
       throw error
@@ -795,6 +801,11 @@ export const useHermesStore = defineStore('hermes', () => {
       await invoke<HermesIdStatus>('hermes_stop_instance', { datasetId })
       orsHealth.value = null
       await loadInstances()
+      // Le serveur décharge les index communes/tunnels sur stop : on relit
+      // l'état aux du dataset actif pour que le diagnostic reste exact.
+      if (activeDatasetId.value) {
+        await loadAux(activeDatasetId.value)
+      }
     } catch (error) {
       recordError(error)
       throw error

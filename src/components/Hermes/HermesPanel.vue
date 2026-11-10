@@ -22,7 +22,10 @@
 
       <v-window v-model="tab" class="hermes-panel__window">
         <v-window-item value="datasets">
-          <HermesDatasetsSection />
+          <HermesDatasetsSection
+            @create-dataset="emit('create-dataset')"
+            @delete-dataset="emit('delete-dataset', $event)"
+          />
         </v-window-item>
         <v-window-item value="regions">
           <HermesRegionsSection
@@ -57,7 +60,10 @@ import HermesServerCard from './HermesServerCard.vue'
 import HermesDatasetsSection from './HermesDatasetsSection.vue'
 import HermesRegionsSection from './HermesRegionsSection.vue'
 import HermesPolygonsSection from './HermesPolygonsSection.vue'
-import type { HermesPolygon } from '../../stores/hermes'
+import type {
+  HermesDataset,
+  HermesPolygon,
+} from '../../stores/hermes'
 
 defineProps<{
   selectedRegionId: string | null
@@ -71,6 +77,8 @@ const emit = defineEmits<{
   'create-polygon': []
   'edit-polygon': [polygon: HermesPolygon]
   'delete-polygon': [polygon: HermesPolygon]
+  'create-dataset': []
+  'delete-dataset': [dataset: HermesDataset]
 }>()
 
 const tab = ref<'datasets' | 'regions' | 'polygons'>('datasets')

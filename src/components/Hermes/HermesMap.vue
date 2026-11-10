@@ -50,6 +50,10 @@ const props = defineProps<{
   selectedPolygonId: string | null
   drawMode: HermesDrawMode
   editingPolygon: HermesPolygon | null
+  /** Régions surlignées par le formulaire de dataset (sélection multiple). */
+  previewRegionIds: string[]
+  /** Polygones surlignés par le formulaire de dataset (sélection multiple). */
+  previewPolygonIds: string[]
   /**
    * Compteur de session : incrémenté à chaque demande de création/édition,
    * même si le mode est déjà le bon. Il force la ré-application de l'outil
@@ -118,11 +122,19 @@ function render(): void {
 
   setRegionsData(
     instance,
-    regionsFeatureCollection(props.regions, props.selectedRegionId),
+    regionsFeatureCollection(
+      props.regions,
+      props.selectedRegionId,
+      props.previewRegionIds,
+    ),
   )
   setPolygonsData(
     instance,
-    polygonsFeatureCollection(props.polygons, props.selectedPolygonId),
+    polygonsFeatureCollection(
+      props.polygons,
+      props.selectedPolygonId,
+      props.previewPolygonIds,
+    ),
   )
 
   if (!hasFitted && (props.regions.length > 0 || props.polygons.length > 0)) {
@@ -303,9 +315,14 @@ watch(
     [
       props.regions,
       props.polygons,
-      props.selectedRegionId,
-      props.selectedPolygonId,
+      props.previewRegionIds,
+      props.previewPolygonIds,
     ] as const,
+  () => render(),
+)
+
+watch(
+  () => [props.selectedRegionId, props.selectedPolygonId] as const,
   () => {
     render()
     if (props.selectedRegionId || props.selectedPolygonId) {

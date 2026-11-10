@@ -18,6 +18,8 @@
         @create-polygon="startCreatePolygon"
         @edit-polygon="startEditPolygon"
         @delete-polygon="requestDeletePolygon"
+        @create-dataset="startCreateDataset"
+        @delete-dataset="requestDeleteDataset"
       />
 
       <v-main>
@@ -29,6 +31,8 @@
           :draw-mode="drawMode"
           :editing-polygon="editingPolygon"
           :draw-session="drawSession"
+          :preview-region-ids="previewRegionIds"
+          :preview-polygon-ids="previewPolygonIds"
           @select-region="onSelectRegion"
           @select-polygon="onSelectPolygon"
           @draw-create="onDrawCreate"
@@ -46,6 +50,14 @@
         :saving="polygonSaving"
         @submit="onPolygonSubmit"
         @cancel="onPolygonCancel"
+      />
+
+      <HermesDatasetForm
+        :model-value="datasetFormOpen"
+        :saving="datasetSaving"
+        @submit="onDatasetSubmit"
+        @cancel="onDatasetCancel"
+        @preview="onDatasetPreview"
       />
 
       <v-dialog v-model="deleteDialogOpen" max-width="500" persistent>
@@ -83,6 +95,47 @@
           </v-card-actions>
         </v-card>
       </v-dialog>
+
+      <v-dialog v-model="deleteDatasetDialogOpen" max-width="500" persistent>
+        <v-card>
+          <v-card-title class="text-h6">
+            Supprimer le dataset ?
+          </v-card-title>
+          <v-card-text>
+            Le dataset <b>« {{ deleteDatasetCandidate?.id ?? '' }} »</b> et
+            tout son contenu (graphes, cache, artefacts) seront supprimés du
+            serveur. Cette action est irréversible.
+            <v-alert
+              v-if="
+                deleteDatasetCandidate?.id === hermesStore.activeDatasetId
+              "
+              type="warning"
+              variant="tonal"
+              density="compact"
+              class="mt-3"
+              text="C'est le dataset actif : il sera désélectionné."
+            />
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn
+              variant="text"
+              :disabled="datasetDeleting"
+              @click="cancelDeleteDataset"
+            >
+              Annuler
+            </v-btn>
+            <v-btn
+              color="error"
+              variant="flat"
+              :loading="datasetDeleting"
+              @click="confirmDeleteDataset"
+            >
+              Supprimer
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
     </v-layout>
   </v-app>
 </template>
@@ -102,11 +155,14 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import {
   useHermesStore,
+  type HermesCreateDatasetPayload,
+  type HermesDataset,
   type HermesPolygon,
   type HermesPolygonInput,
 } from '../stores/hermes'
 import { useUiStore } from '../stores/ui'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
+import HermesDatasetForm from '../components/Hermes/HermesDatasetForm.vue'
 import HermesMap from '../components/Hermes/HermesMap.vue'
 import HermesPanel from '../components/Hermes/HermesPanel.vue'
 import HermesPolygonForm from '../components/Hermes/HermesPolygonForm.vue'
@@ -136,6 +192,14 @@ const polygonSaving = ref(false)
 const polygonDeleting = ref(false)
 const deleteDialogOpen = ref(false)
 const deleteCandidate = ref<HermesPolygon | null>(null)
+/** IDs surlignés par le formulaire de dataset (sélection multiple). */
+const previewRegionIds = ref<string[]>([])
+const previewPolygonIds = ref<string[]>([])
+const datasetFormOpen = ref(false)
+const datasetSaving = ref(false)
+const deleteDatasetDialogOpen = ref(false)
+const deleteDatasetCandidate = ref<HermesDataset | null>(null)
+const datasetDeleting = ref(false)
 
 /** Une action polygone bloque les boutons du panneau et ceux du formulaire. */
 const polygonBusy = computed(
@@ -286,6 +350,72 @@ async function confirmDeletePolygon(): Promise<void> {
     ui.showError(parseHermesError(error).message)
   } finally {
     polygonDeleting.value = false
+  }
+}
+
+// ─── Datasets ───────────────────────────────────────────────────────
+
+function startCreateDataset(): void {
+  datasetFormOpen.value = true
+}
+
+function onDatasetPreview(payload: {
+  regionIds: string[]
+  polygonIds: string[]
+}): void {
+  previewRegionIds.value = payload.regionIds
+  previewPolygonIds.value = payload.polygonIds
+}
+
+function clearDatasetPreview(): void {
+  previewRegionIds.value = []
+  previewPolygonIds.value = []
+}
+
+function onDatasetCancel(): void {
+  datasetFormOpen.value = false
+  clearDatasetPreview()
+}
+
+async function onDatasetSubmit(
+  payload: HermesCreateDatasetPayload,
+): Promise<void> {
+  datasetSaving.value = true
+  try {
+    const result = await hermesStore.createDataset(payload)
+    ui.showSuccess(`Dataset ${result.id} en cours de préparation.`)
+    datasetFormOpen.value = false
+    clearDatasetPreview()
+  } catch (error) {
+    ui.showError(parseHermesError(error).message)
+  } finally {
+    datasetSaving.value = false
+  }
+}
+
+function requestDeleteDataset(dataset: HermesDataset): void {
+  deleteDatasetCandidate.value = dataset
+  deleteDatasetDialogOpen.value = true
+}
+
+function cancelDeleteDataset(): void {
+  deleteDatasetDialogOpen.value = false
+  deleteDatasetCandidate.value = null
+}
+
+async function confirmDeleteDataset(): Promise<void> {
+  const dataset = deleteDatasetCandidate.value
+  if (!dataset) return
+  datasetDeleting.value = true
+  try {
+    await hermesStore.deleteDataset(dataset.id)
+    ui.showSuccess(`Dataset ${dataset.id} supprimé.`)
+    deleteDatasetDialogOpen.value = false
+    deleteDatasetCandidate.value = null
+  } catch (error) {
+    ui.showError(parseHermesError(error).message)
+  } finally {
+    datasetDeleting.value = false
   }
 }
 

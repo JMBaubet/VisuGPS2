@@ -76,13 +76,15 @@ function regionGeometry(region: HermesRegion): GeoJSON.Geometry {
 export function regionsFeatureCollection(
   regions: HermesRegion[],
   selectedId: string | null,
+  previewIds: string[] = [],
 ): GeoJSON.FeatureCollection {
+  const preview = new Set(previewIds)
   const features: GeoJSON.Feature[] = regions.map(
     (region): GeoJSON.Feature => ({
       type: 'Feature',
       properties: {
         id: region.id,
-        selected: region.id === selectedId,
+        selected: region.id === selectedId || preview.has(region.id),
         hasPoly: region.hasPoly,
       },
       geometry: regionGeometry(region),
@@ -94,13 +96,15 @@ export function regionsFeatureCollection(
 export function polygonsFeatureCollection(
   polygons: HermesPolygon[],
   selectedId: string | null,
+  previewIds: string[] = [],
 ): GeoJSON.FeatureCollection {
+  const preview = new Set(previewIds)
   const features: GeoJSON.Feature[] = polygons.map(
     (polygon): GeoJSON.Feature => ({
       type: 'Feature',
       properties: {
         id: polygon.id,
-        selected: polygon.id === selectedId,
+        selected: polygon.id === selectedId || preview.has(polygon.id),
         color: polygon.color ?? DEFAULT_POLYGON_COLOR,
       },
       geometry: polygon.geometry,
