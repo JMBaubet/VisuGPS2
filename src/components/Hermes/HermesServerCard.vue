@@ -36,6 +36,8 @@
         item-title="id"
         item-value="id"
         label="Dataset actif"
+        placeholder="Choisir un dataset…"
+        persistent-placeholder
         density="compact"
         variant="outlined"
         hide-details

@@ -93,7 +93,9 @@ export function describeHermesStatus(
     const stale = dataset.stale ? ' — obsolète' : ''
     tooltip.push(`Dataset actif : ${dataset.id} (${dataset.status}${stale}).`)
   } else {
-    tooltip.push('Aucun dataset actif — ouvrez Hermes pour en choisir un.')
+    tooltip.push(
+      'Aucun dataset actif — choisissez-en un dans la carte Serveur.',
+    )
   }
   if (lastError) {
     tooltip.push(`Dernière erreur : ${lastError}`)
@@ -128,7 +130,7 @@ export function describeHermesStatus(
     return {
       icon: 'mdi-server-network',
       color: 'orange',
-      label: 'Aucun dataset',
+      label: 'Dataset à choisir',
       tooltip,
     }
   }
