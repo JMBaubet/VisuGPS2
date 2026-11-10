@@ -9,6 +9,8 @@
  * Accueil consomment ces fonctions.
  */
 
+import { toRadians } from './geo'
+
 /** Région minimale nécessaire au calcul d'une couverture. */
 export interface RegionShape {
   id: string
@@ -86,4 +88,109 @@ export function datasetGeometries(
   }
 
   return geometries
+}
+
+// ─── Cercles de distance (outil « marqueur distance ») ────────────────
+
+/** Pas, portée et renforcement des cercles de distance. */
+export const DISTANCE_RING_OPTIONS = {
+  stepKm: 10,
+  maxKm: 150,
+  majorEveryKm: 50,
+} as const
+
+const EARTH_RADIUS_KM = 6371.0088
+const RING_SEGMENTS = 180
+
+/**
+ * Point situé à `distanceKm` du centre, dans la direction `bearingDeg`
+ * (0 = nord, sens horaire). Formule sphérique directe.
+ */
+export function destinationPoint(
+  center: [number, number],
+  bearingDeg: number,
+  distanceKm: number,
+): [number, number] {
+  const [lon, lat] = center
+  const angular = distanceKm / EARTH_RADIUS_KM
+  const bearing = toRadians(bearingDeg)
+  const lat1 = toRadians(lat)
+  const lon1 = toRadians(lon)
+
+  const sinLat2 =
+    Math.sin(lat1) * Math.cos(angular) +
+    Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing)
+  const lat2 = Math.asin(Math.min(1, Math.max(-1, sinLat2)))
+  const lon2 =
+    lon1 +
+    Math.atan2(
+      Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
+      Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2),
+    )
+
+  const lonDeg = (lon2 * 180) / Math.PI
+  const normalizedLon = ((lonDeg + 540) % 360) - 180
+  return [normalizedLon, (lat2 * 180) / Math.PI]
+}
+
+/** Anneau fermé d'un cercle géodésique. */
+function ringCoordinates(
+  center: [number, number],
+  radiusKm: number,
+): number[][] {
+  const coordinates: number[][] = []
+  for (let index = 0; index <= RING_SEGMENTS; index += 1) {
+    const bearing = (index * 360) / RING_SEGMENTS
+    coordinates.push(destinationPoint(center, bearing, radiusKm))
+  }
+  return coordinates
+}
+
+/** Cercles concentriques de 10 à 150 km, renforcés tous les 50 km. */
+export function distanceRingsFeatureCollection(
+  center: [number, number],
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = []
+  for (
+    let radius = DISTANCE_RING_OPTIONS.stepKm;
+    radius <= DISTANCE_RING_OPTIONS.maxKm;
+    radius += DISTANCE_RING_OPTIONS.stepKm
+  ) {
+    features.push({
+      type: 'Feature',
+      properties: {
+        radiusKm: radius,
+        major: radius % DISTANCE_RING_OPTIONS.majorEveryKm === 0,
+      },
+      geometry: {
+        type: 'LineString',
+        coordinates: ringCoordinates(center, radius),
+      },
+    })
+  }
+  return { type: 'FeatureCollection', features }
+}
+
+/** Étiquette d'un cercle renforcé, positionnée au nord. */
+export interface DistanceRingLabel {
+  label: string
+  position: [number, number]
+}
+
+/** Étiquettes des cercles 50, 100 et 150 km. */
+export function distanceRingLabels(
+  center: [number, number],
+): DistanceRingLabel[] {
+  const labels: DistanceRingLabel[] = []
+  for (
+    let radius = DISTANCE_RING_OPTIONS.majorEveryKm;
+    radius <= DISTANCE_RING_OPTIONS.maxKm;
+    radius += DISTANCE_RING_OPTIONS.majorEveryKm
+  ) {
+    labels.push({
+      label: `${radius} km`,
+      position: destinationPoint(center, 0, radius),
+    })
+  }
+  return labels
 }

@@ -2,6 +2,34 @@
   <div class="hermes-map">
     <div ref="mapContainer" class="hermes-map__canvas"></div>
 
+    <!-- Capture du prochain clic pour poser le centre des cercles. -->
+    <div
+      v-if="ringMode"
+      class="hermes-map__capture"
+      @click="onPlacementClick"
+    />
+
+    <v-tooltip
+      v-if="drawMode !== 'idle'"
+      location="right"
+      :open-delay="300"
+      max-width="280"
+    >
+      <template #activator="{ props }">
+        <v-btn
+          v-bind="props"
+          class="hermes-map__distance-btn"
+          :color="distanceToolActive ? HERMES_DISTANCE_COLOR : undefined"
+          :variant="distanceToolActive ? 'flat' : 'elevated'"
+          icon="mdi-map-marker-radius"
+          size="small"
+          title="Marqueur distance"
+          @click="toggleDistanceTool"
+        />
+      </template>
+      <span>{{ distanceToolHint }}</span>
+    </v-tooltip>
+
     <v-empty-state
       v-if="!hasMapboxKey"
       icon="mdi-map-marker-off-outline"
@@ -22,6 +50,10 @@
  * L'élément survolé dans la liste — ou sélectionné au clic — passe en bleu.
  * Les traces favorites et affichées de l'Accueil restent visibles sur tous les
  * onglets, avec la même représentation que sur la carte principale.
+ *
+ * En création ou édition de polygone, le bouton « marqueur distance » arme un
+ * clic de placement : des cercles mauves de 10 à 150 km, renforcés tous les
+ * 50 km, sont alors dessinés autour du centre choisi.
  *
  * Le style `outdoors-v12` est volontairement classique (pas le style Standard
  * de l'Accueil) : les couches GeoJSON et l'outil de dessin Mapbox s'y ajoutent
@@ -49,16 +81,23 @@ import {
   type HermesDrawMode,
   type HermesTab,
 } from '../../utils/hermes'
+import {
+  distanceRingLabels,
+  distanceRingsFeatureCollection,
+} from '../../utils/hermesGeometry'
 import { hexToRgbaString } from '../../utils/materialColors'
 import {
+  addHermesDistanceLayers,
   addHermesLayers,
   addHermesTraceLayers,
   applyHermesVisibility,
   coverageFeatureCollection,
   datasetsFeatureCollection,
   emptyFC,
+  HERMES_DISTANCE_COLOR,
   HERMES_LAYER_IDS,
   HERMES_MAP_STYLE,
+  HERMES_RING_SOURCE_IDS,
   HERMES_SOURCE_IDS,
   HERMES_TRACE_SOURCE_IDS,
   polygonsFeatureCollection,
@@ -110,6 +149,12 @@ const mapContainer = ref<HTMLDivElement | null>(null)
 const map = shallowRef<mapboxgl.Map | null>(null)
 const mapReady = ref(false)
 const hasMapboxKey = ref(false)
+/** Le prochain clic sur la carte définit le centre des cercles. */
+const ringMode = ref(false)
+/** Centre des cercles de distance, ou `null` quand ils sont masqués. */
+const ringCenter = ref<[number, number] | null>(null)
+/** Marqueurs HTML des étiquettes 50/100/150 km. */
+let ringMarkers: mapboxgl.Marker[] = []
 
 let resizeObserver: ResizeObserver | null = null
 let draw: MapboxDraw | null = null
@@ -124,6 +169,20 @@ const activeDataset = computed<HermesDataset | null>(() => {
     props.datasets.find(dataset => dataset.id === props.activeDatasetId) ??
     null
   )
+})
+
+const distanceToolActive = computed(
+  () => ringMode.value || ringCenter.value !== null,
+)
+
+const distanceToolHint = computed(() => {
+  if (ringMode.value) {
+    return 'Cliquez sur la carte pour définir le centre des cercles.'
+  }
+  if (ringCenter.value) {
+    return 'Effacer les cercles de distance.'
+  }
+  return 'Afficher les cercles de distance (10 à 150 km, renforcés tous les 50 km).'
 })
 
 /** Première géométrie `Polygon` d'un événement Mapbox Draw. */
@@ -365,6 +424,95 @@ async function refreshTraceLayers(): Promise<void> {
   })
 }
 
+/** Affiche ou efface les anneaux et le point central. */
+function renderDistanceRings(): void {
+  const instance = map.value
+  if (!instance || !mapReady.value) return
+
+  const center = ringCenter.value
+  if (!center) {
+    setSourceData(instance, HERMES_RING_SOURCE_IDS.rings, emptyFC())
+    setSourceData(instance, HERMES_RING_SOURCE_IDS.center, emptyFC())
+    clearRingMarkers()
+    return
+  }
+
+  setSourceData(
+    instance,
+    HERMES_RING_SOURCE_IDS.rings,
+    distanceRingsFeatureCollection(center),
+  )
+  setSourceData(instance, HERMES_RING_SOURCE_IDS.center, {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Point', coordinates: center },
+      },
+    ],
+  })
+  renderRingLabels(center)
+}
+
+/** Étiquettes « 50 km », « 100 km » et « 150 km » au nord des anneaux. */
+function renderRingLabels(center: [number, number]): void {
+  clearRingMarkers()
+  const instance = map.value
+  if (!instance) return
+
+  for (const label of distanceRingLabels(center)) {
+    const element = document.createElement('div')
+    element.textContent = label.label
+    element.style.cssText = `color:${HERMES_DISTANCE_COLOR};font-size:11px;font-weight:600;text-shadow:0 0 3px #fff,0 0 3px #fff;pointer-events:none;white-space:nowrap;`
+    const marker = new mapboxgl.Marker({ element, anchor: 'bottom' })
+      .setLngLat(label.position)
+      .addTo(instance)
+    ringMarkers.push(marker)
+  }
+}
+
+function clearRingMarkers(): void {
+  for (const marker of ringMarkers) marker.remove()
+  ringMarkers = []
+}
+
+function clearDistanceRings(): void {
+  ringMode.value = false
+  ringCenter.value = null
+  clearRingMarkers()
+  const instance = map.value
+  if (!instance || !mapReady.value) return
+  setSourceData(instance, HERMES_RING_SOURCE_IDS.rings, emptyFC())
+  setSourceData(instance, HERMES_RING_SOURCE_IDS.center, emptyFC())
+}
+
+/** Bouton de la carte : arme le placement, puis efface les cercles existants. */
+function toggleDistanceTool(): void {
+  if (ringCenter.value) {
+    clearDistanceRings()
+    return
+  }
+  ringMode.value = !ringMode.value
+}
+
+/** Clic sur la surface de capture : convertit le pixel en coordonnées. */
+function onPlacementClick(event: MouseEvent): void {
+  const instance = map.value
+  const target = event.currentTarget as HTMLElement | null
+  if (!instance || !target) return
+
+  const rect = target.getBoundingClientRect()
+  const point = new mapboxgl.Point(
+    event.clientX - rect.left,
+    event.clientY - rect.top,
+  )
+  const lngLat = instance.unproject(point)
+  ringMode.value = false
+  ringCenter.value = [lngLat.lng, lngLat.lat]
+  renderDistanceRings()
+}
+
 function onMapClick(event: MapMouseEvent): void {
   const instance = map.value
   if (!instance || !mapReady.value || props.drawMode !== 'idle') return
@@ -445,6 +593,7 @@ async function initializeMap(token: string): Promise<void> {
       displayedWidth: Number(getParam('Carte.Traces.epaisseur') ?? 4),
       displayedGradient: buildDisplayedGradient(),
     })
+    addHermesDistanceLayers(instance)
 
     const drawControl = new MapboxDraw({
       displayControlsDefault: false,
@@ -466,11 +615,13 @@ async function initializeMap(token: string): Promise<void> {
     render()
     applyDrawMode()
     void refreshTraceLayers()
+    renderDistanceRings()
   })
 }
 
 function destroyMap(): void {
   traceRefreshToken += 1
+  clearRingMarkers()
   if (map.value) {
     try {
       map.value.remove()
@@ -553,6 +704,18 @@ watch(
 )
 
 watch(
+  () => props.drawSession,
+  () => clearDistanceRings(),
+)
+
+watch(
+  () => props.drawMode,
+  mode => {
+    if (mode === 'idle') clearDistanceRings()
+  },
+)
+
+watch(
   () => tracesStore.traces,
   () => {
     void refreshTraceLayers()
@@ -571,6 +734,20 @@ watch(
 .hermes-map__canvas {
   position: absolute;
   inset: 0;
+}
+
+.hermes-map__capture {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  cursor: crosshair;
+}
+
+.hermes-map__distance-btn {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 4;
 }
 
 .hermes-map__empty {

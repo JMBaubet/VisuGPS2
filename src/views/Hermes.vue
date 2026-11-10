@@ -54,7 +54,7 @@
       <SettingsDrawer :show-system="false" />
 
       <HermesPolygonForm
-        :model-value="polygonDialogOpen"
+        :model-value="polygonFormOpen"
         :mode="polygonFormMode"
         :polygon="editingPolygon"
         :geometry="drawnGeometry"
@@ -203,7 +203,8 @@ const drawSession = ref(0)
 const editingPolygon = ref<HermesPolygon | null>(null)
 /** Géométrie dessinée ou éditée, mise à jour à chaque `draw.update`. */
 const drawnGeometry = ref<GeoJSON.Polygon | null>(null)
-const polygonDialogOpen = ref(false)
+/** Formulaire polygone en tiroir droit : ouvert après le tracé ou en édition. */
+const polygonFormOpen = ref(false)
 const polygonFormMode = ref<'create' | 'edit'>('create')
 const polygonSaving = ref(false)
 const polygonDeleting = ref(false)
@@ -221,7 +222,7 @@ const datasetDeleting = ref(false)
 /** Une action polygone bloque les boutons du panneau et ceux du formulaire. */
 const polygonBusy = computed(
   () =>
-    polygonSaving.value || polygonDeleting.value || polygonDialogOpen.value,
+    polygonSaving.value || polygonDeleting.value || polygonFormOpen.value,
 )
 
 /** Datasets qui référencent le polygone candidat à la suppression. */
@@ -282,11 +283,11 @@ function startCreatePolygon(): void {
 
 function onDrawCreate(geometry: GeoJSON.Polygon): void {
   drawnGeometry.value = geometry
-  polygonDialogOpen.value = true
+  polygonFormOpen.value = true
 }
 
 function onDrawUpdate(geometry: GeoJSON.Polygon): void {
-  if (polygonDialogOpen.value) {
+  if (polygonFormOpen.value) {
     drawnGeometry.value = geometry
   }
 }
@@ -298,13 +299,13 @@ function startEditPolygon(polygon: HermesPolygon): void {
   drawnGeometry.value = polygon.geometry
   polygonFormMode.value = 'edit'
   polygonSaving.value = false
-  polygonDialogOpen.value = true
+  polygonFormOpen.value = true
   drawSession.value += 1
   drawMode.value = 'edit'
 }
 
 function onPolygonCancel(): void {
-  polygonDialogOpen.value = false
+  polygonFormOpen.value = false
   polygonSaving.value = false
   drawMode.value = 'idle'
   drawnGeometry.value = null
@@ -336,7 +337,7 @@ async function onPolygonSubmit(payload: HermesPolygonInput): Promise<void> {
 
     selectedRegionId.value = null
     selectedPolygonId.value = saved.id
-    polygonDialogOpen.value = false
+    polygonFormOpen.value = false
     drawMode.value = 'idle'
     drawnGeometry.value = null
     editingPolygon.value = null

@@ -75,6 +75,19 @@ export const HERMES_TRACE_LAYER_IDS = {
   displayed: 'hermes-trace-displayed-line',
 } as const
 
+export const HERMES_RING_SOURCE_IDS = {
+  rings: 'hermes-distance-rings',
+  center: 'hermes-distance-center',
+} as const
+
+export const HERMES_RING_LAYER_IDS = {
+  rings: 'hermes-distance-rings-line',
+  center: 'hermes-distance-center-dot',
+} as const
+
+/** Mauve Material (purple-600) de l'outil « marqueur distance ». */
+export const HERMES_DISTANCE_COLOR = '#8E24AA'
+
 /** Style des traces, lu dans les paramètres de la carte de l'Accueil. */
 export interface HermesTraceStyle {
   favoriteColor: string
@@ -128,6 +141,58 @@ export function addHermesTraceLayers(
       paint: {
         'line-width': style.displayedWidth,
         'line-gradient': style.displayedGradient,
+      },
+    })
+  }
+}
+
+/**
+ * Ajoute les couches de l'outil de distance : anneaux mauves et point central.
+ * À appeler après les couches de traces pour que les cercles restent visibles.
+ */
+export function addHermesDistanceLayers(map: Map): void {
+  if (!map.getSource(HERMES_RING_SOURCE_IDS.rings)) {
+    map.addSource(HERMES_RING_SOURCE_IDS.rings, {
+      type: 'geojson',
+      data: emptyFC(),
+    })
+  }
+  if (!map.getSource(HERMES_RING_SOURCE_IDS.center)) {
+    map.addSource(HERMES_RING_SOURCE_IDS.center, {
+      type: 'geojson',
+      data: emptyFC(),
+    })
+  }
+
+  if (!map.getLayer(HERMES_RING_LAYER_IDS.rings)) {
+    map.addLayer({
+      id: HERMES_RING_LAYER_IDS.rings,
+      type: 'line',
+      source: HERMES_RING_SOURCE_IDS.rings,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': HERMES_DISTANCE_COLOR,
+        'line-opacity': 0.85,
+        'line-width': [
+          'case',
+          ['==', ['get', 'major'], true],
+          2.5,
+          1,
+        ] as unknown as ExpressionSpecification,
+      },
+    })
+  }
+
+  if (!map.getLayer(HERMES_RING_LAYER_IDS.center)) {
+    map.addLayer({
+      id: HERMES_RING_LAYER_IDS.center,
+      type: 'circle',
+      source: HERMES_RING_SOURCE_IDS.center,
+      paint: {
+        'circle-color': HERMES_DISTANCE_COLOR,
+        'circle-radius': 5,
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#FFFFFF',
       },
     })
   }

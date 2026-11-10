@@ -1,6 +1,12 @@
 <template>
-  <v-dialog :model-value="modelValue" max-width="600" persistent>
-    <v-card>
+  <v-navigation-drawer
+    v-if="modelValue"
+    permanent
+    location="right"
+    width="420"
+    class="hermes-polygon-form"
+  >
+    <v-card flat class="hermes-polygon-form__card">
       <v-card-title class="d-flex align-center">
         <v-icon icon="mdi-shape-polygon-plus" class="mr-2" />
         {{ mode === 'create' ? 'Nouveau polygone' : 'Modifier le polygone' }}
@@ -16,7 +22,7 @@
 
       <v-divider />
 
-      <v-card-text>
+      <v-card-text class="hermes-polygon-form__body">
         <v-text-field
           v-model="name"
           label="Nom"
@@ -92,6 +98,10 @@
           Les sommets se déplacent directement sur la carte. Un polygone doit
           être fermé, sans trou, et comporter au plus 1000 sommets.
         </p>
+        <p class="text-caption text-medium-emphasis mt-2">
+          Le bouton « marqueur distance » de la carte affiche des cercles
+          concentriques de 10 à 150 km autour d'un centre choisi.
+        </p>
       </v-card-text>
 
       <v-divider />
@@ -112,13 +122,15 @@
         </v-btn>
       </v-card-actions>
     </v-card>
-  </v-dialog>
+  </v-navigation-drawer>
 </template>
 
 <script setup lang="ts">
 /**
  * Formulaire de création / édition d'un polygone custom.
  *
+ * Il est présenté dans un tiroir à droite, non modal : la carte reste
+ * interactive pour déplacer les sommets et afficher les cercles de distance.
  * Le tracé n'est pas saisi ici : il est dessiné sur la carte (`HermesMap`) et
  * transmis par la prop `geometry`, mise à jour à chaque `draw.update`. Le
  * formulaire valide le nom, le slug, la couleur et la géométrie avant de
@@ -243,6 +255,17 @@ watch(name, value => {
 </script>
 
 <style scoped>
+.hermes-polygon-form__card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.hermes-polygon-form__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
 .hermes-color-input {
   width: 32px;
   height: 24px;
