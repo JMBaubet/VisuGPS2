@@ -12,8 +12,12 @@
       <HermesPanel
         :selected-region-id="selectedRegionId"
         :selected-polygon-id="selectedPolygonId"
+        :polygon-busy="polygonBusy"
         @select-region="onSelectRegion"
         @select-polygon="onSelectPolygon"
+        @create-polygon="startCreatePolygon"
+        @edit-polygon="startEditPolygon"
+        @delete-polygon="requestDeletePolygon"
       />
 
       <v-main>
@@ -22,44 +26,131 @@
           :polygons="hermesStore.polygons"
           :selected-region-id="selectedRegionId"
           :selected-polygon-id="selectedPolygonId"
+          :draw-mode="drawMode"
+          :editing-polygon="editingPolygon"
+          :draw-session="drawSession"
           @select-region="onSelectRegion"
           @select-polygon="onSelectPolygon"
+          @draw-create="onDrawCreate"
+          @draw-update="onDrawUpdate"
         />
       </v-main>
 
       <SettingsDrawer :show-system="false" />
+
+      <HermesPolygonForm
+        :model-value="polygonDialogOpen"
+        :mode="polygonFormMode"
+        :polygon="editingPolygon"
+        :geometry="drawnGeometry"
+        :saving="polygonSaving"
+        @submit="onPolygonSubmit"
+        @cancel="onPolygonCancel"
+      />
+
+      <v-dialog v-model="deleteDialogOpen" max-width="500" persistent>
+        <v-card>
+          <v-card-title class="text-h6">
+            Supprimer le polygone ?
+          </v-card-title>
+          <v-card-text>
+            Le polygone <b>« {{ deleteCandidate?.name ?? '' }} »</b> sera
+            supprimé du serveur.
+            <v-alert
+              v-if="deleteImpact.length > 0"
+              type="warning"
+              variant="tonal"
+              density="compact"
+              class="mt-3"
+              :text="`Utilisé par les datasets : ${deleteImpact.join(
+                ', ',
+              )}. Ils seront marqués obsolètes au prochain chargement.`"
+            />
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn variant="text" :disabled="polygonDeleting" @click="cancelDelete">
+              Annuler
+            </v-btn>
+            <v-btn
+              color="error"
+              variant="flat"
+              :loading="polygonDeleting"
+              @click="confirmDeletePolygon"
+            >
+              Supprimer
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
     </v-layout>
   </v-app>
 </template>
 
 <script setup lang="ts">
 /**
- * Vue Hermes : état du serveur, datasets, régions et polygones custom.
+ * Vue Hermes : serveur, datasets, régions et polygones custom.
  *
- * Le panneau gauche (carte Serveur + onglets) et la carte Mapbox partagent la
- * même sélection : cliquer une région ou un polygone dans la liste ou sur la
- * carte cadre la carte sur l'objet.
- *
- * Les étapes suivantes ajoutent le dessin/CRUD des polygones (1.5), puis le
- * CRUD des datasets et la gestion ORS (1.6).
+ * Le panneau gauche et la carte partagent la même sélection. La carte porte
+ * l'outil Mapbox Draw : la création dessine un polygone puis ouvre le
+ * formulaire ; l'édition charge le polygone dans l'outil et permet de déplacer
+ * ses sommets. La suppression demande confirmation et signale les datasets
+ * qui utilisent la zone.
  */
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
-import { useHermesStore } from '../stores/hermes'
+import {
+  useHermesStore,
+  type HermesPolygon,
+  type HermesPolygonInput,
+} from '../stores/hermes'
+import { useUiStore } from '../stores/ui'
 import SettingsDrawer from '../components/Accueil/SettingsDrawer.vue'
 import HermesMap from '../components/Hermes/HermesMap.vue'
 import HermesPanel from '../components/Hermes/HermesPanel.vue'
+import HermesPolygonForm from '../components/Hermes/HermesPolygonForm.vue'
 import HermesToolbar from '../components/Hermes/HermesToolbar.vue'
+import { parseHermesError, type HermesDrawMode } from '../utils/hermes'
 
 const router = useRouter()
 const appStore = useAppStore()
 const hermesStore = useHermesStore()
+const ui = useUiStore()
 
 /** Région sélectionnée (contour ou bbox), ou `null`. */
 const selectedRegionId = ref<string | null>(null)
 /** Polygone custom sélectionné, ou `null`. */
 const selectedPolygonId = ref<string | null>(null)
+/** Mode de l'outil de dessin Mapbox. */
+const drawMode = ref<HermesDrawMode>('idle')
+/** Compteur de session de dessin (ré-applique l'outil après une annulation). */
+const drawSession = ref(0)
+/** Polygone en cours d'édition. */
+const editingPolygon = ref<HermesPolygon | null>(null)
+/** Géométrie dessinée ou éditée, mise à jour à chaque `draw.update`. */
+const drawnGeometry = ref<GeoJSON.Polygon | null>(null)
+const polygonDialogOpen = ref(false)
+const polygonFormMode = ref<'create' | 'edit'>('create')
+const polygonSaving = ref(false)
+const polygonDeleting = ref(false)
+const deleteDialogOpen = ref(false)
+const deleteCandidate = ref<HermesPolygon | null>(null)
+
+/** Une action polygone bloque les boutons du panneau et ceux du formulaire. */
+const polygonBusy = computed(
+  () =>
+    polygonSaving.value || polygonDeleting.value || polygonDialogOpen.value,
+)
+
+/** Datasets qui référencent le polygone candidat à la suppression. */
+const deleteImpact = computed(() => {
+  const polygon = deleteCandidate.value
+  if (!polygon) return []
+  return hermesStore.datasets
+    .filter(dataset => dataset.zones?.includes(polygon.id))
+    .map(dataset => dataset.id)
+})
 
 function goHome(): void {
   void router.push({ name: 'accueil' })
@@ -87,11 +178,123 @@ function onSelectPolygon(id: string | null): void {
   if (id) selectedRegionId.value = null
 }
 
+// ─── Création / édition ─────────────────────────────────────────────
+
+function startCreatePolygon(): void {
+  selectedRegionId.value = null
+  selectedPolygonId.value = null
+  editingPolygon.value = null
+  drawnGeometry.value = null
+  polygonFormMode.value = 'create'
+  polygonSaving.value = false
+  drawSession.value += 1
+  drawMode.value = 'create'
+}
+
+function onDrawCreate(geometry: GeoJSON.Polygon): void {
+  drawnGeometry.value = geometry
+  polygonDialogOpen.value = true
+}
+
+function onDrawUpdate(geometry: GeoJSON.Polygon): void {
+  if (polygonDialogOpen.value) {
+    drawnGeometry.value = geometry
+  }
+}
+
+function startEditPolygon(polygon: HermesPolygon): void {
+  selectedRegionId.value = null
+  selectedPolygonId.value = polygon.id
+  editingPolygon.value = polygon
+  drawnGeometry.value = polygon.geometry
+  polygonFormMode.value = 'edit'
+  polygonSaving.value = false
+  polygonDialogOpen.value = true
+  drawSession.value += 1
+  drawMode.value = 'edit'
+}
+
+function onPolygonCancel(): void {
+  polygonDialogOpen.value = false
+  polygonSaving.value = false
+  drawMode.value = 'idle'
+  drawnGeometry.value = null
+  editingPolygon.value = null
+}
+
+async function onPolygonSubmit(payload: HermesPolygonInput): Promise<void> {
+  polygonSaving.value = true
+  try {
+    let saved: HermesPolygon
+    if (polygonFormMode.value === 'edit' && editingPolygon.value) {
+      saved = await hermesStore.updatePolygon(editingPolygon.value.id, {
+        name: payload.name,
+        description: payload.description ?? null,
+        color: payload.color ?? null,
+        geometry: payload.geometry,
+      })
+      ui.showSuccess(`Polygone « ${saved.name} » enregistré.`)
+    } else {
+      saved = await hermesStore.createPolygon({
+        id: payload.id,
+        name: payload.name,
+        description: payload.description ?? null,
+        color: payload.color ?? null,
+        geometry: payload.geometry,
+      })
+      ui.showSuccess(`Polygone « ${saved.name} » créé.`)
+    }
+
+    selectedRegionId.value = null
+    selectedPolygonId.value = saved.id
+    polygonDialogOpen.value = false
+    drawMode.value = 'idle'
+    drawnGeometry.value = null
+    editingPolygon.value = null
+  } catch (error) {
+    ui.showError(parseHermesError(error).message)
+  } finally {
+    polygonSaving.value = false
+  }
+}
+
+// ─── Suppression ────────────────────────────────────────────────────
+
+function requestDeletePolygon(polygon: HermesPolygon): void {
+  deleteCandidate.value = polygon
+  deleteDialogOpen.value = true
+}
+
+function cancelDelete(): void {
+  deleteDialogOpen.value = false
+  deleteCandidate.value = null
+}
+
+async function confirmDeletePolygon(): Promise<void> {
+  const polygon = deleteCandidate.value
+  if (!polygon) return
+  polygonDeleting.value = true
+  try {
+    await hermesStore.deletePolygon(polygon.id)
+    if (selectedPolygonId.value === polygon.id) {
+      selectedPolygonId.value = null
+    }
+    ui.showSuccess(`Polygone « ${polygon.name} » supprimé.`)
+    deleteDialogOpen.value = false
+    deleteCandidate.value = null
+  } catch (error) {
+    ui.showError(parseHermesError(error).message)
+  } finally {
+    polygonDeleting.value = false
+  }
+}
+
 onMounted(() => {
   void refresh()
 })
 
 onUnmounted(() => {
+  drawMode.value = 'idle'
   hermesStore.cancelPolling()
 })
 </script>

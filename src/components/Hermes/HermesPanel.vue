@@ -33,7 +33,11 @@
         <v-window-item value="polygons">
           <HermesPolygonsSection
             :selected-polygon-id="selectedPolygonId"
+            :busy="polygonBusy"
             @select-polygon="emit('select-polygon', $event)"
+            @create-polygon="emit('create-polygon')"
+            @edit-polygon="emit('edit-polygon', $event)"
+            @delete-polygon="emit('delete-polygon', $event)"
           />
         </v-window-item>
       </v-window>
@@ -53,15 +57,20 @@ import HermesServerCard from './HermesServerCard.vue'
 import HermesDatasetsSection from './HermesDatasetsSection.vue'
 import HermesRegionsSection from './HermesRegionsSection.vue'
 import HermesPolygonsSection from './HermesPolygonsSection.vue'
+import type { HermesPolygon } from '../../stores/hermes'
 
 defineProps<{
   selectedRegionId: string | null
   selectedPolygonId: string | null
+  polygonBusy: boolean
 }>()
 
 const emit = defineEmits<{
   'select-region': [id: string | null]
   'select-polygon': [id: string | null]
+  'create-polygon': []
+  'edit-polygon': [polygon: HermesPolygon]
+  'delete-polygon': [polygon: HermesPolygon]
 }>()
 
 const tab = ref<'datasets' | 'regions' | 'polygons'>('datasets')

@@ -8,6 +8,15 @@
       </v-chip>
       <v-spacer />
       <v-btn
+        size="x-small"
+        variant="tonal"
+        prepend-icon="mdi-plus"
+        :disabled="busy"
+        @click="emit('create-polygon')"
+      >
+        Nouveau
+      </v-btn>
+      <v-btn
         icon="mdi-refresh"
         size="x-small"
         variant="text"
@@ -33,7 +42,7 @@
       variant="tonal"
       density="compact"
       class="mb-2"
-      text="La création par dessin et l'édition arrivent à la sous-étape 1.5."
+      text="« Nouveau » dessine un polygone sur la carte ; les sommets restent modifiables."
     />
 
     <div
@@ -66,6 +75,27 @@
           {{ polygon.id }} · {{ areaLabel(polygon) }} · rév.
           {{ polygon.revision }}
         </v-list-item-subtitle>
+        <template #append>
+          <div class="d-flex align-center ga-1">
+            <v-btn
+              icon="mdi-pencil-outline"
+              size="x-small"
+              variant="text"
+              title="Modifier le polygone"
+              :disabled="busy"
+              @click.stop="emit('edit-polygon', polygon)"
+            />
+            <v-btn
+              icon="mdi-delete-outline"
+              size="x-small"
+              variant="text"
+              color="error"
+              title="Supprimer le polygone"
+              :disabled="busy"
+              @click.stop="emit('delete-polygon', polygon)"
+            />
+          </div>
+        </template>
       </v-list-item>
     </v-list>
 
@@ -92,10 +122,15 @@ import { polygonAreaKm2 } from '../../utils/hermes'
 
 const props = defineProps<{
   selectedPolygonId: string | null
+  /** Une requête de création/édition/suppression est en cours. */
+  busy: boolean
 }>()
 
 const emit = defineEmits<{
   'select-polygon': [id: string | null]
+  'create-polygon': []
+  'edit-polygon': [polygon: HermesPolygon]
+  'delete-polygon': [polygon: HermesPolygon]
 }>()
 
 const hermesStore = useHermesStore()

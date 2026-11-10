@@ -28,9 +28,11 @@ import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import type { MapMouseEvent } from 'mapbox-gl'
+import MapboxDraw from '@mapbox/mapbox-gl-draw'
+import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
 import { useSettingsStore } from '../../stores/settings'
 import type { HermesPolygon, HermesRegion } from '../../stores/hermes'
-import { unionBboxes } from '../../utils/hermes'
+import { unionBboxes, type HermesDrawMode } from '../../utils/hermes'
 import {
   addHermesLayers,
   HERMES_LAYER_IDS,
@@ -46,11 +48,22 @@ const props = defineProps<{
   polygons: HermesPolygon[]
   selectedRegionId: string | null
   selectedPolygonId: string | null
+  drawMode: HermesDrawMode
+  editingPolygon: HermesPolygon | null
+  /**
+   * Compteur de session : incrémenté à chaque demande de création/édition,
+   * même si le mode est déjà le bon. Il force la ré-application de l'outil
+   * après une annulation par Échap, sans quoi le bouton « Nouveau » resterait
+   * sans effet.
+   */
+  drawSession: number
 }>()
 
 const emit = defineEmits<{
   'select-region': [id: string | null]
   'select-polygon': [id: string | null]
+  'draw-create': [geometry: GeoJSON.Polygon]
+  'draw-update': [geometry: GeoJSON.Polygon]
 }>()
 
 const settingsStore = useSettingsStore()
@@ -61,7 +74,43 @@ const mapReady = ref(false)
 const hasMapboxKey = ref(false)
 
 let resizeObserver: ResizeObserver | null = null
+let draw: MapboxDraw | null = null
 let hasFitted = false
+
+/** Première géométrie `Polygon` d'un événement Mapbox Draw. */
+function firstPolygon(features: GeoJSON.Feature[]): GeoJSON.Polygon | null {
+  const geometry = features[0]?.geometry
+  return geometry && geometry.type === 'Polygon' ? geometry : null
+}
+
+/**
+ * Applique le mode de dessin demandé : nettoyage puis `draw_polygon` pour une
+ * création, ajout du polygone édité puis `direct_select` pour une édition,
+ * `simple_select` sinon.
+ */
+function applyDrawMode(): void {
+  const drawControl = draw
+  if (!drawControl) return
+  drawControl.deleteAll()
+
+  if (props.drawMode === 'create') {
+    drawControl.changeMode('draw_polygon')
+    return
+  }
+  if (props.drawMode === 'edit' && props.editingPolygon) {
+    const ids = drawControl.add({
+      type: 'Feature',
+      properties: {},
+      geometry: props.editingPolygon.geometry,
+    })
+    const featureId = ids[0]
+    if (featureId) {
+      drawControl.changeMode('direct_select', { featureId })
+    }
+    return
+  }
+  drawControl.changeMode('simple_select')
+}
 
 function render(): void {
   const instance = map.value
@@ -121,7 +170,7 @@ function fitSelection(): void {
 
 function onMapClick(event: MapMouseEvent): void {
   const instance = map.value
-  if (!instance || !mapReady.value) return
+  if (!instance || !mapReady.value || props.drawMode !== 'idle') return
   const features = instance.queryRenderedFeatures(event.point, {
     layers: [HERMES_LAYER_IDS.regionsFill, HERMES_LAYER_IDS.polygonsFill],
   })
@@ -143,7 +192,7 @@ function onMapClick(event: MapMouseEvent): void {
 
 function onMouseMove(event: MapMouseEvent): void {
   const instance = map.value
-  if (!instance || !mapReady.value) return
+  if (!instance || !mapReady.value || props.drawMode !== 'idle') return
   const features = instance.queryRenderedFeatures(event.point, {
     layers: [HERMES_LAYER_IDS.regionsFill, HERMES_LAYER_IDS.polygonsFill],
   })
@@ -186,7 +235,26 @@ async function initializeMap(token: string): Promise<void> {
   instance.on('load', () => {
     mapReady.value = true
     addHermesLayers(instance)
+
+    const drawControl = new MapboxDraw({
+      displayControlsDefault: false,
+      controls: {},
+      defaultMode: 'simple_select',
+    })
+    draw = drawControl
+    instance.addControl(drawControl)
+
+    instance.on('draw.create', (event: MapboxDraw.DrawCreateEvent) => {
+      const geometry = firstPolygon(event.features)
+      if (geometry) emit('draw-create', geometry)
+    })
+    instance.on('draw.update', (event: MapboxDraw.DrawUpdateEvent) => {
+      const geometry = firstPolygon(event.features)
+      if (geometry) emit('draw-update', geometry)
+    })
+
     render()
+    applyDrawMode()
   })
 }
 
@@ -199,6 +267,7 @@ function destroyMap(): void {
     }
   }
   map.value = null
+  draw = null
   mapReady.value = false
   hasFitted = false
 }
@@ -243,6 +312,11 @@ watch(
       fitSelection()
     }
   },
+)
+
+watch(
+  () => [props.drawMode, props.editingPolygon, props.drawSession] as const,
+  () => applyDrawMode(),
 )
 </script>
 

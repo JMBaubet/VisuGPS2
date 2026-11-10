@@ -38,6 +38,9 @@ export function parseHermesError(error: unknown): HermesErrorInfo {
 /** État de connexion au serveur, tel que porté par le store. */
 export type HermesServerState = 'unknown' | 'online' | 'offline' | 'waking'
 
+/** Mode de l'outil de dessin de polygones sur la carte Hermes. */
+export type HermesDrawMode = 'idle' | 'create' | 'edit'
+
 /** Vue minimale d'un dataset nécessaire à l'affichage du chip. */
 export interface HermesDatasetStatusLike {
   id: string

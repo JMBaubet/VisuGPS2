@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@mapbox/mapbox-gl-draw": "^1.5.2",
     "@mdi/font": "^7.4.47",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-opener": "^2",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/mapbox__mapbox-gl-draw": "^1.4.9",
     "@vitejs/plugin-vue": "^5.2.1",
     "sass": "^1.98.0",
     "typescript": "~5.6.2",
