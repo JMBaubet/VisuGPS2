@@ -63,11 +63,11 @@ fn identifiers_are_validated() {
 #[test]
 fn urls_are_joined_without_double_slash() {
     assert_eq!(
-        join_url("http://10.15.58.131:9000/api/v1/", "/ping"),
-        "http://10.15.58.131:9000/api/v1/ping"
+        join_url("http://100.118.62.10:9000/api/v1/", "/ping"),
+        "http://100.118.62.10:9000/api/v1/ping"
     );
     assert_eq!(
-        join_url("http://10.15.58.131:9000/api/v1", "datasets"),
-        "http://10.15.58.131:9000/api/v1/datasets"
+        join_url("http://100.118.62.10:9000/api/v1", "datasets"),
+        "http://100.118.62.10:9000/api/v1/datasets"
     );
 }

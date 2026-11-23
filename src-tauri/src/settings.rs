@@ -1648,7 +1648,7 @@ mod tests {
         assert_eq!(base_url.setting_type, "string");
         assert_eq!(
             base_url.default.as_str(),
-            Some("http://10.15.58.131:9000/api/v1")
+            Some("http://100.118.62.10:9000/api/v1")
         );
 
         let ors_url = hermes_defs
@@ -1658,7 +1658,7 @@ mod tests {
         assert_eq!(ors_url.setting_type, "string");
         assert_eq!(
             ors_url.default.as_str(),
-            Some("http://10.15.58.131:8002/ors/v2")
+            Some("http://100.118.62.10:8002/ors/v2")
         );
 
         let delai = hermes_defs

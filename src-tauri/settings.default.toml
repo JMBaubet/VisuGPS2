@@ -1665,7 +1665,7 @@ icon = "mdi-timer-sand"
 description = "URL de base de l'API hermes"
 documentation = """
 URL du contrôleur `hermes-api`, préfixe `/api/v1` compris :
-`http://10.15.58.131:9000/api/v1` par défaut.
+`http://100.118.62.10:9000/api/v1` par défaut.
 
 Le serveur n'est joignable que par le réseau privé **ZeroTier** (aucune
 exposition publique). Si l'adresse ou le port changent, mettre à jour cette
@@ -1678,14 +1678,14 @@ les routes. Aucun `X-Admin-Token` n'est stocké ni envoyé : les routes admin
 lancer la préparation des artefacts aux et suit ensuite `GET /aux`.
 """
 type = "string"
-default = "http://10.15.58.131:9000/api/v1"
+default = "http://100.118.62.10:9000/api/v1"
 icon = "mdi-server-network"
 
 [Hermes.Connexion.orsBaseUrl]
 description = "URL de base d'ORS sur hermes"
 documentation = """
 URL du moteur ORS hébergé par `hermes`, préfixe `/ors/v2` compris :
-`http://10.15.58.131:8002/ors/v2` par défaut.
+`http://100.118.62.10:8002/ors/v2` par défaut.
 
 Elle sert uniquement à la **gestion de l'instance ORS** depuis la vue Hermes :
 démarrage, arrêt et vérification de santé (`/health`). Le routage de l'Audit
@@ -1693,7 +1693,7 @@ utilise l'API publique OpenRouteService et ses clés (`Systeme.Key.*`), pas cett
 instance.
 """
 type = "string"
-default = "http://10.15.58.131:8002/ors/v2"
+default = "http://100.118.62.10:8002/ors/v2"
 icon = "mdi-directions-fork"
 
 [Hermes.Connexion.delaiSec]

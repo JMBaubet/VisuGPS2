@@ -17,8 +17,8 @@ use tokio::sync::RwLock;
 
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
-pub(crate) const DEFAULT_BASE_URL: &str = "http://10.15.58.131:9000/api/v1";
-pub(crate) const DEFAULT_ORS_BASE_URL: &str = "http://10.15.58.131:8002/ors/v2";
+pub(crate) const DEFAULT_BASE_URL: &str = "http://100.118.62.10:9000/api/v1";
+pub(crate) const DEFAULT_ORS_BASE_URL: &str = "http://100.118.62.10:8002/ors/v2";
 pub(crate) const DEFAULT_WAKE_ADDRESS: &str = "87.91.31.205";
 pub(crate) const DEFAULT_WAKE_MAC: &str = "68:5b:35:a8:5c:65";
 pub(crate) const DEFAULT_WAKE_PORT: u16 = 9;

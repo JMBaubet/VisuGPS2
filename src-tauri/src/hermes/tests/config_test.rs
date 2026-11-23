@@ -131,8 +131,8 @@ actif = "   "
 #[test]
 fn normalize_url_accepts_http_and_https_only() {
     assert_eq!(
-        normalize_url("  http://10.15.58.131:9000/api/v1/  "),
-        Some("http://10.15.58.131:9000/api/v1".to_string())
+        normalize_url("  http://100.118.62.10:9000/api/v1/  "),
+        Some("http://100.118.62.10:9000/api/v1".to_string())
     );
     assert_eq!(
         normalize_url("https://hermes.local/ors/v2///"),
