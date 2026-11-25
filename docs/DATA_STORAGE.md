@@ -532,22 +532,21 @@ restaurable de la vue `/altimetrie`.
 
 ### `tunnels.json` — Tunnels détectés et édités
 
-Fichier **unique** du module Tunnels, dans `traces/{trace_id}/tunnels.json`. Les
-`regions.json`, `regions-geometry.json` et les `.osm.pbf` restent sur le support
-OSM (`Osm.Fichiers.dossierPbf`) et ne sont **jamais** copiés dans le dossier de la
-trace. Les fichiers temporaires de téléchargement (`.part`) et l'index Geofabrik
-téléchargé vivent hors du dossier de la trace (temporaire système pour l'index,
-support OSM pour les `.part`).
+Fichier **unique** du module Tunnels, dans `traces/{trace_id}/tunnels.json`. La
+détection **nominale** passe par le serveur hermes (`POST /tunnels/detect`) : la
+trace n'est jamais mise en ligne, seuls ses points et `minLengthM` sont
+transmis. Le moteur local historique (PBF Geofabrik de la clé USB,
+`Osm.Fichiers.dossierPbf`) reste **dormant** ; ses fichiers (`regions.json`,
+`regions-geometry.json`, `.osm.pbf`) ne sont **jamais** copiés dans le dossier
+de la trace et ne sont plus nécessaires à la détection nominale.
 
 ```json
 {
   "version": 1,
   "traceId": "cd9e49cb-…",
-  "detectedAt": "2026-10-22T10:00:00Z",
-  "updatedAt": "2026-10-22T10:05:00Z",
-  "pbfFiles": [
-    { "name": "provence-alpes-cote-d-azur-latest.osm.pbf", "modifiedAt": "2026-10-20T08:00:00Z" }
-  ],
+  "detectedAt": "2026-11-25T10:00:00Z",
+  "updatedAt": "2026-11-25T10:00:00Z",
+  "pbfFiles": [],
   "params": {
     "distanceToleranceM": 20,
     "angleToleranceDeg": 25,
@@ -559,29 +558,34 @@ support OSM pour les `.part`).
   "tunnels": [
     {
       "id": "t-001",
-      "wayId": "w123456",
+      "wayId": "164338236",
+      "wayIds": ["164338236", "164338237"],
       "name": "Tunnel de la Giraude",
-      "highway": "motorway",
-      "tunnelType": "yes",
       "startKm": 12.34,
       "endKm": 13.01,
       "lengthM": 670,
       "detectionMethod": "osm",
-      "maxDistanceM": 8.4,
-      "maxAngleDiffDeg": 6.0,
       "groupId": null
     }
   ]
 }
 ```
 
-- `detectedAt` vaut `null` pour un fichier créé uniquement par des ajouts
-  manuels. `pbfFiles` documente les PBF réellement analysés.
-- `lengthM` est **dérivé** : le backend le recalcule à chaque sauvegarde à partir
-  des bornes. Le frontend ne fait jamais foi.
-- `groupId` identifie une **fusion logique** : les tronçons restent distincts et
-  disjoints, sur la carte comme dans le profil. L'écart entre deux tronçons n'est
-  pas traité comme du tunnel.
+- `detectedAt` vient de la réponse hermes (`detectedAt`), ou de l'horloge locale
+  s'il manque ; `null` pour un fichier créé uniquement par des ajouts manuels.
+  `pbfFiles` est **vide** en mode hermes : le dataset servi est la seule source.
+- `wayIds` liste les ways OSM du tunnel logique (union-find côté serveur) ;
+  `wayId` en conserve la première pour la compatibilité. Les deux champs sont
+  absents des fichiers produits par le moteur local.
+- `lengthM` est **dérivé** : le backend le recalcule à partir des bornes, à la
+  détection comme à la sauvegarde. Le frontend ne fait jamais foi.
+- `groupId` identifie une **fusion logique manuelle** : les tronçons restent
+  distincts et disjoints, sur la carte comme dans le profil. Le `groupId` renvoyé
+  par hermes est une identité **physique** répétée à chaque passage (aller et
+  retour) : il n'est **pas** importé, sinon les deux passages seraient collés
+  dans une seule carte et la carte tracerait une bande continue sur tout le
+  trajet. Chaque détection hermes reste un tronçon séparé, les fusions sont
+  l'œuvre de l'opérateur.
 - Aucune géométrie n'est stockée : la carte découpe `trace.geojson` aux bornes
   kilométriques, comme pour les montées.
 - Écriture **atomique** (`.tmp` puis `rename`), lecture **tolérante**
@@ -589,13 +593,18 @@ support OSM pour les `.part`).
   `null`.
 - **Validation** : une détection avec tunnels pose `waiting_validate` ; le bouton
   « Valider » ou « Sauvegarder » de l'onglet Tunnels écrit le fichier et pose
-  `success`. Une détection sans tunnel pose directement `success`.
+  `success`. Une détection sans tunnel **dans la couverture** pose directement
+  `success`.
+- **Hors couverture** : un résultat vide hors du dataset servi pose
+  `outside_coverage` (fichier vide écrit s'il n'existait pas) ; un fichier
+  existant n'est **jamais** écrasé. Ce statut n'est pas repris automatiquement,
+  la relance reste manuelle.
 - **Invalidation** : `audit_validate` réécrit le GPX, supprime `tunnels.json` et
-  repose les champs du registre ; la file frontend relance la préparation.
+  repose les champs du registre ; la file frontend relance la détection hermes.
 - **Suppression** : le fichier disparaît avec le dossier de la trace
   (`delete_trace`).
 
-**Support OSM** (dossier `Osm.Fichiers.dossierPbf`) :
+**Support OSM (moteur local dormant)** :
 
 ```
 {clé USB}/osm-data/
@@ -606,10 +615,11 @@ support OSM pour les `.part`).
 └── …                                   # PBF régionaux requis par les traces
 ```
 
-Les téléchargements sont **silencieux** : `regions.json` est produit au premier
-besoin ; les PBF manquants requis par une trace sont téléchargés en tâche de
-fond. La progression est émise par l'événement `tunnels-progress` et affichée
-dans l'onglet Tunnels. Aucun fichier OSM n'est embarqué dans le binaire.
+Ces fichiers ne servent plus à la détection nominale : ils restent la source du
+moteur local dormant et de la fenêtre de gestion OSM de l'Accueil. Le catalogue
+est produit au premier besoin ; les PBF manquants requis par une trace étaient
+téléchargés en tâche de fond par le moteur local. Aucun fichier OSM n'est
+embarqué dans le binaire.
 
 **`regions.json`** — catalogue allégé produit depuis `index-v1.json` :
 
@@ -684,7 +694,8 @@ renomment atomiquement ; une réponse tronquée est rejetée et le `.part` suppr
 `init_settings_state` copie ces surcharges vers `Osm.Fichiers.*` et les retire de
 la configuration ; le lecteur conserve un repli pour les configurations non
 migrées. `Tunnels.Support.actif` reste le seul réglage du groupe
-`Tunnels.Support`.
+`Tunnels.Support` et le commutateur du module, y compris pour la détection
+hermes.
 
 > Les paramètres et commandes sont décrits dans
 > [COMMANDS.md](./COMMANDS.md#tunnels-gpx_tunnelscommandsrs).

@@ -4,13 +4,19 @@
  * Deux responsabilités, comme le store Communes :
  * 1. **état de vue** de l'onglet Tunnels (`file`, brouillon de bornes,
  *    sélection, sauvegarde, validation) ;
- * 2. **file d'attente globale** de préparation silencieuse : une trace à la
- *    fois, téléchargement Geofabrik + détection, avec progression.
+ * 2. **file d'attente globale** de détection via le **serveur hermes** : une
+ *    trace à la fois, contrôle des artefacts (`ensureReady`), puis
+ *    `tunnels_detect_hermes`.
  *
  * La file est déclenchée après un import propre, après une validation d'audit,
- * au lancement sur les traces déjà propres, et par le bouton « Relancer » de
- * l'onglet. Elle ne montre aucune confirmation : la progression est exposée par
- * `progress` et l'état final par le registre (`tunnels_status`).
+ * au lancement sur les traces déjà propres, au retour du service hermes et par
+ * le bouton « Relancer » de l'onglet. Elle ne montre aucune confirmation : le
+ * bilan est regroupé en une notification par catégorie (succès, hors couverture,
+ * échecs) et l'état final vit dans le registre (`tunnels_status`).
+ *
+ * Le moteur local (PBF de la clé USB) reste exposé — `support`,
+ * `requirements`, `progress`, `refreshSupport`, `refreshRequirements`,
+ * `bindProgress` — mais n'est plus appelé par le flux nominal.
  */
 
 import { defineStore } from 'pinia'
@@ -18,6 +24,7 @@ import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
+import { parseHermesError } from '../utils/hermes'
 import {
   applyTunnelBounds,
   constrainTunnelBound,
@@ -25,7 +32,9 @@ import {
   MIN_TUNNEL_LENGTH_KM,
   tunnelRangeOverlaps,
 } from '../utils/altimetrieTunnels'
+import { useHermesStore } from './hermes'
 import { useTracesStore } from './traces'
+import { useUiStore } from './ui'
 
 // ─── Types (miroir des structs Rust, camelCase) ───────────────────────
 
@@ -47,6 +56,8 @@ export interface PbfFileRef {
 export interface Tunnel {
   id: string
   wayId?: string | null
+  /** Ways OSM couvertes par le tunnel logique (détection hermes). */
+  wayIds?: string[] | null
   name?: string | null
   highway?: string | null
   tunnelType?: string | null
@@ -131,6 +142,21 @@ export interface TunnelPrepareResult {
   status: string
 }
 
+/**
+ * Retour de `tunnels_detect_hermes` : le fichier écrit, le statut posé au
+ * registre, le dataset servi et le verdict de couverture.
+ */
+export interface TunnelDetection {
+  file: TunnelFile
+  /** `waiting_validate`, `success` ou `outside_coverage`. */
+  status: string
+  datasetId: string
+  outsideCoverage: boolean
+}
+
+/** Origine d'un lot : un clic parle, le rattrapage du lancement se tait. */
+type RunReason = 'request' | 'catch-up'
+
 // ─── Constantes ───────────────────────────────────────────────────────
 
 const DEFAULT_TUNNEL_PARAMS: TunnelParams = {
@@ -185,7 +211,19 @@ function emptyFile(traceId: string): TunnelFile {
   }
 }
 
+/** Statuts qui closent la détection automatique (relance manuelle sinon). */
+function isTerminalStatus(status: string | null | undefined): boolean {
+  return (
+    status === 'waiting_validate' ||
+    status === 'success' ||
+    status === 'outside_coverage'
+  )
+}
+
 export const useTunnelsStore = defineStore('tunnels', () => {
+  const ui = useUiStore()
+  const hermes = useHermesStore()
+
   // ─── État de vue ───────────────────────────────────────────────────
   const file = ref<TunnelFile | null>(null)
   const fileExists = ref(false)
@@ -208,13 +246,17 @@ export const useTunnelsStore = defineStore('tunnels', () => {
   const supportLoaded = ref(false)
   const lastError = ref<string | null>(null)
   const lastErrorTraceId = ref<string | null>(null)
+  /**
+   * Traces dont la dernière détection est sortie de la couverture du dataset
+   * servi, avec le dataset en question. État de **session** : le fichier ne
+   * conserve que le statut `outside_coverage`, pas le nom du dataset.
+   */
+  const outsideCoverage = ref<Record<string, string>>({})
 
-  /** Traces dont la préparation a échoué dans cette session. */
+  /** Traces dont la détection a échoué dans cette session. */
   const failed = new Set<string>()
   /** Demandes explicites : elles ne sont pas écartées par l'état du registre. */
   const forced = new Set<string>()
-  /** Prochaine préparation de ces traces ignore le plafond de taille. */
-  const sizeLimitOverrides = new Set<string>()
   let progressBound = false
 
   // ─── Getters ───────────────────────────────────────────────────────
@@ -264,11 +306,17 @@ export const useTunnelsStore = defineStore('tunnels', () => {
     return progress.value?.traceId === traceId ? progress.value : null
   }
 
+  /** Dataset dont la trace est sortie à la dernière détection, ou `null`. */
+  function outsideCoverageDataset(traceId: string): string | null {
+    return outsideCoverage.value[traceId] ?? null
+  }
+
   // ─── Chargement et support ─────────────────────────────────────────
 
   async function loadOrCreate(
     traceId: string,
     persistedValidated = false,
+    outsideCoverageFile = false,
   ): Promise<void> {
     viewTraceId.value = traceId
     loading.value = true
@@ -279,7 +327,12 @@ export const useTunnelsStore = defineStore('tunnels', () => {
       if (loaded) {
         file.value = loaded
         fileExists.value = true
-        validated.value = persistedValidated || loaded.tunnels.length === 0
+        // Un fichier vide hors couverture n'est pas une analyse validée : le
+        // statut du registre porte l'information, la vue ne doit pas afficher
+        // « validé ».
+        validated.value =
+          persistedValidated ||
+          (!outsideCoverageFile && loaded.tunnels.length === 0)
       } else {
         file.value = emptyFile(traceId)
         fileExists.value = false
@@ -288,7 +341,6 @@ export const useTunnelsStore = defineStore('tunnels', () => {
       dirty.value = false
       selectedTunnelId.value = null
       boundsDraft.value = null
-      void refreshRequirements(traceId)
     } catch (error) {
       if (viewTraceId.value !== traceId) return
       file.value = emptyFile(traceId)
@@ -506,7 +558,6 @@ export const useTunnelsStore = defineStore('tunnels', () => {
       dirty.value = false
       boundsDraft.value = null
       await useTracesStore().loadTraces()
-      void refreshRequirements(traceId)
       return saved
     } finally {
       saving.value = false
@@ -531,28 +582,90 @@ export const useTunnelsStore = defineStore('tunnels', () => {
 
   // ─── File d'attente ────────────────────────────────────────────────
 
-  async function detect(
-    traceId: string,
-    ignoreSizeLimit = false,
-  ): Promise<TunnelPrepareResult> {
-    return invoke<TunnelPrepareResult>('tunnels_prepare', {
+  /** Détecte les tunnels d'une trace via hermes et retient la couverture. */
+  async function detect(traceId: string): Promise<TunnelDetection> {
+    const detection = await invoke<TunnelDetection>('tunnels_detect_hermes', {
       traceId,
-      ignoreSizeLimit,
     })
+    if (detection.outsideCoverage) {
+      outsideCoverage.value[traceId] = detection.datasetId
+    } else {
+      delete outsideCoverage.value[traceId]
+    }
+    return detection
   }
 
-  /** Prépare une trace : téléchargements silencieux puis détection. */
-  async function runQueue(): Promise<void> {
+  /**
+   * La fonctionnalité est-elle activée ? `Tunnels.Support.actif` reste le
+   * commutateur du module, même si le moteur est désormais hermes.
+   */
+  async function featureEnabled(reason: RunReason): Promise<boolean> {
+    if (!supportLoaded.value) await refreshSupport()
+    if (support.value.active) return true
+    if (reason === 'request') {
+      ui.showWarning('La détection des tunnels est désactivée dans les paramètres.')
+    }
+    return false
+  }
+
+  /**
+   * Le service est-il prêt pour le lot ? Une seule vérification par lot : le
+   * dataset servi et les artefacts `tunnels-logiques.json` + `mm/` doivent être
+   * `ready`. Le backend reste seul juge (il relit `/serving`).
+   */
+  async function readyToDetect(reason: RunReason): Promise<boolean> {
+    const readiness = await hermes.ensureReady('tunnels')
+    if (readiness.ok) return true
+
+    // Au lancement, le serveur est en veille : l'échec est attendu, et le chip
+    // Hermes en porte déjà l'explication. Seules les causes **durables**
+    // (dataset absent, artefacts non préparés) méritent une notification.
+    const durable =
+      readiness.code !== 'HERMES_OFFLINE' && readiness.code !== 'HERMES_TIMEOUT'
+    if (reason === 'request' || durable) {
+      ui.showWarning(
+        readiness.message ?? 'Détection des tunnels indisponible pour le moment.',
+      )
+    }
+    return false
+  }
+
+  /**
+   * Tâche de fond : vide la file, une trace à la fois.
+   *
+   * La préparation du serveur est vérifiée **une fois par lot** ; l'éligibilité,
+   * elle, est revérifiée **avant chaque trace**, registre relu à la source.
+   */
+  async function runQueue(reason: RunReason): Promise<void> {
     if (isRunning.value) return
     isRunning.value = true
     const tracesStore = useTracesStore()
 
+    const failures: string[] = []
+    const uncovered: string[] = []
+    let done = 0
+
     try {
+      if (!(await featureEnabled(reason))) {
+        queue.value = []
+        return
+      }
+
+      let ready = false
+      try {
+        ready = await readyToDetect(reason)
+      } catch (error) {
+        console.error('[tunnels] Préparation hermes impossible :', error)
+      }
+      if (!ready) {
+        queue.value = []
+        return
+      }
+
       while (queue.value.length > 0) {
         const traceId = queue.value.shift()
         if (!traceId || failed.has(traceId)) {
           forced.delete(traceId ?? '')
-          sizeLimitOverrides.delete(traceId ?? '')
           continue
         }
 
@@ -564,22 +677,16 @@ export const useTunnelsStore = defineStore('tunnels', () => {
         await tracesStore.loadTraces()
         const trace = tracesStore.traces.find(candidate => candidate.id === traceId)
         const isForced = forced.has(traceId)
-        const ignoreSizeLimit = sizeLimitOverrides.has(traceId)
         forced.delete(traceId)
-        sizeLimitOverrides.delete(traceId)
 
         if (!trace || trace.audit_status !== 'clean') continue
-        if (
-          !isForced &&
-          (trace.tunnels_status === 'waiting_validate' ||
-            trace.tunnels_status === 'success')
-        ) {
-          continue
-        }
+        if (!isForced && isTerminalStatus(trace.tunnels_status)) continue
 
         try {
-          const result = await detect(traceId, ignoreSizeLimit)
+          const result = await detect(traceId)
           failed.delete(traceId)
+          done += 1
+          if (result.outsideCoverage) uncovered.push(trace.name)
           if (viewTraceId.value === traceId) {
             file.value = result.file
             fileExists.value = true
@@ -589,21 +696,18 @@ export const useTunnelsStore = defineStore('tunnels', () => {
             boundsDraft.value = null
           }
           await tracesStore.loadTraces()
-          if (viewTraceId.value === traceId) {
-            await refreshRequirements(traceId)
-          }
         } catch (error) {
-          const reason = errorMessage(error)
+          // Les commandes hermes préfixent leurs erreurs par un code machine :
+          // le message utilisateur est nettoyé, le code reste dans la console.
+          const parsed = parseHermesError(error)
           failed.add(traceId)
-          lastError.value = reason
+          lastError.value = parsed.message
           lastErrorTraceId.value = traceId
+          failures.push(`${trace.name} (${parsed.message})`)
           console.warn(
-            `[tunnels] Préparation impossible pour ${traceId} : ${reason}`,
+            `[tunnels] Détection impossible pour « ${trace.name} » [${parsed.code}] : ${parsed.message}`,
           )
           await tracesStore.loadTraces()
-          if (viewTraceId.value === traceId) {
-            await refreshRequirements(traceId)
-          }
         } finally {
           progress.value = null
         }
@@ -612,38 +716,61 @@ export const useTunnelsStore = defineStore('tunnels', () => {
       isRunning.value = false
       currentTraceId.value = null
       progress.value = null
+      report(done, failures, uncovered)
     }
+  }
+
+  /**
+   * Bilan de fin de tâche : **une seule** notification par catégorie, jamais une
+   * par circuit — un rattrapage au lancement peut en enchaîner des dizaines.
+   */
+  function report(done: number, failures: string[], uncovered: string[]): void {
+    const detected = done - uncovered.length
+    if (detected > 0) {
+      ui.showSuccess(
+        detected === 1
+          ? 'Tunnels détectés pour 1 circuit.'
+          : `Tunnels détectés pour ${detected} circuits.`,
+      )
+    }
+    if (uncovered.length > 0) {
+      const first =
+        uncovered.length > 1
+          ? `${uncovered[0]} +${uncovered.length - 1}`
+          : uncovered[0]
+      ui.showWarning(
+        `Aucun tunnel détecté pour ${first} : la trace sort de la couverture du dataset servi.`,
+      )
+    }
+    if (failures.length === 0) return
+    const first =
+      failures.length > 1 ? `${failures[0]} +${failures.length - 1}` : failures[0]
+    ui.showWarning(
+      `Détection des tunnels incomplète : ${detected} réussite(s), échec sur ${first}.`,
+    )
   }
 
   /**
    * Demande explicite : relance même si le registre indique déjà une analyse.
-   * La trace passe en tête de file. `ignoreSizeLimit` autorise le
-   * téléchargement des PBF au-dessus du plafond.
+   * La trace passe en tête de file.
    */
-  function request(traceId: string, ignoreSizeLimit = false): void {
+  function request(traceId: string): void {
     if (currentTraceId.value === traceId) return
     failed.delete(traceId)
     forced.add(traceId)
-    if (ignoreSizeLimit) sizeLimitOverrides.add(traceId)
-    else sizeLimitOverrides.delete(traceId)
     if (queue.value.includes(traceId)) return
     queue.value.unshift(traceId)
-    void runQueue()
+    void runQueue('request')
   }
 
   /**
-   * Rattrapage au lancement : traces propres sans analyse validée. Ne fait rien
-   * tant que le support OSM n'est pas configuré et lisible.
+   * Rattrapage au lancement : traces propres sans analyse terminale. Rien à
+   * faire → aucune tâche ne démarre. Le module désactivé ne démarre rien.
+   * Appelée aussi au retour du service hermes.
    */
   async function startCatchUp(): Promise<void> {
     await refreshSupport()
-    if (
-      !support.value.active ||
-      !support.value.configured ||
-      !support.value.readable
-    ) {
-      return
-    }
+    if (!support.value.active) return
 
     const tracesStore = useTracesStore()
     await tracesStore.loadTraces()
@@ -651,8 +778,7 @@ export const useTunnelsStore = defineStore('tunnels', () => {
       .filter(
         trace =>
           trace.audit_status === 'clean' &&
-          trace.tunnels_status !== 'waiting_validate' &&
-          trace.tunnels_status !== 'success' &&
+          !isTerminalStatus(trace.tunnels_status) &&
           !failed.has(trace.id),
       )
       .map(trace => trace.id)
@@ -661,7 +787,7 @@ export const useTunnelsStore = defineStore('tunnels', () => {
     for (const traceId of pending) {
       if (!isPending(traceId)) queue.value.push(traceId)
     }
-    void runQueue()
+    void runQueue('catch-up')
   }
 
   async function bindProgress(): Promise<void> {
@@ -714,6 +840,7 @@ export const useTunnelsStore = defineStore('tunnels', () => {
     isPending,
     isPreparing,
     progressFor,
+    outsideCoverageDataset,
     // Chargement / support
     loadOrCreate,
     refreshSupport,

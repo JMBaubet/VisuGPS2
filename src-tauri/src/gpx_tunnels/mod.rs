@@ -8,13 +8,16 @@
 //! - `params` — lecture des réglages `Tunnels.*` ;
 //! - `geometry` — projections et calculs purs, sans dépendance Tauri ;
 //! - `file` — lecture/écriture atomique et tolérante ;
-//! - `pbf`, `regions`, `download`, `pipeline`, `commands` — acquisition OSM,
-//!   matching et adaptateurs Tauri (sous-étapes suivantes).
+//! - `hermes` — conversion et commit de la détection par le serveur (moteur
+//!   nominal) ;
+//! - `pbf`, `regions`, `download`, `pipeline`, `commands` — acquisition OSM et
+//!   matching **locaux** (moteur dormant depuis l'intégration de hermes).
 
 pub mod commands;
 pub mod download;
 pub mod file;
 pub mod geometry;
+pub mod hermes;
 pub mod params;
 pub mod pbf;
 pub mod pipeline;

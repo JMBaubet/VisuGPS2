@@ -92,6 +92,7 @@ pub fn run() {
             gpx_tunnels::commands::tunnels_requirements,
             gpx_tunnels::commands::tunnels_prepare,
             gpx_tunnels::commands::tunnels_detect,
+            gpx_tunnels::commands::tunnels_detect_hermes,
             gpx_tunnels::commands::tunnels_save,
             gpx_tunnels::commands::tunnels_support_status,
             gpx_tunnels::commands::pick_directory,

@@ -1350,6 +1350,61 @@ pub(crate) fn rebuild_geometry_from_gpx(
     Ok(feature)
 }
 
+/// Coordonnées `[lon, lat]` de la trace persistée (`trace.geojson`).
+///
+/// Utilisé par les détections hermes (communes, tunnels) : le front ne transmet
+/// jamais la géométrie, le backend relit son propre stockage. Si le fichier
+/// GeoJSON manque (trace importée avant ce cache), il est régénéré depuis le
+/// GPX.
+pub(crate) fn load_trace_coordinates(
+    mode_dir: &Path,
+    trace_id: &str,
+) -> Result<Vec<[f64; 2]>, String> {
+    let geojson_path = get_geojson_path(mode_dir, trace_id);
+    let geometry = if geojson_path.exists() {
+        let content = std::fs::read_to_string(&geojson_path)
+            .map_err(|e| format!("Lecture de la géométrie de trace : {}", e))?;
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|e| format!("Géométrie de trace illisible : {}", e))?
+    } else {
+        let registry = load_registry(&get_traces_path(mode_dir));
+        rebuild_geometry_from_gpx(mode_dir, &registry, trace_id)?
+    };
+    coordinates_of(&geometry)
+}
+
+/// Extrait les coordonnées d'une Feature GeoJSON LineString.
+fn coordinates_of(geometry: &serde_json::Value) -> Result<Vec<[f64; 2]>, String> {
+    let raw = geometry
+        .get("geometry")
+        .and_then(|g| g.get("coordinates"))
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| "Géométrie de trace illisible (LineString attendu).".to_string())?;
+
+    raw.iter()
+        .map(|point| {
+            let unreadable = || "Coordonnée de trace illisible.".to_string();
+            let pair = point.as_array().filter(|p| p.len() >= 2).ok_or_else(unreadable)?;
+            let lon = pair[0].as_f64().ok_or_else(unreadable)?;
+            let lat = pair[1].as_f64().ok_or_else(unreadable)?;
+            Ok([lon, lat])
+        })
+        .collect()
+}
+
+/// Empreinte du GPX d'une trace telle que le registre la connaît (`None` si la
+/// trace n'y figure pas).
+///
+/// Sert de témoin aux détections hermes : une empreinte différente en fin
+/// d'analyse signifie qu'un audit a réécrit la trace et que le résultat décrit
+/// l'ancienne géométrie.
+pub(crate) fn trace_hash(mode_dir: &Path, trace_id: &str) -> Option<String> {
+    load_registry(&get_traces_path(mode_dir))
+        .into_iter()
+        .find(|t| t.id == trace_id)
+        .map(|t| t.hash)
+}
+
 /// Retourne la Feature LineString GeoJSON d'une trace par son identifiant.
 ///
 /// Lit le fichier `{mode_dir}/traces/{trace_id}/trace.geojson` généré à

@@ -33,12 +33,10 @@
         :tunnel-pending="tunnelPending"
         :tunnel-loading="tunnelsStore.loading"
         :tunnel-preparing="tunnelPreparing"
-        :tunnel-progress="tunnelProgress"
-        :tunnel-requirements="tunnelRequirements"
-        :tunnel-has-file="tunnelHasFile"
+        :tunnel-error="tunnelError"
+        :tunnel-notice="tunnelNotice"
         :can-create-tunnel="tunnelCreationAvailable"
         :merge-gap-m="mergeGapM"
-        :tunnel-error="tunnelError"
         @update:active-tab="onTabChange"
         @select="onSelectClimb"
         @delete="onDeleteClimb"
@@ -51,7 +49,6 @@
         @split-tunnel="onSplitTunnel"
         @create-tunnel="onCreateTunnelRequested"
         @relaunch-tunnels="onRelaunchTunnels"
-        @force-download-tunnels="onForceDownloadTunnels"
       />
 
       <v-main>
@@ -301,11 +298,6 @@ const tunnelPending = computed(() =>
 const tunnelPreparing = computed(() =>
   traceId.value ? tunnelsStore.isPreparing(traceId.value) : false,
 )
-const tunnelProgress = computed(() =>
-  traceId.value ? tunnelsStore.progressFor(traceId.value) : null,
-)
-const tunnelRequirements = computed(() => tunnelsStore.requirements)
-const tunnelHasFile = computed(() => tunnelsStore.fileExists)
 const tunnelError = computed(() => {
   if (
     tunnelsStore.lastErrorTraceId === traceId.value &&
@@ -315,24 +307,35 @@ const tunnelError = computed(() => {
   }
   return tunnelsStore.loadError
 })
+/**
+ * Trace hors de la couverture du dataset servi : le nom du dataset n'est connu
+ * que pour la session, le statut du registre survit seul au redémarrage.
+ */
+const tunnelNotice = computed(() => {
+  const id = traceId.value
+  if (!id) return null
 
-/** Paramètres de détection courants, pour signaler un fichier périmé. */
-const currentTunnelParams = computed(() => ({
-  distanceToleranceM: settingNumber('Tunnels.Detection.distanceTolerance', 20),
-  angleToleranceDeg: settingNumber('Tunnels.Detection.angleTolerance', 25),
-  bboxMarginM: settingNumber('Tunnels.Detection.bboxMargin', 500),
-  bearingWindowM: settingNumber('Tunnels.Detection.bearingWindow', 30),
-  minRunLength: settingNumber('Tunnels.Detection.minRunLength', 2),
-  minLengthM: settingNumber('Tunnels.Detection.minLength', 25),
-}))
+  const outside = tunnelsStore.outsideCoverageDataset(id)
+  if (outside) {
+    return `Trace hors de la couverture du dataset « ${outside} » : aucun tunnel ne peut être détecté. Sélectionnez un dataset qui couvre la trace, puis relancez la détection.`
+  }
+
+  const trace = tracesStore.traces.find(candidate => candidate.id === id)
+  if (trace?.tunnels_status === 'outside_coverage') {
+    return 'Trace hors de la couverture du dataset servi : aucun tunnel ne peut être détecté. Sélectionnez un dataset qui couvre la trace, puis relancez la détection.'
+  }
+  return null
+})
+
+/** Longueur minimale transmise à hermes (`minLengthM`). */
+const currentTunnelMinLength = computed(() =>
+  settingNumber('Tunnels.Detection.minLength', 25),
+)
 
 const tunnelParamsOutdated = computed(() => {
   const currentFile = tunnelsStore.file
   if (!currentFile || !tunnelsStore.fileExists) return false
-  const current = currentTunnelParams.value
-  return (Object.keys(current) as (keyof typeof current)[]).some(
-    key => currentFile.params[key] !== current[key],
-  )
+  return currentFile.params.minLengthM !== currentTunnelMinLength.value
 })
 
 // ─── Toolbar adaptée à l'onglet ──────────────────────────────────────
@@ -672,10 +675,6 @@ function onTabChange(tab: 'climbs' | 'tunnels'): void {
   tunnelsStore.clearTunnelDraft()
   activeTab.value = tab
   void router.replace({ query: { ...route.query, tab } })
-  if (tab === 'tunnels') {
-    void tunnelsStore.refreshSupport()
-    if (traceId.value) void tunnelsStore.refreshRequirements(traceId.value)
-  }
 }
 
 function onCreateTunnelRequested(): void {
@@ -838,15 +837,6 @@ function runTunnelDetection(): void {
   tunnelsStore.request(traceId.value)
 }
 
-/**
- * Passe outre le plafond de taille pour cette trace : les régions bloquées
- * sont téléchargées, puis la détection est relancée.
- */
-function onForceDownloadTunnels(): void {
-  if (!traceId.value) return
-  tunnelsStore.request(traceId.value, true)
-}
-
 async function onDeleteClimb(id: number): Promise<void> {
   if (!traceId.value) return
   if (creating.value) {
@@ -954,15 +944,14 @@ onMounted(async () => {
       trace.altimetrie_validated,
     )
 
-    // Onglet Tunnels : état du support OSM, fichier éventuel (ou état local
-    // vide pour permettre la création manuelle), puis écoute de la
-    // progression des téléchargements.
-    await tunnelsStore.refreshSupport()
+    // Onglet Tunnels : fichier éventuel (ou état local vide pour permettre la
+    // création manuelle). La détection hermes est déclenchée par la file
+    // globale ; un fichier vide hors couverture n'est pas « validé ».
     await tunnelsStore.loadOrCreate(
       traceId.value,
       trace.tunnels_status === 'success',
+      trace.tunnels_status === 'outside_coverage',
     )
-    void tunnelsStore.bindProgress()
   } catch (error) {
     const message =
       typeof error === 'string' ? error : 'Analyse altimétrique impossible.'

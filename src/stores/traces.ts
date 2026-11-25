@@ -158,7 +158,8 @@ export interface TraceMetadata {
   /**
    * Statut de la détection des tunnels (module Tunnels) : `waiting_validate`
    * (fichier avec tunnels, pas encore validé), `success` (validation opérateur
-   * ou détection sans tunnel), `error`, `not_configured`, `missing_pbf`.
+   * ou détection sans tunnel), `outside_coverage` (trace hors du dataset servi,
+   * résultat vide non concluant), `error`, `not_configured`, `missing_pbf`.
    *
    * `null` sur un registre antérieur ; `get_traces` rattrape les fichiers
    * `tunnels.json` déjà présents.

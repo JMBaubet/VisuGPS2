@@ -1,22 +1,17 @@
 //! Tests de validation et de normalisation des tunnels sauvegardés.
 
-use std::path::{Path, PathBuf};
-
-use uuid::Uuid;
-
 use crate::gpx_tunnels::commands::{backfill_state, group_count, normalize_tunnels};
 use crate::gpx_tunnels::file;
 use crate::gpx_tunnels::types::Tunnel;
-use crate::import_gpx::{
-    get_traces_path, load_registry, save_registry, Point3D, TraceMetadata, TraceStats,
-};
+use crate::import_gpx::{get_traces_path, load_registry, save_registry};
 
-use super::sample_file;
+use super::{cleanup, sample_file, temp_mode_dir, trace_metadata};
 
 fn tunnel(id: &str, start_km: f64, end_km: f64, group: Option<&str>) -> Tunnel {
     Tunnel {
         id: id.to_string(),
         way_id: None,
+        way_ids: Vec::new(),
         name: None,
         highway: None,
         tunnel_type: None,
@@ -122,58 +117,6 @@ fn group_count_counts_groups_once_and_singles_separately() {
         ]),
         2
     );
-}
-
-fn temp_mode_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("visugps2-tunnel-commands-{}", Uuid::new_v4()))
-}
-
-fn cleanup(mode_dir: &Path) {
-    let _ = std::fs::remove_dir_all(mode_dir);
-}
-
-fn trace_metadata(trace_id: &str) -> TraceMetadata {
-    TraceMetadata {
-        id: trace_id.to_string(),
-        name: "Trace de test".to_string(),
-        source: "test".to_string(),
-        source_url: None,
-        activity_type: None,
-        filename: "trace.gpx".to_string(),
-        import_date: "2026-10-22T10:00:00Z".to_string(),
-        stats: TraceStats {
-            start_point: Point3D {
-                lat: 45.0,
-                lon: 2.0,
-                alt: Some(0.0),
-            },
-            end_point: Point3D {
-                lat: 45.0,
-                lon: 2.0,
-                alt: Some(0.0),
-            },
-            distance_m: 1000.0,
-            positive_elevation_m: 0.0,
-            negative_elevation_m: 0.0,
-            alt_min_m: Some(0.0),
-            alt_max_m: Some(0.0),
-            points_count: 10,
-            duration_s: None,
-        },
-        hash: "sha256:test".to_string(),
-        favorite: false,
-        is_displayed: false,
-        audit_status: "clean".to_string(),
-        audit_archived: false,
-        multiride_status: None,
-        multiride_complete: None,
-        communes_completed: false,
-        communes_status: None,
-        altimetrie_validated: false,
-        altimetrie_climb_count: None,
-        tunnels_status: None,
-        tunnels_count: None,
-    }
 }
 
 #[test]

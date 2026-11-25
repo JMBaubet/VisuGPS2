@@ -16,6 +16,8 @@
 //! `altimetrie_validated`, afin que l'icône du circuit puisse les lire sans
 //! ouvrir le fichier.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 /// Version du format du fichier. Une version inconnue est ignorée par
@@ -34,6 +36,10 @@ pub const STATUS_ERROR: &str = "error";
 pub const STATUS_NOT_CONFIGURED: &str = "not_configured";
 /// Les PBF requis pour cette trace sont absents ou n'ont pas pu être obtenus.
 pub const STATUS_MISSING_PBF: &str = "missing_pbf";
+/// La trace sort de la couverture du dataset servi : `tunnels: []` ne dit rien
+/// de la présence réelle d'un tunnel. Statut terminal pour le rattrapage, la
+/// relance reste manuelle depuis l'onglet Tunnels.
+pub const STATUS_OUTSIDE_COVERAGE: &str = "outside_coverage";
 
 // ─── États de préparation ─────────────────────────────────────────────
 
@@ -156,6 +162,11 @@ pub struct Tunnel {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub way_id: Option<String>,
+    /// Ways OSM couvertes par le tunnel logique (détection hermes). Champ
+    /// additif : absent des fichiers produits par le moteur local, qui
+    /// n'appariait qu'une way par tronçon.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub way_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -178,6 +189,22 @@ pub struct Tunnel {
 }
 
 // ─── Index Geofabrik ──────────────────────────────────────────────────
+
+/// Nombre de tunnels logiques : les membres d'un même `groupId` comptent une
+/// fois. Partagé par les deux moteurs (local et hermes) et les tests.
+pub fn group_count(tunnels: &[Tunnel]) -> u32 {
+    let mut groups: HashSet<&str> = HashSet::new();
+    let mut singles = 0_u32;
+    for tunnel in tunnels {
+        match tunnel.group_id.as_deref() {
+            Some(group) => {
+                groups.insert(group);
+            }
+            None => singles += 1,
+        }
+    }
+    groups.len() as u32 + singles
+}
 
 /// Entrée de `regions.json`, produite depuis l'index Geofabrik.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -283,6 +310,20 @@ pub struct TunnelPrepareResult {
     pub file: TunnelFile,
     /// `waiting_validate` ou `success`, tel que posé dans le registre.
     pub status: String,
+}
+
+/// Résultat de `tunnels_detect_hermes` (camelCase côté IPC).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelDetection {
+    pub file: TunnelFile,
+    /// `waiting_validate`, `success` ou `outside_coverage`.
+    pub status: String,
+    /// Dataset servi qui a produit la détection.
+    pub dataset_id: String,
+    /// Vrai quand aucun point de la trace ne tombe dans la couverture du
+    /// dataset — un résultat vide ne dit alors rien des tunnels réels.
+    pub outside_coverage: bool,
 }
 
 /// Progression d'une préparation, émise par l'événement `tunnels-progress`.

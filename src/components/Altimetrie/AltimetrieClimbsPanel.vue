@@ -53,14 +53,19 @@
         </template>
 
         <template v-else>
-          <AltimetrieOsmPanel
-            :requirements="tunnelRequirements"
-            :progress="tunnelProgress"
-            :pending="tunnelPending"
-            :preparing="tunnelPreparing"
-            :has-file="tunnelHasFile"
-            :error="tunnelError"
-            @force-download="emit('force-download-tunnels')"
+          <v-alert
+            v-if="tunnelError"
+            type="error"
+            variant="tonal"
+            density="compact"
+            :text="tunnelError"
+          />
+          <v-alert
+            v-else-if="tunnelNotice"
+            type="warning"
+            variant="tonal"
+            density="compact"
+            :text="tunnelNotice"
           />
 
           <template v-if="tunnels.length > 0">
@@ -86,12 +91,12 @@
 
           <v-empty-state
             v-else-if="tunnelPreparing || tunnelPending"
-            icon="mdi-cloud-download-outline"
-            title="Préparation des tunnels"
+            icon="mdi-cloud-search-outline"
+            title="Détection des tunnels"
             :text="
               tunnelPreparing
-                ? 'Téléchargement et analyse des données OSM en cours…'
-                : 'En attente dans la file de préparation…'
+                ? 'Analyse via le serveur hermes en cours…'
+                : 'En attente dans la file de détection…'
             "
           />
 
@@ -99,7 +104,7 @@
             v-else
             icon="mdi-tunnel-outline"
             title="Aucun tunnel"
-            text="Aucun tunnel détecté. Créez-en un manuellement ou relancez la détection."
+            text="Aucun tunnel détecté via hermes. Créez-en un manuellement ou relancez la détection. La détection est indicative, notamment en zone urbaine dense."
           />
         </template>
       </div>
@@ -162,19 +167,15 @@
  * **Montées**. Chaque onglet garde le même fonctionnement : position sur la
  * trace complète, métriques, sélection synchronisée avec la carte et le widget.
  *
- * L'onglet Tunnels porte en tête le panneau « Données OSM » (PBF chargés, en
- * cours de téléchargement, manquants) et les actions de fusion/séparation.
+ * L'onglet Tunnels porte en tête les alertes de détection (erreur ou trace hors
+ * couverture du dataset servi), puis les cartes et les actions de
+ * fusion/séparation.
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import AltimetrieClimbCard from './AltimetrieClimbCard.vue'
 import AltimetrieTunnelCard from './AltimetrieTunnelCard.vue'
-import AltimetrieOsmPanel from './AltimetrieOsmPanel.vue'
 import type { AltimetrieClimb, AltimetrieProfilePoint } from '../../stores/altimetrie'
-import type {
-  TunnelGroup,
-  TunnelProgress,
-  TunnelRequirements,
-} from '../../stores/tunnels'
+import type { TunnelGroup } from '../../stores/tunnels'
 
 const props = defineProps<{
   activeTab: 'climbs' | 'tunnels'
@@ -196,15 +197,15 @@ const props = defineProps<{
   tunnelPending: boolean
   /** Le fichier de tunnels est en cours de chargement. */
   tunnelLoading: boolean
-  /** La trace est la préparation en cours. */
+  /** La trace est la détection en cours. */
   tunnelPreparing: boolean
-  tunnelProgress: TunnelProgress | null
-  tunnelRequirements: TunnelRequirements | null
-  tunnelHasFile: boolean
+  /** Message d'erreur de la dernière détection, ou `null`. */
+  tunnelError: string | null
+  /** Trace hors de la couverture du dataset servi (session ou registre). */
+  tunnelNotice: string | null
   /** Le widget de profil sait créer un tunnel (étape suivante). */
   canCreateTunnel: boolean
   mergeGapM: number
-  tunnelError: string | null
 }>()
 
 const emit = defineEmits<{
@@ -220,7 +221,6 @@ const emit = defineEmits<{
   'split-tunnel': [id: string]
   'create-tunnel': []
   'relaunch-tunnels': []
-  'force-download-tunnels': []
 }>()
 
 const listRef = ref<HTMLDivElement | null>(null)

@@ -1,6 +1,6 @@
 # Points d'attention — vue Hermes
 
-> État au 24/11/2026, branche `feature/hermes-integration`.
+> État au 25/11/2026, branche `feature/communes-via-hermes` (étape 2).
 > Ce document ne décrit pas le fonctionnement nominal : il rassemble les
 > décisions confirmées, les points ouverts et les pièges à ne pas réintroduire
 > lors des prochaines sous-étapes.
@@ -135,6 +135,149 @@
       request`) par « Serveur hermes injoignable (Tailscale ou veille) » ; la
       carte Serveur masque l'alerte hors ligne (chip « Inconnu » + Réveiller
       suffisent).
+
+## 0 ter. Décisions du 25/11/2026 — étape 2 : communes via hermes
+
+- [x] **Moteur nominal = hermes.** La détection passe par
+      `POST /communes/detect` sur le **dataset servi** (`GET /serving`, résolu
+      côté Rust — seule source de vérité). Seuls `adminLevel` et
+      `minSegmentKm` lui sont transmis ; la trace n'est jamais mise en ligne,
+      la commande relit `trace.geojson`.
+- [x] **Overpass dormant.** `communes_detect`, `useCommunesOverpass.ts`,
+      `osm.rs`/`pipeline.rs` et les cinq seuils de pipeline restent en place
+      mais ne sont plus appelés. Nettoyage prévu à l'étape 4, avec
+      `Communes.Overpass.delaiSec`.
+- [x] **`communes.json` conservé** comme cache local : hermes n'est appelé
+      qu'à la détection. Un recalcul hors couverture sur une trace déjà décrite
+      est **refusé** — la description existante est conservée, jamais écrasée
+      par un faux négatif.
+- [x] **`ambiguous` persisté** (7ᵉ clé du fichier) et affiché en badge
+      « frontière incertaine » (chevauchement de frontières OSM > 1 m).
+- [x] **Lissage client des passages courts** :
+      `Communes.Detection.minKeepKm` (0,5 km) absorbe un passage dans son
+      **voisin le plus long**, jusqu'à stabilité, puis recolle les voisins de
+      même commune et renumérote. Garde-fous : jamais par-dessus un trou de
+      couverture (voisin non accolé), jamais sur un passage `ambiguous`.
+      `minKeepKm = 0` rend la segmentation brute du serveur. Sans ce lissage,
+      hermes expose les oscillations de la trace sur une frontière (quatre
+      allers-retours Nice ↔ Villefranche en 285 m, Monaco 40 m) que l'ancien
+      moteur masquait.
+- [x] **Statut tri-état `communes_status`** (`none` / `partial` / `complete`),
+      source de vérité de l'IHM. `partial` = plus de **5 %** de la trace
+      (longueur 2D) hors de toute commune — `COVERAGE_TOLERANCE`, calculé par
+      le backend, partagé par les deux moteurs. `communes_completed` n'est
+      `true` que pour `complete`. Migration **en mémoire** au chargement
+      (`normalize_communes_status`), sans réécriture du registre.
+- [x] **Une détection partielle n'est pas reprise d'office** : `isEligible`
+      exige `communes_status === 'none'`. Le recalcul est **manuel**, depuis la
+      fenêtre ouverte par l'icône jaune.
+- [x] **Icône `mdi-city`** : grise (non nettoyée), **bleue** (ce circuit en
+      analyse), orange (en file), **jaune** (partielle — forcée visible, ouvre
+      la fenêtre), verte (complète — ouvre la fenêtre), rouge (aucune
+      détection — forcée visible, la lance).
+- [x] **Garde-fou dans la fenêtre** : ratio `km couverts / longueur de trace`,
+      alerte de statut partiel, message dédié quand aucun point n'est dans le
+      dataset (session, nomme le dataset). Le ratio et l'alerte survivent au
+      redémarrage, le nom du dataset non.
+- [x] **Rattrapage relancé au retour du service** (`watch` sur `apiOnline` dans
+      `App.vue`) : le serveur dort au lancement, la vérification
+      `ensureReady('communes')` échouerait avant la fin du réveil.
+- [x] **Défauts serveur constatés et corrigés le 25/11** (rapport transmis) :
+      1. **traces fermées** : un passage de la commune de départ pouvait
+         s'étendre jusqu'à la fin de la ligne, englober tous les autres et les
+         marquer `ambiguous` ; une boucle entièrement dans Nice pouvait ne rien
+         renvoyer. Repro minimale à 4 points dans le rapport.
+      2. **artefact `communes.geojson` incomplet** pour les communes
+         franchissant le bord de la zone (Saint-Martin-Vésubie, Valdeblore,
+         Saint-Sauveur-sur-Tinée, Roure, Roubion) : « Etape TdF 2024 » ne
+         couvrait que 92,55 km sur 138,70. Régénération corrigée côté serveur ;
+         la trace couvre désormais 138,70 km.
+
+### Points ouverts (étape 2)
+
+- [ ] **Changement de dataset servi** : les descriptions existantes ne sont ni
+      invalidées ni rejouées. Un recalcul peut être refusé hors couverture
+      (protection), mais le statut reste celui de l'ancien dataset. Décider
+      s'il faut rejouer les détections au changement de dataset, ou seulement
+      avertir.
+- [ ] **Nom du dataset non persisté** : seul le statut `partial` l'est ; après
+      redémarrage, la fenêtre affiche un message générique. Ajouter un champ au
+      registre si le besoin se confirme.
+- [ ] **`minKeepKm` côté client** : la même absorption pourrait passer dans
+      `CommuneParams` côté serveur (`absorbBelowKm`) si d'autres clients
+      apparaissent.
+- [ ] **`ambiguous` non exploité comme contrôle** : un artefact incohérent
+      (comme le Menton du 25/11) marquait tout `ambiguous` sans que l'IHM
+      n'alerte. Un avertissement « géométrie suspecte » reste à définir.
+- [ ] **Ratio 2D/3D** : la fenêtre compare les km 2D du fichier à
+      `stats.distance_m` (3D) ; l'écart (~0,3 %) est absorbé par le seuil 5 %.
+- [ ] **Tests de bout en bout** : le projet n'a pas de mock HTTP ; la chaîne
+      locale est testée (conversion, lissage, statut, migration). Rejouer un
+      test réel après chaque évolution du contrat serveur.
+
+## 0 quater. Décisions du 25/11/2026 — étape 3 : tunnels via hermes
+
+- [x] **Moteur nominal = hermes.** `POST /tunnels/detect` sur le **dataset servi**
+      (`GET /serving`, résolu côté Rust). Seuls les points de `trace.geojson` et
+      `minLengthM` sont transmis ; la trace n'est jamais mise en ligne. Timeout
+      client de **150 s**, indépendant de `Hermes.Connexion.delaiSec` ; `POST`
+      n'est jamais rejoué.
+- [x] **Moteur local dormant.** `pbf.rs`, `regions.rs`, `download.rs`,
+      `pipeline.rs`, les commandes `tunnels_prepare`/`tunnels_detect`/
+      `tunnels_requirements`/`tunnels_support_status` et les seuils
+      `Tunnels.Detection.*` restent en place, non appelés. Nettoyage prévu avec
+      `osm/`.
+- [x] **Panneau « Données OSM » retiré** de l'onglet Tunnels, sans remplacement :
+      l'onglet ne dépend plus de la clé USB. Les erreurs et le hors-couverture
+      sont affichés en tête de liste, le reste est porté par le chip Hermes.
+- [x] **Contrôle de couverture sur résultat vide** : `tunnels: []` est
+      indistinguable de « hors dataset ». Un vide hors couverture pose
+      `outside_coverage` (fichier vide sur première détection) et n'écrase jamais
+      un fichier existant. Le statut n'est pas repris automatiquement ; la
+      relance est manuelle. Le nom du dataset n'est conservé que pour la session.
+- [x] **Conversion serveur → `tunnels.json`** : bornes arrondies au mètre,
+      `lengthM` recalculé sur les bornes, `wayId` = premier `wayIds`, `wayIds`
+      ajouté au fichier (champ additif, version 1 conservée), identifiants vides
+      ou dupliqués remplacés, `groupId` serveur **ignoré**, `detectionMethod =
+      "osm"`.
+- [x] **Contrôle altimétrique différé** : envoyé à `false` avec une tolérance de
+      30 m. Il n'annote qu'un tunnel déjà apparié et exige des points 3D ; or
+      `trace.geojson` est 2D. À reprendre avec des traces de test à altitude
+      fiable, en persistant alors `altimetricOk` et un badge.
+- [x] **Disponibilité** : `ensureReady('tunnels')` exige désormais
+      `auxFileReady(aux.tunnels) && auxFileReady(aux.mm)` (`state === 'ready'`),
+      et non plus `exists`. Le rattrapage est relancé au retour d'`apiOnline`.
+
+### Points ouverts (étape 3)
+
+- [ ] **Limitation Monaco** : `tunnels: []` peut être un vrai négatif en zone
+      urbaine dense (map matching sans altitude). L'IHM l'indique dans l'état
+      vide ; une alerte plus visible reste à définir si les remontées terrain le
+      justifient.
+- [ ] **Changement de dataset servi** : les `tunnels.json` existants ne sont ni
+      invalidés ni rejoués (même point que les communes).
+- [ ] **Nom du dataset hors couverture** : seul le statut est persisté ; le nom
+      n'est connu que pendant la session.
+- [ ] **ORS arrêté** : `ensureReady` refuse un service `stopped`/`failed` alors
+      que `/tunnels/detect` ne dépend pas d'ORS (seuls les artefacts du dataset
+      comptent). À assouplir si le besoin d'une détection sans ORS se confirme.
+- [ ] **Concurrence communes/tunnels** : deux files indépendantes peuvent lancer
+      deux `POST /detect` simultanés sur le même dataset. À surveiller (charge
+      du Mac mini, `map_matching_2`).
+- [x] **`groupId` serveur ignoré** : il identifie le tunnel physique et se
+      répète à chaque passage (aller et retour). L'importer comme fusion locale
+      collait les deux passages dans une carte « fusionné (2) » et faisait tracer
+      une bande continue sur tout le trajet. Chaque détection reste un tronçon
+      séparé ; les fusions/séparations manuelles restent seules maîtresses dans
+      `tunnels.json`.
+- [ ] **Timeout 150 s** : constant côté client ; à paramétrer si le serveur
+      dépasse sur de grands datasets.
+- [ ] **Dépendance temporaire** `gpx_tunnels` → `gpx_communes::commands` pour
+      `serving_dataset` / `outside_coverage` ; extraction vers `hermes/` prévue
+      au nettoyage.
+- [ ] **Tests de bout en bout** : la chaîne locale (conversion, commit, statuts,
+      garde d'empreinte) est testée ; rejouer un appel réel après chaque
+      évolution du contrat serveur.
 
 ## 1. Dataset servi et couverture
 
@@ -309,3 +452,8 @@
 | `be50bdc` | `fix(hermes): corriger les filtres et ajouter celui des datasets` |
 | `1e439d9` | `feat(accueil): afficher la couverture du dataset hermes actif` |
 | `b1321ae` | `feat(hermes): préparer les artefacts aux et permettre la relance` |
+| `476ceb1` | `feat(communes): contrats hermes et contrôle de couverture` |
+| `b0e0f35` | `feat(communes): détecter les communes via le dataset hermes` |
+| `a883929` | `feat(communes): brancher le store sur la détection hermes` |
+| `bcde9c9` | `feat(communes): fiabiliser la détection et son statut` |
+| `2058705` | `feat(communes): consulter, recalculer et contrôler la couverture` |

@@ -930,9 +930,11 @@ const altitudeStatus = computed<CircuitAltitudeStatus>(() => ({
 }))
 
 /**
- * État des tunnels pour cette carte. La file de préparation du store Tunnels
- * prime sur le registre : une trace en cours de téléchargement/détection est
- * « pending », même si son ancien fichier portait un autre statut.
+ * État des tunnels pour cette carte. La file de détection du store Tunnels
+ * prime sur le registre : une trace en cours d'analyse via hermes est
+ * « pending », même si son ancien fichier portait un autre statut. Le registre
+ * porte ensuite `waiting_validate`, `success`, `error`, `outside_coverage` ou
+ * les statuts hérités du moteur local (`not_configured`, `missing_pbf`).
  */
 const tunnelStatus = computed<CircuitTunnelStatus>(() => {
   const count = props.trace.tunnels_count ?? null
@@ -941,12 +943,6 @@ const tunnelStatus = computed<CircuitTunnelStatus>(() => {
       ? tunnelsStore.lastError
       : null
 
-  if (!tunnelsStore.supportLoaded) {
-    return { state: 'hidden', hasFile: false, count, message }
-  }
-  if (!tunnelsStore.support.active) {
-    return { state: 'disabled', hasFile: false, count, message }
-  }
   if (tunnelsStore.isPending(props.trace.id)) {
     const status = props.trace.tunnels_status
     return {
@@ -963,7 +959,8 @@ const tunnelStatus = computed<CircuitTunnelStatus>(() => {
     status === 'success' ||
     status === 'error' ||
     status === 'not_configured' ||
-    status === 'missing_pbf'
+    status === 'missing_pbf' ||
+    status === 'outside_coverage'
   ) {
     return {
       state: status,
@@ -973,9 +970,6 @@ const tunnelStatus = computed<CircuitTunnelStatus>(() => {
     }
   }
 
-  if (!tunnelsStore.support.configured || !tunnelsStore.support.readable) {
-    return { state: 'not_configured', hasFile: false, count, message }
-  }
   return { state: 'hidden', hasFile: false, count, message }
 })
 

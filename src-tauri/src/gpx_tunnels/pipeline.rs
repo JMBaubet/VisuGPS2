@@ -212,6 +212,7 @@ pub fn match_tunnels(
         tunnels.push(Tunnel {
             id: format!("t-{:03}", index + 1),
             way_id: Some(way.id.clone()),
+            way_ids: vec![way.id.clone()],
             name: way
                 .tags
                 .get("tunnel:name")

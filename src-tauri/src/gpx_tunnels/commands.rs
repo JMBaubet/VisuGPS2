@@ -18,25 +18,31 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tauri::Emitter;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::gpx_audit::export::iso_now;
+use crate::gpx_communes::commands::{outside_coverage, serving_dataset};
+use crate::hermes::client::HermesClient;
+use crate::hermes::types::{coded, codes, HermesTunnelsDetectResponse};
 use crate::import_gpx::{
-    get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry, update_registry,
+    get_mode_dir, get_trace_gpx_path, get_traces_path, load_registry, load_trace_coordinates,
+    trace_hash, update_registry,
 };
 
 use super::download;
 use super::file;
 use super::geometry;
+use super::hermes::{build_detection_request, commit_hermes_detection};
 use super::params::read_config;
 use super::pbf;
 use super::pipeline;
 use super::regions;
 use super::types::{
-    PbfFileRef, Tunnel, TunnelFile, TunnelParams, TunnelPrepareResult, TunnelProgress,
-    TunnelRequirements, TunnelSupportStatus, FILE_VERSION, STATUS_ERROR,
+    PbfFileRef, Tunnel, TunnelDetection, TunnelFile, TunnelParams, TunnelPrepareResult,
+    TunnelProgress, TunnelRequirements, TunnelSupportStatus, FILE_VERSION, STATUS_ERROR,
     STATUS_MISSING_PBF, STATUS_NOT_CONFIGURED, STATUS_SUCCESS, STATUS_WAITING_VALIDATE,
 };
 
@@ -46,6 +52,11 @@ static PREPARE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const PROGRESS_EVENT: &str = "tunnels-progress";
 const MIN_TUNNEL_LENGTH_KM: f64 = 0.01;
+
+/// Timeout de `POST /tunnels/detect` : `map_matching_2` est plus lent que les
+/// routes courtes. La valeur est indépendante de `Hermes.Connexion.delaiSec`,
+/// qui reste le délai des requêtes ordinaires.
+const HERMES_DETECT_TIMEOUT: Duration = Duration::from_secs(150);
 
 // ─── Résolution et helpers ────────────────────────────────────────────
 
@@ -90,20 +101,9 @@ fn pbf_ref(path: &Path) -> PbfFileRef {
 }
 
 /// Nombre de tunnels logiques : les membres d'un même `groupId` comptent une
-/// fois.
-pub fn group_count(tunnels: &[Tunnel]) -> u32 {
-    let mut groups: HashSet<&str> = HashSet::new();
-    let mut singles = 0_u32;
-    for tunnel in tunnels {
-        match tunnel.group_id.as_deref() {
-            Some(group) => {
-                groups.insert(group);
-            }
-            None => singles += 1,
-        }
-    }
-    groups.len() as u32 + singles
-}
+/// fois. La fonction vit dans `types` (partagée avec le moteur hermes) et reste
+/// réexportée ici pour les appelants historiques.
+pub use super::types::group_count;
 
 fn emit_progress(
     app: &tauri::AppHandle,
@@ -677,6 +677,83 @@ pub async fn tunnels_detect(
     )
     .await
     .map_err(|error| fail(&mode_dir, &trace_id, STATUS_ERROR, error))
+}
+
+/// Détecte les tunnels d'une trace **via le serveur hermes** et persiste le
+/// résultat — moteur nominal depuis l'intégration du serveur.
+///
+/// La trace n'est jamais transmise telle quelle : la commande relit
+/// `trace.geojson` côté backend et n'envoie au serveur que les **points**, avec
+/// `minLengthM` comme seul réglage utile. Le dataset vient de `GET /serving`,
+/// seule source de vérité de la sélection.
+///
+/// Le contrôle de couverture ne sert qu'à départager un résultat **vide** : une
+/// liste non vide prouve à elle seule que la trace est dans le dataset. Un vide
+/// hors couverture n'écrase jamais un fichier existant ; sur une première
+/// détection, il pose `outside_coverage` pour ne pas confondre « hors dataset »
+/// et « aucun tunnel ».
+#[tauri::command]
+pub async fn tunnels_detect_hermes(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<TunnelDetection, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let (params, support) = read_config(&app).await;
+    if !support.actif {
+        return Err(
+            "La détection des tunnels est désactivée dans les paramètres.".to_string(),
+        );
+    }
+
+    let points = load_trace_coordinates(&mode_dir, &trace_id)?;
+    let reference_hash = trace_hash(&mode_dir, &trace_id);
+
+    let config = crate::hermes::config::read_config(&app).await;
+    let client = HermesClient::new(&config)?;
+    let dataset_id = serving_dataset(&client, config.request_timeout).await?;
+
+    let request = build_detection_request(&trace_id, &dataset_id, points.clone(), &params);
+    let response = match client
+        .post::<HermesTunnelsDetectResponse, _>(
+            "/tunnels/detect",
+            &request,
+            HERMES_DETECT_TIMEOUT,
+        )
+        .await
+    {
+        Ok(response) => response,
+        // 404 : dataset inconnu, ou `tunnels-logiques.json` / `mm/` absent. Le
+        // code réservé `HERMES_NOT_PREPARED` permet au store de proposer la
+        // bonne action (préparer les artefacts dans la vue Hermes).
+        Err(error) if error.starts_with(codes::NOT_FOUND) => {
+            return Err(coded(
+                codes::NOT_PREPARED,
+                format!(
+                    "Tunnels non préparés pour le dataset « {} » (tunnels-logiques.json ou mm/ absents). Contactez l'administrateur.",
+                    dataset_id
+                ),
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+
+    let outside = response.tunnels.is_empty()
+        && outside_coverage(&client, config.request_timeout, &dataset_id, &points).await;
+    if outside {
+        println!(
+            "[tunnels] {} : aucun point dans la couverture du dataset {} — résultat vide consigné.",
+            trace_id, dataset_id
+        );
+    }
+
+    commit_hermes_detection(
+        &mode_dir,
+        &trace_id,
+        &response,
+        outside,
+        reference_hash.as_deref(),
+        &params,
+    )
 }
 
 /// Sauvegarde les tunnels édités et vaut validation opérateur.

@@ -324,6 +324,78 @@ pub struct HermesCommunesDetectResponse {
     pub passages: Vec<HermesCommunePassage>,
 }
 
+// ─── Détection des tunnels ────────────────────────────────────────────
+
+/// Réglages de `POST /tunnels/detect` (objet `params` du contrat).
+///
+/// Le contrôle altimétrique reste **désactivé** côté client : le serveur ne
+/// l'utilise que pour annoter un tunnel déjà apparié, et `trace.geojson` ne
+/// porte pas d'altitude. Les deux champs sont transmis explicitement pour que le
+/// fichier `tunnels.json` documente la requête réellement envoyée.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesTunnelParams {
+    /// Longueur minimale d'un tunnel retenu, en mètres.
+    pub min_length_m: f64,
+    /// Contrôle altimétrique optionnel (toujours `false` côté client).
+    pub altimetric_check: bool,
+    /// Tolérance du contrôle altimétrique, en mètres.
+    pub altimetric_tolerance_m: f64,
+}
+
+/// Payload de `POST /tunnels/detect` (contrat v1.10).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesTunnelsDetectRequest {
+    pub trace_id: String,
+    pub dataset_id: String,
+    /// Points `[lon, lat]` de la trace, dans l'ordre chronologique.
+    pub points: Vec<[f64; 2]>,
+    pub params: HermesTunnelParams,
+}
+
+/// Un tunnel tel que le serveur le renvoie.
+///
+/// `way_ids` porte les ways OSM couvertes par le tunnel logique (union-find
+/// côté serveur) ; `altimetric_ok` reste `None` tant que le contrôle
+/// altimétrique n'est pas activé.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesTunnel {
+    pub id: String,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(alias = "start_km")]
+    pub start_km: f64,
+    #[serde(alias = "end_km")]
+    pub end_km: f64,
+    #[serde(default, alias = "length_m")]
+    pub length_m: f64,
+    #[serde(default, alias = "way_ids")]
+    pub way_ids: Vec<String>,
+    #[serde(default, alias = "altimetric_ok")]
+    pub altimetric_ok: Option<bool>,
+}
+
+/// Réponse de `POST /tunnels/detect` : `tunnels` vide est un résultat, y
+/// compris quand la trace sort de la couverture du dataset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesTunnelsDetectResponse {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default, alias = "trace_id")]
+    pub trace_id: String,
+    #[serde(default, alias = "dataset_id")]
+    pub dataset_id: String,
+    #[serde(default, alias = "detected_at")]
+    pub detected_at: String,
+    #[serde(default)]
+    pub tunnels: Vec<HermesTunnel>,
+}
+
 // ─── Réveil ───────────────────────────────────────────────────────────
 
 /// Résultat de `hermes_wake`.

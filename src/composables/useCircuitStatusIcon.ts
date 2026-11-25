@@ -10,7 +10,8 @@
  * 3. erreur de détection des tunnels ;
  * 4. tunnels en attente de validation ;
  * 5. altimétrie en attente de validation ;
- * 6. support OSM absent et aucun fichier de tunnels ;
+ * 6. trace hors de la couverture du dataset servi, ou support local absent, et
+ *    aucun fichier de tunnels ;
  * 7. altimétrie validée avec montées ;
  * 8. altimétrie validée sans montée.
  */
@@ -26,6 +27,7 @@ export type TunnelStatusState =
   | 'success'
   | 'not_configured'
   | 'missing_pbf'
+  | 'outside_coverage'
 
 export type CircuitStatusAction =
   | 'none'
@@ -123,6 +125,18 @@ export function computeCircuitStatusDisplay(
       visibility: 'always',
       tooltip: "Analyser l'altimétrie — validation requise.",
       action: 'altimetrie-climbs',
+      loading: false,
+    }
+  }
+
+  if (candidate?.state === 'outside_coverage') {
+    return {
+      icon: 'mdi-tunnel',
+      color: 'grey',
+      visibility: 'hover',
+      tooltip:
+        'Trace hors de la couverture du dataset servi — aucun tunnel ne peut être détecté. Cliquez pour ouvrir l’onglet Tunnels.',
+      action: 'altimetrie-tunnels',
       loading: false,
     }
   }

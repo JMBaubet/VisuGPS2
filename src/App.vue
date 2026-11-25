@@ -67,21 +67,22 @@ onMounted(async () => {
   // le temps d'une frame, et deux tâches se disputeraient le serveur hermes.
   void communesStore.startCatchUp()
 
-  // Le serveur hermes dort au lancement : la détection ne peut aboutir qu'une
-  // fois l'API éveillée. On relance le rattrapage dès qu'elle redevient
+  // Le serveur hermes dort au lancement : les détections ne peuvent aboutir
+  // qu'une fois l'API éveillée. On relance les rattrapages dès qu'elle redevient
   // joignable — `startCatchUp` est idempotent (rien d'éligible → aucune tâche).
   watch(
     () => hermesStore.apiOnline,
     online => {
-      if (online === true) void communesStore.startCatchUp()
+      if (online === true) {
+        void communesStore.startCatchUp()
+        void tunnelsStore.startCatchUp()
+      }
     },
   )
 
-  // Progression des téléchargements de tunnels : l'écoute est posée une fois
-  // pour la fenêtre principale. Le rattrapage enfile les traces propres qui
-  // n'ont pas encore d'analyse de tunnels validée ; sans support OSM configuré,
-  // il ne démarre rien.
-  void tunnelsStore.bindProgress()
+  // Rattrapage des tunnels : traces propres sans détection terminale, via le
+  // serveur hermes. Le module désactivé (`Tunnels.Support.actif`) ne démarre
+  // rien ; le service en veille est traité au retour de `apiOnline`.
   void tunnelsStore.startCatchUp()
 })
 

@@ -1618,44 +1618,68 @@ un changement de réglage ne s'applique qu'après « Recalculer ».
 
 ### Module Tunnels (`gpx_tunnels/`)
 
-Le module confronte une trace **propre** aux ways OSM portant les tags `tunnel`
-et `highway` :
+Depuis l'intégration de hermes, la détection **nominale** ne lit plus les PBF :
+la commande `tunnels_detect_hermes` relit `trace.geojson`, résout le dataset
+servi (`GET /serving`), puis appelle `POST /tunnels/detect` avec les points de
+la trace et `minLengthM` (timeout de 150 s, indépendant de
+`Hermes.Connexion.delaiSec`). Le serveur apparie les points au réseau
+(`map_matching_2`) et renvoie des tunnels logiques (`id`, `groupId`, `name`,
+`startKm`, `endKm`, `lengthM`, `wayIds`) :
 
-1. lecture du GPX et distances cumulées (`pipeline::load_points`) ;
-2. construction d'un R-tree des segments OSM (`rstar`) et calcul du cap de la
-   trace sur une fenêtre glissante (`geometry::cap_at`) ;
-3. appariement par distance et écart de cap **bidirectionnel**, puis regroupement
-   en runs contigus par `way_id` ;
-4. filtrage des runs trop courts (`minRunLength`) et des tunnels sous la longueur
-   minimale (`Tunnels.Detection.minLength`, 25 m par défaut) ;
-5. écriture de `traces/{trace_id}/tunnels.json` et mise à jour du registre
-   (`tunnels_status`, `tunnels_count`).
+1. `hermes::build_detection_request` compose la requête (points 2D, contrôle
+   altimétrique désactivé) ;
+2. `hermes::tunnels_from_hermes` convertit la réponse : bornes arrondies au
+   mètre, longueur recalculée, identifiants uniques, `groupId` serveur **ignoré**
+   (il identifie le tunnel physique et se répète à chaque passage), `wayId` =
+   première way, `wayIds` complet ;
+3. `hermes::commit_hermes_detection` applique la garde d'empreinte, écrit
+   `traces/{trace_id}/tunnels.json` et pose le statut du registre.
 
-- **Acquisition OSM** : `pbf.rs` lit les PBF avec `osmpbfreader` (deux passes
-  pour ne charger que les nœuds utiles) ; `regions.rs` transforme l'index
-  Geofabrik en `regions.json` ; `download.rs` télécharge les PBF manquants.
-  `merge_ways` déduplique les ways entre PBF régionaux.
-- **Détection silencieuse** : `tunnels_prepare` produit `regions.json` si besoin,
-  télécharge les PBF manquants (dans la limite de `Osm.Fichiers.tailleMaxPbf`),
-  puis détecte. La progression est émise par `tunnels-progress`. Une seule
-  préparation à la fois (`PREPARE_LOCK`) ; le hash du GPX est revérifié avant
-  l'écriture.
-- **Validation** : une détection avec tunnels pose `waiting_validate` ; le bouton
-  « Valider » ou « Sauvegarder » de l'onglet Tunnels écrit le fichier et pose
-  `success`. Une détection sans tunnel pose directement `success`.
+- **Statuts** : `waiting_validate` (tunnels détectés), `success` (validation
+  opérateur ou résultat vide **dans** la couverture), `outside_coverage`
+  (résultat vide hors du dataset servi), `error`, `not_configured`,
+  `missing_pbf` (les deux derniers sont hérités du moteur local).
+- **Couverture** : contrôlée uniquement si la réponse est vide (un résultat non
+  vide prouve la présence dans le dataset). Un vide hors couverture n'écrase
+  jamais un fichier existant ; sur une première détection, il écrit un fichier
+  vide et pose `outside_coverage`. Ce statut n'est pas repris automatiquement,
+  la relance reste manuelle depuis l'onglet Tunnels.
 - **Édition** : `tunnels_save` valide les bornes, la longueur minimale
   structurelle (10 m), les chevauchements, les groupes (≥ 2) et les identifiants ;
   il recalcule les longueurs. La sauvegarde vaut validation.
 - **Frontend** : `src/stores/tunnels.ts` porte le fichier, l'édition, la file
-  d'attente et le support. L'onglet Tunnels de `/altimetrie` liste les groupes,
-  `AltimetrieMap` affiche les portails (cercles blanc/noir, pins vert/rouge pour
-  la sélection) et `AltimetrieProfileWidget` gère la sélection, la création en
-  deux clics, le glissement horizontal des bornes et la fusion/séparation.
+  d'attente hermes et le contrôle de disponibilité (`ensureReady('tunnels')` :
+  artefacts `tunnels-logiques.json` et `mm/` à l'état `ready`). L'onglet Tunnels
+  de `/altimetrie` liste les groupes et alerte sur les erreurs ou les traces
+  hors couverture ; `AltimetrieMap` affiche les portails (cercles blanc/noir,
+  pins vert/rouge pour la sélection) et `AltimetrieProfileWidget` gère la
+  sélection, la création en deux clics, le glissement horizontal des bornes et
+  la fusion/séparation. Le panneau « Données OSM » a été retiré : l'onglet ne
+  dépend plus de la clé USB.
+
+#### Moteur local dormant
+
+Le pipeline historique reste compilé mais n'est plus appelé par l'IHM :
+
+1. lecture du GPX et distances cumulées (`pipeline::load_points`) ;
+2. R-tree des segments OSM (`rstar`) et cap de la trace sur fenêtre glissante ;
+3. appariement distance + écart de cap, runs contigus par `way_id` ;
+4. filtres `minRunLength` / `minLength` ;
+5. écriture de `tunnels.json` et du registre.
+
+- `pbf.rs` lit les PBF avec `osmpbfreader` ; `regions.rs` transforme l'index
+  Geofabrik ; `download.rs` télécharge les PBF manquants ; `merge_ways`
+  déduplique les ways entre PBF régionaux.
+- `tunnels_prepare` / `tunnels_detect` restent enregistrés, avec
+  `PREPARE_LOCK`, l'événement `tunnels-progress` et la garde d'empreinte. Les
+  seuils `Tunnels.Detection.*` autres que `minLength` ne pilotent que ce moteur.
+- Nettoyage prévu avec `osm/` et les composants `Osm/*` dans une étape dédiée.
 
 ### Gestion OSM partagée (`osm/`)
 
-Le module `osm` est la couche de gestion des fichiers utilisée par les modules
-Tunnels et Communes :
+Le module `osm` est la couche de gestion des fichiers utilisée par la fenêtre
+« Données OSM » de l'Accueil et par les **moteurs locaux dormants** (Tunnels,
+Communes) :
 
 | Fichier | Rôle |
 |---|---|
@@ -1678,7 +1702,7 @@ Tunnels et Communes :
   `.osm.pbf`. Les fichiers AppleDouble `._*.pbf` et tout nom commençant par `.`
   sont ignorés. `regions.json` et `regions-geometry.json` sont générés ensemble
   par `ensure_regions_json` lors d'une mise à jour du catalogue (index Geofabrik
-  ~3,6 Mo) ou d'un premier téléchargement de tunnels.
+  ~3,6 Mo) ou d'un premier téléchargement manuel.
 - **Date de génération** : `inventory::pbf_generation_date` lit le premier bloc
   `OSMHeader` (brut ou zlib) et extrait `osmosis_replication_timestamp` ; à
   défaut, la date de création puis de modification du fichier est utilisée.
@@ -1694,7 +1718,7 @@ Tunnels et Communes :
   l'espace libre (`fs4::available_space`) est toujours vérifié et bloque le
   téléchargement s'il est insuffisant. `download_to_file` écrit un `.part` puis
   renomme atomiquement, vérifie la troncature (`done != total`) et est sérialisé
-  par `DOWNLOAD_LOCK` (partagé avec les téléchargements silencieux des tunnels).
+  par `DOWNLOAD_LOCK` (partagé avec le moteur local dormant des tunnels).
   `OSM_LOCK` sérialise les opérations manuelles (téléchargement, suppression,
   rafraîchissement du catalogue).
 - **Catalogue et géométries** : `transform_all` parse l'index une seule fois,

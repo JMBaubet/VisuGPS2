@@ -1333,11 +1333,12 @@ icon = "mdi-calendar-refresh"
 
 # ---------------------------------------------------------------------------
 # Détection des tunnels (module Tunnels).
-# Une trace propre est confrontée aux ways OSM `tunnel` + `highway` des PBF
-# régionaux ; le résultat est écrit dans `traces/{trace_id}/tunnels.json` et
-# l'état de validation dans `traces.json` (`tunnels_status`, `tunnels_count`).
-# `regions.json` et les `.osm.pbf` vivent sur le support OSM, jamais dans le
-# dossier de la trace.
+# Moteur **nominal** : hermes (`POST /tunnels/detect`) sur le dataset servi ;
+# seul `minLength` est transmis, sous le nom `minLengthM`. Les autres seuils ne
+# pilotent que le **moteur local dormant** (lecture des ways `tunnel` +
+# `highway` des PBF de la clé USB) ; ils restent documentés dans `tunnels.json`.
+# Le résultat est écrit dans `traces/{trace_id}/tunnels.json` et l'état dans
+# `traces.json` (`tunnels_status`, `tunnels_count`).
 # ---------------------------------------------------------------------------
 
 [Tunnels.Detection.distanceTolerance]
@@ -1417,9 +1418,10 @@ icon = "mdi-counter"
 [Tunnels.Detection.minLength]
 description = "Longueur minimale d'un tunnel détecté"
 documentation = """
-Longueur minimale, en mètres, d'un tunnel retenu par la détection OSM. Les runs
-dont l'emprise sur la trace est plus courte sont ignorés : ils proviennent le
-plus souvent d'un portail effleuré ou d'un fragment de tunnel, pas d'une
+Longueur minimale, en mètres, d'un tunnel retenu. Elle est transmise à hermes
+sous le nom **`minLengthM`** et s'applique aussi au moteur local dormant. Les
+runs dont l'emprise sur la trace est plus courte sont ignorés : ils proviennent
+le plus souvent d'un portail effleuré ou d'un fragment de tunnel, pas d'une
 traversée réelle. Le seuil s'applique **uniquement à la détection** ; la
 création manuelle et la sauvegarde conservent leur minimum structurel de 10 m.
 Valeur par défaut : **25 m**.
@@ -1451,9 +1453,10 @@ icon = "mdi-call-merge"
 [Tunnels.Support.actif]
 description = "Activer la détection des tunnels"
 documentation = """
-Active la préparation automatique des tunnels après nettoyage d'une trace. Quand
-elle est désactivée, aucune détection ni téléchargement n'est lancé ; les tunnels
-déjà présents restent consultables et éditables dans l'onglet Tunnels.
+Active la détection automatique des tunnels après nettoyage d'une trace. Quand
+elle est désactivée, aucune détection n'est lancée, ni via hermes ni via le
+moteur local ; les tunnels déjà présents restent consultables et éditables dans
+l'onglet Tunnels.
 """
 type = "bool"
 default = true

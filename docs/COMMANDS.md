@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (90 commandes)
+## Catalogue (91 commandes)
 
 ### Application
 
@@ -542,20 +542,21 @@ pub struct AltimetrieClimbEdit {
 
 ### Tunnels (`gpx_tunnels/commands.rs`)
 
-**Principe** : une trace propre est confrontée aux ways OSM `tunnel` + `highway`
-des PBF régionaux. Le seul fichier écrit dans le dossier de la trace est
-`traces/{trace_id}/tunnels.json` ; `regions.json` et les `.osm.pbf` restent sur
-le support OSM (`Osm.Fichiers.dossierPbf`). La détection est **silencieuse** :
-`regions.json` est produit depuis Geofabrik si nécessaire, les PBF manquants sont
-téléchargés sans confirmation, et la progression est émise par l'événement
-`tunnels-progress` (`{ traceId, stage, region?, filename?, bytesDone, bytesTotal, percent }`).
+**Principe** : la détection **nominale** passe par le serveur hermes
+(`POST /tunnels/detect`, commande `tunnels_detect_hermes`) sur le dataset servi.
+Le moteur local historique — lecture des ways `tunnel` + `highway` des PBF
+régionaux de la clé USB — reste en place mais **dormant** : `tunnels_prepare`,
+`tunnels_detect`, `tunnels_requirements` et `tunnels_support_status` ne sont plus
+appelés par l'IHM. Le seul fichier écrit dans le dossier de la trace est
+`traces/{trace_id}/tunnels.json`.
 
 | Commande | Signature Rust | Retour |
 |---|---|---|
 | `tunnels_load` | `async (app, trace_id: String) -> Result<Option<TunnelFile>, String>` | Relit `tunnels.json`. `null` si le fichier est absent, illisible, d'une version inconnue ou rattaché à une autre trace. |
 | `tunnels_requirements` | `async (app, trace_id: String) -> Result<TunnelRequirements, String>` | Décrit les ressources OSM nécessaires à la trace : état (`disabled`, `not_configured`, `needs_regions`, `no_region`, `missing_pbf`, `ready`), dossier, régions Geofabrik requises et présence de chaque PBF. Ne télécharge rien. |
 | `tunnels_prepare` | `async (app, trace_id: String, ignore_size_limit: Option<bool>) -> Result<TunnelPrepareResult, String>` | Produit `regions.json` si absent, télécharge silencieusement les PBF manquants requis (progression), lit les PBF en Rust pur, apparie la trace, écrit `tunnels.json` et pose le statut du registre. Une seule préparation à la fois. Garde de hash : si le GPX a changé pendant les téléchargements, rien n'est écrit. |
-| `tunnels_detect` | `async (app, trace_id: String) -> Result<TunnelPrepareResult, String>` | Même détection **sans téléchargement** ; refuse si `regions.json` ou un PBF requis manque. Utilisée par la relance de l'onglet Tunnels. |
+| `tunnels_detect` | `async (app, trace_id: String) -> Result<TunnelPrepareResult, String>` | Même détection locale **sans téléchargement** ; refuse si `regions.json` ou un PBF requis manque. Moteur local dormant, plus appelé par l'IHM. |
+| `tunnels_detect_hermes` | `async (app, trace_id: String) -> Result<TunnelDetection, String>` | Détection **via hermes** : relit `trace.geojson`, résout le dataset servi (`GET /serving`), envoie les points à `POST /tunnels/detect` (timeout 150 s), contrôle la couverture si le résultat est vide, écrit `tunnels.json` et pose `waiting_validate`, `success` ou `outside_coverage`. Un résultat vide hors couverture n'écrase jamais un fichier existant. |
 | `tunnels_save` | `async (app, trace_id: String, tunnels: Vec<Tunnel>) -> Result<TunnelFile, String>` | Valide et normalise les tunnels édités (bornes, longueur minimale 10 m, chevauchements, groupes ≥ 2, identifiants uniques), recalcule les longueurs, écrit atomiquement et pose `tunnels_status = "success"` : **la sauvegarde vaut validation opérateur**. |
 | `tunnels_support_status` | `async (app) -> Result<TunnelSupportStatus, String>` | État global du support OSM : activation, dossier configuré/lisible, présence et version de `regions.json`, nombre de PBF. Lu par la carte du circuit. |
 | `pick_directory` | `async (app) -> Result<Option<String>, String>` | Sélecteur natif de dossier, utilisé par le paramètre `Osm.Fichiers.dossierPbf`. |
@@ -568,38 +569,51 @@ pub struct TunnelFile {
     pub detected_at: Option<String>,     // None pour un fichier créé manuellement
     pub updated_at: String,              // ISO 8601
     pub pbf_files: Vec<PbfFileRef>,      // { name, modifiedAt? }
-    pub params: TunnelParams,            // réglages de détection utilisés
+    pub params: TunnelParams,            // minLengthM transmis à hermes
     pub tunnels: Vec<Tunnel>,
 }
 
 pub struct Tunnel {
     pub id: String,
-    pub way_id: Option<String>,          // w123456
-    pub name: Option<String>,            // tunnel:name, sinon name
-    pub highway: Option<String>,
-    pub tunnel_type: Option<String>,     // yes, building_passage, culvert…
+    pub way_id: Option<String>,          // première way (compatibilité)
+    pub way_ids: Vec<String>,            // ways OSM du tunnel logique (hermes)
+    pub name: Option<String>,            // name renvoyé par le serveur
+    pub highway: Option<String>,         // moteur local uniquement
+    pub tunnel_type: Option<String>,     // moteur local uniquement
     pub start_km: f64,
     pub end_km: f64,
-    pub length_m: f64,                   // recalculée à chaque sauvegarde
+    pub length_m: f64,                   // recalculée sur les bornes
     pub detection_method: String,        // "osm" | "manual"
     pub max_distance_m: Option<f64>,
     pub max_angle_diff_deg: Option<f64>,
-    pub group_id: Option<String>,        // fusion logique, tronçons disjoints
+    pub group_id: Option<String>,        // fusion logique manuelle, jamais celle de hermes
+}
+
+pub struct TunnelDetection {             // retour de tunnels_detect_hermes
+    pub file: TunnelFile,
+    pub status: String,                  // waiting_validate | success | outside_coverage
+    pub dataset_id: String,
+    pub outside_coverage: bool,          // aucun point dans le dataset servi
 }
 ```
 
 **Statuts du registre** (`TraceMetadata`) :
 - `tunnels_status` : `waiting_validate` (fichier avec tunnels, pas encore validé),
-  `success` (validé, ou détection sans tunnel), `error`, `not_configured`,
-  `missing_pbf` ; absent (`None`) sur un registre antérieur.
+  `success` (validé, ou détection sans tunnel **dans la couverture**),
+  `outside_coverage` (trace hors du dataset servi, résultat vide non concluant),
+  `error`, `not_configured`, `missing_pbf` ; absent (`None`) sur un registre
+  antérieur. Les deux derniers statuts sont hérités du moteur local.
 - `tunnels_count` : nombre de tunnels **logiques** (un groupe fusionné compte une
   fois). `get_traces` fait un rattrapage pour les fichiers existants sans statut.
 
-**Réglages** : `Tunnels.Detection.*` (distance, angle, marge bbox, fenêtre de cap,
-longueur minimale de run, longueur minimale de tunnel, écart de fusion) et
-`Tunnels.Support.actif` (activation). Le dossier OSM et le plafond PBF sont
-partagés : `Osm.Fichiers.dossierPbf` / `Osm.Fichiers.tailleMaxPbf`. Le type
-`directory` est accepté par `update_setting` comme une chaîne libre.
+**Réglages** : `Tunnels.Detection.minLength` est transmis à hermes
+(`minLengthM`). Les autres seuils (`distanceTolerance`, `angleTolerance`,
+`bboxMargin`, `bearingWindow`, `minRunLength`) et `Tunnels.Detection.mergeGap`
+(interface de fusion) ne pilotent que le moteur local dormant.
+`Tunnels.Support.actif` reste le commutateur du module. Le dossier OSM et le
+plafond PBF sont partagés : `Osm.Fichiers.dossierPbf` /
+`Osm.Fichiers.tailleMaxPbf`. Le type `directory` est accepté par
+`update_setting` comme une chaîne libre.
 
 ### Paramètres / Settings (`settings.rs`)
 

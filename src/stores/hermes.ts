@@ -1311,7 +1311,10 @@ export const useHermesStore = defineStore('hermes', () => {
         message: `Communes non préparées pour ${dataset.id}. Contactez l'administrateur.`,
       }
     }
-    if (kind === 'tunnels' && !(aux.tunnels.exists && aux.mm.exists)) {
+    if (
+      kind === 'tunnels' &&
+      !(auxFileReady(aux.tunnels) && auxFileReady(aux.mm))
+    ) {
       return {
         ok: false,
         code: 'HERMES_NOT_PREPARED',

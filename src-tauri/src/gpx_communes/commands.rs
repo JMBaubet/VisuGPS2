@@ -22,8 +22,7 @@ use crate::hermes::types::{
     HermesDataset, HermesPolygon, HermesRegion, HermesServingStatus,
 };
 use crate::import_gpx::{
-    get_geojson_path, get_mode_dir, get_traces_path, load_registry, rebuild_geometry_from_gpx,
-    update_registry,
+    get_mode_dir, get_traces_path, load_trace_coordinates, trace_hash, update_registry,
 };
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
@@ -161,7 +160,7 @@ pub fn detect_impl(
     //    manque (trace importée avant ce cache), et l'empreinte qui servira de
     //    témoin pour détecter une réécriture pendant l'analyse.
     let trace = load_trace_coordinates(mode_dir, trace_id)?;
-    let reference_hash = registry_hash(mode_dir, trace_id);
+    let reference_hash = trace_hash(mode_dir, trace_id);
 
     // 2. Communes reçues d'Overpass.
     let (communes, stats) = osm::parse_communes(osm_json, &params.admin_level)?;
@@ -202,15 +201,6 @@ pub fn detect_impl(
     );
 
     Ok(passages)
-}
-
-/// Empreinte du GPX d'une trace telle que le registre la connaît (`None` si la
-/// trace n'y figure pas : l'appelant retombera sur « trace introuvable »).
-fn registry_hash(mode_dir: &Path, trace_id: &str) -> Option<String> {
-    load_registry(&get_traces_path(mode_dir))
-        .into_iter()
-        .find(|t| t.id == trace_id)
-        .map(|t| t.hash)
 }
 
 /// Écrit la description des communes puis pose son **état**, sous le verrou du
@@ -277,7 +267,7 @@ pub async fn communes_detect_hermes(
     let params = read_communes_params(&app);
     let points = load_trace_coordinates(&mode_dir, &trace_id)?;
     let trace_km = trace_length_km(&points);
-    let reference_hash = registry_hash(&mode_dir, &trace_id);
+    let reference_hash = trace_hash(&mode_dir, &trace_id);
 
     let config = crate::hermes::config::read_config(&app).await;
     let client = HermesClient::new(&config)?;
@@ -424,7 +414,13 @@ pub fn build_detection_request(
 }
 
 /// Dataset servi (`GET /serving`), validé avant de composer l'URL.
-async fn serving_dataset(client: &HermesClient, timeout: Duration) -> Result<String, String> {
+///
+/// Partagé avec le module Tunnels : les deux détections portent sur le même
+/// dataset servi, seule source de vérité de la sélection.
+pub(crate) async fn serving_dataset(
+    client: &HermesClient,
+    timeout: Duration,
+) -> Result<String, String> {
     let serving = client.get::<HermesServingStatus>("/serving", timeout).await?;
     let dataset_id = serving.dataset_id.ok_or_else(|| {
         coded(
@@ -437,13 +433,14 @@ async fn serving_dataset(client: &HermesClient, timeout: Duration) -> Result<Str
 }
 
 /// Vrai quand **aucun** point de la trace ne tombe dans la couverture du
-/// dataset — le serveur renvoie alors `passages: []`, indistinguable d'un
-/// « aucune commune traversée ».
+/// dataset — le serveur renvoie alors `passages: []` ou `tunnels: []`,
+/// indistinguable d'un « rien traversé ».
 ///
-/// Les deux requêtes de géométrie sont **facultatives** : un échec ne doit pas
-/// transformer une détection réussie en erreur. Sans géométrie exploitable, on
-/// ne conclut rien (`false`) — mieux vaut pas d'alerte qu'une alerte fausse.
-async fn outside_coverage(
+/// Partagé avec le module Tunnels. Les deux requêtes de géométrie sont
+/// **facultatives** : un échec ne doit pas transformer une détection réussie en
+/// erreur. Sans géométrie exploitable, on ne conclut rien (`false`) — mieux vaut
+/// pas d'alerte qu'une alerte fausse.
+pub(crate) async fn outside_coverage(
     client: &HermesClient,
     timeout: Duration,
     dataset_id: &str,
@@ -540,38 +537,4 @@ pub fn reset_impl(mode_dir: &Path, trace_id: &str) -> Result<(), String> {
 
     println!("[communes] {} : détection réinitialisée.", trace_id);
     Ok(())
-}
-
-/// Coordonnées `[lon, lat]` de la trace persistée (`trace.geojson`).
-fn load_trace_coordinates(mode_dir: &Path, trace_id: &str) -> Result<Vec<[f64; 2]>, String> {
-    let geojson_path = get_geojson_path(mode_dir, trace_id);
-    let geometry = if geojson_path.exists() {
-        let content = std::fs::read_to_string(&geojson_path)
-            .map_err(|e| format!("Lecture de la géométrie de trace : {}", e))?;
-        serde_json::from_str::<serde_json::Value>(&content)
-            .map_err(|e| format!("Géométrie de trace illisible : {}", e))?
-    } else {
-        let registry = load_registry(&get_traces_path(mode_dir));
-        rebuild_geometry_from_gpx(mode_dir, &registry, trace_id)?
-    };
-    coordinates_of(&geometry)
-}
-
-/// Extrait les coordonnées d'une Feature GeoJSON LineString.
-fn coordinates_of(geometry: &serde_json::Value) -> Result<Vec<[f64; 2]>, String> {
-    let raw = geometry
-        .get("geometry")
-        .and_then(|g| g.get("coordinates"))
-        .and_then(|c| c.as_array())
-        .ok_or_else(|| "Géométrie de trace illisible (LineString attendu).".to_string())?;
-
-    raw.iter()
-        .map(|point| {
-            let unreadable = || "Coordonnée de trace illisible.".to_string();
-            let pair = point.as_array().filter(|p| p.len() >= 2).ok_or_else(unreadable)?;
-            let lon = pair[0].as_f64().ok_or_else(unreadable)?;
-            let lat = pair[1].as_f64().ok_or_else(unreadable)?;
-            Ok([lon, lat])
-        })
-        .collect()
 }
