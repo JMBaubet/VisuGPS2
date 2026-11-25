@@ -28,10 +28,11 @@ use crate::import_gpx::{
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
 use super::file;
-use super::hermes::{coverage_rings, is_outside_coverage, passages_from_hermes};
+use super::geometry;
+use super::hermes::{coverage_rings, is_outside_coverage, passages_from_hermes, smooth_short_passages};
 use super::osm;
 use super::pipeline;
-use super::types::{CommuneDetection, CommuneParams, CommunePassage};
+use super::types::{CommuneDetection, CommuneParams, CommunePassage, coverage_is_partial};
 
 // ─── Lecture des paramètres ───────────────────────────────────────────
 
@@ -114,6 +115,16 @@ pub fn communes_params_from_settings(
 /// appliqué) pendant que la détection travaillait sur l'ancienne géométrie.
 const ABANDONED: &str = "Trace réécrite pendant la détection (audit appliqué) : la détection a été abandonnée et sera rejouée.";
 
+/// Longueur 2D de la trace, en kilomètres : la même projection que les bornes
+/// des passages, donc la référence exacte du contrôle de couverture.
+fn trace_length_km(line: &[[f64; 2]]) -> f64 {
+    geometry::cumulative_distances(line)
+        .last()
+        .copied()
+        .unwrap_or(0.0)
+        / 1000.0
+}
+
 /// Détecte les communes traversées par une trace et persiste le résultat.
 ///
 /// `osm` porte la **réponse Overpass brute** (tableau des `elements`, sérialisé
@@ -166,11 +177,15 @@ pub fn detect_impl(
 
     // 3. Détection.
     let passages = pipeline::detect_passages(&trace, &communes, params)?;
+    // 3 bis. Garde-fou de couverture : une part significative de la trace hors
+    //        de toute commune rend la détection **partielle** (icône jaune, pas
+    //        verte) — même règle que le moteur hermes.
+    let partial = coverage_is_partial(trace_length_km(&trace), &passages);
 
-    // 4. Description et drapeau : l'ordre compte — une trace « détectée » sans
+    // 4. Description et état : l'ordre compte — une trace « détectée » sans
     //    description serait un état mensonger, et une trace supprimée ou
     //    réécrite pendant l'analyse ne doit rien recevoir.
-    if commit_detection(mode_dir, trace_id, &passages, reference_hash.as_deref())? {
+    if commit_detection(mode_dir, trace_id, &passages, reference_hash.as_deref(), partial)? {
         return Err(ABANDONED.to_string());
     }
 
@@ -198,8 +213,14 @@ fn registry_hash(mode_dir: &Path, trace_id: &str) -> Option<String> {
         .map(|t| t.hash)
 }
 
-/// Écrit la description des communes puis pose le drapeau, **sous le verrou du
-/// registre** — le calcul, lui, est resté hors section critique.
+/// Écrit la description des communes puis pose son **état**, sous le verrou du
+/// registre — le calcul, lui, est resté hors section critique.
+///
+/// L'état est `"complete"` quand toute la trace est couverte par des passages,
+/// `"partial"` quand une part significative n'est dans aucune commune (trace
+/// hors couverture, ou communes absentes de l'artefact du dataset). Le booléen
+/// hérité `communes_completed` ne vaut `true` que pour `"complete"` : une
+/// détection partielle n'est **pas** considérée terminée.
 ///
 /// Retourne `true` quand la détection est **abandonnée** : l'empreinte du GPX a
 /// changé depuis le début de l'analyse, donc un audit a réécrit la trace et la
@@ -214,6 +235,7 @@ pub(crate) fn commit_detection(
     trace_id: &str,
     passages: &[CommunePassage],
     reference_hash: Option<&str>,
+    partial: bool,
 ) -> Result<bool, String> {
     update_registry(&get_traces_path(mode_dir), |registry| {
         let entry = registry
@@ -226,7 +248,8 @@ pub(crate) fn commit_detection(
         }
 
         file::save_file(mode_dir, trace_id, passages)?;
-        entry.communes_completed = true;
+        entry.communes_completed = !partial;
+        entry.communes_status = Some(if partial { "partial" } else { "complete" }.to_string());
         Ok(false)
     })
 }
@@ -253,6 +276,7 @@ pub async fn communes_detect_hermes(
     let mode_dir = get_mode_dir(&app)?;
     let params = read_communes_params(&app);
     let points = load_trace_coordinates(&mode_dir, &trace_id)?;
+    let trace_km = trace_length_km(&points);
     let reference_hash = registry_hash(&mode_dir, &trace_id);
 
     let config = crate::hermes::config::read_config(&app).await;
@@ -294,8 +318,15 @@ pub async fn communes_detect_hermes(
         );
     }
 
-    let detection =
-        commit_hermes_detection(&mode_dir, &trace_id, &response, outside, reference_hash.as_deref())?;
+    let detection = commit_hermes_detection(
+        &mode_dir,
+        &trace_id,
+        &response,
+        outside,
+        reference_hash.as_deref(),
+        params.min_keep_km,
+        trace_km,
+    )?;
 
     println!(
         "[communes] {} : {} passage(s) via hermes (dataset {}).",
@@ -318,15 +349,56 @@ pub fn commit_hermes_detection(
     response: &HermesCommunesDetectResponse,
     outside_coverage: bool,
     reference_hash: Option<&str>,
+    min_keep_km: f64,
+    trace_length_km: f64,
 ) -> Result<CommuneDetection, String> {
-    let passages = passages_from_hermes(&response.passages);
-    if commit_detection(mode_dir, trace_id, &passages, reference_hash)? {
+    let converted = passages_from_hermes(&response.passages);
+    // Le serveur rend la segmentation brute : les oscillations de la trace sur
+    // une frontière y figurent telles quelles. On leur applique la règle
+    // d'absorption du moteur historique, côté client, avant d'écrire.
+    let passages = smooth_short_passages(&converted, min_keep_km);
+    // Garde-fou : une part significative de la trace hors de toute commune rend
+    // la détection partielle — elle ne sera pas marquée terminée.
+    let partial = coverage_is_partial(trace_length_km, &passages);
+    if passages.len() != converted.len() {
+        println!(
+            "[communes] {} : {} passage(s) brut(s) → {} après absorption des passages de moins de {} km.",
+            trace_id,
+            converted.len(),
+            passages.len(),
+            min_keep_km
+        );
+    }
+    if partial {
+        println!(
+            "[communes] {} : détection partielle — les passages ne couvrent pas toute la trace.",
+            trace_id
+        );
+    }
+
+    // Recalcul hors couverture : une réponse vide écraserait une description qui
+    // pouvait être juste — le dataset servi a changé, ou la trace a été détectée
+    // avant avec un autre. On refuse d'écrire : l'opérateur garde son résultat
+    // et peut rejouer avec un dataset qui couvre la trace. Une **première**
+    // détection, elle, enregistre le vide : il n'y a rien à protéger.
+    if outside_coverage
+        && passages.is_empty()
+        && file::file_path(mode_dir, trace_id).exists()
+    {
+        return Err(format!(
+            "Trace hors de la couverture du dataset « {} » : la description existante est conservée. Sélectionnez un dataset qui couvre la trace, puis relancez le recalcul.",
+            response.dataset_id
+        ));
+    }
+
+    if commit_detection(mode_dir, trace_id, &passages, reference_hash, partial)? {
         return Err(ABANDONED.to_string());
     }
     Ok(CommuneDetection {
         passages,
         dataset_id: response.dataset_id.clone(),
         outside_coverage,
+        status: if partial { "partial" } else { "complete" }.to_string(),
     })
 }
 
@@ -462,6 +534,7 @@ pub fn reset_impl(mode_dir: &Path, trace_id: &str) -> Result<(), String> {
 
         file::remove_file(mode_dir, trace_id);
         entry.communes_completed = false;
+        entry.communes_status = Some("none".to_string());
         Ok(())
     })?;
 

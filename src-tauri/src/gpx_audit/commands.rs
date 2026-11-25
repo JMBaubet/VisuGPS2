@@ -501,6 +501,7 @@ pub fn validate_impl(
         entry.multiride_complete = multiride.map(|(_, complete)| complete);
         // Le GPX réécrit a invalidé la description des communes (étape 8ter).
         entry.communes_completed = false;
+        entry.communes_status = Some("none".to_string());
         // Le GPX réécrit change la trace : l'altimétrie régénérée à l'étape 8quater
         // est une nouvelle analyse, que l'opérateur n'a pas encore validée.
         entry.altimetrie_validated = false;

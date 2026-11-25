@@ -3,7 +3,10 @@
 
 use serde_json::json;
 
-use crate::gpx_communes::hermes::{coverage_rings, is_outside_coverage, passages_from_hermes};
+use crate::gpx_communes::hermes::{
+    coverage_rings, is_outside_coverage, passages_from_hermes, smooth_short_passages,
+};
+use crate::gpx_communes::types::{CommunePassage, coverage_is_partial};
 use crate::hermes::types::{HermesCommunePassage, HermesDataset, HermesPolygon, HermesRegion};
 
 // ─── Aides de test ────────────────────────────────────────────────────
@@ -200,4 +203,202 @@ fn coverage_without_geometry_never_alerts() {
     assert!(rings.is_empty());
     assert!(!is_outside_coverage(&[[1.0, 4.0]], &rings));
     assert!(!is_outside_coverage(&[], &t_shaped_rings()));
+}
+
+// ─── Lissage des passages courts ──────────────────────────────────────
+
+/// Passage du fichier, sans ambiguïté : la numérotation sera recalculée.
+fn span(commune: &str, entry: f64, exit: f64) -> CommunePassage {
+    CommunePassage {
+        commune: commune.to_string(),
+        passage: 1,
+        nb_passages_total: 1,
+        km_entree: entry,
+        km_sortie: exit,
+        longueur_km: exit - entry,
+        ambiguous: false,
+    }
+}
+
+/// La séquence réellement rendue par hermes sur « Stage Émotion Bike. Menton :
+/// J5 » : quatre allers-retours Nice ↔ Villefranche en 285 m, un Monaco de 40 m
+/// et un Beausoleil de 38 m.
+fn boundary_sequence() -> Vec<CommunePassage> {
+    [
+        ("Menton", 0.000, 1.877),
+        ("Roquebrune-Cap-Martin", 1.877, 8.764),
+        ("Monaco", 8.764, 8.804),
+        ("Roquebrune-Cap-Martin", 8.804, 9.431),
+        ("Monaco", 9.431, 13.255),
+        ("Cap-d'Ail", 13.255, 16.139),
+        ("Èze", 16.139, 20.315),
+        ("Villefranche-sur-Mer", 20.315, 20.722),
+        ("Beaulieu-sur-Mer", 20.722, 22.894),
+        ("Villefranche-sur-Mer", 22.894, 25.996),
+        ("Nice", 25.996, 26.140),
+        ("Villefranche-sur-Mer", 26.140, 26.221),
+        ("Nice", 26.221, 26.256),
+        ("Villefranche-sur-Mer", 26.256, 26.281),
+        ("Nice", 26.281, 36.657),
+        ("La Trinité", 36.657, 38.229),
+        ("Nice", 38.229, 39.363),
+        ("Villefranche-sur-Mer", 39.363, 41.329),
+        ("Èze", 41.329, 47.877),
+        ("La Turbie", 47.877, 51.072),
+        ("Beausoleil", 51.072, 51.110),
+        ("La Turbie", 51.110, 51.195),
+        ("Beausoleil", 51.195, 52.674),
+        ("Roquebrune-Cap-Martin", 52.674, 60.375),
+        ("Menton", 60.375, 62.249),
+    ]
+    .into_iter()
+    .map(|(commune, entry, exit)| span(commune, entry, exit))
+    .collect()
+}
+
+#[test]
+fn smoothing_absorbs_the_boundary_micro_passages() {
+    let smoothed = smooth_short_passages(&boundary_sequence(), 0.5);
+
+    assert_eq!(smoothed.len(), 16, "25 passages bruts → 16 après absorption");
+
+    let roquebrune = &smoothed[1];
+    assert_eq!(roquebrune.commune, "Roquebrune-Cap-Martin");
+    assert_eq!((roquebrune.km_entree, roquebrune.km_sortie), (1.877, 9.431));
+    assert_eq!(roquebrune.longueur_km, 7.554, "le Monaco de 40 m est absorbé");
+    assert_eq!((roquebrune.passage, roquebrune.nb_passages_total), (1, 2));
+
+    // Les deux passages Roquebrune devenus adjacents sont recollés : le second
+    // passage de la commune est celui de la fin de trace.
+    let last_roquebrune = smoothed
+        .iter()
+        .find(|passage| passage.commune == "Roquebrune-Cap-Martin" && passage.passage == 2)
+        .expect("second passage Roquebrune");
+    assert_eq!(
+        (last_roquebrune.km_entree, last_roquebrune.km_sortie),
+        (52.674, 60.375)
+    );
+
+    let nice = &smoothed[7];
+    assert_eq!(nice.commune, "Nice");
+    assert_eq!((nice.km_entree, nice.km_sortie), (26.256, 36.657));
+    assert_eq!(nice.longueur_km, 10.401, "les allers-retours sont absorbés");
+
+    let la_turbie = &smoothed[12];
+    assert_eq!(la_turbie.commune, "La Turbie");
+    assert_eq!(
+        (la_turbie.km_entree, la_turbie.km_sortie),
+        (47.877, 51.195)
+    );
+
+    // 11 communes conservées, couverture totale conservée.
+    let communes: std::collections::HashSet<&str> =
+        smoothed.iter().map(|passage| passage.commune.as_str()).collect();
+    assert_eq!(communes.len(), 11);
+    let total: f64 = smoothed.iter().map(|passage| passage.longueur_km).sum();
+    assert!((total - 62.249).abs() < 1e-9, "couverture : {total}");
+}
+
+#[test]
+fn smoothing_keeps_the_length_invariant_and_renumbers() {
+    let smoothed = smooth_short_passages(&boundary_sequence(), 0.5);
+
+    for passage in &smoothed {
+        assert!(
+            (passage.longueur_km - (passage.km_sortie - passage.km_entree)).abs() < 1e-9,
+            "invariant longueur = sortie − entrée pour {}",
+            passage.commune
+        );
+    }
+    for commune in ["Menton", "Roquebrune-Cap-Martin", "Nice", "Villefranche-sur-Mer"] {
+        let numbers: Vec<u32> = smoothed
+            .iter()
+            .filter(|passage| passage.commune == commune)
+            .map(|passage| passage.passage)
+            .collect();
+        let total = smoothed
+            .iter()
+            .find(|passage| passage.commune == commune)
+            .map(|passage| passage.nb_passages_total)
+            .expect("commune présente");
+        assert_eq!(numbers, (1..=total).collect::<Vec<u32>>(), "{commune}");
+    }
+}
+
+#[test]
+fn smoothing_zero_returns_the_server_segmentation() {
+    let raw = boundary_sequence();
+    assert_eq!(smooth_short_passages(&raw, 0.0), raw);
+}
+
+// ─── Garde-fou de couverture ─────────────────────────────────────────
+
+#[test]
+fn partial_coverage_uses_a_five_percent_tolerance() {
+    let covering = |km: f64| vec![span("Nice", 0.0, km)];
+
+    assert!(
+        !coverage_is_partial(100.0, &covering(96.0)),
+        "4 % hors communes : complet"
+    );
+    assert!(
+        !coverage_is_partial(100.0, &covering(95.0)),
+        "exactement 5 % : toléré"
+    );
+    assert!(
+        coverage_is_partial(100.0, &covering(94.0)),
+        "6 % hors communes : partiel"
+    );
+    assert!(coverage_is_partial(100.0, &[]), "aucune commune : partiel");
+    assert!(
+        !coverage_is_partial(0.0, &[]),
+        "trace de longueur nulle : jamais partielle"
+    );
+}
+
+/// Un passage court isolé par un trou de couverture reste en place : le lissage
+/// ne comble jamais une portion hors dataset.
+#[test]
+fn smoothing_never_bridges_a_coverage_hole() {
+    let segments = vec![
+        span("Hors zone", 0.0, 0.100),
+        span("Nice", 1.0, 2.0),
+        span("Nice", 2.0, 2.100),
+    ];
+
+    let smoothed = smooth_short_passages(&segments, 0.5);
+
+    assert_eq!(smoothed.len(), 2);
+    assert_eq!(smoothed[0].commune, "Hors zone", "le trou n'est pas comblé");
+    assert_eq!((smoothed[0].km_entree, smoothed[0].km_sortie), (0.0, 0.100));
+    assert_eq!(smoothed[1].commune, "Nice");
+    assert_eq!((smoothed[1].km_entree, smoothed[1].km_sortie), (1.0, 2.100));
+}
+
+/// Un passage `ambiguous` n'est ni absorbé ni cible d'absorption.
+#[test]
+fn smoothing_leaves_ambiguous_passages_alone() {
+    let mut short = span("Monaco", 5.0, 5.040);
+    short.ambiguous = true;
+    let flagged = vec![span("Roquebrune-Cap-Martin", 0.0, 5.0), short, span("Roquebrune-Cap-Martin", 5.040, 10.0)];
+    assert_eq!(
+        smooth_short_passages(&flagged, 0.5).len(),
+        3,
+        "le passage signalé reste tel quel"
+    );
+
+    let mut flagged_neighbour = span("Roquebrune-Cap-Martin", 5.040, 10.0);
+    flagged_neighbour.ambiguous = true;
+    let neighbour = vec![
+        span("Beausoleil", 0.0, 5.0),
+        span("Monaco", 5.0, 5.040),
+        flagged_neighbour,
+    ];
+    let smoothed = smooth_short_passages(&neighbour, 0.5);
+    assert_eq!(smoothed.len(), 2);
+    assert_eq!(
+        (smoothed[0].commune.as_str(), smoothed[0].km_sortie),
+        ("Beausoleil", 5.040),
+        "seul le voisin non signalé reçoit l'absorption"
+    );
 }

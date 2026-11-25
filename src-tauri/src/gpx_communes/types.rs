@@ -45,6 +45,30 @@ pub struct CommuneDetection {
     /// dataset : la liste vide est alors un « hors zone », pas un « aucune
     /// commune ». Faux quand la couverture n'a pas pu être établie.
     pub outside_coverage: bool,
+    /// État posé au registre : `"complete"` ou `"partial"`.
+    pub status: String,
+}
+
+/// Part de la trace tolérée hors de toute commune avant de considérer la
+/// détection comme **partielle** : 5 %.
+///
+/// Elle absorbe l'écart entre la longueur 3D du registre (`distance_m`, avec
+/// dénivelé) et les kilomètres 2D du fichier, ainsi que les extrémités hors de
+/// toute commune sans conséquence.
+pub const COVERAGE_TOLERANCE: f64 = 0.05;
+
+/// La détection est-elle **partielle** ? Vrai quand une part significative de la
+/// trace n'est couverte par aucun passage — trace hors de la couverture du
+/// dataset, ou artefact `communes.geojson` incomplet (communes absentes).
+///
+/// Partagé par les deux moteurs : le statut du registre et l'icône de la carte en
+/// dépendent. Une longueur nulle n'est jamais partielle.
+pub fn coverage_is_partial(trace_length_km: f64, passages: &[CommunePassage]) -> bool {
+    if trace_length_km <= 0.0 {
+        return false;
+    }
+    let covered_km: f64 = passages.iter().map(|passage| passage.longueur_km).sum();
+    (trace_length_km - covered_km) > trace_length_km * COVERAGE_TOLERANCE
 }
 
 /// Réglages de la détection (`Communes.Detection.*` de `settings.default.toml`).

@@ -134,6 +134,16 @@ pub struct TraceMetadata {
     /// été réalisée, la tâche de fond la reprendra au lancement.
     #[serde(default)]
     pub communes_completed: bool,
+    /// État de la détection des communes (module Communes) : `"none"`,
+    /// `"partial"` — une description existe, mais une part significative de la
+    /// trace n'est dans aucune commune du dataset — ou `"complete"`.
+    ///
+    /// Tri-état introduit avec le garde-fou de couverture : `communes_completed`
+    /// reste le booléen hérité, aligné sur `"complete"`. Absent d'un registre
+    /// antérieur, il est **dérivé** de `communes_completed` au chargement
+    /// (`load_registry`), sans réécriture du fichier.
+    #[serde(default)]
+    pub communes_status: Option<String>,
     /// L'opérateur a **validé** l'analyse altimétrique de la trace : une
     /// sauvegarde utilisateur a été effectuée depuis la vue `/altimetrie`.
     ///
@@ -171,6 +181,21 @@ pub struct TraceMetadata {
     /// l'infobulle de l'icône combinée.
     #[serde(default)]
     pub tunnels_count: Option<u32>,
+}
+
+impl TraceMetadata {
+    /// Complète `communes_status` pour un registre écrit avant le tri-état :
+    /// `"complete"` si la détection était marquée faite, `"none"` sinon.
+    ///
+    /// Migration **en mémoire** : `load_registry` l'appelle sur chaque entrée,
+    /// et le fichier n'est réécrit qu'à la prochaine mutation du registre.
+    pub fn normalize_communes_status(&mut self) {
+        if self.communes_status.is_none() {
+            self.communes_status = Some(
+                if self.communes_completed { "complete" } else { "none" }.to_string(),
+            );
+        }
+    }
 }
 
 /// Valeur par défaut du statut d'audit pour les registres antérieurs :
@@ -820,7 +845,14 @@ pub(crate) fn load_registry(traces_path: &Path) -> Vec<TraceMetadata> {
                 return Vec::new();
             }
             match serde_json::from_str::<Vec<TraceMetadata>>(&content) {
-                Ok(registry) => registry,
+                Ok(mut registry) => {
+                    // Migration en mémoire du tri-état des communes : un
+                    // registre antérieur n'a que le booléen.
+                    for trace in &mut registry {
+                        trace.normalize_communes_status();
+                    }
+                    registry
+                }
                 Err(e) => {
                     eprintln!("Erreur de lecture du registre traces.json : {}", e);
                     Vec::new()
@@ -1131,6 +1163,7 @@ pub async fn import_gpx_file(app: tauri::AppHandle) -> Result<TraceMetadata, Str
         // déclenchera aussitôt si la trace est déjà propre, à la validation de
         // l'audit sinon.
         communes_completed: false,
+        communes_status: None,
         // L'analyse altimétrique générée automatiquement n'est qu'une
         // proposition : la validation appartient à l'opérateur.
         altimetrie_validated: false,
@@ -1519,6 +1552,7 @@ mod tests {
             multiride_status: None,
             multiride_complete: None,
             communes_completed: false,
+            communes_status: None,
             altimetrie_validated: false,
             altimetrie_climb_count: None,
             tunnels_status: None,
@@ -1575,28 +1609,49 @@ mod tests {
     }
 
     /// Un registre antérieur à la détection des communes (sans
-    /// `communes_completed`) se charge sans erreur : le champ retombe à `false`
-    /// — l'information absente vaut « détection non réalisée » — la tâche de
-    /// fond rattrapera la trace au lancement.
+    /// `communes_completed` ni `communes_status`) se charge sans erreur : le
+    /// booléen retombe à `false` — l'information absente vaut « détection non
+    /// réalisée » — et le tri-état est dérivé à `"none"`. La tâche de fond
+    /// rattrapera la trace au lancement.
     #[test]
     fn load_registry_defaults_communes_completed_to_false() {
         let mode = test_mode_dir("communes_absent");
         fs::create_dir_all(&mode).unwrap();
         let traces_path = mode.join("traces.json");
 
-        // JSON d'un registre écrit avant l'apparition du champ.
+        // JSON d'un registre écrit avant l'apparition des champs.
         let mut value = serde_json::to_value(vec![make_trace("id-1", "a.gpx")]).unwrap();
-        value[0]
-            .as_object_mut()
-            .unwrap()
-            .remove("communes_completed");
+        let object = value[0].as_object_mut().unwrap();
+        object.remove("communes_completed");
+        object.remove("communes_status");
         let legacy = serde_json::to_string(&value).unwrap();
         assert!(!legacy.contains("communes_completed"));
+        assert!(!legacy.contains("communes_status"));
         fs::write(&traces_path, &legacy).unwrap();
 
         let loaded = load_registry(&traces_path);
         assert_eq!(loaded.len(), 1);
         assert!(!loaded[0].communes_completed);
+        assert_eq!(loaded[0].communes_status.as_deref(), Some("none"));
+    }
+
+    /// Un registre antérieur où la détection était marquée faite prend le statut
+    /// `"complete"` : le tri-état ne provoque pas de re-détection massive.
+    #[test]
+    fn load_registry_derives_a_complete_status_from_the_legacy_flag() {
+        let mode = test_mode_dir("communes_derived");
+        fs::create_dir_all(&mode).unwrap();
+        let traces_path = mode.join("traces.json");
+
+        let mut value = serde_json::to_value(vec![make_trace("id-1", "a.gpx")]).unwrap();
+        let object = value[0].as_object_mut().unwrap();
+        object.insert("communes_completed".to_string(), true.into());
+        object.remove("communes_status");
+        fs::write(&traces_path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let loaded = load_registry(&traces_path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].communes_status.as_deref(), Some("complete"));
     }
 
     /// Deux mutations concurrentes du registre ne se perdent plus : le verrou de

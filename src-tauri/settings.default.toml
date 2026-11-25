@@ -1617,6 +1617,13 @@ absorbée lui est réattribuée, la couverture de la trace reste complète :
 
 Valeur 0 : aucune absorption. Ce seuil est plus permissif que `minSegmentKm` :
 il s'applique une fois les passages identifiés.
+
+Ce lissage s'applique **côté client** aux passages renvoyés par hermes, qui rend
+la segmentation brute : c'est lui qui fait disparaître les allers-retours de
+quelques dizaines de mètres sur une frontière (quatre passages Nice ↔
+Villefranche en 285 m sur une trace réelle). Deux passages séparés par une
+portion hors couverture ne sont jamais recollés, et un passage marqué
+`ambiguous` par le serveur n'est ni absorbé ni cible d'absorption.
 """
 type = "float"
 default = 0.5

@@ -58,6 +58,7 @@ fn make_trace(trace_id: &str) -> TraceMetadata {
         multiride_status: None,
         multiride_complete: None,
         communes_completed: false,
+        communes_status: None,
         altimetrie_validated: false,
         altimetrie_climb_count: None,
         tunnels_status: None,
@@ -205,7 +206,7 @@ fn detection_is_abandoned_when_the_trace_changed_during_the_analysis() {
     let mode = setup("abandon", trace_id);
 
     // Empreinte témoin différente de celle du registre : la trace a été réécrite.
-    let abandonne = commit_detection(&mode, trace_id, &[], Some("sha256:empreinte-precedente"))
+    let abandonne = commit_detection(&mode, trace_id, &[], Some("sha256:empreinte-precedente"), false)
         .expect("l'appel doit aboutir");
 
     assert!(abandonne, "l'empreinte ne correspond plus : détection abandonnée");
@@ -220,7 +221,7 @@ fn detection_is_abandoned_when_the_trace_changed_during_the_analysis() {
 
     // Empreinte conforme : la description est écrite et le drapeau posé.
     let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
-    let abandonne = commit_detection(&mode, trace_id, &[], Some(&empreinte))
+    let abandonne = commit_detection(&mode, trace_id, &[], Some(&empreinte), false)
         .expect("l'appel doit aboutir");
 
     assert!(!abandonne);
@@ -260,7 +261,7 @@ fn hermes_detection_writes_the_description_and_raises_the_flag() {
     let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
     let response = hermes_response(trace_id, "provence-alpes-cote-dazur");
 
-    let detection = commit_hermes_detection(&mode, trace_id, &response, false, Some(&empreinte))
+    let detection = commit_hermes_detection(&mode, trace_id, &response, false, Some(&empreinte), 0.0, 5.4)
         .expect("la détection doit aboutir");
 
     assert_eq!(detection.dataset_id, "provence-alpes-cote-dazur");
@@ -302,6 +303,8 @@ fn hermes_detection_is_abandoned_when_the_trace_changed() {
         &response,
         false,
         Some("sha256:empreinte-precedente"),
+        0.0,
+        5.4,
     )
     .expect_err("l'empreinte ne correspond plus");
 
@@ -311,6 +314,150 @@ fn hermes_detection_is_abandoned_when_the_trace_changed() {
         "aucune description ne doit être écrite"
     );
     assert!(!load_registry(&get_traces_path(&mode))[0].communes_completed);
+
+    let _ = fs::remove_dir_all(&mode);
+}
+
+/// Réponse vide : le serveur n'a trouvé aucun passage — trace hors couverture ou
+/// réellement sans commune, le client ne le sait pas encore.
+fn hermes_empty_response(trace_id: &str, dataset_id: &str) -> HermesCommunesDetectResponse {
+    serde_json::from_value(json!({
+        "traceId": trace_id,
+        "datasetId": dataset_id,
+        "detectedAt": "2026-11-25T10:00:00Z",
+        "passages": []
+    }))
+    .expect("réponse hermes vide lisible")
+}
+
+/// Une **première** détection hors couverture enregistre le vide : la trace est
+/// marquée détectée, et le verdict `outsideCoverage` remonte au front.
+#[test]
+fn hermes_first_detection_outside_coverage_is_recorded() {
+    let trace_id = "t-hermes-outside";
+    let mode = setup("hermes_outside", trace_id);
+    let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
+    let response = hermes_empty_response(trace_id, "test-monaco-ds");
+
+    let detection =
+        commit_hermes_detection(&mode, trace_id, &response, true, Some(&empreinte), 0.0, 10.0)
+            .expect("une première détection vide est un résultat");
+
+    assert!(detection.outside_coverage);
+    assert!(detection.passages.is_empty());
+    assert_eq!(detection.dataset_id, "test-monaco-ds");
+    assert_eq!(detection.status, "partial", "aucun km couvert : détection partielle");
+    assert_eq!(load_file(&mode, trace_id), Some(Vec::new()));
+    assert!(
+        !load_registry(&get_traces_path(&mode))[0].communes_completed,
+        "une détection partielle n'est pas terminée"
+    );
+
+    let _ = fs::remove_dir_all(&mode);
+}
+
+/// Un **recalcul** hors couverture ne remplace pas une description existante :
+/// le dataset servi a changé, le résultat serait un faux négatif destructeur.
+#[test]
+fn hermes_recalculation_outside_coverage_keeps_the_existing_description() {
+    let trace_id = "t-hermes-keep";
+    let mode = setup("hermes_keep", trace_id);
+    let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
+
+    // Détection initiale avec un dataset couvrant la trace.
+    let response = hermes_response(trace_id, "provence-alpes-cote-dazur");
+    commit_hermes_detection(&mode, trace_id, &response, false, Some(&empreinte), 0.0, 5.4)
+        .expect("détection initiale");
+    let avant = load_file(&mode, trace_id).expect("description initiale");
+
+    // Recalcul avec un dataset qui ne couvre pas la trace.
+    let vide = hermes_empty_response(trace_id, "test-monaco-ds");
+    let erreur = commit_hermes_detection(&mode, trace_id, &vide, true, Some(&empreinte), 0.0, 5.4)
+        .expect_err("le recalcul hors couverture doit être refusé");
+
+    assert!(erreur.contains("conservée"), "message inattendu : {erreur}");
+    assert_eq!(
+        load_file(&mode, trace_id),
+        Some(avant),
+        "la description précédente est intacte"
+    );
+    assert!(
+        load_registry(&get_traces_path(&mode))[0].communes_completed,
+        "la trace reste marquée détectée"
+    );
+
+    let _ = fs::remove_dir_all(&mode);
+}
+
+/// Les micro-passages de frontière sont absorbés avant l'écriture : le fichier
+/// ne conserve pas les oscillations de quelques dizaines de mètres.
+#[test]
+fn hermes_detection_smooths_the_boundary_micro_passages() {
+    let trace_id = "t-hermes-smooth";
+    let mode = setup("hermes_smooth", trace_id);
+    let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
+    let response: HermesCommunesDetectResponse = serde_json::from_value(json!({
+        "traceId": trace_id,
+        "datasetId": "EB-Menton",
+        "detectedAt": "2026-11-25T15:00:00Z",
+        "passages": [
+            {"commune": "Roquebrune-Cap-Martin", "passage": 1, "nbPassagesTotal": 3,
+             "kmEntree": 1.877, "kmSortie": 8.764, "longueurKm": 6.887, "ambiguous": false},
+            {"commune": "Monaco", "passage": 1, "nbPassagesTotal": 2,
+             "kmEntree": 8.764, "kmSortie": 8.804, "longueurKm": 0.040, "ambiguous": false},
+            {"commune": "Roquebrune-Cap-Martin", "passage": 2, "nbPassagesTotal": 3,
+             "kmEntree": 8.804, "kmSortie": 9.431, "longueurKm": 0.627, "ambiguous": false},
+            {"commune": "Monaco", "passage": 2, "nbPassagesTotal": 2,
+             "kmEntree": 9.431, "kmSortie": 13.255, "longueurKm": 3.824, "ambiguous": false}
+        ]
+    }))
+    .expect("réponse hermes lisible");
+
+    let detection = commit_hermes_detection(&mode, trace_id, &response, false, Some(&empreinte), 0.5, 11.378)
+        .expect("la détection doit aboutir");
+
+    assert_eq!(detection.passages.len(), 2, "le Monaco de 40 m est absorbé");
+    assert_eq!(detection.status, "complete", "la couverture est intégrale");
+    let roquebrune = &detection.passages[0];
+    assert_eq!(roquebrune.commune, "Roquebrune-Cap-Martin");
+    assert_eq!((roquebrune.km_entree, roquebrune.km_sortie), (1.877, 9.431));
+    assert_eq!(roquebrune.longueur_km, 7.554);
+    assert_eq!((roquebrune.passage, roquebrune.nb_passages_total), (1, 1));
+    let monaco = &detection.passages[1];
+    assert_eq!((monaco.km_entree, monaco.km_sortie), (9.431, 13.255));
+
+    assert_eq!(
+        load_file(&mode, trace_id),
+        Some(detection.passages.clone()),
+        "le fichier porte la segmentation lissée"
+    );
+    assert!(load_registry(&get_traces_path(&mode))[0].communes_completed);
+
+    let _ = fs::remove_dir_all(&mode);
+}
+
+/// Une détection dont les passages ne couvrent pas toute la trace est
+/// **partielle** : le fichier est écrit, mais l'état n'est pas terminé.
+#[test]
+fn hermes_detection_marks_a_partial_coverage() {
+    let trace_id = "t-hermes-partial";
+    let mode = setup("hermes_partial", trace_id);
+    let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
+    let response = hermes_response(trace_id, "provence-alpes-cote-dazur");
+
+    // Les passages couvrent 5,388 km ; la trace en fait 20.
+    let detection =
+        commit_hermes_detection(&mode, trace_id, &response, false, Some(&empreinte), 0.0, 20.0)
+            .expect("la détection doit aboutir");
+
+    assert_eq!(detection.status, "partial");
+    assert!(file_path(&mode, trace_id).exists(), "la description partielle est écrite");
+    let registry = load_registry(&get_traces_path(&mode));
+    assert!(
+        !registry[0].communes_completed,
+        "une détection partielle n'est pas terminée"
+    );
+    assert_eq!(registry[0].communes_status.as_deref(), Some("partial"));
 
     let _ = fs::remove_dir_all(&mode);
 }

@@ -89,6 +89,7 @@ fn seed_registry(mode_dir: &Path, trace_id: &str, validated: bool) {
         multiride_status: None,
         multiride_complete: None,
         communes_completed: false,
+        communes_status: None,
         altimetrie_validated: validated,
         altimetrie_climb_count: None,
         tunnels_status: None,

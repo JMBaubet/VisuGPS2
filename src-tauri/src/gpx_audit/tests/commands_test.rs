@@ -145,6 +145,7 @@ fn make_trace_metadata(id: &str, filename: &str) -> TraceMetadata {
         multiride_status: None,
         multiride_complete: None,
         communes_completed: false,
+        communes_status: None,
         altimetrie_validated: false,
         altimetrie_climb_count: None,
         tunnels_status: None,

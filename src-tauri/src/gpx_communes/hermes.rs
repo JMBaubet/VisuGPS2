@@ -19,7 +19,7 @@
 //! (région sans `.poly`), le contrôle hérite de cette imprécision — il ne
 //! produit alors aucune fausse alerte, mais peut manquer un trou.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::hermes::types::{HermesCommunePassage, HermesDataset, HermesPolygon, HermesRegion};
 
@@ -56,6 +56,165 @@ pub fn passages_from_hermes(source: &[HermesCommunePassage]) -> Vec<CommunePassa
 /// les artefacts binaires du calcul serveur.
 fn round_metre(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
+}
+
+/// Écart maximal (km) pour considérer deux passages comme accolés : 1 m.
+///
+/// Les bornes sortent déjà arrondies au mètre ; en deçà, deux passages se
+/// touchent réellement. Au-delà, il y a un trou de couverture — la trace sort du
+/// dataset —, que le lissage ne doit jamais combler.
+const CONTIGUITY_KM: f64 = 0.001;
+
+/// Passage en cours de lissage : bornes en kilomètres et nom de commune.
+struct Span {
+    commune: String,
+    entry: f64,
+    exit: f64,
+    ambiguous: bool,
+}
+
+impl Span {
+    fn length(&self) -> f64 {
+        self.exit - self.entry
+    }
+
+    /// Le passage est-il accolé à cet autre ? (dans un sens ou dans l'autre)
+    fn touches(&self, other: &Span) -> bool {
+        (self.entry - other.exit).abs() <= CONTIGUITY_KM
+            || (other.entry - self.exit).abs() <= CONTIGUITY_KM
+    }
+}
+
+/// Absorbe les passages plus courts que `min_keep_km` dans leur **voisin le plus
+/// long**, puis recolle les passages adjacents de même commune.
+///
+/// C'est la règle du moteur historique (`pipeline::merge_short_segments`) : le
+/// serveur hermes rend la segmentation **brute**, où chaque oscillation de la
+/// trace sur une frontière (quatre allers-retours Nice ↔ Villefranche en 285 m,
+/// par exemple) produit un passage de quelques dizaines de mètres. Les mètres
+/// absorbés sont réattribués au voisin : la couverture de la trace reste
+/// complète, seule la répartition change.
+///
+/// Deux garde-fous propres au moteur hermes :
+/// - **contiguïté** : on n'absorbe que dans un voisin réellement accolé, jamais
+///   par-dessus une portion hors du dataset ;
+/// - **`ambiguous`** : un passage signalé par le serveur n'est ni absorbé ni
+///   cible d'absorption — un chevauchement de frontière ne se maquille pas.
+///
+/// `min_keep_km <= 0` rend la segmentation du serveur telle quelle. L'ordre
+/// chronologique et le nombre de communes restent ceux du serveur.
+pub fn smooth_short_passages(passages: &[CommunePassage], min_keep_km: f64) -> Vec<CommunePassage> {
+    if min_keep_km <= 0.0 || passages.len() < 2 {
+        return passages.to_vec();
+    }
+
+    let mut spans: Vec<Span> = passages
+        .iter()
+        .map(|passage| Span {
+            commune: passage.commune.clone(),
+            entry: passage.km_entree,
+            exit: passage.km_sortie,
+            ambiguous: passage.ambiguous,
+        })
+        .collect();
+
+    // Chaque tour retire un passage : la boucle se termine d'elle-même.
+    while spans.len() > 1 {
+        let candidate = (0..spans.len())
+            .find_map(|index| absorption_target(&spans, index, min_keep_km).map(|target| (index, target)));
+        let Some((index, target)) = candidate else {
+            break;
+        };
+
+        let absorbed = spans.remove(index);
+        // L'index du voisin se décale si le passage absorbé le précède.
+        let target = if target > index { target - 1 } else { target };
+        if target < index {
+            spans[target].exit = absorbed.exit;
+        } else {
+            spans[target].entry = absorbed.entry;
+        }
+    }
+
+    // Deux passages de même commune devenus adjacents ne font qu'un.
+    let mut merged: Vec<Span> = Vec::with_capacity(spans.len());
+    for span in spans {
+        let glue = merged.last().is_some_and(|last: &Span| {
+            last.commune == span.commune
+                && !last.ambiguous
+                && !span.ambiguous
+                && last.touches(&span)
+        });
+        if glue {
+            if let Some(last) = merged.last_mut() {
+                last.exit = span.exit;
+            }
+        } else {
+            merged.push(span);
+        }
+    }
+
+    renumber(merged)
+}
+
+/// Voisin dans lequel absorber le passage `index`, s'il est absorbable : plus
+/// court que le seuil, non ambigu, et accolé à au moins un voisin non ambigu.
+/// À égalité de longueur, le **précédent** l'emporte, comme dans le moteur
+/// historique.
+fn absorption_target(spans: &[Span], index: usize, min_keep_km: f64) -> Option<usize> {
+    let span = &spans[index];
+    if span.ambiguous || span.length() >= min_keep_km {
+        return None;
+    }
+
+    let previous = index
+        .checked_sub(1)
+        .filter(|&i| !spans[i].ambiguous && spans[i].touches(span));
+    let next = (index + 1 < spans.len())
+        .then_some(index + 1)
+        .filter(|&i| !spans[i].ambiguous && spans[i].touches(span));
+
+    match (previous, next) {
+        (Some(previous), Some(next)) => {
+            if spans[previous].length() >= spans[next].length() {
+                Some(previous)
+            } else {
+                Some(next)
+            }
+        }
+        (Some(previous), None) => Some(previous),
+        (None, Some(next)) => Some(next),
+        (None, None) => None,
+    }
+}
+
+/// Numérote les passages par commune et réarrondit les bornes : l'invariant du
+/// fichier — `longueur = sortie − entrée` — reste exact après l'absorption.
+fn renumber(spans: Vec<Span>) -> Vec<CommunePassage> {
+    let mut totals: HashMap<String, u32> = HashMap::new();
+    for span in &spans {
+        *totals.entry(span.commune.clone()).or_insert(0) += 1;
+    }
+
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    spans
+        .into_iter()
+        .map(|span| {
+            let count = seen.entry(span.commune.clone()).or_insert(0);
+            *count += 1;
+            let km_entree = round_metre(span.entry);
+            let km_sortie = round_metre(span.exit);
+            CommunePassage {
+                passage: *count,
+                nb_passages_total: totals.get(&span.commune).copied().unwrap_or(1),
+                commune: span.commune,
+                km_entree,
+                km_sortie,
+                longueur_km: round_metre(km_sortie - km_entree),
+                ambiguous: span.ambiguous,
+            }
+        })
+        .collect()
 }
 
 /// Anneaux extérieurs de la couverture d'un dataset.
