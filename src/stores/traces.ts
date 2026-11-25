@@ -46,6 +46,13 @@ export interface TracePoint {
   distance_m: number
 }
 
+/**
+ * État de la détection des communes : aucune description, description
+ * **partielle** (plus de 5 % de la trace hors de toute commune du dataset) ou
+ * **complète**. Miroir du champ `communes_status` du registre.
+ */
+export type CommunesStatus = 'none' | 'partial' | 'complete'
+
 /** Métadonnées complètes d'une trace importée. */
 export interface TraceMetadata {
   /** Identifiant unique (UUID v4). */
@@ -108,14 +115,25 @@ export interface TraceMetadata {
   multiride_complete: boolean | null
   /**
    * État de la détection des communes traversées (module Communes) : `true`
-   * quand le fichier `communes.json` de la trace est présent et à jour — la
-   * fonctionnalité a été menée à son terme pour cette trace.
+   * quand une description couvre **toute** la trace.
    *
-   * Absent des registres antérieurs → `false` : la détection n'a pas été
-   * réalisée, la tâche de fond la reprendra au lancement. Reposé à `false` par
-   * un nettoyage (le GPX réécrit change la géométrie de la trace).
+   * Booléen hérité, aligné sur `communes_status === 'complete'`. Une détection
+   * partielle le laisse à `false`.
    */
   communes_completed: boolean
+  /**
+   * État **tri-état** de la détection des communes :
+   * - `none` : aucune description ;
+   * - `partial` : une description existe, mais une part significative de la
+   *   trace (plus de 5 %) n'est dans aucune commune — trace hors couverture du
+   *   dataset, ou communes absentes de son artefact ;
+   * - `complete` : toute la trace est couverte.
+   *
+   * Source de vérité de l'icône `mdi-city` (jaune si partielle, verte si
+   * complète). Dérivé de `communes_completed` par le backend pour un registre
+   * antérieur au tri-état.
+   */
+  communes_status: CommunesStatus
   /**
    * L'opérateur a **validé** l'analyse altimétrique : une sauvegarde utilisateur
    * a été effectuée depuis la vue `/altimetrie`.
@@ -345,13 +363,18 @@ export const useTracesStore = defineStore('traces', () => {
 
   /**
    * Reflète en mémoire l'état de détection des communes d'une trace, **sans
-   * relire le registre** : le backend vient d'écrire le drapeau (détection
-   * aboutie, ou réinitialisation de diagnostic), l'entrée en mémoire doit
-   * simplement le suivre — les cartes de circuit s'y adossent.
+   * relire le registre** : le backend vient d'écrire le statut (détection
+   * aboutie ou partielle, réinitialisation de diagnostic), l'entrée en mémoire
+   * doit simplement le suivre — les cartes de circuit s'y adossent.
+   *
+   * Le booléen hérité `communes_completed` est maintenu en cohérence :
+   * `true` seulement pour `complete`.
    */
-  function setCommunesCompleted(traceId: string, completed: boolean): void {
+  function setCommunesStatus(traceId: string, status: CommunesStatus): void {
     const trace = traces.value.find(t => t.id === traceId)
-    if (trace) trace.communes_completed = completed
+    if (!trace) return
+    trace.communes_status = status
+    trace.communes_completed = status === 'complete'
   }
 
   /**
@@ -392,7 +415,7 @@ export const useTracesStore = defineStore('traces', () => {
     getTraceGeometry,
     getTracePoints,
     invalidateGeometry,
-    setCommunesCompleted,
+    setCommunesStatus,
     updateMapCenter,
     setVisibleTraceIds,
   }

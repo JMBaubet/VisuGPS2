@@ -137,6 +137,7 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
     "multiride_status": "pending",
     "multiride_complete": false,
     "communes_completed": false,
+    "communes_status": "none",
     "altimetrie_validated": false,
     "altimetrie_climb_count": 6,
     "tunnels_status": "waiting_validate",
@@ -153,7 +154,7 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Complétude des passages multiples** (`multiride_complete`) : `true` quand **chaque segment** de la détection a reçu un verdict — approuvé ou écarté. Distinct de `multiride_status` : une validation globale peut être posée alors que des segments restent à examiner. `null` sur un registre antérieur au champ ; `get_traces` le calcule depuis `multiride.json` et le persiste au premier chargement (rattrapage idempotent). La carte du circuit s'en sert pour colorer l'icône `mdi-repeat` : **verte** seulement si la validation est globale et complète, **jaune** sinon.
 
-**Détection des communes** (`communes_completed`) : `true` quand le fichier `communes.json` de la trace est présent et à jour — la fonctionnalité a été menée à son terme pour cette trace. L'information **absente** vaut `false` (« la tâche n'a pas été réalisée ») : c'est ce qui permet à la tâche de fond du lancement de rattraper les traces nettoyées avant l'introduction du module. Posé par `communes_detect`, reposé à `false` par `audit_validate` — le GPX réécrit change la géométrie de la trace, la description est donc supprimée et la détection rejouée.
+**Détection des communes** (`communes_status`, `communes_completed`) : `communes_status` est le **tri-état** — `"none"` (aucune description), `"partial"` (description écrite, mais **plus de 5 %** de la trace hors de toute commune : trace hors couverture, ou artefact `communes.geojson` incomplet), `"complete"`. Le booléen hérité `communes_completed` n'est `true` que pour `"complete"` : une détection partielle n'est pas considérée terminée, et la carte du circuit affiche l'icône `mdi-city` en **jaune** (clic : fenêtre de consultation, pour relancer). `communes_status` absent d'un registre antérieur est dérivé de `communes_completed` **au chargement**, sans réécriture. Une trace `"none"` est éligible au rattrapage automatique du lancement ; une trace `"partial"` ne l'est pas — le recalcul est **manuel**. Posés par `communes_detect_hermes` (et le moteur Overpass historique), reposés à `"none"` et `false` par `audit_validate` — le GPX réécrit change la géométrie de la trace — et par `communes_reset`.
 
 **Validation de l'altimétrie** (`altimetrie_validated`) : `true` quand l'**opérateur** a sauvegardé l'analyse depuis la vue `/altimetrie` — la première sauvegarde vaut validation du profil et des montées. L'information **absente** vaut `false` : la génération automatique du fichier (import d'une trace propre, validation d'audit) n'est qu'une proposition, elle ne vaut pas validation. Posé par `altimetrie_save`, reposé à `false` par `altimetrie_detect` (recalcul explicite ou génération à l'ouverture) et par `audit_validate` (le GPX réécrit produit une nouvelle analyse). C'est ce drapeau, lu par la carte du circuit sans lire de fichier, qui colore l'icône `mdi-terrain` — jaune tant que l'analyse reste à valider, verte ensuite.
 
@@ -163,7 +164,7 @@ Tableau JSON de `TraceMetadata`, sérialisé en pretty-print (indentation 2 espa
 
 **Champs retirés** : `cleaning_status` et `cleaning_phase` ont disparu avec l'ancien module de nettoyage. Les registres qui les contiennent sont traités comme « pré-audit » (voir ci-dessous).
 
-**Rétrocompatibilité et registres pré-audit (D1)** : `favorite`, `is_displayed`, `audit_archived`, `communes_completed`, `altimetrie_validated`, `altimetrie_climb_count` et `multiride_complete` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ces champs se charge donc sans erreur. `multiride_complete` est le seul à distinguer « absent » (`null`) de « faux » : c'est ce qui permet à `get_traces` de le rattraper une seule fois. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
+**Rétrocompatibilité et registres pré-audit (D1)** : `favorite`, `is_displayed`, `audit_archived`, `communes_completed`, `communes_status`, `altimetrie_validated`, `altimetrie_climb_count` et `multiride_complete` ont `#[serde(default)]`, `audit_status` a `#[serde(default = "default_audit_status")]` (valeur `"needs_review"`) — un `traces.json` sans ces champs se charge donc sans erreur. `communes_status` absent est dérivé de `communes_completed` au chargement. `multiride_complete` est le seul à distinguer « absent » (`null`) de « faux » : c'est ce qui permet à `get_traces` de le rattraper une seule fois. En revanche, un registre au **format pré-audit**, c'est-à-dire contenant la clé `"cleaning_status"`, est **détecté et ignoré** par `load_registry` : la liste retournée est vide et le fichier **n'est jamais réécrit par le chargement**. Les traces concernées disparaissent de l'interface, mais leurs dossiers et fichiers GPX restent **intacts sur disque** (aucune perte de données). Le registre est réécrit au nouveau format au prochain import ; les entrées de l'ancien format ne sont alors plus référencées.
 
 ### `traces/{trace_id}/trace.geojson` — LineString GeoJSON
 
@@ -374,8 +375,10 @@ remontée à l'utilisateur.
 ### `traces/{trace_id}/communes.json` — Communes traversées
 
 Description des **communes traversées** par la trace, produite par la commande
-`communes_detect` : la trace nettoyée est croisée avec les limites
-administratives d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
+`communes_detect_hermes` — le croisement avec les limites administratives
+d'OpenStreetMap est fait par le serveur **hermes** sur le dataset servi
+(`POST /communes/detect`). La commande historique `communes_detect` (Overpass)
+écrit le même format et reste disponible, dormante.
 
 ```json
 [
@@ -385,7 +388,8 @@ administratives d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
     "nb_passages_total": 1,
     "km_entree": 0,
     "km_sortie": 5.131,
-    "longueur_km": 5.131
+    "longueur_km": 5.131,
+    "ambiguous": false
   },
   {
     "commune": "La Trinité",
@@ -393,23 +397,39 @@ administratives d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
     "nb_passages_total": 1,
     "km_entree": 5.131,
     "km_sortie": 8.001,
-    "longueur_km": 2.87
+    "longueur_km": 2.87,
+    "ambiguous": false
   }
 ]
 ```
 
-- **Tableau racine** d'objets à six clés, **sans objet englobant ni géométrie** :
+- **Tableau racine** d'objets à sept clés, **sans objet englobant ni géométrie** :
   les coordonnées d'entrée et de sortie sont reconstituables depuis la trace et
   les kilomètres. C'est le format de référence de la spécification du module
-  (`features/communes/`, `Specifications.md` §3.2).
+  (`features/communes/`, `Specifications.md` §3.2), étendu du champ `ambiguous`.
 - Une entrée **par passage** : une commune traversée deux fois donne deux
   entrées, numérotées par `passage` sur `nb_passages_total`.
 - Kilomètres arrondis au mètre ; `longueur_km` est la **différence des bornes
   arrondies**, l'invariant `longueur = sortie − entrée` tient donc exactement
   dans le fichier écrit.
+- **`ambiguous`** : renseigné par hermes quand deux passages de communes
+  différentes se chevauchent de plus de 1 m (frontière OSM imprécise). Absent
+  des fichiers antérieurs au moteur hermes, il vaut alors `false`.
+- **Lissage client** : hermes rend la segmentation **brute**, où chaque
+  oscillation de la trace sur une frontière (quatre passages Nice ↔
+  Villefranche en 285 m sur une trace réelle) produit un passage de quelques
+  dizaines de mètres. Les passages plus courts que
+  `Communes.Detection.minKeepKm` (0,5 km par défaut) sont **absorbés dans leur
+  voisin le plus long** avant écriture : la couverture reste continue et la
+  longueur totale est conservée, seule la répartition change. Deux passages
+  séparés par une portion hors couverture ne sont jamais recollés, et un passage
+  `ambiguous` n'est ni absorbé ni cible d'absorption. `minKeepKm = 0` conserve
+  la segmentation brute du serveur.
 - Un tableau **vide** est un résultat : la trace ne traverse aucune commune
   connue (pleine mer, zone absente d'OSM) — ce n'est pas un échec, et le
-  drapeau est posé.
+  drapeau est posé. Quand la trace sort de la couverture du dataset servi, la
+  commande le signale au front (`outsideCoverage`) sans distinguer le fichier :
+  il reste un tableau vide.
 - Nom **uniforme** `communes.json`, comme `audit.json` et `multiride.json` : la
   trace est désignée par son dossier. Écriture **atomique** (`.tmp` puis
   `rename`), et **suppression** par `audit_validate` — le GPX réécrit change la

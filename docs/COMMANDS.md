@@ -414,10 +414,10 @@ pub struct MultiridePassage {
 
 | Commande | Signature Rust | Retour |
 |---|---|---|
-| `communes_detect_hermes` | `async (app, trace_id: String) -> Result<CommuneDetection, String>` | **Moteur nominal.** Relit la trace (`trace.geojson`, régénéré depuis le GPX au besoin), résout le dataset servi par `GET /serving`, envoie les points et les réglages retenus (`adminLevel`, `minSegmentKm`) à `POST /communes/detect`, convertit la réponse au format du fichier (arrondi au mètre, `longueur = sortie − entrée`), écrit `communes.json` et pose `communes_completed`. Un `404` du serveur (dataset inconnu, `communes.geojson` absent) devient `HERMES_NOT_PREPARED` ; aucun dataset servi, `HERMES_NO_DATASET`. Quand la réponse est vide, compare la trace à la **couverture** du dataset (secteurs, ou contours de régions) et renvoie `outsideCoverage` : la liste vide est alors un « hors zone », pas un « aucune commune ». Un échec des requêtes de couverture ne fait pas échouer la détection. Même garde d'empreinte que le moteur Overpass : une trace réécrite pendant l'analyse fait abandonner la détection. |
-| `communes_detect` | `async (app, trace_id: String, osm: String) -> Result<Vec<CommunePassage>, String>` | **Moteur Overpass historique, dormant** (plus appelé par l'interface). Lit la trace nettoyée, assemble les polygones de la réponse Overpass transmise par le front, exécute la détection (simplification, échantillonnage au pas fixe, arbitrage par centroïde, raffinement des transitions), écrit `communes.json` (écriture atomique) et pose `communes_completed`. Retourne les passages écrits. Si l'empreinte du GPX a changé pendant l'analyse — un audit a réécrit la trace — la détection est **abandonnée** (rien n'est écrit, la trace sera rejouée). |
+| `communes_detect_hermes` | `async (app, trace_id: String) -> Result<CommuneDetection, String>` | **Moteur nominal.** Relit la trace (`trace.geojson`, régénéré depuis le GPX au besoin), résout le dataset servi par `GET /serving`, envoie les points et les réglages retenus (`adminLevel`, `minSegmentKm`) à `POST /communes/detect`, convertit la réponse au format du fichier (arrondi au mètre, `longueur = sortie − entrée`), **lisse les passages courts** (`Communes.Detection.minKeepKm`, absorption dans le voisin le plus long, sans jamais combler un trou de couverture ni toucher un passage `ambiguous`), écrit `communes.json` et pose le **statut** (`communes_status` : `"complete"`, ou `"partial"` quand plus de 5 % de la trace n'est dans aucune commune — `communes_completed` ne vaut `true` que pour `"complete"`). Un `404` du serveur (dataset inconnu, `communes.geojson` absent) devient `HERMES_NOT_PREPARED` ; aucun dataset servi, `HERMES_NO_DATASET`. Quand la réponse est vide, compare la trace à la **couverture** du dataset (secteurs, ou contours de régions) et renvoie `outsideCoverage` : la liste vide est alors un « hors zone », pas un « aucune commune ». Un échec des requêtes de couverture ne fait pas échouer la détection. Même garde d'empreinte que le moteur Overpass : une trace réécrite pendant l'analyse fait abandonner la détection ; un recalcul hors couverture venu du front conserve la description existante au lieu de l'écraser. |
+| `communes_detect` | `async (app, trace_id: String, osm: String) -> Result<Vec<CommunePassage>, String>` | **Moteur Overpass historique, dormant** (plus appelé par l'interface). Lit la trace nettoyée, assemble les polygones de la réponse Overpass transmise par le front, exécute la détection (simplification, échantillonnage au pas fixe, arbitrage par centroïde, raffinement des transitions), écrit `communes.json` (écriture atomique) et pose le statut (`communes_status`, même règle de couverture que hermes). Retourne les passages écrits. Si l'empreinte du GPX a changé pendant l'analyse — un audit a réécrit la trace — la détection est **abandonnée** (rien n'est écrit, la trace sera rejouée). |
 | `communes_load` | `async (app, trace_id: String) -> Result<Option<Vec<CommunePassage>>, String>` | Relit la description d'une trace, pour la **consultation** ouverte depuis la carte du circuit. `null` si le fichier est absent ou illisible — ce n'est pas une erreur. Un tableau vide signifie « aucune commune traversée ». |
-| `communes_reset` | `async (app, trace_id: String) -> Result<(), String>` | **Diagnostic** (exposé en mode debug dans la fenêtre de consultation) : supprime `communes.json` et repose `communes_completed` — la trace redevient « à détecter ». Refusé pour une trace inconnue du registre, sans rien modifier. |
+| `communes_reset` | `async (app, trace_id: String) -> Result<(), String>` | **Diagnostic** (exposé en mode debug dans la fenêtre de consultation) : supprime `communes.json` et repose le statut (`communes_status = "none"`, `communes_completed = false`) — la trace redevient « à détecter ». Refusé pour une trace inconnue du registre, sans rien modifier. |
 
 **Type `CommunePassage`** (format du fichier `communes.json`, miroir de l'interface TS) :
 ```rust
@@ -438,15 +438,18 @@ pub struct CommuneDetection {
     pub passages: Vec<CommunePassage>,  // format du fichier, snake_case
     pub dataset_id: String,             // dataset servi utilisé
     pub outside_coverage: bool,         // aucun point de la trace dans le dataset
+    pub status: String,                 // "complete" | "partial" (posé au registre)
 }
 ```
 
 > **Paramètres** : `Communes.Detection.adminLevel` et
-> `Communes.Detection.minSegmentKm` sont **transmis à hermes**. Les six autres
-> seuils de `Communes.Detection.*` et `Communes.Overpass.delaiSec` ne servent
-> qu'au moteur Overpass historique, sans effet sur la détection hermes. Les deux
-> groupes sont rattachés à la vue `accueil` : la détection se déclenche depuis la
-> carte d'un circuit, elle n'a pas de vue dédiée.
+> `Communes.Detection.minSegmentKm` sont **transmis à hermes** ;
+> `Communes.Detection.minKeepKm` s'applique **après la réponse**, comme lissage
+> client (voir `smooth_short_passages`). Les cinq autres seuils de
+> `Communes.Detection.*` et `Communes.Overpass.delaiSec` ne servent qu'au moteur
+> Overpass historique, sans effet sur la détection hermes. Les deux groupes sont
+> rattachés à la vue `accueil` : la détection se déclenche depuis la carte d'un
+> circuit, elle n'a pas de vue dédiée.
 
 ### Altimétrie (`gpx_altimetrie/commands.rs`)
 
@@ -638,11 +641,15 @@ pub struct TraceMetadata {
     #[serde(default)]
     pub multiride_status: Option<String>, // "none" | "pending" | "validated" | null
     #[serde(default)]
-    pub communes_completed: bool,         // détection des communes réalisée (fichier écrit)
+    pub communes_completed: bool,         // détection complète (toute la trace couverte)
+    #[serde(default)]
+    pub communes_status: Option<String>,  // "none" | "partial" | "complete"
 }
 ```
 
-> `#[serde(default)]` sur `favorite`/`is_displayed`/`audit_archived`/`multiride_status`/`communes_completed` et `#[serde(default = "default_audit_status")]` sur `audit_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`false`/`null`/`false`/`"needs_review"`).
+> `#[serde(default)]` sur `favorite`/`is_displayed`/`audit_archived`/`multiride_status`/`communes_completed`/`communes_status` et `#[serde(default = "default_audit_status")]` sur `audit_status` assurent la **rétrocompatibilité** : un `traces.json` antérieur se charge sans erreur (`false`/`false`/`false`/`null`/`false`/`null`/`"needs_review"`).
+>
+> `communes_status` est le **tri-état** de la détection des communes. Un registre antérieur au champ est migré **en mémoire** au chargement : `"complete"` si `communes_completed` était vrai, `"none"` sinon. `communes_completed` n'est `true` que pour `"complete"` — une détection partielle (plus de 5 % de la trace hors de toute commune) ne vaut pas achèvement.
 >
 > `multiride_status` vaut `null` pour une trace dont la détection des passages multiples n'a pas été jouée : la valeur est **permissive** — la barrière ne s'applique qu'aux traces détectées depuis l'introduction du module.
 >

@@ -192,18 +192,20 @@
           Communes traversées (mdi-city) : état de la détection, seconde rangée.
            - **gris** : circuit non nettoyé — la détection ne porte que sur une
              trace propre ;
-           - **jaune** : ce circuit est en cours de traitement (import d'une
-             trace propre, fin d'audit, ou tâche de fond) ;
+           - **bleu** : ce circuit est en cours d'analyse (import d'une trace
+             propre, fin d'audit, tâche de fond ou recalcul) ;
            - **orange** : détection en attente — circuit en file, ou tâche de
              fond occupée sur un autre circuit ;
-           - **vert** : communes détectées — le clic ouvre la consultation ;
-           - **rouge** : circuit propre sans détection — le clic la lance, et le
-             bouton reste **forcé visible** hors survol, puisqu'une action reste
-             à mener.
+           - **jaune** : détection **partielle** — une description existe, mais
+             une part significative de la trace n'est dans aucune commune ; le
+             clic ouvre la fenêtre pour consulter et relancer ;
+           - **vert** : détection complète — le clic ouvre la consultation ;
+           - **rouge** : circuit propre sans détection — le clic la lance.
 
-          L'icône n'est jamais `disabled` : un bouton désactivé masque son
-          infobulle et écrase sa couleur. C'est le garde du clic
-          (`onCommunesClick`) qui rend gris, jaune et orange inertes.
+          Jaune et rouge restent **forcés visibles** hors survol, puisqu'une
+          action reste à mener. L'icône n'est jamais `disabled` : un bouton
+          désactivé masque son infobulle et écrase sa couleur. C'est le garde du
+          clic (`onCommunesClick`) qui rend gris, bleu et orange inertes.
         -->
         <v-btn
           class="action-btn"
@@ -1016,36 +1018,44 @@ function onStatusClick(): void {
 /**
  * État de la détection des communes, du point de vue de cette carte :
  * - `grey`   : circuit non nettoyé — la détection ne porte que sur une trace propre ;
- * - `yellow` : **ce circuit** est effectivement en cours de traitement, quelle que
- *              soit l'origine de la demande (import, fin d'audit, tâche de fond) ;
+ * - `blue`   : **ce circuit** est effectivement en cours d'analyse, quelle que
+ *              soit l'origine de la demande (import, fin d'audit, tâche de fond,
+ *              recalcul depuis la fenêtre de consultation) ;
  * - `orange` : détection en attente — circuit dans la file, ou tâche de fond
  *              occupée sur un autre circuit ;
- * - `green`  : communes détectées — la carte propose la consultation ;
- * - `red`    : tout autre cas — circuit propre sans détection, **seul état où le
- *              clic lance** la détection.
+ * - `yellow` : détection **partielle** — une description existe, mais une part
+ *              significative de la trace n'est dans aucune commune ; le clic
+ *              ouvre la fenêtre pour consulter et relancer ;
+ * - `green`  : détection complète — le clic ouvre la consultation ;
+ * - `red`    : circuit propre sans aucune détection, **seul état où le clic
+ *              lance** la détection.
  */
-type CommunesState = 'grey' | 'yellow' | 'orange' | 'green' | 'red'
+type CommunesState = 'grey' | 'blue' | 'yellow' | 'orange' | 'green' | 'red'
 
 /**
  * État de la détection des communes traversées (module Communes) pour cette
  * trace.
  *
- * L'ordre d'évaluation compte : un circuit **déjà détecté reste vert** même
- * pendant qu'une tâche de fond traite d'autres circuits, et seul le circuit
- * réellement en cours de traitement passe au jaune — les deux états chauds
- * signalent ce qui reste à faire, jamais ce qui est fait.
+ * L'ordre d'évaluation compte : le circuit **en cours** passe au bleu, celui qui
+ * attend son tour à l'orange, puis le **statut du registre** tranche — partiel
+ * (jaune) ou complet (vert). Un circuit déjà détecté reste vert pendant que la
+ * tâche de fond traite d'autres circuits : seuls les deux états chauds du
+ * circuit lui-même le font sortir de son statut.
  */
 const communesState = computed<CommunesState>(() => {
   if (needsAudit.value) return 'grey'        // trace non nettoyée : hors sujet
-  if (props.trace.communes_completed) return 'green'
-  if (communesStore.currentTraceId === props.trace.id) return 'yellow'
-  if (communesStore.isRunning || communesStore.isPending(props.trace.id)) return 'orange'
+  if (communesStore.currentTraceId === props.trace.id) return 'blue'
+  if (communesStore.isPending(props.trace.id)) return 'orange'
+  if (props.trace.communes_status === 'partial') return 'yellow'
+  if (props.trace.communes_status === 'complete') return 'green'
+  if (communesStore.isRunning) return 'orange'
   return 'red'
 })
 
 /**
- * Couleur de l'icône : le jaune marque le traitement en cours, le rouge la seule
- * situation où le bouton lance quelque chose.
+ * Couleur de l'icône : bleu pendant l'analyse de ce circuit, jaune quand la
+ * détection est partielle, vert quand elle est complète, rouge quand elle reste
+ * à lancer.
  *
  * Le jaune est volontairement assombri (`yellow-darken-2`) : le jaune de base
  * est illisible sur une carte claire.
@@ -1053,6 +1063,7 @@ const communesState = computed<CommunesState>(() => {
 const communesColor = computed(() => {
   const colors: Record<CommunesState, string> = {
     grey: 'grey',
+    blue: 'blue',
     yellow: 'yellow-darken-2',
     orange: 'orange',
     green: 'green',
@@ -1061,14 +1072,20 @@ const communesColor = computed(() => {
   return colors[communesState.value]
 })
 
-/** Le bouton est **forcé visible** quand une action reste à mener. */
-const isCommunesForced = computed(() => communesState.value === 'red')
+/**
+ * Le bouton est **forcé visible** quand une action reste à mener : détection à
+ * lancer (rouge) ou détection partielle à revoir (jaune).
+ */
+const isCommunesForced = computed(
+  () => communesState.value === 'red' || communesState.value === 'yellow',
+)
 
 /** Tooltip de l'icône Communes : l'état réel, ou l'action quand il y en a une. */
 const communesTitle = computed(() => {
   const titles: Record<CommunesState, string> = {
     grey: "Les communes traversées ne sont disponibles qu'après le nettoyage de la trace.",
-    yellow: 'Communes — détection en cours pour ce circuit…',
+    blue: 'Communes — détection en cours pour ce circuit…',
+    yellow: 'Communes détectées partiellement — voir et relancer',
     orange: 'Communes — détection en attente…',
     green: 'Voir les communes traversées',
     red: 'Détecter les communes traversées',
@@ -1077,10 +1094,10 @@ const communesTitle = computed(() => {
 })
 
 /**
- * Action de l'icône Communes : elle n'existe que dans les deux états
- * actionnables — **rouge** (lancer la détection de ce circuit) et **verte**
- * (consulter les communes détectées). Jaune et orange n'ont aucune action,
- * et n'ouvrent pas non plus de fenêtre.
+ * Action de l'icône Communes : **rouge** lance la détection de ce circuit,
+ * **jaune** (détection partielle) et **verte** ouvrent la fenêtre de
+ * consultation — la jaune pour y relancer le calcul. Bleu et orange n'ont
+ * aucune action, et n'ouvrent pas non plus de fenêtre.
  *
  * L'icône n'étant jamais `disabled` — un bouton désactivé masquerait son
  * infobulle et éteindrait la couleur de l'état —, c'est ce garde qui rend ces
@@ -1096,11 +1113,11 @@ function onCommunesClick() {
   }
   if (communesState.value === 'red') {
     // La trace passe en tête de la file du store : une analyse déjà en cours se
-    // termine d'abord, puis Overpass et le backend enchaînent.
+    // termine d'abord, puis la détection enchaîne.
     communesStore.request(props.trace.id)
     return
   }
-  if (communesState.value === 'green') {
+  if (communesState.value === 'yellow' || communesState.value === 'green') {
     appStore.openCommunes(props.trace.id)
   }
 }

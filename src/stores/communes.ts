@@ -13,7 +13,7 @@
  *   d'audit, ou clic sur la carte du circuit. La trace passe **en tête** de
  *   file : l'analyse en cours se termine, puis celle-ci est traitée ;
  * - `request(traceId, { force: true })` : **recalcul** demandé depuis la fenêtre
- *   de consultation. Le drapeau `communes_completed` ne bloque pas, et le
+ *   de consultation. Un statut `complete` ou `partial` ne bloque pas, et le
  *   fichier précédent reste en place jusqu'au succès : un échec ne détruit pas
  *   le résultat existant ;
  * - `startCatchUp()` : au lancement, toutes les traces **déjà nettoyées** dont la
@@ -35,7 +35,7 @@ import { useHermesStore } from './hermes'
 // Import croisé avec `traces.ts` : chaque store n'appelle l'autre qu'à
 // l'intérieur de ses actions, jamais au chargement du module.
 import { useTracesStore } from './traces'
-import type { TraceMetadata } from './traces'
+import type { CommunesStatus, TraceMetadata } from './traces'
 import { useUiStore } from './ui'
 
 /**
@@ -66,15 +66,17 @@ export interface CommunePassage {
 
 /**
  * Retour de `communes_detect_hermes` (camelCase) : les passages écrits, le
- * dataset utilisé et le verdict de couverture.
+ * dataset utilisé, le verdict de couverture et l'état posé au registre.
  */
 export interface CommuneDetection {
   passages: CommunePassage[]
   datasetId: string
   outsideCoverage: boolean
+  /** `"complete"` si toute la trace est couverte, `"partial"` sinon. */
+  status: CommunesStatus
 }
 
-/** Un élément de la file : `force` court-circuite `communes_completed`. */
+/** Un élément de la file : `force` court-circuite une détection existante. */
 interface QueueItem {
   traceId: string
   force: boolean
@@ -115,9 +117,13 @@ export const useCommunesStore = defineStore('communes', () => {
 
   // Getters
 
-  /** Une trace est éligible si elle est nettoyée et sans détection aboutie. */
+  /**
+   * Une trace est éligible au rattrapage automatique si elle est nettoyée et
+   * **jamais détectée**. Une détection partielle n'est pas reprise d'office :
+   * l'icône jaune et la fenêtre de consultation proposent le recalcul manuel.
+   */
   function isEligible(trace: TraceMetadata): boolean {
-    return trace.audit_status === 'clean' && !trace.communes_completed
+    return trace.audit_status === 'clean' && trace.communes_status === 'none'
   }
 
   /** Un traitement est-il en cours (ou en file) pour ce circuit ? */
@@ -137,7 +143,7 @@ export const useCommunesStore = defineStore('communes', () => {
 
   /**
    * Registre relu à la source (`get_traces`) : la détection écrit
-   * `communes_completed` côté backend, et une trace peut avoir été nettoyée,
+   * le statut des communes côté backend, et une trace peut avoir été nettoyée,
    * supprimée ou ré-auditée entre-temps. Lecture seule.
    */
   async function freshTraces(): Promise<TraceMetadata[]> {
@@ -172,7 +178,7 @@ export const useCommunesStore = defineStore('communes', () => {
   }
 
   /** Détecte les communes d'une trace via hermes, et retient la couverture. */
-  async function processOne(traceId: string): Promise<number> {
+  async function processOne(traceId: string): Promise<CommuneDetection> {
     const detection = await invoke<CommuneDetection>('communes_detect_hermes', {
       traceId,
     })
@@ -181,7 +187,7 @@ export const useCommunesStore = defineStore('communes', () => {
     } else {
       delete outsideCoverage.value[traceId]
     }
-    return detection.passages.length
+    return detection
   }
 
   /**
@@ -212,7 +218,7 @@ export const useCommunesStore = defineStore('communes', () => {
     await invoke('communes_reset', { traceId })
     failed.delete(traceId)
     delete outsideCoverage.value[traceId]
-    useTracesStore().setCommunesCompleted(traceId, false)
+    useTracesStore().setCommunesStatus(traceId, 'none')
     ui.showInfo('Détection des communes réinitialisée : le circuit peut être relancé.')
   }
 
@@ -256,18 +262,21 @@ export const useCommunesStore = defineStore('communes', () => {
 
         const trace = (await freshTraces()).find(t => t.id === item.traceId)
         if (!trace || trace.audit_status !== 'clean') continue
-        if (!item.force && trace.communes_completed) continue
+        if (!item.force && trace.communes_status !== 'none') continue
 
         try {
-          const passages = await processOne(item.traceId)
+          const detection = await processOne(item.traceId)
           done += 1
-          // La commande a écrit le drapeau côté backend : l'entrée en mémoire
-          // doit le refléter sans relire le registre — la carte du circuit s'y
-          // adosse, et un circuit détecté repasse au vert sans attendre la fin
+          // La commande a écrit le statut côté backend : l'entrée en mémoire
+          // doit le suivre sans relire le registre — la carte du circuit s'y
+          // adosse, et le circuit passe au vert ou au jaune sans attendre la fin
           // du lot.
-          useTracesStore().setCommunesCompleted(item.traceId, true)
+          useTracesStore().setCommunesStatus(item.traceId, detection.status)
           if (outsideCoverage.value[item.traceId]) uncovered.push(trace.name)
-          console.log(`[communes] ${trace.name} : ${passages} passage(s).`)
+          console.log(
+            `[communes] ${trace.name} : ${detection.passages.length} passage(s)` +
+              (detection.status === 'partial' ? ' — détection partielle.' : '.'),
+          )
         } catch (error) {
           // Les commandes hermes préfixent leurs erreurs par un code machine :
           // le message utilisateur est nettoyé, le code reste dans la console.

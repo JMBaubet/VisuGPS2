@@ -275,7 +275,7 @@ Pour garder le code Rust maintenable, les fonctionnalités sont organisées en m
 - `import_gpx.rs` : Import de fichiers GPX (parsing, statistiques, registre de traces, points avec distance cumulée, persistance des keyframes)
 - `gpx_audit/` : Module Audit GPX (détection AR/RP, corrections, export, commandes Tauri) — voir § « Audit GPX » ci-dessous
 - `gpx_multiride/` : Module Multiride (détection des portions parcourues plusieurs fois, ajustements, fichier de description) — voir § « Passage multiples » ci-dessous
-- `gpx_communes/` : Module Communes (croisement avec les limites administratives OSM via Overpass, description des passages) — voir § « Détection des communes » ci-dessous
+- `gpx_communes/` : Module Communes (croisement avec les limites administratives OSM par le serveur hermes, lissage client et description des passages) — voir § « Détection des communes » ci-dessous
 - `gpx_altimetrie/` : Module Altimétrie (profil lissé, segments de pente, détection et reconstruction des montées) — voir § « Altimétrie » ci-dessous
 - `gpx_tunnels/` : Module Tunnels (matching OSM, acquisition Geofabrik, portails, édition) — voir § « Tunnels et gestion des données OSM » ci-dessous
 - `osm/` : Gestion partagée des données OSM (inventaire des PBF, dates de génération, catalogue, géométries, commandes) — voir le même §
@@ -463,7 +463,7 @@ src-tauri/
 │   ├── import_gpx.rs     # Import de fichiers GPX
 │   ├── gpx_audit/        # Module Audit GPX (15 fichiers + tests)
 │   ├── gpx_multiride/    # Module Multiride (11 fichiers + tests)
-│   ├── gpx_communes/     # Module Communes (7 fichiers + tests)
+│   ├── gpx_communes/     # Module Communes (8 fichiers + tests)
 │   ├── gpx_altimetrie/   # Module Altimétrie (6 fichiers + tests)
 │   ├── gpx_tunnels/      # Module Tunnels (11 fichiers + tests)
 │   ├── osm/              # Gestion partagée des données OSM (types, params, inventory, commands)
@@ -486,7 +486,7 @@ src-tauri/
 - `import_gpx.rs` : Parsing GPX, calcul de stats (Haversine), détection d'éditeur, registre de traces
 - `gpx_audit/` : Module Audit GPX (détection AR/RP, moteur de correction, archive d'audit, réécriture GPX) — 15 fichiers : `types.rs`, `geometry.rs`, `consolidation.rs`, `ar.rs`, `rp.rs`, `anchor.rs`, `corrections.rs`, `migration.rs`, `export.rs`, `archive.rs`, `overlay.rs`, `preview.rs`, `routing.rs`, `pipeline.rs`, `commands.rs`. Détails au § « Audit GPX » ci-dessous.
 - `gpx_multiride/` : Module Multiride (détection des portions répétées, ajustements, fichier de description) — 11 fichiers : `types.rs`, `projection.rs`, `resample.rs`, `runs.rs`, `direction.rs`, `segments.rs`, `adjustments.rs`, `file.rs`, `detection.rs`, `commands.rs`, plus `tests/`. Détails au § « Passage multiples » ci-dessous.
-- `gpx_communes/` : Module Communes (croisement OSM/Overpass, écriture de la description) — 7 fichiers : `types.rs`, `geometry.rs`, `osm.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Détection des communes » ci-dessous.
+- `gpx_communes/` : Module Communes (détection par hermes, lissage client, écriture de la description) — 8 fichiers : `types.rs`, `hermes.rs`, `geometry.rs`, `osm.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. `osm`/`pipeline` ne servent plus qu'au moteur Overpass historique, dormant. Détails au § « Détection des communes » ci-dessous.
 - `gpx_altimetrie/` : Module Altimétrie (profil, segments de pente, montées) — 6 fichiers : `types.rs`, `params.rs`, `pipeline.rs`, `file.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Altimétrie » ci-dessous.
 - `gpx_tunnels/` : Module Tunnels (matching OSM, acquisition Geofabrik, portails) — `types.rs`, `geometry.rs`, `params.rs`, `file.rs`, `pbf.rs`, `regions.rs`, `download.rs`, `pipeline.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au § « Tunnels et gestion des données OSM ».
 - `osm/` : Gestion partagée des données OSM — `types.rs`, `params.rs`, `inventory.rs`, `commands.rs`, `mod.rs`, plus `tests/`. Détails au même §.
@@ -1338,74 +1338,117 @@ la demande, depuis la carte du circuit.
 
 ### Découpage front / backend
 
-Le **réseau reste côté front** (WebView), comme pour OpenRouteService : le
-composable `src/composables/useCommunesOverpass.ts` interroge l'API Overpass
-d'OpenStreetMap (quatre miroirs en cascade, délai d'abandon par miroir) pour les
-relations `boundary=administrative` de niveau `admin_level = 8` autour de la
-trace. Seule la **boîte englobante** de la trace est transmise au serveur, jamais
-la trace elle-même.
+Le **moteur nominal est le serveur hermes** : le backend envoie les **points** de
+la trace à `POST /communes/detect` et ne transmet que les deux réglages qui
+gardent un sens côté client (`adminLevel`, `minSegmentKm`). Le réseau vit en Rust
+(`hermes/client`), comme pour le reste du client ; le frontend ne fait aucun
+`fetch`. La trace n'est jamais mise en ligne : la commande relit `trace.geojson`
+(régénéré depuis le GPX au besoin).
 
-Le **backend** (`src-tauri/src/gpx_communes/`) fait le reste, sur la réponse
-brute reçue en IPC :
+Le module `src-tauri/src/gpx_communes/` garde trois responsabilités :
 
 | Module | Rôle |
 |---|---|
-| `osm` | réponse Overpass → communes nommées (assemblage des anneaux depuis les ways membres, rôles `outer`/`inner`) |
-| `geometry` | primitives pures : distances, échantillonnage au pas fixe, surfaces, appartenance, intersections |
-| `pipeline` | l'algorithme : simplification, filtrage des candidates, timeline, arbitrage par centroïde, raffinement des transitions, post-traitement |
+| `hermes` | conversion de la réponse `camelCase` au format du fichier (arrondi au mètre, invariant `longueur = sortie − entrée`), **lissage** des passages courts (`minKeepKm`), **contrôle de couverture** (anneaux des secteurs ou contours de régions, test point-dans-polygone) |
 | `file` | chemin et écriture atomique de `communes.json` |
-| `commands` | la commande `communes_detect` et la lecture des paramètres |
+| `commands` | `communes_detect_hermes` (nominal), `communes_load`, `communes_reset`, et le moteur Overpass historique `communes_detect` |
 
-La trace est relue depuis son propre stockage (`trace.geojson`, régénéré depuis
-le GPX au besoin) : aucune géométrie de trace ne franchit l'IPC. C'est le portage
-du prototype validé (`features/communes/`) — `oscillationRatio`, désactivé par
-défaut là-bas, n'est pas implémenté.
+Le moteur **Overpass** historique reste enregistré mais n'est plus appelé par
+l'interface ; son portage du prototype validé (`osm`, `geometry`, `pipeline`) est
+dormant jusqu'au nettoyage prévu. `geometry` sert encore au calcul de surface des
+secteurs hermes.
+
+### Lissage des passages courts
+
+hermes rend la segmentation **brute** : chaque oscillation de la trace sur une
+frontière produit un passage de quelques dizaines de mètres (quatre passages
+Nice ↔ Villefranche en 285 m sur une trace réelle). `smooth_short_passages`
+applique la règle du moteur historique — un passage plus court que
+`Communes.Detection.minKeepKm` (0,5 km) est absorbé par son **voisin le plus
+long**, jusqu'à stabilité, puis les passages adjacents de même commune sont
+recollés et renumérotés. Les mètres absorbés sont réattribués au voisin : la
+couverture et la longueur totale sont conservées. Deux garde-fous : jamais
+d'absorption par-dessus un trou de couverture (voisin non accolé), et jamais sur
+un passage `ambiguous`. `minKeepKm = 0` conserve la sortie brute du serveur.
 
 ### Orchestration : file d'attente et tâche de fond
 
-Le store `src/stores/communes.ts` porte la **file d'attente** : une seule analyse
-à la fois, une requête Overpass à la fois, un temps mort entre deux traces. Deux
-points d'entrée :
+Le store `src/stores/communes.ts` porte la **file d'attente** (une analyse à la
+fois, une écriture de registre à la fois) et vérifie la préparation du serveur
+**une fois par lot** (`hermesStore.ensureReady('communes')` : ping, dataset
+servi, artefacts). Deux points d'entrée :
 
-- `request(traceId)` — un circuit précis (import d'une trace propre, validation
-  d'un audit, clic sur la carte du circuit) : la trace passe **en tête** de file,
-  l'analyse en cours se termine d'abord ;
+- `request(traceId, { force? })` — un circuit précis (import d'une trace propre,
+  validation d'un audit, clic sur la carte du circuit) : la trace passe **en tête**
+  de file. `force` sert au **recalcul** demandé depuis la fenêtre de consultation
+  et court-circuite `communes_completed` sans supprimer le fichier avant le
+  succès ;
 - `startCatchUp()` — au lancement (fenêtre principale **uniquement** : la fenêtre
-  secondaire monte aussi l'accueil le temps d'une frame), toutes les traces **déjà
-  nettoyées** dont la détection n'a pas abouti ; rien à faire → aucune tâche ne
-  démarre.
+  secondaire monte aussi l'accueil le temps d'une frame) **et au retour du service
+  hermes** (`watch` sur `apiOnline` dans `App.vue`, le serveur dormant au
+  démarrage) : toutes les traces déjà nettoyées dont la détection n'a pas abouti ;
+  rien à faire → aucune tâche ne démarre.
 
-L'éligibilité — trace nettoyée (`audit_status = "clean"`) sans détection aboutie —
-est revérifiée avant chaque trace, registre relu à la source. Un échec (Overpass
-indisponible, réponse illisible) laisse la détection à faire : elle est retentée
-au lancement suivant ou au clic, jamais en boucle dans la même session.
+Si le service n'est pas prêt, la file est vidée — les icônes repassent au rouge —
+et les traces restent éligibles (aucun drapeau posé). Un clic parle (notification) ;
+le rattrapage se tait, sauf cause durable (dataset absent, artefacts non préparés).
+L'éligibilité — trace nettoyée sans détection aboutie — est revérifiée avant
+chaque trace, registre relu à la source. Un échec laisse la détection à faire :
+elle est retentée au lancement suivant ou au clic, jamais en boucle dans la même
+session.
+
+### Couverture et résultat vide
+
+`POST /communes/detect` renvoie `passages: []` sans erreur quand la trace sort du
+dataset. La commande compare alors les points de la trace aux **polygones** du
+dataset (secteurs assemblés, ou contours GeoJSON des régions, repli bbox) : si
+aucun point n'est couvert, `outsideCoverage` remonte au front, qui affiche une
+alerte dédiée. Le fichier reste un tableau vide. Un recalcul hors couverture sur
+une trace déjà décrite est **refusé** : la description existante est conservée
+plutôt qu'écrasée par un faux négatif.
+
+Le **garde-fou partiel** est calculé par le backend à chaque détection
+(`coverage_is_partial`, tolérance **5 %**) : une part significative de la trace
+hors de toute commune pose `communes_status = "partial"`, l'icône passe au jaune
+et la fenêtre affiche l'alerte — trace partiellement hors couverture, ou artefact
+`communes.geojson` incomplet (des communes absentes de l'artefact produisent
+exactement ce symptôme : des trous silencieux sur la carte, sans aucune erreur).
+Le résumé de la fenêtre montre aussi le ratio `km couverts / longueur de trace`.
 
 ### État et restitution
 
-- `communes_completed` (registre `traces.json`) porte l'état : **absent** vaut
-  `false`, donc une trace nettoyée avant l'introduction du module est reprise au
-  lancement. `audit_validate` le repose à `false` et supprime la description : le
-  GPX réécrit a changé la géométrie de la trace.
+- `communes_status` (registre `traces.json`) porte l'état, en **tri-état** :
+  `"none"` (aucune description), `"partial"` (description écrite, mais plus de
+  5 % de la trace hors de toute commune) et `"complete"`. Le booléen hérité
+  `communes_completed` n'est `true` que pour `"complete"` ; un registre
+  antérieur au tri-état est migré **en mémoire** au chargement
+  (`normalize_communes_status`). `audit_validate` repose l'état à `"none"` et
+  supprime la description : le GPX réécrit a changé la géométrie de la trace.
+- Le statut est calculé par le backend à chaque détection :
+  `coverage_is_partial(trace_length_km, passages)` — tolérance de **5 %**,
+  partagée par les deux moteurs. Une trace partielle n'est pas reprise
+  automatiquement : elle reste à l'opérateur de relancer.
 - L'icône `mdi-city` de la carte du circuit matérialise cet état par sa couleur :
-  **grise** (trace non nettoyée — la détection ne porte que sur une trace propre),
-  **jaune** (**ce circuit** est effectivement en cours de traitement, quelle que
-  soit l'origine de la demande : import, fin d'audit ou tâche de fond),
-  **orange** (détection en attente — circuit dans la file, ou tâche de fond
-  occupée ailleurs), **verte** (détection aboutie) et **rouge** dans les autres
-  cas — seule couleur **forcée visible** hors survol. L'ordre d'évaluation fait
-  qu'un circuit **déjà détecté reste vert** pendant qu'une tâche de fond traite
-  d'autres circuits.
-- **Deux** états sont actionnables, et deux seulement : le **rouge**, où le clic
-  lance la détection pour ce seul circuit, et le **vert**, où il ouvre la
-  **fenêtre de consultation** (`src/components/Communes/CommunesDialog.vue`,
-  montée une fois sur l'accueil et pilotée par `appStore.communesTraceId`). Elle
-  restitue `communes.json` : résumé (passages, communes distinctes, kilomètres
-  couverts) et tableau chronologique `km entrée / commune / km sortie / longueur`,
-  avec le badge de passage multiple. L'icône n'est **jamais `disabled`** — un
-  bouton désactivé masque son infobulle et éteint la couleur de l'état — c'est le
-  garde du clic qui rend gris, jaune et orange inertes.
+  **grise** (trace non nettoyée), **bleue** (**ce circuit** est en cours
+  d'analyse, quelle que soit l'origine de la demande), **orange** (en attente —
+  circuit dans la file, ou tâche de fond occupée ailleurs), **jaune** (détection
+  **partielle**), **verte** (détection complète) et **rouge** (aucune détection).
+  Jaune et rouge sont **forcés visibles** hors survol : une action reste à mener.
+  L'ordre d'évaluation fait qu'un circuit déjà détecté garde son statut pendant
+  qu'une tâche de fond traite d'autres circuits.
+- **Trois** états sont actionnables : le **rouge**, où le clic lance la détection
+  pour ce seul circuit ; le **vert** et le **jaune**, où il ouvre la **fenêtre de
+  consultation** (`src/components/Communes/CommunesDialog.vue`, montée une fois
+  sur l'accueil et pilotée par `appStore.communesTraceId`) — la jaune pour y
+  relancer le calcul (`request(traceId, { force: true })`). La fenêtre restitue
+  `communes.json` : résumé (passages, communes distinctes, kilomètres couverts
+  **sur la longueur de la trace**), tableau chronologique
+  `km entrée / commune / km sortie / longueur`, badges de passage multiple et de
+  frontière incertaine, alerte de couverture partielle. L'icône n'est **jamais
+  `disabled`** — un bouton désactivé masque son infobulle et éteint la couleur
+  de l'état — c'est le garde du clic qui rend gris, bleu et orange inertes.
 - En **mode debug** (`appStore.isDebug`), la fenêtre expose la **suppression de la
-  détection** (`communes_reset` : fichier supprimé, drapeau reposé) après
+  détection** (`communes_reset` : fichier supprimé, statut reposé) après
   confirmation : l'outil de rejeu d'une détection.
 
 ### Paramètres (`Communes.*`)
