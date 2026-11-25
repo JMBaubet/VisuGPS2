@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAppStore } from './stores/app'
@@ -64,8 +64,18 @@ onMounted(async () => {
   // nettoyées dont la détection n'a pas encore abouti (traces antérieures à la
   // fonctionnalité). Rien à faire → aucune tâche ne démarre. Lancée dans la
   // **seule** fenêtre principale : la fenêtre secondaire monte aussi l'accueil
-  // le temps d'une frame, et deux tâches se disputeraient l'API Overpass.
+  // le temps d'une frame, et deux tâches se disputeraient le serveur hermes.
   void communesStore.startCatchUp()
+
+  // Le serveur hermes dort au lancement : la détection ne peut aboutir qu'une
+  // fois l'API éveillée. On relance le rattrapage dès qu'elle redevient
+  // joignable — `startCatchUp` est idempotent (rien d'éligible → aucune tâche).
+  watch(
+    () => hermesStore.apiOnline,
+    online => {
+      if (online === true) void communesStore.startCatchUp()
+    },
+  )
 
   // Progression des téléchargements de tunnels : l'écoute est posée une fois
   // pour la fenêtre principale. Le rattrapage enfile les traces propres qui
