@@ -441,6 +441,7 @@ mod tests {
             km_entree: 0.0,
             km_sortie: 1.0,
             longueur_km: 1.0,
+            ambiguous: false,
         }
     }
 

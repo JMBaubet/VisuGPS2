@@ -260,6 +260,74 @@ pub struct HermesAuxPrepareResponse {
     pub message: Option<String>,
 }
 
+// ─── Détection des communes ───────────────────────────────────────────
+
+/// Réglages de `POST /communes/detect` (objet `params` du contrat).
+///
+/// La géométrie est traitée par le serveur, qui applique ses propres règles :
+/// seuls les réglages qui gardent un sens côté client sont transmis. L'écart de
+/// fusion des passages contigus (`gapMaxM`) reste au défaut du serveur (50 m).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesCommunesParams {
+    /// Niveau administratif OSM forcé (`"8"` = communes en France, Espagne,
+    /// Italie, Suisse) ; `None` laisse le serveur appliquer son mapping par
+    /// pays.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admin_level: Option<String>,
+    /// Longueur minimale d'un passage retenu, en kilomètres.
+    pub min_segment_km: f64,
+}
+
+/// Payload de `POST /communes/detect` (contrat v1.10).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesCommunesDetectRequest {
+    pub trace_id: String,
+    pub dataset_id: String,
+    /// Points `[lon, lat]` de la trace, dans l'ordre chronologique.
+    pub points: Vec<[f64; 2]>,
+    pub params: HermesCommunesParams,
+}
+
+/// Un passage dans une commune, tel que le serveur le renvoie.
+///
+/// La route de détection répond en `camelCase` (`kmEntree`,
+/// `nbPassagesTotal`…) ; les alias `snake_case` gardent le client tolérant,
+/// comme pour les autres routes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesCommunePassage {
+    pub commune: String,
+    pub passage: u32,
+    #[serde(alias = "nb_passages_total")]
+    pub nb_passages_total: u32,
+    #[serde(alias = "km_entree")]
+    pub km_entree: f64,
+    #[serde(alias = "km_sortie")]
+    pub km_sortie: f64,
+    #[serde(alias = "longueur_km")]
+    pub longueur_km: f64,
+    /// Deux passages de communes différentes se chevauchent de plus de 1 m :
+    /// la frontière OSM est imprécise à cet endroit.
+    #[serde(default)]
+    pub ambiguous: bool,
+}
+
+/// Réponse de `POST /communes/detect` : `passages` vide est un résultat, y
+/// compris quand la trace sort de la couverture du dataset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesCommunesDetectResponse {
+    #[serde(alias = "trace_id")]
+    pub trace_id: String,
+    #[serde(alias = "dataset_id")]
+    pub dataset_id: String,
+    #[serde(default, alias = "detected_at")]
+    pub detected_at: String,
+    pub passages: Vec<HermesCommunePassage>,
+}
+
 // ─── Réveil ───────────────────────────────────────────────────────────
 
 /// Résultat de `hermes_wake`.

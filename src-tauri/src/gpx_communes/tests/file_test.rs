@@ -56,8 +56,8 @@ fn remove_file_is_tolerant_and_idempotent() {
     let _ = fs::remove_dir_all(&mode);
 }
 
-/// Le fichier écrit respecte le contrat de la spécification : tableau racine
-/// d'objets à six clés, indentation de 2 espaces, aucune géométrie.
+/// Le fichier écrit respecte le contrat du module : tableau racine d'objets à
+/// sept clés, indentation de 2 espaces, aucune géométrie.
 #[test]
 fn save_file_writes_the_documented_format() {
     let mode = test_mode_dir("save");
@@ -69,6 +69,7 @@ fn save_file_writes_the_documented_format() {
             km_entree: 0.0,
             km_sortie: 5.131,
             longueur_km: 5.131,
+            ambiguous: false,
         },
         CommunePassage {
             commune: "La Trinité".to_string(),
@@ -77,6 +78,7 @@ fn save_file_writes_the_documented_format() {
             km_entree: 5.131,
             km_sortie: 8.001,
             longueur_km: 2.87,
+            ambiguous: true,
         },
     ];
 
@@ -88,8 +90,8 @@ fn save_file_writes_the_documented_format() {
     assert_eq!(array.len(), 2);
     assert_eq!(
         array[0].as_object().expect("objet de passage").len(),
-        6,
-        "exactement les six clés de la spécification"
+        7,
+        "exactement les sept clés du contrat"
     );
     for key in [
         "commune",
@@ -98,6 +100,7 @@ fn save_file_writes_the_documented_format() {
         "km_entree",
         "km_sortie",
         "longueur_km",
+        "ambiguous",
     ] {
         assert!(array[0].get(key).is_some(), "clé manquante : {key}");
     }

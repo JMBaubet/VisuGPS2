@@ -432,6 +432,9 @@ fn number(drafts: Vec<DraftPassage>, candidates: &[Candidate]) -> Vec<CommunePas
                 km_entree,
                 km_sortie,
                 longueur_km: km_sortie - km_entree,
+                // Le moteur Overpass ne marque pas les chevauchements de
+                // frontières : l'information n'existe que côté hermes.
+                ambiguous: false,
             }
         })
         .collect()

@@ -5,5 +5,6 @@
 
 mod commands_test;
 mod file_test;
+mod hermes_test;
 mod osm_test;
 mod pipeline_test;

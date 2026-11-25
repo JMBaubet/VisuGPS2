@@ -7,8 +7,9 @@
 use serde_json::json;
 
 use crate::hermes::types::{
-    HermesAuxPrepareResponse, HermesAuxStatus, HermesDataset, HermesIdStatus, HermesPolygon,
-    HermesPolygonInput, HermesRegion, HermesServingStatus,
+    HermesAuxPrepareResponse, HermesAuxStatus, HermesCommunesDetectRequest,
+    HermesCommunesDetectResponse, HermesCommunesParams, HermesDataset, HermesIdStatus,
+    HermesPolygon, HermesPolygonInput, HermesRegion, HermesServingStatus,
 };
 
 #[test]
@@ -240,6 +241,85 @@ fn aux_prepare_response_accepts_camel_case_and_serializes_camel_case() {
     assert_eq!(out["datasetId"], "test-monaco-ds");
     assert_eq!(out["startedAt"], "2026-11-09T20:40:44Z");
     assert_eq!(out["status"], "preparing");
+}
+
+#[test]
+fn communes_detect_response_accepts_the_contract_sample() {
+    // Échantillon de la réponse runtime validée (contrat v1.10, camelCase).
+    let raw = json!({
+        "traceId": "t-nice-monaco",
+        "datasetId": "provence-alpes-cote-dazur",
+        "detectedAt": "2026-11-09T12:52:20Z",
+        "passages": [
+            {"commune": "Nice", "passage": 1, "nbPassagesTotal": 1,
+             "kmEntree": 0.0, "kmSortie": 6.685, "longueurKm": 6.685, "ambiguous": false},
+            {"commune": "Monaco", "passage": 2, "nbPassagesTotal": 3,
+             "kmEntree": 6.685, "kmSortie": 6.9, "longueurKm": 0.215, "ambiguous": true}
+        ]
+    });
+
+    let response: HermesCommunesDetectResponse =
+        serde_json::from_value(raw).expect("réponse communes/detect lisible");
+    assert_eq!(response.trace_id, "t-nice-monaco");
+    assert_eq!(response.dataset_id, "provence-alpes-cote-dazur");
+    assert_eq!(response.detected_at, "2026-11-09T12:52:20Z");
+    assert_eq!(response.passages.len(), 2);
+    assert_eq!(response.passages[0].commune, "Nice");
+    assert_eq!(response.passages[0].km_sortie, 6.685);
+    assert_eq!(response.passages[1].nb_passages_total, 3);
+    assert!(response.passages[1].ambiguous);
+    assert!(!response.passages[0].ambiguous);
+}
+
+#[test]
+fn communes_detect_response_accepts_snake_case_and_a_missing_ambiguous() {
+    // Serveur antérieur au champ `ambiguous` : il doit valoir faux.
+    let raw = json!({
+        "trace_id": "t-1",
+        "dataset_id": "ds",
+        "passages": [
+            {"commune": "Nice", "passage": 1, "nb_passages_total": 1,
+             "km_entree": 0.0, "km_sortie": 1.0, "longueur_km": 1.0}
+        ]
+    });
+
+    let response: HermesCommunesDetectResponse =
+        serde_json::from_value(raw).expect("réponse snake_case lisible");
+    assert_eq!(response.trace_id, "t-1");
+    assert_eq!(response.detected_at, "");
+    assert!(!response.passages[0].ambiguous);
+}
+
+#[test]
+fn communes_detect_request_serializes_camel_case_and_omits_absent_level() {
+    let request = HermesCommunesDetectRequest {
+        trace_id: "t-1".to_string(),
+        dataset_id: "ds".to_string(),
+        points: vec![[7.24, 43.70], [7.30, 43.72]],
+        params: HermesCommunesParams {
+            admin_level: Some("8".to_string()),
+            min_segment_km: 0.015,
+        },
+    };
+
+    let out = serde_json::to_value(&request).expect("requête sérialisable");
+    assert_eq!(out["traceId"], "t-1");
+    assert_eq!(out["datasetId"], "ds");
+    assert_eq!(out["points"][0], json!([7.24, 43.70]));
+    assert_eq!(out["params"]["adminLevel"], "8");
+    assert_eq!(out["params"]["minSegmentKm"], 0.015);
+    // `gapMaxM` n'est pas transmis : le serveur applique son défaut (50 m).
+    assert!(out["params"].get("gapMaxM").is_none());
+
+    let auto = HermesCommunesDetectRequest {
+        params: HermesCommunesParams {
+            admin_level: None,
+            min_segment_km: 0.005,
+        },
+        ..request
+    };
+    let out = serde_json::to_value(&auto).expect("requête sérialisable");
+    assert!(out["params"].get("adminLevel").is_none());
 }
 
 #[test]

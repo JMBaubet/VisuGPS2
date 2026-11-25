@@ -12,15 +12,20 @@
 //! invalide la description des communes — et à `true` par la détection, une
 //! fois le fichier écrit.
 //!
-//! Le réseau reste côté front (WebView) : la commande reçoit la réponse Overpass
-//! brute (`osm`), et le backend se charge du reste. Le portage du prototype
-//! validé (`features/communes/`) se répartit ainsi :
+//! Le moteur nominal est désormais le serveur **hermes** : `POST
+//! /communes/detect` calcule les passages, et le module ne garde que la
+//! conversion de la réponse, le contrôle de couverture et la persistance (voir
+//! `hermes`). Le moteur **Overpass** historique reste en place, dormant, avec
+//! son portage du prototype validé (`features/communes/`) :
 //! `osm` (relations OSM → polygones nommés) → `geometry` (primitives pures) →
 //! `pipeline` (l'algorithme) → `file` (persistance) → `commands` (la commande).
+//! `geometry` sert aux deux chemins, ainsi qu'au calcul de surface des secteurs
+//! hermes.
 
 pub mod commands;
 pub mod file;
 pub mod geometry;
+pub mod hermes;
 pub mod osm;
 pub mod pipeline;
 pub mod types;

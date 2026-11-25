@@ -22,6 +22,29 @@ pub struct CommunePassage {
     pub km_sortie: f64,
     /// Longueur du passage (`km_sortie - km_entree`), en kilomètres.
     pub longueur_km: f64,
+    /// Deux passages de communes différentes se chevauchent de plus de 1 m
+    /// (frontière OSM imprécise). Absent des fichiers antérieurs à la détection
+    /// par hermes : il vaut alors `false`.
+    #[serde(default)]
+    pub ambiguous: bool,
+}
+
+/// Résultat d'une détection par le serveur hermes : les passages écrits, et deux
+/// informations que le fichier `communes.json` ne porte pas.
+///
+/// Sérialisé en **camelCase** pour l'IPC (convention Tauri) ; les passages
+/// gardent le `snake_case` du fichier, qui est leur contrat de persistance.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommuneDetection {
+    /// Passages enregistrés, au format du fichier.
+    pub passages: Vec<CommunePassage>,
+    /// Dataset servi utilisé pour la détection.
+    pub dataset_id: String,
+    /// Vrai quand **aucun** point de la trace ne tombe dans la couverture du
+    /// dataset : la liste vide est alors un « hors zone », pas un « aucune
+    /// commune ». Faux quand la couverture n'a pas pu être établie.
+    pub outside_coverage: bool,
 }
 
 /// Réglages de la détection (`Communes.Detection.*` de `settings.default.toml`).
