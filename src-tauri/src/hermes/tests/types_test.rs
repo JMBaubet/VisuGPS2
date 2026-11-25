@@ -8,13 +8,14 @@ use serde_json::json;
 
 use crate::hermes::types::{
     HermesAuxPrepareResponse, HermesAuxStatus, HermesDataset, HermesIdStatus, HermesPolygon,
-    HermesPolygonInput, HermesRegion,
+    HermesPolygonInput, HermesRegion, HermesServingStatus,
 };
 
 #[test]
 fn dataset_accepts_snake_case_and_serializes_camel_case() {
     let raw = json!([{
         "id": "provence-alpes-cote-dazur",
+        "name": "Provence-Alpes-Côte d'Azur",
         "regions": ["provence-alpes-cote-dazur"],
         "zones": null,
         "created_at": "2026-11-07T16:42:00Z",
@@ -29,6 +30,10 @@ fn dataset_accepts_snake_case_and_serializes_camel_case() {
     let dataset = &datasets[0];
     assert_eq!(dataset.id, "provence-alpes-cote-dazur");
     assert_eq!(
+        dataset.name.as_deref(),
+        Some("Provence-Alpes-Côte d'Azur")
+    );
+    assert_eq!(
         dataset.regions.as_deref(),
         Some(&["provence-alpes-cote-dazur".to_string()][..])
     );
@@ -40,9 +45,80 @@ fn dataset_accepts_snake_case_and_serializes_camel_case() {
     assert_eq!(dataset.last_log_tail, None);
 
     let out = serde_json::to_value(dataset).expect("dataset sérialisable");
+    assert_eq!(out["name"], "Provence-Alpes-Côte d'Azur");
     assert_eq!(out["createdAt"], "2026-11-07T16:42:00Z");
     assert_eq!(out["sizeBytes"], 1_750_000_000u64);
     assert_eq!(out["orsVersion"], "9.9.0");
+}
+
+#[test]
+fn dataset_exposes_v19_state_and_artifacts() {
+    let raw = json!({
+        "id": "mon-dataset",
+        "status": "preparing",
+        "state": "building",
+        "state_label": "Construction",
+        "phase": "pbf",
+        "artifacts": {
+            "pbf": true,
+            "ors": false,
+            "communes": false,
+            "tunnels": false,
+            "mm": false
+        },
+        "run_id": "run-42",
+        "size_bytes": 0,
+        "ors_version": ""
+    });
+
+    let dataset: HermesDataset =
+        serde_json::from_value(raw).expect("dataset v1.9 lisible en snake_case");
+    assert_eq!(dataset.state.as_deref(), Some("building"));
+    assert_eq!(dataset.state_label.as_deref(), Some("Construction"));
+    assert_eq!(dataset.phase.as_deref(), Some("pbf"));
+    assert_eq!(dataset.run_id.as_deref(), Some("run-42"));
+    let artifacts = dataset.artifacts.as_ref().expect("artefacts présents");
+    assert_eq!(artifacts["pbf"], json!(true));
+    assert_eq!(artifacts["mm"], json!(false));
+
+    let out = serde_json::to_value(&dataset).expect("dataset sérialisable");
+    assert_eq!(out["stateLabel"], "Construction");
+    assert_eq!(out["runId"], "run-42");
+}
+
+#[test]
+fn serving_status_accepts_camel_and_snake_case() {
+    let camel = json!({
+        "datasetId": "Monaco",
+        "state": "waiting",
+        "stateLabel": "En attente",
+        "datasetState": "building",
+        "since": "2026-11-23T12:00:00Z",
+        "reason": "construction en cours"
+    });
+    let serving: HermesServingStatus =
+        serde_json::from_value(camel).expect("serving camelCase lisible");
+    assert_eq!(serving.dataset_id.as_deref(), Some("Monaco"));
+    assert_eq!(serving.state, "waiting");
+    assert_eq!(serving.state_label.as_deref(), Some("En attente"));
+    assert_eq!(serving.dataset_state.as_deref(), Some("building"));
+    assert_eq!(serving.reason.as_deref(), Some("construction en cours"));
+
+    let out = serde_json::to_value(&serving).expect("serving sérialisable");
+    assert_eq!(out["datasetId"], "Monaco");
+    assert_eq!(out["stateLabel"], "En attente");
+
+    let snake = json!({
+        "dataset_id": null,
+        "state": "none",
+        "state_label": "Aucun dataset",
+        "dataset_state": null
+    });
+    let serving: HermesServingStatus =
+        serde_json::from_value(snake).expect("serving snake_case lisible");
+    assert_eq!(serving.dataset_id, None);
+    assert_eq!(serving.state, "none");
+    assert_eq!(serving.since, None);
 }
 
 #[test]
@@ -172,7 +248,6 @@ fn polygon_input_omits_optional_fields() {
         id: None,
         name: "Zone Nice".to_string(),
         description: None,
-        color: Some("#3b82f6".to_string()),
         geometry: json!({"type": "Polygon", "coordinates": []}),
     };
 
@@ -180,7 +255,20 @@ fn polygon_input_omits_optional_fields() {
     assert!(out.get("id").is_none());
     assert!(out.get("description").is_none());
     assert_eq!(out["name"], "Zone Nice");
-    assert_eq!(out["color"], "#3b82f6");
+}
+
+#[test]
+fn polygon_input_omits_color() {
+    let input = HermesPolygonInput {
+        id: Some("ma-zone-nice".to_string()),
+        name: "Zone Nice".to_string(),
+        description: None,
+        geometry: json!({"type": "Polygon", "coordinates": []}),
+    };
+
+    let out = serde_json::to_value(&input).expect("payload sérialisable");
+    // Contrat v1.9 : le champ `color` a disparu du payload.
+    assert!(out.get("color").is_none());
 }
 
 #[test]

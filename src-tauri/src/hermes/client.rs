@@ -129,6 +129,15 @@ impl HermesClient {
             .await
     }
 
+    /// `PUT` sans corps ni lecture de réponse (routes de sélection `/serving`).
+    pub async fn put_no_body(&self, path: &str, timeout: Duration) -> Result<(), String> {
+        let url = join_url(&self.base_url, path);
+        let _response = self
+            .execute(reqwest::Method::PUT, &url, None, timeout, false)
+            .await?;
+        Ok(())
+    }
+
     /// `DELETE` idempotent avec reprise.
     pub async fn delete(&self, path: &str, timeout: Duration) -> Result<(), String> {
         let url = join_url(&self.base_url, path);
@@ -233,7 +242,7 @@ fn backoff(attempt: usize) -> Duration {
 
 /// Une requête réseau est rejouable si l'échec est transitoire. Les erreurs
 /// `is_request`/`is_body` couvrent les connexions fermées ou réinitialisées
-/// (keep-alive expiré, coupure ZeroTier) : rejouer un `GET` ou un `DELETE` est
+/// (keep-alive expiré, coupure Tailscale) : rejouer un `GET` ou un `DELETE` est
 /// sans risque. Les `POST`/`PUT` ne passent jamais par cette branche
 /// (`retry = false`).
 fn is_retryable(error: &reqwest::Error) -> bool {

@@ -25,10 +25,11 @@
 /**
  * Chip d'état du serveur `hermes` dans la toolbar de l'Accueil.
  *
- * Il affiche l'état de connexion et l'identifiant du dataset actif. Un clic
- * ouvre la vue `/hermes`, où l'ensemble des données est géré. Le rafraîchissement
- * a lieu au montage et au retour de focus de la fenêtre — jamais par un timer
- * permanent, qui empêcherait la veille du serveur.
+ * Il affiche l'état du serveur, du service et le dataset servi. Un clic ouvre
+ * la vue `/hermes`, où la carte Serveur gère la sélection et l'instance.
+ * Le rafraîchissement complet (serving, datasets, aux) a lieu au montage et au
+ * retour de focus ; le moniteur global de `App.vue` entretient le ping API en
+ * continu et met à jour l'état du service.
  */
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'

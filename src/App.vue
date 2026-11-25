@@ -21,16 +21,20 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAppStore } from './stores/app'
 import { useCommunesStore } from './stores/communes'
+import { useHermesStore } from './stores/hermes'
+import { useSettingsStore } from './stores/settings'
 import { useTunnelsStore } from './stores/tunnels'
 import { useUiStore } from './stores/ui'
 
 const appStore = useAppStore()
 const communesStore = useCommunesStore()
+const hermesStore = useHermesStore()
+const settingsStore = useSettingsStore()
 const tunnelsStore = useTunnelsStore()
 const ui = useUiStore()
 const router = useRouter()
@@ -43,6 +47,15 @@ onMounted(async () => {
     await router.replace({ name: 'screenBis' })
     return
   }
+
+  // Le serveur se met en veille par défaut : trame WoL systématique au
+  // lancement (l'état « réveil en cours » est posé avant le premier await).
+  void hermesStore.wake()
+
+  // Moniteur de santé global : ping API permanent, ping système en secours.
+  // Les popups d'alerte (service ou serveur) sont rendues dans la vue Hermes.
+  void settingsStore.loadSettings()
+  hermesStore.startHealthMonitor()
 
   // Fenêtre principale : charger les displays sans ouvrir automatiquement la 2e fenêtre
   await appStore.loadDisplays()
@@ -60,5 +73,9 @@ onMounted(async () => {
   // il ne démarre rien.
   void tunnelsStore.bindProgress()
   void tunnelsStore.startCatchUp()
+})
+
+onUnmounted(() => {
+  hermesStore.stopHealthMonitor()
 })
 </script>

@@ -1,72 +1,906 @@
-# hermes — contrat d'interface M1
+# Contrat d'interface — API hermes et réveil
 
-> **Document de référence.** Contrat d'interface entre l'application **M1** (client Mac) et le serveur **`hermes`** (contrôleur `hermes-api` sur `:9000` + moteur ORS sur `:8002`). Spécifie les routes, les payloads, les codes HTTP, le cycle de vie client et les règles de robustesse.
->
-> **Version 1.10 — 9 novembre 2026.** Intègre les services **Communes** et **Tunnels** (Phase 8) et les nouveaux endpoints **Aux**.
->
-> **Documents liés** : `ref_tech.md` v1.10, `hermes.md` v1.10, `plan_action.md` v1.10, `communes & tunnels.md` v1.10.
+> Version 1.10 — 23 novembre 2026
+> Fichier : ~/notes/hermes-api-contract.md
+> Référence : sequencement.md v1.10, code hermes-api du 23 novembre 2026
+> Public : app M1 (Mac), PC Windows, app admin, scripts de test
 
-**Légende :**
-- 🟢 **Route M1** : utilisable par l'application M1 sans authentification (ZeroTier uniquement).
-- 🔒 **Route admin** : réservée à l'application admin (`X-Admin-Token`). M1 ne doit pas l'appeler.
-- 🆕 **v1.10** : route ajoutée en Phase 8.
+Ce document définit l'interface entre l'application cliente (Mac M1 /
+PC Windows), l'app admin, et le serveur `hermes`.
+
+**Changements v1.10** :
+
+- Nouveaux états individuels de dataset : `initializing`, `building`,
+  `ready`, `unavailable`, `degradedCommunes`, `degradedTunnels`,
+  `degradedAux`.
+- Nouvel objet `artifacts` : `pbf`, `ors`, `communes`, `tunnels`, `mm`,
+  avec les états `pending|building|ready|failed`.
+- Nouvelles routes du dataset servi : `GET /serving`,
+  `PUT /serving/{dataset_id}`, `DELETE /serving`.
+- Documentation contractuelle des routes auxiliaires :
+  `GET /datasets/{id}/aux` et `POST /datasets/{id}/aux/prepare`.
+- `skipMm` est supprimé ; toute requête qui l’envoie reçoit HTTP 422.
+- MM ne passe à `ready` que sur marqueur explicite de fin ; l’existence du
+  dossier `mm/` ne suffit pas.
+- Le champ `color` des polygones est supprimé du contrat.
+- L’URL d’API est celle de l’interface privée Tailscale, jamais
+  `127.0.0.1` sauf déploiement `--bind-local`.
+
+**Changements v1.9** (par rapport à v1.8) — clôture des candidats T57 :
+
+- **T57-I** : refonte complète de l'UI admin (voir §11 réécrit) :
+  - Vue unifiée 3 colonnes (Catalogue | Carte | Régions) sur `/admin/`
+  - Pico.css + thème clair/sombre/auto (toggle + `prefers-color-scheme`)
+  - Toolbar permanente + modal `<dialog>` natif (remplace la page plein écran)
+  - Cache IndexedDB du catalogue Geofabrik (TTL 24 h, ~3 Mo)
+  - Drapeaux `flagcdn.com`, icônes `@mdi/font`
+  - Traduction FR des continents/pays via `Intl.DisplayNames`
+  - Filtre pays persistant (défaut `France, Italie, Suisse, Espagne`)
+  - Garde-fou téléchargement (limite 500 Mo configurable)
+  - URLs `/admin/regions` et `/admin/geofabrik` conservées (redirection JS
+    vers `/admin/?focus=…`)
+- **T57-H** : `created_at` des **nouveaux** manifests au format
+  `YYYY-MM-DDTHH:MM:SSZ` (secondes + Z), comme `updated_at` de
+  `regions.json`. Les anciens manifests (`isoformat()` avec µs + offset
+  `+00:00`) restent **lisibles** par le client — voir §1.2.
+- **T57-B, C, D, E, F** : décisions **backend sans impact sur le contrat
+  client**. Détails dans `hermes.md` §8 (v1.9).
+- **T57-A, T57-G** : déjà documentés en v1.8.
+
+**Changements v1.8** (par rapport à v1.7) — implémentation des décisions
+T50–T56 (étape D) :
+
+- `GET /geofabrik/regions` : **enveloppe** `{fetched_at, regions: [...]}`
+  (E6), **11 champs** par région (E1–E4), **state à 4 valeurs** (E3),
+  `?refresh=true` (E5), `size`/`last_update` obtenus par HEAD lazy (E7).
+- `GET /api/v1/regions` : ajout de `geofabrik_id` et `updated_at` (E13).
+- `POST /api/v1/regions` : validation `id` = `^[a-zA-Z0-9_-]+$` + normalisation
+  lowercase (E9/C2), `Lock` asyncio anti-race (C3).
+- `PUT /api/v1/regions/{id}` : `affected_datasets` = `[{id, status, stale}]`
+  (E15), `bbox` recalculée (E16).
+- `POST /api/v1/datasets` : XOR neutre (messages support), 3 limites T53,
+  pas de mode `bbox`.
+- `GET /datasets` et `GET /datasets/{id}` : `stale` calculé (T55), mode `zones`
+  → `stale=false` (Q5.2).
+- Auth admin : `X-Admin-Token` (header), UI web utilise `localStorage` (E17).
+- **Nouveau §11** : UI admin (E17–E18).
+- Correctifs UI implémentation : `id` local dans le bouton « Mettre à jour »
+  (C4), `disabled` anti double-clic.
+- Amendements v1.8 : E1–E18 + C1–C4.
+
+**Changements v1.7** (par rapport à v1.6) :
+- `POST /datasets` : suppression du mode `bbox`, ajout du mode `zones`
+  (T50, T52). Payload = `regions` XOR `zones`.
+- Nouveaux endpoints CRUD `/polygons` (T54).
+- Nouveaux endpoints admin `/regions` (T55) et `/geofabrik/regions`
+  (T56).
+- Authentification admin par token `X-Admin-Token` (T55).
+- Champ `stale` dans `GET /datasets` (T55).
+- Section « Validation géométrique des polygones » (§8).
+- Section « Limites de construction » (T53, §10).
+- Section « Codes d'erreur HTTP » étendue.
+- Accents corrigés sur `GET /regions`.
+
+**Changements v1.6** (par rapport à v1.5) :
+- Découpage des itinéraires côté M1 (T47).
+- Note `maximum_distance = 100 km` conservée comme garde-fou.
+- Note « ORS non redémarré après veille ».
+- Note « reprise ORS post-restart ~70 s » (T46).
+- Codes HTTP exacts, statuts de dataset, cycle de vie complet type.
 
 ---
 
-## 1. Vue d'ensemble
+## 1. API Contrôleur (port 9000)
 
-`hermes` est un serveur backend dédié au traitement de traces GPX et au routage vélo/automobile. Il est accessible **uniquement** via le réseau privé ZeroTier `10.15.58.131` (aucune exposition publique sur Internet).
+- URL de base production : `http://100.118.62.10:9000/api/v1`
+- URL de base de la machine de développement : utiliser son IP Tailscale
+  courante, par exemple `http://100.118.62.12:9000/api/v1`.
+- `127.0.0.1` ne fonctionne que si l’API a été installée avec
+  `--bind-local`. Ne pas l’utiliser comme adresse par défaut de test.
+- Format : JSON
+- Préfixe : `/api/v1` (obligatoire)
+- Pas d'authentification pour les endpoints M1 (réseau privé Tailscale)
+- Authentification admin : header `X-Admin-Token` (voir §9)
 
-L'application M1 est un client :
-- **Routage** : vélo de route / automobile via ORS (`:8002`).
-- **Datasets** : choix des régions (PBF Geofabrik) ou zones custom (polygones M1) pour préparer un dataset ORS ad hoc.
-- **Communes** 🆕 : liste des communes traversées par une trace.
-- **Tunnels** 🆕 : liste des tunnels traversés (limité, voir §9).
-- **Cycle de vie** : créer un dataset → lancer ORS → router → enrichir → arrêter ORS.
+### 1.1 Keep-alive et Ping
 
-L'application M1 n'a **jamais** besoin de se connecter à ORS pour préparer un dataset ni pour communes/tunnels. Tout passe par `hermes-api` (`:9000`).
+**`GET /ping`**
+
+- Réponse : `200` + `{"status": "ok"}`
+- Rôle : signaler au serveur que l'application est ouverte (toutes les
+  30 secondes). Empêche la mise en veille automatique.
+- Recommandé tant que l'app M1 est ouverte.
+
+```bash
+curl -s http://10.15.58.131:9000/api/v1/ping
+# {"status":"ok"}
+```
+
+### 1.2 Gestion des Datasets
+
+#### `GET /datasets`
+
+- Réponse : `200` + tableau JSON de manifest(s)
+- Champs : `id`, `regions`, `zones`, `created_at`, `status`, `state`,
+  `stateLabel`, `phase`, `artifacts`, `runId`, `size_bytes`, `ors_version`,
+  `last_log_tail` (si le PBF/ORS est indisponible), `stale`.
+
+`state` est l’état de référence pour l’orchestrateur :
+`initializing`, `building`, `ready`, `unavailable`, `degradedCommunes`,
+`degradedTunnels`, `degradedAux`. Le champ historique `status` reste exposé
+avec le mapping `preparing|ready|failed`. `artifacts` expose séparément
+`pbf`, `ors`, `communes`, `tunnels` et `mm`.
+
+Exemple historique (dataset créé **avant v1.9**, format `isoformat()`) :
+```json
+[
+  {
+    "id": "provence-alpes-cote-dazur",
+    "regions": ["provence-alpes-cote-dazur"],
+    "zones": null,
+    "created_at": "2026-11-04T16:27:00+00:00",
+    "status": "ready",
+    "size_bytes": 1748992918,
+    "ors_version": "9.9.0",
+    "stale": false
+  }
+]
+```
+
+Les manifests actuels ajoutent `state`, `stateLabel`, `phase`, `artifacts`,
+`runId` et `stateUpdatedAt` à ces champs historiques.
+
+Exemple (dataset créé **à partir de v1.9**, format uniformisé) :
+```json
+[
+  {
+    "id": "mon-dataset",
+    "regions": ["monaco"],
+    "zones": null,
+    "created_at": "2026-11-08T16:19:29Z",
+    "status": "ready",
+    "size_bytes": 133000000,
+    "ors_version": "9.9.0",
+    "stale": false
+  }
+]
+```
+
+**Note `created_at` (T57-H, v1.9)** : deux formats coexistent :
+- **Anciens datasets** (`isoformat()` Python) : `2026-11-04T16:27:00+00:00`
+  (microsecondes + offset, ex. `2026-11-04T16:27:00.123456+00:00`)
+- **Nouveaux datasets** (v1.9+) : `2026-11-08T16:19:29Z`
+  (`strftime("%Y-%m-%dT%H:%M:%SZ")`, secondes + Z)
+
+Le client **DOIT** utiliser un parser ISO 8601 robuste (`datetime.fromisoformat`
+Python, `new Date()` JS, etc.), pas une comparaison string naïve. Le serveur
+lui-même utilise `datasets._parse_iso()` qui accepte les deux formats.
+
+- `stale: true` : au moins une région du dataset a été mise à jour
+  (via `PUT /regions/{id}`) après sa création, OU une région du dataset
+  n'existe plus dans `regions.json` (supprimée via `DELETE /regions/{id}`).
+  La reconstruction est à la charge du client (voir §4, cycle de vie).
+- **Mode `zones`** (Q5.2, v1.8) : `stale=false` toujours (pas d'info
+  fiable sur les régions sous-jacentes utilisées pour le clipping).
+  Reconstruction déclenchée par le client quand il le souhaite.
+
+#### `GET /datasets/{id}`
+
+- Réponse : `200` + manifest, ou `404` si dataset introuvable
+- Si `state: "unavailable"`, `last_log_tail` contient les 50 dernières
+  lignes utiles (log contrôleur + journal ORS).
+- `status` reste un champ de compatibilité : utiliser `state` pour toute
+  nouvelle logique.
+- Inclut `stale` (même calcul que `GET /datasets`)
+
+#### `POST /datasets`
+
+Lance la préparation d'un dataset en arrière-plan.
+
+**Payload** (XOR strict, T52 — le mode `bbox` est supprimé) :
+
+Mode `regions` (merge des PBF entiers) :
+```json
+{"name": "mon-dataset", "regions": ["provence-alpes-cote-dazur", "italy-nord-ovest"]}
+```
+
+Mode `zones` (clipping osmium, T50) :
+```json
+{"name": "mon-dataset", "zones": ["ma-zone-nice", "ma-zone-marseille"]}
+```
+
+- `name` : optionnel, max 64 chars, regex `^[a-zA-Z0-9_-]+$`
+  (si absent, généré `ds-<timestamp>-<slug>`)
+- `regions` : liste de clés de `regions.json`
+- `zones` : liste d'IDs de polygones custom (créés via `POST /polygons`)
+- **Pas de mixte `regions` + `zones`** (T52)
+- **Pas de `bbox`** (T52)
+
+**Réponses :**
+
+| HTTP | Cas | Corps |
+|---|---|---|
+| `202` | Accepté, build lancé | `{"id":"...","status":"preparing","state":"initializing","stateLabel":"Initialisation","phase":"pbf","runId":"..."}` |
+| `400` | Payload invalide, PBF manquant, zone manquante, limite dépassée (T53), XOR violé | `{"detail": "..."}` |
+| `409` | Un build est déjà en cours | `{"detail": "build déjà en cours: <id>"}` |
+
+**Messages d'erreur neutres + support (Q2.1 ter, v1.8)** :
+
+Le handler `create_dataset` vérifie le XOR **avant** d'appeler les résolveurs.
+Les messages ont deux parties : fait factuel + invitation support.
+
+| Cas | `detail` |
+|---|---|
+| `{}` ou `{"name":"x"}` | `"Aucun périmètre fourni (ni région ni zone). Si vous venez de sélectionner un périmètre dans l'application, un problème inattendu est survenu : réessayez, puis signalez-le au support."` |
+| `{"regions": []}` seul | `"La liste des régions est vide. Si vous venez de sélectionner une région dans l'application, un problème inattendu est survenu : réessayez, puis signalez-le au support."` |
+| `{"zones": []}` seul | `"La liste des zones est vide. Si vous venez de sélectionner une zone dans l'application, un problème inattendu est survenu : réessayez, puis signalez-le au support."` |
+| `{"regions": [...], "zones": [...]}` (les deux non vides) | `"Régions et zones ne peuvent pas être fournies ensemble. Si vous n'avez sélectionné qu'un seul type de périmètre dans l'application, un problème inattendu est survenu : réessayez, puis signalez-le au support."` |
+
+Les `[]` seuls sont traités comme « absent » (Q2.1 bis) : `{"regions": ["paca"], "zones": []}` → mode `regions`, `zones` ignoré.
+
+**Limites** (T53, voir §10) : nombre de régions, surface totale,
+nombre de zones. Dépassement → `400` avec messages factuels :
+- `"trop de zones: N (max M)"`
+- `"trop de régions: N (max M)"`
+- `"surface totale N km² (max M km²)"`
+
+**Durée** :
+- mode `regions` : ~12 min (1 région) à ~26 min (2 régions, 2 profils).
+  Mesuré jusqu'à ~9 min sur système chaud (rebuild PACA D.6).
+- mode `zones` : quelques secondes à quelques minutes (clipping
+  osmium + build ORS sur dataset réduit). Mesuré ~80 s pour Nice+Monaco.
+
+**Le client DOIT interroger `GET /datasets/{id}` pour suivre
+l'avancement.** Un POST réussi n'indique que le démarrage, pas la
+fin.
+
+#### `DELETE /datasets/{id}`
+
+- Stoppe l'instance ORS si elle tourne, supprime le dataset
+- Réponse : `204` ou `404`
+- **Précaution** : supprime graphes et caches d'élévation
+- Si le dataset supprimé est le dataset sélectionné, la sélection est conservée
+  par id pour permettre le flux update `DELETE` puis `POST`.
+
+### 1.3 Régions (M1, lecture seule)
+
+#### `GET /regions`
+
+Liste les régions indexées dans `regions.json`, avec leur contour
+GeoJSON (T48).
+
+- Réponse : `200` + tableau JSON
+
+Exemple :
+```json
+[
+  {
+    "id": "provence-alpes-cote-dazur",
+    "bbox": [4.144746, 42.31539, 7.748528, 45.12887],
+    "has_poly": true,
+    "geojson": {
+      "type": "Polygon",
+      "coordinates": [[[7.729716, 43.48231], [7.555371, 43.48099], ...]]
+    },
+    "geofabrik_id": "europe/france/provence-alpes-cote-d-azur",
+    "updated_at": "2026-11-06T21:04:41Z"
+  },
+  {
+    "id": "monaco",
+    "bbox": [7.408583, 43.48382, 7.595671, 43.75293],
+    "has_poly": true,
+    "geojson": {...},
+    "geofabrik_id": "europe/monaco",
+    "updated_at": "2026-11-07T10:30:33Z"
+  }
+]
+```
+
+- `has_poly` : `true` si un fichier `.poly` a été trouvé et converti,
+  `false` si fallback sur `bbox` (rectangle)
+- `geojson` : objet `Polygon` standard (lon/lat WGS84)
+- `geofabrik_id` : **ajout v1.8** (E13), identifiant Geofabrik complet
+  (`null` si migration non faite)
+- `updated_at` : **ajout v1.8** (E13), timestamp ISO 8601 UTC de la
+  dernière mise à jour locale (POST/PUT `/regions`). `null` si inconnu.
+- Utilisation M1 : affichage des régions sur la carte (peut ignorer
+  `geofabrik_id` et `updated_at`, non-breaking)
+
+### 1.4 Polygones custom (CRUD, T54)
+
+Les polygones custom sont stockés côté serveur dans
+`/srv/hermes/polygons/` (T51). Ils servent au mode `zones` de
+`POST /datasets`.
+
+#### `GET /polygons`
+
+- Réponse : `200` + tableau JSON de polygones complets
+- Chaque polygone contient tous ses champs (pas de version allégée) :
+  `id`, `name`, `description`, `geometry`, `bbox`,
+  `created_at`, `updated_at`, `revision`
+
+Exemple :
+```json
+[
+  {
+    "id": "ma-zone-nice",
+    "name": "Zone Nice - Col de Turini",
+    "description": "Zone tampon autour de la trace",
+    "geometry": {"type": "Polygon", "coordinates": [[...]]},
+    "bbox": [7.20, 43.65, 7.40, 43.80],
+    "created_at": "2026-11-06T10:30:00Z",
+    "updated_at": "2026-11-06T10:30:00Z",
+    "revision": 1
+  }
+]
+```
+
+- Pas de filtre (T54) : M1 filtre côté client
+- Pas de pagination (T54)
+
+#### `GET /polygons/{id}`
+
+- Réponse : `200` + objet complet, ou `404`
+- `400` si id invalide (regex)
+- `403` si permissions insuffisantes (cas rare)
+
+#### `POST /polygons`
+
+Crée un polygone. L'`id` est fourni par le client (T54).
+
+**Payload :**
+```json
+{
+  "id": "ma-zone-nice",
+  "name": "Zone Nice",
+  "description": "optionnel",
+  "geometry": {"type": "Polygon", "coordinates": [[[7.26,43.71],[7.28,43.71],[7.28,43.73],[7.26,43.73],[7.26,43.71]]]}
+}
+```
+
+**Validation** (voir §8) :
+- `id` : regex `^[a-zA-Z0-9_-]+$`, 1-64 chars, `index` réservé
+- `geometry` : `Polygon` uniquement, 1000 sommets max, auto-fermeture,
+  arrondi serveur à 5 décimales
+
+**Réponses :**
+
+| HTTP | Cas | Corps |
+|---|---|---|
+| `201` | Créé | objet complet |
+| `400` | `id` invalide, `geometry` invalide | `{"detail": "..."}` |
+| `409` | `id` déjà utilisé | `{"detail": "polygone existe déjà: <id>"}` |
+
+#### `PUT /polygons/{id}`
+
+Remplacement complet (pas de `PATCH`, T54). Le client envoie
+`name`, `description?`, `geometry`. Le serveur recalcule
+`bbox`, incrémente `revision`, met à jour `updated_at`.
+
+**Payload :**
+```json
+{
+  "name": "Zone Nice v2",
+  "geometry": {"type": "Polygon", "coordinates": [[...]]}
+}
+```
+
+- Champs modifiables : `name`, `description`, `geometry`
+- Champs ignorés : `id`, `created_at`, `bbox`, `revision` (calculés
+  serveur). Un `id` fourni dans le corps est **ignoré silencieusement**
+  (Q4.2 v1.7, confirmé D.2).
+- Remplacement complet : `description` absent → remis à
+  `null` (Q8 du contrat v1.7).
+
+**Réponses :**
+
+| HTTP | Cas | Corps |
+|---|---|---|
+| `200` | Modifié | objet complet mis à jour |
+| `400` | Payload invalide | `{"detail": "..."}` |
+| `404` | Polygone introuvable | `{"detail": "polygone introuvable"}` |
+
+#### `DELETE /polygons/{id}`
+
+- Réponse : `204` ou `404`
+- `400` si id invalide
+- **Précaution** : si un dataset a été créé avec ce polygone, il
+  reste fonctionnel (son `merged.osm.pbf` est déjà clippé). Seul le
+  polygone lui-même est supprimé.
+
+### 1.5 Instances ORS
+
+#### `GET /instances`
+
+- Réponse : `200` + tableau d'instances actives
+
+```json
+[{"id": "provence-alpes-cote-dazur", "status": "active"}]
+```
+
+#### `POST /instances/{id}/start`
+
+- Démarre ORS pour le dataset spécifié
+- Réponse : `200` + `{"id": "...", "status": "starting"}`, `404` si
+  dataset introuvable, `409` si `ors-config.yml` manquant
+- `status: "starting"` ≠ `ready`. Polling `GET /ors/v2/health` requis.
+- Délai : ~15 s (1 profil) à ~70 s (2 profils, T46)
+
+#### `POST /instances/{id}/stop`
+
+- Arrête ORS
+- Réponse : `200` + `{"id": "...", "status": "stopped"}`, ou `404`
+- Après stop, nouveau `start` recharge le graphe (15–70 s)
+
+### 1.6 Dataset servi par Hermes
+
+La sélection est indépendante du dataset en cours de construction. Elle est
+persistée dans `/srv/hermes/serving.json`.
+
+États : `none`, `waiting`, `starting`, `active`, `stopped`, `failed`.
+
+#### `GET /serving`
+
+```json
+{
+  "datasetId": "Monaco",
+  "state": "waiting",
+  "stateLabel": "En attente",
+  "datasetState": "building",
+  "since": "2026-11-23T12:00:00Z",
+  "reason": "construction en cours"
+}
+```
+
+#### `PUT /serving/{dataset_id}`
+
+- persiste le dataset sélectionné ;
+- démarre automatiquement ORS lorsqu’il est exploitable ;
+- ne remplace pas automatiquement la sélection lors d’un build d’un autre
+  dataset.
+
+#### `DELETE /serving`
+
+- arrête ORS ;
+- efface la sélection.
+
+### 1.7 Artefacts auxiliaires
+
+Les trois artefacts sont `communes.geojson`, `tunnels-logiques.json` et
+`mm/`. Chaque artefact expose indépendamment :
+
+```text
+pending | building | ready | failed
+```
+
+Un artefact `ready` doit posséder son marqueur de terminaison sous
+`/srv/hermes/datasets/<id>/.state/`. En particulier, un dossier `mm/`
+non vide n’est pas `ready` tant que `mm.json` ne l’indique pas.
+
+#### `GET /datasets/{id}/aux`
+
+Réponse `200` :
+
+```json
+{
+  "datasetId": "EB-Monaco",
+  "communes": {
+    "name": "communes.geojson",
+    "state": "ready",
+    "exists": true,
+    "sizeBytes": 123456,
+    "completedAt": "2026-11-23T20:00:00Z"
+  },
+  "tunnels": {
+    "name": "tunnels-logiques.json",
+    "state": "ready",
+    "exists": true
+  },
+  "mm": {
+    "name": "mm/",
+    "state": "building",
+    "exists": true
+  },
+  "preparing": true,
+  "startedAt": "2026-11-23T20:01:00Z",
+  "lastError": null,
+  "loadedInMemory": false,
+  "activeDataset": null,
+  "runId": "f7..."
+}
+```
+
+- `404` si le dataset n’existe pas.
+- `preparing=true` uniquement pour le dataset effectivement en préparation.
+- `lastError` est propre au dernier run du dataset.
+
+#### `POST /datasets/{id}/aux/prepare`
+
+Payload strict :
+
+```json
+{"force": false}
+```
+
+- `force=true` régénère les trois artefacts même s’ils existent.
+- `skipMm` n’existe plus. Pydantic refuse les champs inconnus : envoyer
+  `skipMm` produit HTTP **422**.
+- Réponse nominale : HTTP **200**, pas 202.
+
+```json
+{
+  "datasetId": "EB-Monaco",
+  "status": "preparing",
+  "startedAt": "2026-11-23T20:01:00Z",
+  "runId": "f7...",
+  "message": "Préparation en tâche de fond. Consulter GET /datasets/{id}/aux"
+}
+```
+
+- `404` : dataset inexistant.
+- `409` : build ORS en cours, aux déjà en cours, ou PBF absent/non validé.
+- La route n’exige pas `X-Admin-Token` dans l’implémentation actuelle ; son
+  accès est protégé par le réseau privé.
+
+Condition complète de succès :
+
+```text
+preparing == false
+lastError == null
+communes.state == ready
+tunnels.state == ready
+mm.state == ready
+```
+
+### 1.8 Admin — Régions (T55)
+
+**Tous les endpoints de cette section nécessitent le header
+`X-Admin-Token`** (voir §9).
+
+#### `POST /regions`
+
+Ajoute une région depuis le catalogue Geofabrik. Télécharge le PBF +
+le `.poly`, valide, place dans `/srv/hermes/pbf/`, met à jour
+`regions.json`.
+
+**Payload :**
+```json
+{"id": "monaco", "geofabrik_id": "europe/monaco"}
+```
+
+- `id` : validation `^[a-zA-Z0-9_-]+$`, 1-64 chars, `regions` et `index`
+  réservés, **normalisation lowercase automatique** (E9, C2) : `"Monaco"`
+  → `"monaco"`
+- `geofabrik_id` : identifiant Geofabrik complet (path), ex.
+  `europe/france/provence-alpes-cote-d-azur`
+
+**Pipeline serveur (T58 — tâche de fond) :**
+1. Valide `id` (lowercase)
+2. Vérifie que `id` n'existe pas déjà (`409`)
+3. Vérifie qu'aucun autre téléchargement n'est en cours (`409` + `job_id`)
+4. Cherche `geofabrik_id` dans le catalogue Geofabrik (404 interne si absent → `400`)
+5. Répond immédiatement `202` avec un `job_id`, puis en arrière-plan :
+   télécharge le PBF (streaming reprise `Range`, whitelist
+   `GEOFABRIK_BASE_URL`, taille max 5 Go, blocage détecté après 60 s sans
+   octet, vérification taille + MD5), valide `osmium fileinfo`, télécharge
+   le `.poly` (best-effort), écriture atomique puis `regions.json`
+6. **Un seul job à la fois** (C3) : un second POST/PUT renvoie `409`
+
+**Réponses :**
+
+| HTTP | Cas | Corps |
+|---|---|---|
+| `202` | Job accepté | `{"job_id": "...", "id": "...", "status": "queued"}` |
+| `400` | Payload invalide, URL non whitelistée, id réservé, région Geofabrik inconnue | `{"detail": "..."}` |
+| `401` | Token absent ou invalide | `{"detail": "X-Admin-Token absent ou invalide"}` |
+| `409` | Région déjà existante, ou téléchargement déjà en cours | `{"detail": "..."}` ou `{"detail": {"message": "...", "job_id": "..."}}` |
+| `500` | `ADMIN_TOKEN` non configuré côté serveur | `{"detail": "ADMIN_TOKEN non configuré côté serveur"}` |
+| `503` | Catalogue Geofabrik injoignable | `{"detail": "..."}` |
+| `507` | Disque plein | `{"detail": "..."}` |
+
+- Whitelist : URLs commençant par `GEOFABRIK_BASE_URL` (T56)
+- Taille max : 5 Go
+- Suivi : `GET /regions/downloads/{job_id}` (voir §1.6.1)
+
+**Path traversal** (E14) : un id contenant `/` est bloqué **au niveau du
+router HTTP** (404, résolution URL) **et** par `validate_region_id` (400).
+Défense en profondeur.
+
+#### `PUT /regions/{id}`
+
+Met à jour une région existante (re-téléchargement du PBF + poly).
+
+- Réponse : `202` + `{"job_id": "...", "id": "...", "status": "queued"}`
+  (téléchargement en tâche de fond, T58)
+- Le résultat final (`affected_datasets`) est disponible dans le job :
+  `GET /regions/downloads/{job_id}` → champ `result` :
+  ```json
+  {
+    "id": "provence-alpes-cote-dazur",
+    "updated_at": "...",
+    "affected_datasets": [
+      {"id": "provence-alpes-cote-dazur", "status": "ready", "stale": true}
+    ]
+  }
+  ```
+  Permet à l'admin de signaler aux utilisateurs que leur dataset est
+  `stale`.
+- **Ne reconstruit PAS les datasets existants** (responsabilité
+  utilisateur)
+- `404` si région introuvable, `400` si id invalide ou `geofabrik_id`
+  manquant, `409` si build/téléchargement en cours
+- **Un seul job à la fois** (C3) : sérialise avec `POST /regions`
+- `bbox` recalculée depuis la `geometry` Geofabrik (E16)
+
+#### `DELETE /regions/{id}`
+
+- Supprime les fichiers `.pbf` et `.poly` et l'entrée dans `regions.json`
+- Réponse : `204` ou `404`
+- `400` si id invalide
+- `409` si un téléchargement est en cours sur cette région (`job_id` fourni)
+- **N'échoue pas** si des datasets existants utilisent encore cette
+  région (leur `merged.osm.pbf` reste intact). Les datasets
+  deviennent `stale: true` (région absente de `regions.json`) mais
+  restent fonctionnels.
+
+#### Jobs de téléchargement (T58)
+
+**Tous les endpoints de cette sous-section nécessitent `X-Admin-Token`.**
+
+| Méthode | Route | Description |
+|---|---|---|
+| `GET` | `/regions/downloads?active=true` | Liste des jobs (50 derniers, ou actifs seulement) |
+| `GET` | `/regions/downloads/{job_id}` | État + progression d'un job |
+| `POST` | `/regions/downloads/{job_id}/cancel` | Annulation (le partiel est conservé) |
+| `POST` | `/regions/downloads/{job_id}/resume` | Reprise depuis le fichier partiel |
+
+Un job expose notamment :
+
+```json
+{
+  "job_id": "dl-20261118T150643-092549",
+  "action": "add",
+  "region_id": "monaco",
+  "status": "downloading_pbf",
+  "bytes_downloaded": 312000000,
+  "total_bytes": 708123000,
+  "percent": 44.1,
+  "speed_bps": 3400000,
+  "eta_s": 116,
+  "attempt": 2,
+  "max_attempts": 6,
+  "retry_reason": "aucune donnée reçue pendant 60 s (connexion bloquée)",
+  "stalled": false,
+  "seconds_since_progress": 3,
+  "error": null,
+  "result": null
+}
+```
+
+**Statuts :** `queued`, `downloading_pbf`, `verifying_pbf`,
+`downloading_poly`, `committing`, `done`, `failed`, `cancelled`,
+`interrupted`.
+
+- `interrupted` : le service a redémarré pendant le téléchargement. Le
+  fichier partiel (`/srv/hermes/pbf/.tmp-<id>.osm.pbf`) et ses
+  métadonnées sont conservés ; `POST .../resume` reprend à l'offset exact.
+- `stalled: true` : aucun octet reçu depuis `GEOFABRIK_READ_TIMEOUT_S`
+  (60 s par défaut) pendant une phase de téléchargement. La reprise est
+  automatique (backoff, jusqu'à `GEOFABRIK_MAX_ATTEMPTS`).
+- `error` / `retry_reason` sont des messages lisibles destinés à l'IHM.
+
+### 1.9 Admin — Catalogue Geofabrik (T55, T56)
+
+**Tous les endpoints de cette section nécessitent `X-Admin-Token`.**
+
+#### `GET /geofabrik/regions`
+
+Renvoie le catalogue Geofabrik enrichi. Cache local 7 jours.
+
+**Paramètres :**
+- `refresh` (query, bool, défaut `false`) : force le re-téléchargement
+  du catalogue (E5)
+
+**Réponse : enveloppe** (E6, **rupture vs v1.7 qui retournait un tableau**) :
+
+```json
+{
+  "fetched_at": "2026-11-06T20:16:08Z",
+  "regions": [
+    {
+      "id": "europe/monaco",
+      "name": "Monaco",
+      "parent": "europe",
+      "path": ["europe", "monaco"],
+      "level": 2,
+      "size": 707098,
+      "last_update": "2026-11-05T16:43:47Z",
+      "already_added": true,
+      "state": "stale",
+      "age_days": 1,
+      "geometry": {"type": "MultiPolygon", "coordinates": [[...]]}
+    },
+    {
+      "id": "europe/france/provence-alpes-cote-d-azur",
+      "name": "Provence Alpes-Cote-d'Azur",
+      "parent": "europe/france",
+      "path": ["europe", "france", "provence-alpes-cote-d-azur"],
+      "level": 3,
+      "size": 391496840,
+      "last_update": "2026-11-05T18:08:41Z",
+      "already_added": true,
+      "state": "stale",
+      "age_days": 2,
+      "geometry": {"type": "MultiPolygon", "coordinates": [[...]]}
+    },
+    {
+      "id": "europe/italy/nord-ovest",
+      "name": "Nord-Ovest",
+      "parent": "europe/italy",
+      "path": ["europe", "italy", "nord-ovest"],
+      "level": 3,
+      "size": 594760218,
+      "last_update": "2026-11-05T20:11:36Z",
+      "already_added": true,
+      "state": "stale",
+      "age_days": 1,
+      "geometry": {...}
+    },
+    {
+      "id": "europe/andorra",
+      "name": "Andorra",
+      "parent": "europe",
+      "path": ["europe", "andorra"],
+      "level": 2,
+      "size": 3508150,
+      "last_update": "2026-11-05T15:30:12Z",
+      "already_added": false,
+      "state": "absent",
+      "age_days": null,
+      "geometry": {...}
+    }
+  ]
+}
+```
+
+**Champs par région (11, E1–E4) :**
+
+| Champ | Type | Sens |
+|---|---|---|
+| `id` | str | path complet (`europe/france/provence-...`), reconstruit via parent |
+| `name` | str | nom lisible |
+| `parent` | str | path complet du parent (`europe/france`), `null` si racine |
+| `path` | list[str] | segments (`["europe","france","provence-..."]`), pour construire un arbre UI |
+| `level` | int | `1`=continent, `2`=pays, `3`=région (`len(path)`) |
+| `size` | int \| null | taille PBF en octets (HEAD lazy, `null` si échec) |
+| `last_update` | str \| null | ISO 8601 UTC de dernière MAJ Geofabrik (HEAD lazy, `null` si échec) |
+| `already_added` | bool | `true` si `id` présent dans `regions.json` (via `geofabrik_id`) |
+| `state` | str | `absent` / `current` / `stale` / `old` (voir table ci-dessous) |
+| `age_days` | int \| null | jours depuis `updated_at` local (`null` si `absent`) |
+| `geometry` | object | GeoJSON `MultiPolygon` (catalogue source, pour carte) |
+
+**Logique `state` (E3, priorité `stale` > `old` > `current`) :**
+
+| `state` | Condition | Couleur UI |
+|---|---|---|
+| `absent` | pas dans `regions.json` | rouge |
+| `stale` | présent + Geofabrik a publié une version plus récente (`last_update > updated_at`), **indépendant de l'âge** | vert-jaune |
+| `old` | présent + pas de MAJ Geofabrik + `age_days >= 60` (2 mois) | orange |
+| `current` | présent + pas de MAJ Geofabrik + `age_days < 60` | vert |
+
+**`size` et `last_update` (E7)** : le catalogue Geofabrik `index-v1.json`
+ne contient **pas** ces champs. Le serveur les obtient par **HEAD** sur
+l'URL PBF (ou GET `Range: bytes=0-0` en fallback), **uniquement pour
+les régions déjà ajoutées** (`already_added=true`) — typiquement 2 à 5
+requêtes, coût négligeable. En cas d'échec réseau, `size` et
+`last_update` restent `null` (état limité à `current` ou `old`).
+
+**Cache** :
+- Fichier : `/srv/hermes/pbf/geofabrik_catalog.json`
+- TTL : **7 jours** (`GEOFABRIK_CATALOG_URL` refetch automatique)
+- `?refresh=true` force le re-fetch
+- Si Geofabrik inaccessible + cache existant (même périmé) : cache
+  servi + warning log
+- Si Geofabrik inaccessible + pas de cache : `503`
+- `fetched_at` : timestamp du dernier fetch réussi
+
+**Filtrage** : uniquement les entrées avec `urls.pbf` **et** `geometry`
+présentes (exclut les continents sans PBF téléchargeable).
+
+**Usage UI admin** : arbre dépliable par `path` (continent → pays →
+région), survol/clic affiche `geometry` sur carte Leaflet, couleurs
+selon `state`, boutons « Ajouter » (state=absent) ou « Mettre à jour »
+(state=current/stale/old).
 
 ---
 
-## 2. Configuration réseau M1
+## 2. API ORS (port 8002)
 
-### 2.1 ZeroTier
+- URL de base (LAN ou ZeroTier) : `http://10.15.58.131:8002/ors/v2`
+- Format : JSON
+- Profils actifs : **`driving-car`**, **`cycling-road`** (T36)
 
-| Élément | Valeur |
+### 2.1 Health check
+
+**`GET /ors/v2/health`**
+
+- Réponse : `200` + `{"status": "ready"}`, ou `503` + `{"status": "not ready"}`
+- À utiliser après chaque `POST /instances/{id}/start` ou après un
+  redémarrage serveur
+
+### 2.2 Calcul d'itinéraire
+
+**`POST /ors/v2/directions/{profile}/geojson`**
+
+- Profils : `driving-car`, `cycling-road`
+- **Limite** : distance à vol d'oiseau entre les waypoints **≤ 100 km**
+  (code 2004 au-delà). Voir T47 ci-dessous.
+
+**Payload :**
+
+```json
+{
+  "coordinates": [[lon1, lat1], [lon2, lat2]],
+  "elevation": true,
+  "instructions": true,
+  "geometry_simplify": false
+}
+```
+
+- `coordinates` : 2 à 50 waypoints `[lon, lat]` (WGS84)
+- `elevation` : `true` → coordonnées 3D
+- `instructions` : `true` → segments + steps
+- `geometry_simplify` : `false` → tous les points
+
+**Réponse :**
+
+- `200` + GeoJSON `FeatureCollection`
+- `400` + `{"error": {"code": 2004, ...}}` si route > 100 km
+- `404` + `{"error": {"code": 2010, ...}}` si waypoint hors du réseau routable (rayon 400 m)
+- `503` si ORS pas `ready`
+
+**Champs exploités par M1 :**
+
+| Champ | Signification |
 |---|---|
-| Network ID | `08752e18b13fb847` |
-| IP hermes | `10.15.58.131` |
-| IP Mac M1 | `10.15.58.56` |
-| Fallback DNS | IP ZeroTier directe (pas de DNS configuré, D6) |
-| Test 4G | Hotspot iPhone avec « Maximize Compatibility » |
+| `features[0].geometry.coordinates` | `[[lon, lat, ele], ...]` |
+| `features[0].properties.ascent` | Dénivelé positif (m) |
+| `features[0].properties.descent` | Dénivelé négatif (m) |
+| `features[0].properties.summary.distance` | Distance (m) |
+| `features[0].properties.summary.duration` | Durée (s) |
+| `features[0].properties.segments[].steps[]` | Guidage (optionnel) |
 
-**Procédure d'invitation** :
-1. Communiquer le Network ID à l'invité.
-2. L'invité ajoute le réseau dans son client ZeroTier.
-3. Autoriser son nœud dans ZeroTier Central.
+### 2.3 Découpage des itinéraires (T47)
 
-### 2.2 URLs de base
+**L'app M1 découpe systématiquement tout itinéraire en segments
+de ≤ 50 km entre waypoints consécutifs.**
 
-| Service | URL |
-|---|---|
-| Contrôleur API | `http://10.15.58.131:9000/api/v1` |
-| ORS | `http://10.15.58.131:8002/ors/v2` |
-| UI admin (navigateur) | `http://10.15.58.131:9000/admin/` |
-| Doc auto (OpenAPI) | `http://10.15.58.131:9000/docs` |
+Règles :
+- Distance mesurée à vol d'oiseau (Haversine)
+- Si > 50 km : insérer un waypoint intermédiaire (interpolation
+  géodésique) jusqu'à ce que tous les segments soient ≤ 50 km
+- Les waypoints intermédiaires ne sont pas affichés dans l'UI
+- Concaténation finale : distance, durée, ascent/descent, coordonnées
+  (supprimer le doublon aux jonctions)
 
-### 2.3 Réveil WoL
+**Garde-fou ORS** (`maximum_distance = 100 km`, inchangé) : un
+segment > 100 km (bug de découpage) renvoie `code 2004`.
 
-| Élément | Valeur |
-|---|---|
-| MAC cible | `68:5b:35:a8:5c:65` (interface `enp1s0f0`) |
-| IP publique box | `87.91.31.205` (Bouygues) |
-| Port UDP | `9` |
+---
 
-**Python (exemple)** :
+## 3. Réveil à distance (Wake-on-LAN)
+
+Le serveur se met en veille après **15 minutes** d'inactivité.
+
+- **Mécanisme** : paquet UDP (port 9) vers l'IP publique de la box FAI
+- **IP cible** : `87.91.31.205` (Box FAI Bouygues)
+- **MAC cible** : `68:5b:35:a8:5c:65` (interface `enp1s0f0`)
+- **Format** : 6 octets `0xFF` + 16 répétitions de la MAC
+
+**Exemple Python :**
 
 ```python
 import socket
-
 mac = bytes.fromhex("685b35a85c65")
 pkt = b"\xff" * 6 + mac * 16
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -76,1039 +910,498 @@ for _ in range(3):
 s.close()
 ```
 
-**Temps de reprise mesuré** : ~50 s à ~1min52s (boot + services + ORS ready si instance active avant veille).
+**Recommandation** : 3 trames (espacées de 1 s). Attendre ~50 s
+(phase 4) à ~2 min (phase 5, mesuré 1min52s). Le client doit
+réessayer `GET /ping` en boucle (timeout global 3 min).
 
 ---
 
-## 3. Conventions générales de l'API contrôleur
+## 4. Cycle de vie complet type
 
-### 3.1 Formats
+```
+┌─ App M1 ouverte ──────────────────────────────────────────────┐
+│                                                                │
+│ 1. GET /api/v1/ping (toutes les 30 s)                         │
+│                                                                │
+│ 2. [Affichage carte, optionnel]                                │
+│    GET /api/v1/regions                                        │
+│    GET /api/v1/polygons                                       │
+│                                                                │
+│ 3. [Création zone custom, optionnel]                          │
+│    POST /api/v1/polygons {id, name, geometry}                 │
+│    → 201 objet complet                                        │
+│                                                                │
+│ 4. POST /api/v1/datasets {name, regions} OU {name, zones}    │
+│    → 202 {"id":"...","status":"preparing"}                    │
+│                                                                │
+│ 5. GET  /api/v1/datasets/{id} (polling 30 s)                 │
+│    → preparing → ready (ou failed + last_log_tail)           │
+│                                                                │
+│ 6. POST /api/v1/instances/{id}/start                          │
+│    → 200 starting                                             │
+│                                                                │
+│ 7. GET  /ors/v2/health (polling 3 s)                         │
+│    → 503 → 200 ready (~15-70 s)                               │
+│                                                                │
+│ 8. [Pour chaque segment ≤ 50 km, T47]                         │
+│    POST /ors/v2/directions/{profile}/geojson                  │
+│                                                                │
+│ 9. [Concaténation côté M1]                                     │
+│                                                                │
+│ 10. POST /api/v1/instances/{id}/stop                          │
+│     → 200 stopped                                              │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
 
-- **Timestamps** : `YYYY-MM-DDTHH:MM:SSZ` (UTC, secondes, suffixe `Z`).
-- **Payload** : JSON, **camelCase** côté client (`traceId`, `datasetId`, `kmEntree`...). Le serveur utilise `snake_case` en interne et expose `camelCase` via Pydantic `alias`.
-- **Réponse** : toujours JSON (sauf `204 No Content`).
-- **Coordonnées** : `[lon, lat]` ou `[lon, lat, ele]` en WGS84 (EPSG:4326), comme ORS (GeoJSON standard).
-- **Unités** : distances en **km** (sauf champs suffixés `_m`/`M` en mètres), durées en **secondes**, surfaces en **km²**.
+┌─ App admin ───────────────────────────────────────────────────┐
+│                                                                │
+│ 1. [Ouvrir UI] http://10.15.58.131:9000/admin/               │
+│    - Saisir token si localStorage vide                        │
+│    - Vue unifiée 3 colonnes (Catalogue | Carte | Régions)    │
+│                                                                │
+│ 2. [Catalogue] colonne 1, arbre + carte au survol             │
+│    → couleurs state, boutons Ajouter/MAJ                     │
+│                                                                │
+│ 3. [Ajouter une région]                                       │
+│    POST /api/v1/regions {id, geofabrik_id}                    │
+│    → 201, téléchargement + ajout automatique                  │
+│                                                                │
+│ 4. [Mettre à jour]                                            │
+│    PUT /api/v1/regions/{id}                                   │
+│    → 200, affected_datasets retournés                         │
+│                                                                │
+│ 5. [Supprimer]                                                │
+│    DELETE /api/v1/regions/{id}                                │
+│    → 204, datasets stale=true                                 │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
 
-### 3.2 Authentification
+┌─ Si l'utilisateur ferme l'app M1 ──────────────────────────────┐
+│ Après 15 min sans ping → veille auto (S3)                     │
+│ Réveil : WoL UDP/9, puis GET /ping en boucle                  │
+│ Si ORS était stoppé avant veille → reste stoppé (refaire      │
+│ POST /instances/{id}/start)                                    │
+└────────────────────────────────────────────────────────────────┘
+```
 
-- **Routes M1 🟢** : **aucune authentification**. Protection par le réseau ZeroTier privé uniquement.
-- **Routes admin 🔒** : header `X-Admin-Token: <hex64>`. Non utilisé par M1.
+**Notes importantes :**
 
-### 3.3 Codes HTTP standard
+- **ORS non redémarré après veille** : S3 préserve l'état. Si instance
+  `active` avant veille → toujours `active` (health ready en 10-30 s
+  après réveil). Si `stopped` → reste `stopped`.
+- **API toujours active après veille** : systemd relance, ~5-10 s.
+- **Redémarrage ORS** : 15-70 s selon dataset. Utiliser
+  `GET /ors/v2/health`, pas un timer fixe.
+- **Dataset `stale`** : si `stale: true` dans `GET /datasets`, une
+  région a été mise à jour ou supprimée après la création. Reconstruire
+  avec `POST /datasets` si on veut bénéficier des nouvelles données.
+- **Dataset `zones` et stale** (v1.8) : `stale=false` toujours pour les
+  datasets mode `zones`, car le manifest ne stocke pas les régions
+  sous-jacentes utilisées pour le clipping. Le client peut reconstruire
+  à la demande (build rapide, ~1-3 min).
 
-| Code | Signification |
+---
+
+## 5. États de dataset (référence)
+
+| `state` | Signification | Action client |
+|---|---|---|
+| `initializing` | PBF en construction | Poller `GET /datasets/{id}` |
+| `building` | PBF validé ; ORS ou auxiliaires en cours | Attendre ; déclencher les aux si nécessaire |
+| `ready` | PBF, ORS, Communes, Tunnels et MM prêts | Dataset complet |
+| `unavailable` | PBF ou graphe ORS inutilisable | Lire `last_log_tail`, corriger/reconstruire |
+| `degradedCommunes` | Communes en échec uniquement | Le routage ORS reste possible |
+| `degradedTunnels` | Tunnels et/ou MM en échec | Le routage reste possible ; Tunnels indisponibles |
+| `degradedAux` | Communes et Tunnels/MM en échec | Dataset partiellement utilisable |
+
+Mapping de compatibilité :
+
+| `state` | `status` historique |
 |---|---|
-| `200` | Succès |
-| `201` | Création réussie (POST /polygons) |
-| `202` | Accepté, traitement en tâche de fond (POST /datasets) |
-| `204` | Succès sans contenu (DELETE) |
-| `400` | Payload invalide (validation sémantique) |
-| `401` | Token admin absent/invalide (routes 🔒 seulement) |
-| `404` | Ressource inexistante |
-| `409` | Conflit (build en cours, dataset déjà existant, lock posé) |
-| `422` | Validation Pydantic échouée (champ manquant, type invalide) |
-| `500` | Erreur interne serveur |
+| `initializing`, `building` | `preparing` |
+| `ready`, `degraded*` | `ready` |
+| `unavailable` | `failed` |
 
-### 3.4 Format des erreurs
+Conséquences pour M1 :
 
-```json
-{
-  "detail": "message lisible en français"
-}
-```
+- ne pas déclencher les aux sur `status === "ready"` ;
+- attendre `artifacts.ors.state === "ready"` pour activer le bouton aux ;
+- utiliser `state` pour déterminer si le dataset est terminal et/ou dégradé ;
+- un dataset peut avoir `status=preparing` pendant toute la phase aux.
 
-Sur `422`, FastAPI ajoute un détail structuré :
-```json
-{
-  "detail": [
-    {"loc": ["body", "points"], "msg": "field required", "type": "value_error.missing"}
-  ]
-}
-```
+**Champ `stale`** (indépendant du statut) : `true` si une région a
+été mise à jour ou supprimée depuis la création du dataset.
+Reconstruire si on veut bénéficier des nouvelles données.
 
-### 3.5 Robustesse client M1
-
-- **Retry** : sur `5xx` ou timeout réseau, retry avec backoff exponentiel (1 s, 2 s, 4 s, max 3 tentatives).
-- **Idempotence** : `GET` et `DELETE` sont idempotents. `POST /datasets` et `POST /communes/detect` **ne le sont pas** (chaque appel crée un nouveau dataset / relance une détection).
-- **Keep-alive** : `GET /api/v1/ping` toutes les 30 s côté client (empêche la veille pendant un travail actif).
-- **Timeout** : 30 s par défaut sur les routes courtes, **pas de timeout** sur `GET /datasets/{id}` (polling : le build peut durer 45 min).
+- **Mode `regions`** : `stale` calculé selon `regions.json`
+- **Mode `zones`** (v1.8) : `stale=false` par design
 
 ---
 
-## 4. Routes M1 — Datasets
+## 6. Codes d'erreur HTTP et ORS
 
-### 4.1 🟢 `GET /api/v1/datasets`
+### Codes HTTP (API contrôleur)
 
-Liste tous les datasets existants.
-
-**Réponse 200** (tableau) :
-```json
-[
-  {
-    "id": "provence-alpes-cote-dazur",
-    "regions": ["provence-alpes-cote-dazur"],
-    "zones": null,
-    "created_at": "2026-11-07T16:42:00Z",
-    "status": "ready",
-    "size_bytes": 1750000000,
-    "ors_version": "9.9.0",
-    "stale": false
-  }
-]
-```
-
-| Champ | Type | Description |
+| Code | Signification | Causes fréquentes |
 |---|---|---|
-| `id` | str | Identifiant technique (dossier, unité systemd) |
-| `regions` | list[str]\|null | Régions fusionnées (mode `regions`) |
-| `zones` | list[str]\|null | Zones custom (mode `zones`) |
-| `created_at` | str | Timestamp de création |
-| `status` | str | `preparing` / `ready` / `failed` |
-| `size_bytes` | int | Taille disque du dataset |
-| `ors_version` | str | Version ORS utilisée |
-| `stale` | bool | `true` si une région source a été mise à jour depuis `created_at` |
-
-**Codes** : `200`, `403` (permissions), `500`.
-
-### 4.2 🟢 `GET /api/v1/datasets/{id}`
-
-Détail d'un dataset + `last_log_tail` si `status=failed`.
-
-**Réponse 200** : même structure que `GET /datasets` + `last_log_tail: str|null`.
-
-**Codes** : `200`, `404`, `403`.
-
-### 4.3 🟢 `POST /api/v1/datasets`
-
-Crée un dataset (mode `regions` **XOR** mode `zones`). Retourne `202` immédiatement, le build tourne en tâche de fond.
-
-**Payload mode `regions`** :
-```json
-{
-  "name": "paca-italy",
-  "regions": ["provence-alpes-cote-dazur", "italy-nord-ovest"]
-}
-```
-
-**Payload mode `zones`** :
-```json
-{
-  "name": "nice-monaco",
-  "zones": ["ma-zone-nice", "ma-zone-monaco"]
-}
-```
-
-| Champ | Type | Contraintes |
-|---|---|---|
-| `name` | str\|null | Optionnel. Si absent, généré (`ds-<ts>-<slug>`) |
-| `regions` | list[str]\|null | IDs de `GET /regions` |
-| `zones` | list[str]\|null | IDs de `GET /polygons` |
-
-**Contraintes serveur** (T53) :
-- `regions` et `zones` mutuellement exclusifs (XOR strict). **Pas de mixte.**
-- `max_regions` = 4 par défaut (`MAX_DATASET_REGIONS`).
-- `max_zones` = 100 par défaut (`MAX_DATASET_ZONES`).
-- `max_area_km2` = 50 000 km² par défaut (`MAX_DATASET_AREA_KM2`).
-- Le mode `bbox` a été **supprimé** (T52). Utiliser `regions` ou `zones`.
-
-**Réponse 202** :
-```json
-{
-  "id": "nice-monaco",
-  "status": "preparing"
-}
-```
-
-**Codes** :
-- `202` : accepté, build en cours.
-- `400` : payload invalide. Messages possibles :
-  - `"Aucun périmètre fourni (ni région ni zone)."`
-  - `"La liste des régions est vide."`
-  - `"La liste des zones est vide."`
-  - `"Régions et zones ne peuvent pas être fournies ensemble."`
-  - `"trop de régions: N (max M)"`
-  - `"trop de zones: N (max M)"`
-  - `"surface totale N km² (max M km²)"`
-  - `"PBF manquant pour: <liste>"`
-- `409` : `"build déjà en cours: <id>"` ou `"dataset existe déjà: <id>"`.
-
-**Comportement M1** : après `202`, **polling** `GET /datasets/{id}` toutes les 5-10 s jusqu'à `status=ready` ou `status=failed`.
-
-**Durées typiques** :
-- Monaco (mode regions) : ~15 s.
-- PACA (mode regions) : 525 s système chaud / ~700 s système froid.
-- PACA + Italie NW (mode regions) : ~26 min.
-- Nice + Monaco (mode zones, clipping) : ~80 s.
-
-### 4.4 🟢 `DELETE /api/v1/datasets/{id}`
-
-Supprime le dataset (dossier complet, y compris `graphs/`, `elevation_cache/`, `logs/`, `mm/`, `communes.geojson`, `tunnels-logiques.json`). Si ORS tourne pour ce dataset, il est arrêté avant.
-
-**Codes** : `204`, `404`.
-
-**Attention** : **irréversible**. M1 doit demander confirmation utilisateur.
-
----
-
-## 5. Routes M1 — Instances ORS
-
-### 5.1 🟢 `GET /api/v1/instances`
-
-Liste les instances ORS actives (0 ou 1).
-
-**Réponse 200** :
-```json
-[{"id": "provence-alpes-cote-dazur", "status": "active"}]
-```
-
-### 5.2 🟢 `POST /api/v1/instances/{id}/start`
-
-Démarre ORS pour un dataset.
-
-**Réponse 200** :
-```json
-{"id": "provence-alpes-cote-dazur", "status": "starting"}
-```
-
-**Codes** : `200`, `404`, `409` (ors-config.yml manquant).
-
-**Attention** : `starting` ne signifie **pas** que ORS est prêt. Il faut attendre `GET http://10.15.58.131:8002/ors/v2/health` → `{"status":"ready"}`. Délai : **~70 s** pour PACA (2 profils), ~15 s pour Monaco (2 profils).
-
-**Attente recommandée M1** :
-```python
-import time, httpx
-
-def wait_ors_ready(max_wait_s=120, poll_s=3):
-    t0 = time.time()
-    while time.time() - t0 < max_wait_s:
-        try:
-            r = httpx.get("http://10.15.58.131:8002/ors/v2/health", timeout=2)
-            if r.status_code == 200 and r.json().get("status") == "ready":
-                return True
-        except httpx.HTTPError:
-            pass
-        time.sleep(poll_s)
-    return False
-```
-
-### 5.3 🟢 `POST /api/v1/instances/{id}/stop`
-
-Arrête ORS **et libère les index communes/tunnels en mémoire** (A7).
-
-**Réponse 200** :
-```json
-{"id": "provence-alpes-cote-dazur", "status": "stopped"}
-```
-
-**Codes** : `200`, `404`.
-
-**Conséquence (A7)** : si M1 rappelle `communes/detect` ou `tunnels/detect` après un `stop`, le premier appel recharge l'index (~2 s PACA, ~1 s Monaco). Les appels suivants sont rapides (17 ms).
-
----
-
-## 6. Routes M1 — Régions et polygones
-
-### 6.1 🟢 `GET /api/v1/regions`
-
-Liste les régions indexées avec leur contour GeoJSON.
-
-**Réponse 200** :
-```json
-[
-  {
-    "id": "provence-alpes-cote-dazur",
-    "bbox": [4.23, 42.98, 7.72, 45.13],
-    "has_poly": true,
-    "geojson": {"type": "Polygon", "coordinates": [[[4.23, 42.98], ...]]},
-    "geofabrik_id": "europe/france/provence-alpes-cote-d-azur",
-    "updated_at": "2026-11-07T16:00:00Z"
-  }
-]
-```
-
-| Champ | Type | Description |
-|---|---|---|
-| `id` | str | Clé technique (`regions.json`) |
-| `bbox` | [lon_min, lat_min, lon_max, lat_max] | Métadonnée (indexation) |
-| `has_poly` | bool | Contour réel disponible |
-| `geojson` | GeoJSON Polygon\|null | Contour (ou bbox fallback) |
-| `geofabrik_id` | str | ID Geofabrik (T56) |
-| `updated_at` | str | Timestamp ISO UTC |
-
-**Usage M1** : afficher les régions sur la carte pour permettre la sélection.
-
-**Codes** : `200`, `403`.
-
-### 6.2 🟢 `GET /api/v1/polygons`
-
-Liste les zones custom M1 (polygones créés par M1).
-
-**Réponse 200** :
-```json
-[
-  {
-    "id": "ma-zone-nice",
-    "name": "Zone Nice - Col de Turini",
-    "description": "Sortie gravel...",
-    "color": "#3b82f6",
-    "geometry": {"type": "Polygon", "coordinates": [[[7.26, 43.71], ...]]},
-    "bbox": [7.26, 43.71, 7.28, 43.73],
-    "created_at": "2026-11-06T10:30:00Z",
-    "updated_at": "2026-11-06T10:30:00Z",
-    "revision": 1
-  }
-]
-```
-
-### 6.3 🟢 `GET /api/v1/polygons/{id}`
-
-Détail d'un polygone custom.
-
-**Codes** : `200`, `400` (id invalide), `404`.
-
-### 6.4 🟢 `POST /api/v1/polygons`
-
-Crée un polygone custom (zone M1).
-
-**Payload** :
-```json
-{
-  "id": "ma-zone-nice",
-  "name": "Zone Nice",
-  "description": "Optionnel",
-  "color": "#3b82f6",
-  "geometry": {"type": "Polygon", "coordinates": [[[7.26, 43.71], [7.28, 43.71], [7.28, 43.73], [7.26, 43.73], [7.26, 43.71]]]}
-}
-```
-
-| Champ | Type | Contraintes |
-|---|---|---|
-| `id` | str | Slug ASCII `[a-zA-Z0-9_-]{1,64}`, `"index"` réservé, unicité |
-| `name` | str | Non vide, ≤ 200 chars |
-| `description` | str\|null | ≤ 2000 chars |
-| `color` | str\|null | `^#[0-9a-fA-F]{6}$` |
-| `geometry` | GeoJSON Polygon | Voir validation ci-dessous |
-
-**Validation géométrique serveur** (T54) :
-- **Type** : `Polygon` uniquement (pas de MultiPolygon, pas de trous).
-- **Fermeture** : auto-fermeture silencieuse si 1er ≠ dernier point.
-- **Sommets** : max 1000 (après auto-fermeture).
-- **Précision** : arrondi serveur à 5 décimales (~1 m).
-- **Coordonnées** : WGS84 (lon/lat), bornes ±180 / ±90.
-
-**Réponse 201** : objet complet (comme `GET /polygons/{id}`).
-
-**Codes** :
-- `201` : créé.
-- `400` : géométrie invalide, id réservé, name/description/color invalide.
-- `409` : `"polygone existe déjà: <id>"`.
-
-### 6.5 🟢 `PUT /api/v1/polygons/{id}`
-
-Remplace un polygone custom (remplacement **complet**, pas de PATCH).
-
-**Payload** : `{name, description?, color?, geometry}`. `id` et `created_at` **immuables**. `bbox`, `updated_at`, `revision` recalculés côté serveur (`revision` incrémentée).
-
-**Réponse 200** : objet complet.
-
-**Codes** : `200`, `400`, `404`.
-
-### 6.6 🟢 `DELETE /api/v1/polygons/{id}`
-
-Supprime un polygone custom.
-
-**Codes** : `204`, `400`, `404`.
-
-**Attention** : si un dataset actif utilise ce polygone (`zones: [id]`), le dataset **reste fonctionnel** (son `merged.osm.pbf` est déjà généré). Mais il sera marqué `stale=true` au prochain `GET /datasets`.
-
----
-
-## 7. Routes M1 — Communes (v1.10, Phase C) 🆕
-
-### 7.1 🟢 `POST /api/v1/communes/detect`
-
-Détecte les communes traversées par une trace GPX.
-
-**Payload** :
-```json
-{
-  "traceId": "t-20261109-01",
-  "datasetId": "provence-alpes-cote-dazur",
-  "points": [[7.24152, 44.05123], [7.24320, 44.05281]],
-  "params": {
-    "adminLevel": "8",
-    "minSegmentKm": 0.005,
-    "gapMaxM": 50.0
-  }
-}
-```
-
-| Champ | Type | Défaut | Description |
+| `200` | OK | — |
+| `201` | Créé | POST /polygons, POST /regions |
+| `202` | Accepté | POST /datasets (build lancé) |
+| `204` | Supprimé | DELETE /datasets, /polygons, /regions |
+| `400` | Requête invalide | Payload mal formé, XOR violé, géométrie invalide, limite dépassée, id invalide, PBF invalide |
+| `401` | Non autorisé | X-Admin-Token absent ou invalide (endpoints admin) |
+| `404` | Introuvable | Dataset, polygone, région inexistants |
+| `409` | Conflit | Build/aux en cours, PBF non prêt, id déjà utilisé, `ors-config.yml` manquant |
+| `422` | Validation | Payload invalide, notamment `skipMm` dans `/aux/prepare` |
+| `500` | Erreur serveur | Exception interne, configuration admin invalide |
+| `503` | Service indisponible | Catalogue Geofabrik inaccessible + cache absent |
+| `507` | Stockage insuffisant | Disque plein (POST/PUT /regions) |
+
+### Codes d'erreur ORS
+
+| Code | Message | Cause | Action |
 |---|---|---|---|
-| `traceId` | str | — | ID client (traçabilité) |
-| `datasetId` | str | — | Dataset cible (doit avoir `communes.geojson`) |
-| `points` | list[[lon,lat(,ele)]] | — | Trace GPX, ≥ 2 points |
-| `params.adminLevel` | str\|null | mapping pays | Force un `admin_level` OSM (voir §7.3) |
-| `params.minSegmentKm` | float | `0.005` | Longueur min. d'une intersection (km) |
-| `params.gapMaxM` | float | `50.0` | Tolérance fusion passages contigus (m) |
+| `2004` | `Request parameters exceed the server configuration limits` | Route > 100 km à vol d'oiseau | Découper en segments ≤ 50 km (T47) |
+| `2010` | `Could not find routable point within a radius of 400m` | Waypoint hors réseau routable | Choisir un point plus proche d'une route ; vérifier que le point est dans le dataset chargé |
+| `2099` | `Unable to compute route` | Pas de connexion | Vérifier les coordonnées |
 
-**Réponse 200** :
-```json
-{
-  "traceId": "t-20261109-01",
-  "datasetId": "provence-alpes-cote-dazur",
-  "detectedAt": "2026-11-09T12:52:20Z",
-  "passages": [
-    {
-      "commune": "Nice",
-      "passage": 1,
-      "nbPassagesTotal": 1,
-      "kmEntree": 0.0,
-      "kmSortie": 6.685,
-      "longueurKm": 6.685,
-      "ambiguous": false
-    }
-  ]
-}
-```
+### Messages d'erreur admin (v1.8)
 
-| Champ | Description |
-|---|---|
-| `commune` | Nom OSM de la commune |
-| `passage` | Numéro de passage (1, 2, 3... si aller-retour) |
-| `nbPassagesTotal` | Nombre total de passages pour cette commune |
-| `kmEntree` | Distance cumulée (km) du début de la trace |
-| `kmSortie` | Distance cumulée de sortie |
-| `longueurKm` | Longueur du passage dans la commune |
-| `ambiguous` | `true` si chevauchement avec une autre commune (frontière OSM imprécise) |
-
-**Sémantique** :
-- Les passages sont **ordonnés chronologiquement** (`kmEntree` croissant).
-- Un **aller-retour** (Nice → Monaco → Nice) donne deux passages distincts pour Nice (`passage=1` et `passage=2`, gap 150 m non fusionné).
-- Un **micro-passage parasite** (Nice → Monaco 8 m → Nice) est fusionné si filtré par `minSegmentKm` (gap 8 m < 50 m).
-- **`ambiguous: true`** : chevauchement > 1 m avec une autre commune. Frontière OSM imprécise ou enclave. M1 peut avertir l'utilisateur.
-
-**Codes HTTP** :
-- `200` : succès, même si `passages: []` (trace hors communes).
-- `404` : `datasetId` inconnu, ou `communes.geojson` absent. Message : `"communes.geojson absent pour dataset '<id>'"`.
-- `422` : moins de 2 points, coordonnées invalides (Pydantic).
-- `500` : index corrompu, GeoJSON invalide.
-
-**Performances** :
-- **Premier appel** sur un dataset : ~2.2 s (parse 27 Mo PACA + STRtree).
-- **Appels suivants** : ~17 ms (index en mémoire).
-- Bascule sur un autre dataset : recharge l'index (~2 s).
-- Après `POST /instances/{id}/stop` : recharge au prochain appel.
-
-### 7.2 Sémantique de la fusion (A9)
-
-Deux passages **consécutifs de même nom** avec un gap < `gapMaxM` sont fusionnés en un seul.
-
-| Cas | Comportement |
-|---|---|
-| `Nice(0-100), Nice(102-300)` (gap 2 m) | **Fusionné** en `Nice(0-300)` |
-| `Nice(0-100), Monaco(100-102, 2 m), Nice(102-300)` avec `minSegmentKm=5 m` | Monaco filtré → fusionné en `Nice(0-300)` |
-| `Nice(0-100), Monaco(100-200), Nice(200-300)` | **Non fusionné** (Monaco entre les deux) |
-| `Nice(0-100), Monaco(100-120, 20 m), Nice(120-300)` avec `minSegmentKm=50 m` | Monaco filtré → fusionné en `Nice(0-300)` |
-| `Nice(0-100), Monaco(100-120, 20 m), Nice(120-300)` avec `minSegmentKm=5 m` | Monaco conservé (20 m > 5 m) → **non fusionné** |
-
-**Recommandation M1** : utiliser les défauts (`minSegmentKm=0.005`, `gapMaxM=50`). Ne les ajuster que pour des cas spécifiques.
-
-### 7.3 Mapping `admin_level` (A4)
-
-| Pays | `admin_level` commune | Notes |
-|---|---|---|
-| France | `8` | commune |
-| Espagne | `8` | municipio |
-| Italie | `8` | comune |
-| Suisse | `8` | commune / Gemeinde |
-| **Monaco** | **`8`** | commune (⚠️ **pas 4**) |
-| Autres | `8` (fallback) | WARNING côté serveur |
-
-**Cas Monaco** (A4) :
-- Relation `admin_level=2` : pays (`country=MC`).
-- Relation `admin_level=8` : commune (`Monaco`).
-- Relations `admin_level=10` : quartiers (`Monte-Carlo`, `Fontvieille`...).
-- Le défaut `admin_level=8` retourne **la commune entière** (1 seul polygone).
-
-**Override M1** (rare) :
-- `params.adminLevel="2"` → pays entier (frontière).
-- `params.adminLevel="6"` → départements (France).
-- `params.adminLevel="10"` → quartiers (Monaco, Nice).
-
-### 7.4 Mapping pays manquant (A5)
-
-Pour les pays non listés dans `COUNTRY_ADMIN_LEVELS`, le serveur applique `admin_level=8` par défaut et émet un WARNING **une seule fois par pays** (dédup). Aucune action M1 requise.
+- `401` : `{"detail":"X-Admin-Token absent ou invalide"}` (fixe)
+- `500` : `{"detail":"ADMIN_TOKEN non configuré côté serveur"}` (fixe)
+- `409` : `{"detail":"build déjà en cours: <id>"}` ou `{"detail":"région existe déjà: <id>"}`
 
 ---
 
-## 8. Routes M1 — Tunnels (v1.10, Phase D) 🆕
+## 7. Contraintes de robustesse côté client
 
-### 8.1 🟢 `POST /api/v1/tunnels/detect`
+- **Toujours** `GET /ping` toutes les 30 s tant que l'app est ouverte
+- **Toujours** poller `GET /datasets/{id}` sur `state`, et non uniquement
+  sur le champ historique `status`
+- **Toujours** attendre `artifacts.ors.state == "ready"` avant de lancer
+  `POST /datasets/{id}/aux/prepare`
+- **Toujours** considérer les aux terminées uniquement avec
+  `communes.state == "ready"`, `tunnels.state == "ready"` et
+  `mm.state == "ready"`, plus `preparing == false` et `lastError == null`
+- **Toujours** poller `GET /ors/v2/health` après un `start`
+- **Toujours** vérifier `features[0].geometry.coordinates` avant
+  affichage (parfois vide si route invalide)
+- **Toujours** découper les itinéraires en segments ≤ 50 km (T47)
+- **Toujours** gérer les codes d'erreur ORS explicitement (2004, 2010, 2099)
+- **Toujours** gérer `stale: true` dans `GET /datasets` (avertir
+  l'utilisateur)
+- **Toujours** vérifier `already_added` avant `POST /regions` (app admin)
+- **UI admin** (v1.9) : le token est dans `localStorage`, ne doit
+  jamais être loggé côté client
 
-Détecte les tunnels traversés par une trace GPX (via `map_matching_2` + `tunnels-logiques.json` + `mm/`).
+---
 
-**Payload** :
-```json
-{
-  "traceId": "t-tunnel-01",
-  "datasetId": "test-monaco-ds",
-  "points": [[7.4201, 43.7382, 45.0], [7.4215, 43.7390, 48.2]],
-  "params": {
-    "minLengthM": 50.0,
-    "altimetricCheck": false,
-    "altimetricToleranceM": 30.0
-  }
-}
-```
+## 8. Validation géométrique des polygones
 
-| Champ | Type | Défaut | Description |
+Règles appliquées par `hermes-api` à `POST /polygons` et
+`PUT /polygons/{id}` (T54) :
+
+| Règle | Valeur |
+|---|---|
+| Type | `Polygon` uniquement (pas de `MultiPolygon`, pas de trous) |
+| Fermeture | Auto-fermeture silencieuse si 1er ≠ dernier point |
+| Sens | Horaire ou anti-horaire (libre) |
+| Sommets | Max 1000 (après auto-fermeture) |
+| Précision | Arrondi serveur à 5 décimales (~1 m) |
+| Coordonnées | WGS84 (lon/lat), ordre lon-lat, bornes ±180 / ±90 |
+| `id` | Regex `^[a-zA-Z0-9_-]+$`, 1-64 chars, `index` réservé |
+| `name` | Non vide après strip, ≤ 200 caractères |
+| `description` | ≤ 2000 caractères (optionnel) |
+
+**Aire du polygone** (v1.8) : `polygons.polygon_area_km2(geometry)`
+calcule une aire approximative par Shoelace + correction `cos(lat)`
+moyenne. Précision < 0.1 % pour zones < 100 km de côté. Utilisée pour
+valider `MAX_DATASET_AREA_KM2` (T53). **Pas exposée dans l'API** —
+c'est un garde-fou interne.
+
+**Raison du choix `Polygon` uniquement** : cohérent avec la
+décision T52 (pas de mixte). Pour plusieurs zones disjointes,
+créer plusieurs polygones et les référencer dans `zones: [...]`.
+
+---
+
+## 9. Authentification admin
+
+Les endpoints admin (`/regions` POST/PUT/DELETE, `/geofabrik/regions`)
+exigent un header `X-Admin-Token` (T55).
+
+- **Token stocké** : `/etc/hermes/hermes.conf` (`ADMIN_TOKEN=...`)
+- **Permissions** (T57-A, v1.8) : fichier `root:hermes-api 640`
+  - root (owner) et hermes-api (group) peuvent lire
+  - ors ne peut pas lire directement (systemd lit le fichier en root
+    via `EnvironmentFile=`)
+- **Génération** : `openssl rand -hex 32` à l'installation
+- **Transmission** : header HTTP `X-Admin-Token: <valeur>`
+- **Erreur si absent ou invalide** : `401 Unauthorized`
+  `{"detail":"X-Admin-Token absent ou invalide"}`
+- **Comparaison** : `hmac.compare_digest` (temps constant)
+
+**Note** : le token n'est PAS nécessaire pour les endpoints M1
+(`/ping`, `/datasets`, `/regions` GET, `/polygons`, `/instances`).
+
+**UI admin — refonte v1.9 (T57-I)** : l'interface web utilise le même
+mécanisme `X-Admin-Token` mais avec une **ergonomie différente** :
+
+**Flux utilisateur** :
+1. **Premier chargement sans token** : overlay `Token requis` avec fond
+   flouté. Toolbar affiche `○ Token absent` (rouge).
+2. **Cliquer « Configurer le token »** (overlay) ou **« Changer le token »**
+   (toolbar) → ouvre un `<dialog>` HTML natif (pas de modal custom JS).
+3. **Champ `type=password`** + boutons `Enregistrer` / `Annuler`.
+   `Échap` ferme. `Enregistrer` écrit dans localStorage et recharge la page.
+4. **Après saisie** : toolbar affiche `● Token configuré` (vert), overlay
+   disparaît, contenu de la vue unifiée visible.
+5. **Cliquer « Déconnexion »** : `clearToken()` + reload → retour overlay.
+
+**Clés de stockage côté client (v1.9)** :
+
+| Clé | Type | Usage |
+|---|---|---|
+| `hermes_admin_token` | string | Token admin (X-Admin-Token) |
+| `hermes_admin_theme` | `auto` \| `light` \| `dark` | Thème UI |
+| `hermes_admin_countries` | string (CSV) | Filtre pays. Défaut 1er lancement : `France, Italie, Suisse, Espagne` |
+| `hermes_admin_max_download_mb` | int | Limite téléchargement. Défaut : 500 |
+| IndexedDB `hermes_admin` / store `catalog` | object | Cache du catalogue Geofabrik (TTL 24 h) |
+
+Ces clés ne sont **jamais** transmises au serveur. Seul `hermes_admin_token`
+sort du navigateur, dans le header `X-Admin-Token`.
+
+**Recommandation** : le token ne doit jamais être loggé côté client.
+Utiliser HTTPS si possible (le réseau ZeroTier est privé, mais un
+attaquant avec accès au réseau pourrait intercepter le token).
+
+---
+
+## 10. Limites de construction (T53)
+
+Configurables dans `/etc/hermes/hermes.conf` :
+
+| Variable | Valeur par défaut | Effet |
+|---|---|---|
+| `MAX_DATASET_REGIONS` | 4 | Nombre max de régions (PBF) concernées par un dataset |
+| `MAX_DATASET_AREA_KM2` | 50000 | Surface totale max des zones (clipping) |
+| `MAX_DATASET_ZONES` | 100 | Nombre max de zones dans un dataset |
+
+**Dépassement → `400`** avec message clair :
+- `"trop de régions: N (max M)"`
+- `"surface totale N km² (max M)"`
+- `"trop de zones: N (max M)"`
+
+**Ordre de vérification** (v1.8) :
+1. `MAX_DATASET_ZONES` avant `resolve_zones` (fail fast)
+2. `MAX_DATASET_REGIONS` après résolution
+3. `MAX_DATASET_AREA_KM2` après calcul de surface (mode zones)
+
+**Modification** : éditer `hermes.conf` puis
+`sudo systemctl restart hermes-api.service`.
+
+**Raison** : éviter les abus et garder `hermes` prévisible. Valeurs
+configurables pour suivre l'évolution matérielle (passage à plus de
+RAM, CPU plus rapide).
+
+---
+
+## 11. UI admin (T55, refonte T57-I) — v1.9
+
+Interface web d'administration, servie par `hermes-api` sur `/admin/*`.
+Refondue en v1.9 (T57-I) : vue unifiée, thème, Pico.css, cache client,
+traduction FR, garde-fou téléchargement.
+
+### 11.1 Pages et navigation
+
+| URL | Contenu |
+|---|---|
+| `/admin/` | Vue unifiée 3 colonnes (Catalogue \| Carte \| Régions) |
+| `/admin/regions` | Stub → redirection JS vers `/admin/?focus=regions` |
+| `/admin/geofabrik` | Stub → redirection JS vers `/admin/?focus=geofabrik` |
+| `/admin/static/*` | Assets statiques |
+
+**Deep-links** : `?focus=regions` ou `?focus=geofabrik` positionne le
+scroll sur la colonne concernée avec un outline bleu qui s'efface
+après ~2,5 s. Permet de conserver les anciens bookmarks
+`/admin/regions` et `/admin/geofabrik`.
+
+**Layout 3 colonnes** (gauche → droite) :
+
+1. **Catalogue Geofabrik** : arbre dépliable + filtre pays + carte
+   au survol (hover).
+2. **Carte Leaflet** : affiche les régions configurées en permanence
+   (colorées par `state`), et la région survolée (catalogue ou liste).
+3. **Régions configurées** : liste verticale avec drapeaux, badges,
+   boutons MAJ/Suppr.
+
+**Toolbar** (header permanent, sticky) :
+- Brand `hermes admin` cliquable → `/admin/`
+- Indicateur d'état token (`● Token configuré` / `○ Token absent`)
+- Bouton `Changer le token` (ouvre modal)
+- Bouton `Déconnexion` (vide localStorage + retour overlay)
+- Bouton thème : cycle `auto → light → dark → auto`
+
+### 11.2 Authentification
+
+Voir §9 pour le détail. Modèle : token dans `localStorage.hermes_admin_token`,
+header `X-Admin-Token` sur chaque `fetch()`, aucun cookie, aucune
+session serveur.
+
+### 11.3 Comportement des actions
+
+#### Colonne 1 — Catalogue Geofabrik
+
+- **Arbre `<details>`** ouvert par défaut sur `europe` (niveau 1).
+  Les pays (niveau 2) restent **fermés** par défaut pour ne pas noyer
+  l'utilisateur.
+- **Filtre pays** (input) : saisie libre `France, Italie, Suisse…` (CSV).
+  - **Matching bilingue** : tape `Italie` matche `italy` (slug) **et**
+    `Italie` (nom FR via `Intl.DisplayNames`). Idem `Switzerland` / `Suisse`.
+  - **Persistant** dans `localStorage.hermes_admin_countries`.
+  - **Défaut 1er lancement** : `France, Italie, Suisse, Espagne`.
+  - **Bouton `✕`** : vide le champ (persiste `''` = tout afficher).
+    Ne remet pas le défaut.
+- **Boutons** :
+  - `⊞` : tout ouvrir (tous les `<details>`)
+  - `⊟` : tout fermer
+  - `⟳` (icône `mdi-refresh`) : vide le cache IndexedDB + fetch forcé
+    `GET /geofabrik/regions?refresh=true`
+- **Survol** d'une ligne → affiche la `geometry` sur la carte.
+- **Ajouter** (state=`absent`) :
+  - Confirm avec **slug pré-rempli** : `europe/france/alsace` → `alsace`.
+    Le slug est auto-généré, affiché dans le confirm. L'utilisateur
+    peut Annuler s'il ne veut pas.
+  - `POST /api/v1/regions {id: slug, geofabrik_id: gid}`
+  - **Désactivé** si :
+    - `size > hermes_admin_max_download_mb` (défaut 500 Mo) → tooltip
+      `Taille ~X Go > limite 500 Mo`
+    - OU `size == null` ET la région a des enfants (agrégat) → tooltip
+      `Région agrégée — ajoutez plutôt une sous-région précise`
+- **Mettre à jour** (state=`current`/`stale`/`old`) :
+  - Confirm avec `id` local + taille (si connue).
+  - `PUT /api/v1/regions/{local_id}` (mapping `geofabrik_id → id_local`
+    chargé via `GET /regions`, C4).
+
+#### Colonne 2 — Carte
+
+- **Leaflet 1.9.4** (CDN unpkg), tuiles OSM publiques.
+- **Régions configurées** affichées en permanence dans une couche
+  persistante, avec couleur selon `state` (voir §11.4). `fitBounds` au
+  chargement pour cadrer l'ensemble.
+- **Hover** sur une ligne du catalogue ou de la liste régions →
+  surbrillance bleue de la `geometry` (couche temporaire au-dessus
+  des persistentes).
+- **Légende** sous la carte : 3 entrées (À jour / À mettre à jour /
+  Ancien). L'entrée `Absent` a été **retirée en v1.9** (pas d'intérêt,
+  aucun polygone d'une région absente à afficher).
+
+#### Colonne 3 — Régions configurées
+
+Liste verticale (une carte-ligne par région) :
+- Drapeau (via `flagcdn.com` si code ISO connu, fallback 🌐)
+- Nom d'affichage (traduit FR si connu, sinon `humanizeId(id)`)
+- Badge `state` (couleur voir §11.4)
+- Breadcrumb traduit (`Europe · France · Provence-Alpes-Côte d'Azur`)
+- `~taille · maj age` (taille PBF **Geofabrik**, pas local — cf. §11.5)
+- Badge `has_poly` : icône `mdi-map-outline` (contour réel) ou
+  `mdi-square-outline` (fallback bbox)
+- Actions : `mdi-refresh` (MAJ) + `mdi-delete` (Suppr)
+
+#### Feedback utilisateur
+
+- **Bandeau d'alerte** sticky sous le header :
+  - Succès (vert) : auto-dismiss 5 s
+  - Erreur (rouge) : persistant jusqu'au prochain succès
+  - Info (bleu) : auto-dismiss 5 s (ou persistant si `duration: 0`)
+- **Spinner** sur bouton pendant les actions longues (`POST`/`PUT`/`DELETE`)
+- **Anti double-clic** : `btn.disabled = true` avant chaque `fetch`.
+  Défense supplémentaire côté serveur : `_OP_LOCK` asyncio (C3).
+
+### 11.4 Couleurs d'état
+
+Utilisées à la fois dans les badges (colonne 1 et 3) et sur la carte :
+
+| `state` | Couleur | Badge | Carte (polygone) |
 |---|---|---|---|
-| `traceId` | str | — | ID client |
-| `datasetId` | str | — | Dataset cible (doit avoir `tunnels-logiques.json` et `mm/`) |
-| `points` | list[[lon,lat(,ele)]] | — | Trace GPX, ≥ 2 points |
-| `params.minLengthM` | float | `50.0` | Longueur min. pour retenir un tunnel (m) |
-| `params.altimetricCheck` | bool | `false` | Contrôle altimétrique a posteriori (voir §8.3) |
-| `params.altimetricToleranceM` | float | `30.0` | Tolérance du contrôle altimétrique (m) |
+| `absent` | rouge | `bg #fde2e2 / fg #b00020` | non affiché (pas de polygone dans regions.json) |
+| `current` | vert | `bg #d4f4dd / fg #0a7a3b` | `#0a7a3b`, fillOpacity 0.15 |
+| `stale` | vert-jaune | `bg #fff3c4 / fg #8a6d00` | `#8a6d00`, fillOpacity 0.15 |
+| `old` | orange | `bg #ffe0c2 / fg #b25e00` | `#b25e00`, fillOpacity 0.15 |
 
-**Réponse 200** :
-```json
-{
-  "version": 1,
-  "traceId": "t-tunnel-01",
-  "datasetId": "test-monaco-ds",
-  "detectedAt": "2026-11-09T20:06:23Z",
-  "params": {
-    "minLengthM": 50.0,
-    "altimetricCheck": false,
-    "altimetricToleranceM": 30.0
-  },
-  "tunnels": [
-    {
-      "id": "t-001",
-      "groupId": "g-503230507",
-      "name": "Tunnel Rainier III",
-      "startKm": 14.215,
-      "endKm": 15.820,
-      "lengthM": 1605.0,
-      "wayIds": ["503230507", "944079968", "1327492342", "1327492343"],
-      "altimetricOk": null
-    }
-  ]
-}
-```
+Logique `state` : voir §1.9 (priorité `stale > old > current`).
 
-| Champ | Description |
-|---|---|
-| `id` | ID court du tunnel dans la trace (`t-001`, `t-002`...) |
-| `groupId` | Identifiant du groupe logique (`tunnels-logiques.json`) |
-| `name` | Nom OSM du tunnel (peut être `null`) |
-| `startKm` | Point d'entrée sur la trace (km cumulés) |
-| `endKm` | Point de sortie |
-| `lengthM` | Longueur traversée (m) |
-| `wayIds` | Ways OSM du tunnel (sans préfixe `w`, A2) |
-| `altimetricOk` | `true`/`false`/`null` (si `altimetricCheck=false` ou pas d'élévation) |
+### 11.5 Notes techniques
 
-**Codes HTTP** :
-- `200` : succès, même si `tunnels: []`.
-- `404` : `datasetId` inconnu, ou `tunnels-logiques.json` / `mm/` absent.
-- `422` : moins de 2 points, coordonnées invalides.
-- `500` : `map_matching_2` absent, timeout, ou erreur interne.
+**Socle UI** :
+- **Pico.css** 2.0.6 (CDN jsdelivr) + **surcharge densification** :
+  `--pico-font-size: 87.5%`, `--pico-form-element-spacing-vertical: 0.5rem`,
+  `--pico-border-radius: 0.375rem`, `--pico-spacing: 0.75rem`. Objectif :
+  interface compacte adaptée à une app d'administration (pas une landing page).
+- **Thème** : `data-theme` sur `<html>` (light/dark) + fallback
+  `prefers-color-scheme` (auto). Persistance `localStorage.hermes_admin_theme`.
+  Toggle dans la toolbar : cycle `auto → light → dark → auto`.
 
-**Performances** : ~100-500 ms par appel (subprocess `map_matching_2 --match` + lecture index + projection).
+**Carte** : Leaflet 1.9.4 (CDN unpkg), tuiles OSM publiques
+(`tile.openstreetmap.org`). Boutons zoom Leaflet corrigés via CSS
+ciblé `.leaflet-bar a` (Pico.css cassait leur centrage).
 
-### 8.2 ⚠️ Limitation importante — tunnels urbains (A15)
+**Icônes** : `@mdi/font` 7.4.47 (CDN jsdelivr), webfont ~1.4 Mo cachée
+par le navigateur après premier chargement. Utilisation via classes
+`mdi mdi-{nom}`. Aucun SVG inline dans le HTML.
 
-**La détection de tunnels ne fonctionne PAS dans les réseaux urbains denses** (Monaco, Nice centre-ville).
+**Drapeaux** : `flagcdn.com/w20/{iso2}.png` (CDN gratuit, toutes
+régions ISO 3166-1). Table `COUNTRY_ISO` dans le JS mappe les slugs
+Geofabrik → codes ISO (`france → FR`, `italy → IT`, `monaco → MC`, etc.,
+~80 entrées). Fallback : emoji 🌐 si code inconnu.
 
-**Causes** (documentées, non résolues en v1.10) :
-1. `map_matching_2` n'utilise **pas l'altitude** en entrée du HMM (seulement lon/lat).
-2. Les GPX édités par **Strava, RunWithGPS, Garmin Connect, OpenRunner** ont des altitudes **lissées par DEM**, pas barométriques. Il n'y a donc pas de "dépression" détectable au passage du tunnel.
-3. Monaco a **3-4 niveaux de routes superposés** (surface, tunnels, galeries, parkings). Les routes de surface sont toujours à portée du HMM.
-4. Les **faux positifs OSM** (galeries piétonnes, parkings tagués `tunnel=yes`) brouillent les groups union-find.
+**Traduction** : `Intl.DisplayNames(['fr'], {type: 'region'})` natif
+(supporté Safari 14.1+, Chrome 81+, Firefox 86+). Table `CONTINENT_NAMES`
+manuelle pour les 8 continents Geofabrik. Les noms anglais originaux
+restent accessibles via `title` (survol) sur les nœuds traduits.
 
-**Conséquences pour M1** :
+**Cache catalogue (T57-I)** :
+- Store IndexedDB `hermes_admin` / `catalog`
+- Contenu : `{ts, data}` où `data` = réponse `GET /geofabrik/regions`
+- TTL : **24 h** côté client (indépendant du cache serveur 7 j)
+- **Usage** : au chargement, si cache valide → pas de `GET /geofabrik/regions`.
+  Le bouton **Rafraîchir** vide le cache + force `?refresh=true`.
+- **Pourquoi IndexedDB et pas localStorage** : le payload complet pèse
+  ~3 Mo (principalement `geometry` des 554 régions). localStorage Safari
+  est limité à ~5 Mo UTF-16 (2 octets/char) → quota dépassé.
+  IndexedDB n'a pas cette limite (stockage binaire efficace).
 
-| Cas d'usage | Détection |
-|---|---|
-| Tunnel isolé (Tende, Fréjus, Cluse, autoroutier) | ✅ **Fonctionne** (aucune route alternative de surface) |
-| Tunnel urbain (Monaco, Nice centre) avec GPX édité | ❌ **Ne fonctionne pas** |
-| Tunnel urbain avec GPX 3D barométrique brut | ⚠️ **Non testé** en v1.10 (hors scope) |
+**Garde-fou téléchargement (T57-I)** :
+- Le serveur ne pré-charge `size` que pour les régions `already_added`
+  (HEAD lazy, cf. §1.9). Une région `absent` a donc `size = null`.
+- Pour éviter un téléchargement continental accidentel (ex. ajouter
+  `europe` = ~50 Go), le client **bloque** les Ajouter si :
+  - `size > hermes_admin_max_download_mb` (défaut 500 Mo, configurable
+    dans `localStorage.hermes_admin_max_download_mb`)
+  - OU `size == null` ET la région a des enfants (agrégat type `france`,
+    `europe`). Ces agrégats n'ont pas de PBF direct téléchargeable.
+- **Conséquence UX** : le tooltip « Ajouter (taille inconnue) » n'existe
+  plus. Pour les feuilles sans `size` (ex. `finland`), le tooltip
+  s'affiche simplement `Ajouter`. L'utilisateur découvre la taille au
+  moment du confirm si connue, ou se fie à son intuition pour les
+  petites régions.
 
-**Recommandation M1** :
-- Afficher la détection de tunnels **uniquement pour les traces hors milieu urbain dense**.
-- OU avertir l'utilisateur que la détection est **indicative** en ville.
-- Documenter côté M1 : "La détection de tunnels n'est fiable que sur les tunnels isolés (alpins, autoroutiers). En ville, elle peut renvoyer une liste vide alors que la trace traverse un tunnel."
+**Templates Jinja2** (dans `/opt/hermes-api/app/templates/`) :
+- `base.html` : layout + toolbar + modal `<dialog>` token + thème +
+  variables CSS Pico + helpers JS (`hermesAdmin.authHeaders()`, etc.)
+- `index.html` : vue unifiée (contenu du `{% block content %}`) +
+  carte Leaflet + catalogue + liste régions + JS complet
+- `regions.html` : stub minimal `{% extends "index.html" %}` + JS de
+  redirection vers `/admin/?focus=regions`
+- `geofabrik.html` : stub minimal `{% extends "index.html" %}` + JS de
+  redirection vers `/admin/?focus=geofabrik`
 
-**`altimetricCheck`** : **ne peut pas forcer** le choix du tunnel. Il **valide** un tunnel déjà matché (vérifie que la variation d'altitude est monotone sur le tunnel). Utile quand le GPS fournit une altitude non lissée.
-
-### 8.3 Détail `altimetricCheck`
-
-Si `altimetricCheck=true` **et** les points ont une 3e coordonnée (`ele`) **et** le tunnel a été matché :
-
-- Le serveur extrait les points de la trace dans l'intervalle `[startKm, endKm]`.
-- Vérifie que l'altitude suit le profil interpolé (entrée/sortie) avec une tolérance `altimetricToleranceM`.
-- Retourne `altimetricOk: true` (OK), `false` (anomalie), ou `null` (pas de tunnel matché ou pas d'élévation).
-
-**Si `tunnels: []`**, `altimetricCheck` n'a **aucun effet** (rien à valider).
+**Note** : modifier `index.html` impacte les 3 pages (à cause des stubs).
+Toujours tester les 3 URLs `/admin/`, `/admin/regions`, `/admin/geofabrik`
+après modification (4 × 200 = non-régression).
 
 ---
 
-## 9. Routes M1 — Aux (v1.10, Phase E) 🆕
+*Contrat v1.10 — 23 novembre 2026. Référence : sequencement.md et
+implémentation hermes-api du 23 novembre 2026.*
 
-### 9.1 🟢 `GET /api/v1/datasets/{id}/aux`
-
-Statut des artefacts auxiliaires (communes, tunnels, mm) pour un dataset.
-
-**Réponse 200** :
-```json
-{
-  "datasetId": "provence-alpes-cote-dazur",
-  "communes": {
-    "name": "communes.geojson",
-    "exists": true,
-    "sizeBytes": 46502397,
-    "modifiedAt": "2026-11-09T12:44:51Z"
-  },
-  "tunnels": {
-    "name": "tunnels-logiques.json",
-    "exists": true,
-    "sizeBytes": 187432,
-    "modifiedAt": "2026-11-09T20:29:01Z"
-  },
-  "mm": {
-    "name": "mm/",
-    "exists": true,
-    "sizeBytes": 2402864,
-    "modifiedAt": "2026-11-09T20:40:45Z"
-  },
-  "preparing": false,
-  "startedAt": null,
-  "lastError": null,
-  "loadedInMemory": false,
-  "activeDataset": null
-}
-```
-
-| Champ | Description |
-|---|---|
-| `communes.exists` | `communes.geojson` présent sur disque |
-| `tunnels.exists` | `tunnels-logiques.json` présent |
-| `mm.exists` | `mm/` présent |
-| `preparing` | `true` si `aux-prepare.lock` posé (génération en cours) |
-| `lastError` | Message d'erreur du dernier `prepare` échoué (ou `null`) |
-| `loadedInMemory` | Index actuellement chargés pour **ce** dataset |
-| `activeDataset` | Dataset actuellement en mémoire (peut être différent de `id`) |
-
-**Usage M1** :
-- Avant d'appeler `communes/detect` ou `tunnels/detect`, vérifier `communes.exists` / `tunnels.exists`.
-- Si absent, **ne pas appeler** `aux/prepare` (réservé admin). Afficher un message : *"Fonction non disponible pour ce dataset. Contactez l'administrateur."*
-- `loadedInMemory` + `activeDataset` : diagnostic (savoir quel dataset occupe le cache).
-
-**Codes** : `200`, `404` (dataset inconnu).
-
-**Route non-admin** : utilisable par M1 directement.
-
-### 9.2 🔒 `POST /api/v1/datasets/{id}/aux/prepare`
-
-**Réservé à l'admin** (token `X-Admin-Token`). **M1 ne doit pas l'appeler.**
-
-Si M1 a besoin qu'un dataset soit préparé, il doit afficher un message à l'utilisateur (« Contactez l'administrateur pour activer la détection communes/tunnels sur ce dataset »).
-
----
-
-## 10. Routes admin (réservées, M1 ne doit pas appeler)
-
-### 10.1 🔒 `GET /api/v1/geofabrik/regions`
-
-Catalogue Geofabrik enrichi (admin UI). **M1 n'en a pas besoin.**
-
-### 10.2 🔒 `POST /api/v1/regions`, `PUT /api/v1/regions/{id}`, `DELETE /api/v1/regions/{id}`
-
-Ajout / mise à jour / suppression de régions depuis Geofabrik. **M1 n'en a pas besoin.**
-
-### 10.3 🔒 `POST /api/v1/datasets/{id}/aux/prepare`
-
-Génération des artefacts auxiliaires. **M1 n'en a pas besoin.**
-
-**Si M1 tente d'appeler ces routes** : `401 Unauthorized` (token absent).
-
----
-
-## 11. Contrat ORS (port 8002)
-
-### 11.1 Route de routage
-
-```
-POST http://10.15.58.131:8002/ors/v2/directions/{profile}/geojson
-Content-Type: application/json
-
-{
-  "coordinates": [[lon1, lat1], [lon2, lat2], ...],
-  "elevation": true,
-  "instructions": true,
-  "geometry_simplify": false
-}
-```
-
-**Profils actifs** : `driving-car`, `cycling-road`. `cycling-regular` **retiré** (inutile, coûteux — T36).
-
-**Réponse** : GeoJSON FeatureCollection standard ORS (voir doc ORS v9).
-
-### 11.2 Limite 100 km (T47)
-
-ORS rejette les routes > **100 km** avec le code **2004**.
-
-**Découpage M1 (T47)** : M1 doit découper en segments ≤ **50 km** et concaténer les résultats. La limite 100 km côté serveur reste un garde-fou.
-
-### 11.3 Codes d'erreur ORS
-
-| Code | Signification | Action M1 |
-|---|---|---|
-| `2004` | Route > 100 km | Découper en segments ≤ 50 km |
-| `2010` | Waypoint hors réseau routable (rayon 400 m) | Vérifier la proximité des waypoints, avertir l'utilisateur |
-| `2099` | Pas de connexion entre points | Segments non connectés, avertir |
-
-### 11.4 Réponse exploitée
-
-| Champ | Usage M1 |
-|---|---|
-| `features[0].geometry.coordinates` | Trace géométrique `[[lon, lat, ele], ...]` |
-| `features[0].properties.ascent` | Dénivelé positif (m) |
-| `features[0].properties.descent` | Dénivelé négatif (m) |
-| `features[0].properties.summary.distance` | Distance totale (m) |
-| `features[0].properties.summary.duration` | Durée estimée (s) |
-
-### 11.5 Attente santé ORS
-
-Après `POST /instances/{id}/start`, attendre `GET /ors/v2/health` → `{"status":"ready"}`.
-
-| Dataset | Temps ready |
-|---|---|
-| Monaco (2 profils) | ~15 s |
-| PACA (2 profils) | ~70 s |
-| PACA + Italie NW (2 profils) | ~90 s (2 profils, gros PBF) |
-
-**Recommandation M1** : poll toutes les 3 s, timeout 120 s.
-
----
-
-## 12. Cycle de vie M1
-
-### 12.1 Séquence typique
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant App as App M1
-    participant Api as hermes-api (:9000)
-    participant Ors as ORS (:8002)
-    participant Aux as hermes-prepare-aux (admin)
-
-    App->>Api: GET /api/v1/ping (toutes les 30 s, keep-alive)
-    App->>Api: GET /api/v1/regions (optionnel, affichage carte)
-    App->>Api: GET /api/v1/polygons (optionnel, zones custom)
-    App->>Api: POST /api/v1/polygons (optionnel, créer zone)
-    App->>Api: POST /api/v1/datasets {name, regions|zones}
-    Api-->>App: 202 preparing
-    App->>Api: GET /api/v1/datasets/{id} (polling 5-10 s)
-    Api-->>App: status=ready
-
-    App->>Api: GET /api/v1/datasets/{id}/aux (vérifier artefacts)
-    Api-->>App: {communes: exists?, tunnels: exists?, mm: exists?}
-
-    App->>Api: POST /api/v1/instances/{id}/start
-    App->>Ors: GET /ors/v2/health (polling 3 s)
-    Ors-->>App: {"status": "ready"}
-
-    App->>Ors: POST /ors/v2/directions/cycling-road/geojson
-    Ors-->>App: itinéraire + altimétrie
-
-    App->>Api: POST /api/v1/communes/detect
-    Api-->>App: 200 {passages[]}
-
-    App->>Api: POST /api/v1/tunnels/detect (si artefacts aux présents)
-    Api-->>App: 200 {tunnels[]}
-
-    App->>Api: POST /api/v1/instances/{id}/stop
-    Note over Api: unload communes + tunnels (A7)
-```
-
-### 12.2 Étapes textuelles
-
-1. **Keep-alive** : `GET /api/v1/ping` toutes les 30 s (empêche la veille pendant un travail actif).
-2. **Carte** (optionnel) : `GET /api/v1/regions` + `GET /api/v1/polygons` → affichage.
-3. **Zone custom** (optionnel) : `POST /api/v1/polygons {id, name, geometry}` → création.
-4. **Création dataset** : `POST /api/v1/datasets {name, regions}` OU `{name, zones}` → `202`.
-5. **Polling dataset** : `GET /api/v1/datasets/{id}` toutes les 5-10 s → `status=ready` (ou `failed`).
-6. **Vérification aux** (v1.10) : `GET /api/v1/datasets/{id}/aux` → si communes/tunnels absents, désactiver les fonctions correspondantes côté UI.
-7. **Démarrage ORS** : `POST /api/v1/instances/{id}/start` → `200`.
-8. **Attente santé ORS** : `GET /ors/v2/health` toutes les 3 s → `ready` (~15-70 s).
-9. **Routage** : pour chaque segment ≤ 50 km (T47), `POST /ors/v2/directions/{profile}/geojson`.
-10. **Enrichissement communes** (v1.10) : `POST /api/v1/communes/detect` → `200 {passages[]}`.
-11. **Enrichissement tunnels** (v1.10) : `POST /api/v1/tunnels/detect` (si artefacts présents) → `200 {tunnels[]}`.
-12. **Arrêt ORS** : `POST /api/v1/instances/{id}/stop` → `200` (unload index).
-13. **Veille auto** : après 15 min d'inactivité (timer serveur).
-14. **Réveil** : WoL UDP/9 vers `87.91.31.205` (box FAI).
-
-### 12.3 Cas d'erreur et reprise
-
-| Situation | Comportement M1 |
-|---|---|
-| `POST /datasets` → `409` build en cours | Attendre la fin du build, retenter |
-| `POST /datasets` → `400` payload invalide | Corriger payload, ne pas retenter à l'identique |
-| Polling dataset → `status=failed` | Afficher `last_log_tail` à l'utilisateur, proposer `DELETE /datasets/{id}` puis retenter |
-| ORS `2010` waypoint non routable | Avertir l'utilisateur, proposer d'ajuster les waypoints |
-| ORS `2004` route > 100 km | Découper en segments ≤ 50 km (T47) |
-| ORS timeout / 5xx | Retry 3× avec backoff, puis avertir |
-| `communes/detect` → `404` `communes.geojson absent` | Afficher "Fonction indisponible pour ce dataset", désactiver l'UI |
-| `tunnels/detect` → `500` `map_matching_2 absent` | Idem |
-| `tunnels/detect` → `200 {tunnels: []}` | **Normal** (vrai négatif possible). Ne pas alerter. |
-| `POST /instances/{id}/stop` → `404` | Dataset supprimé entre temps. Nettoyer côté M1. |
-
----
-
-## 13. Construction GPX côté M1
-
-ORS produit du `<rte>`/`<rtept>`. **M1 construit** `<trk>`/`<trkpt>` (T5) :
-
-- `<time>` **uniquement** dans `<metadata>` (pas dans les `<trkpt>`).
-- `<wpt>` nommés injectés par M1 (points d'intérêt utilisateur).
-- `<trkpt>` générés depuis `features[0].geometry.coordinates` (lon, lat, ele).
-
-**Structure type** :
-```xml
-<?xml version="1.0"?>
-<gpx version="1.1" creator="M1">
-  <metadata>
-    <time>2026-11-09T12:00:00Z</time>
-  </metadata>
-  <wpt lat="43.70" lon="7.26"><name>Départ Nice</name></wpt>
-  <wpt lat="43.73" lon="7.42"><name>Arrivée Monaco</name></wpt>
-  <trk>
-    <name>Nice → Monaco</name>
-    <trkseg>
-      <trkpt lat="43.70" lon="7.26"><ele>15.0</ele></trkpt>
-      <trkpt lat="43.71" lon="7.28"><ele>45.0</ele></trkpt>
-      ...
-    </trkseg>
-  </trk>
-</gpx>
-```
-
----
-
-## 14. Tableau récapitulatif des routes M1
-
-| Méthode | Route | Auth | Rôle |
-|---|---|---|---|
-| `GET` | `/api/v1/ping` | — | Keep-alive |
-| `GET` | `/api/v1/datasets` | — | Liste datasets |
-| `GET` | `/api/v1/datasets/{id}` | — | Détail dataset (+ polling) |
-| `POST` | `/api/v1/datasets` | — | Créer dataset (202) |
-| `DELETE` | `/api/v1/datasets/{id}` | — | Supprimer dataset |
-| `GET` | `/api/v1/instances` | — | Lister instances ORS |
-| `POST` | `/api/v1/instances/{id}/start` | — | Démarrer ORS |
-| `POST` | `/api/v1/instances/{id}/stop` | — | Arrêter ORS + unload |
-| `GET` | `/api/v1/regions` | — | Lister régions |
-| `GET` | `/api/v1/polygons` | — | Lister zones custom |
-| `GET` | `/api/v1/polygons/{id}` | — | Détail zone |
-| `POST` | `/api/v1/polygons` | — | Créer zone (201) |
-| `PUT` | `/api/v1/polygons/{id}` | — | Remplacer zone |
-| `DELETE` | `/api/v1/polygons/{id}` | — | Supprimer zone |
-| **`POST`** | **`/api/v1/communes/detect`** | — | **Détecter communes (v1.10)** |
-| **`POST`** | **`/api/v1/tunnels/detect`** | — | **Détecter tunnels (v1.10)** |
-| **`GET`** | **`/api/v1/datasets/{id}/aux`** | — | **Statut artefacts aux (v1.10)** |
-
-**Routes admin (M1 ne doit pas appeler)** :
-- `POST /api/v1/regions`, `PUT /api/v1/regions/{id}`, `DELETE /api/v1/regions/{id}`
-- `GET /api/v1/geofabrik/regions`
-- `POST /api/v1/datasets/{id}/aux/prepare`
-
----
-
-## 15. Décisions clés impactant M1
-
-| # | Décision | Impact M1 |
-|---|---|---|
-| **T47** | Découpage segments ≤ 50 km | M1 concatène les réponses ORS par segment |
-| **T52** | Mode `bbox` supprimé | M1 utilise `regions` XOR `zones` (pas de mixte) |
-| **T53** | Limites datasets | M1 valide côté client avant envoi (fail fast UX) |
-| **T36** | Profils `driving-car`, `cycling-road` | M1 n'utilise pas `cycling-regular` (retiré) |
-| **T39** | ORS `-Xmx4g` | M1 peut router 2 profils en parallèle sans OOM |
-| **A7** | Unload sur `stop` | Après `stop`, premier appel `communes/detect` ~2 s |
-| **A2** | Edge IDs entiers nus | M1 ne doit pas préfixer `w` en sortie (tunnels) |
-| **A4** | Monaco `admin_level=8` | Défaut OK, override possible |
-| **A9** | Fusion gap < 50 m | Un aller-retour = 2 passages, micro-passage fusionné |
-| **A15** | Tunnels urbains non détectés | M1 avertit l'utilisateur (limitation) |
-
----
-
-## 16. Annexes
-
-### A. Exemple de cycle complet (Python httpx)
-
-```python
-import httpx
-import time
-
-BASE = "http://10.15.58.131:9000/api/v1"
-ORS = "http://10.15.58.131:8002/ors/v2"
-client = httpx.Client(timeout=30)
-
-# 1. Ping
-client.get(f"{BASE}/ping")
-
-# 2. Créer un dataset
-r = client.post(f"{BASE}/datasets", json={
-    "name": "mon-ds",
-    "regions": ["provence-alpes-cote-dazur"]
-})
-assert r.status_code == 202, r.text
-ds_id = r.json()["id"]
-
-# 3. Polling dataset
-while True:
-    r = client.get(f"{BASE}/datasets/{ds_id}")
-    status = r.json()["status"]
-    if status in ("ready", "failed"):
-        break
-    time.sleep(5)
-
-assert status == "ready", r.json().get("last_log_tail")
-
-# 4. Vérifier artefacts aux
-r = client.get(f"{BASE}/datasets/{ds_id}/aux")
-aux = r.json()
-has_communes = aux["communes"]["exists"]
-has_tunnels = aux["tunnels"]["exists"] and aux["mm"]["exists"]
-
-# 5. Démarrer ORS
-r = client.post(f"{BASE}/instances/{ds_id}/start")
-assert r.status_code == 200
-
-# 6. Attendre ready
-while True:
-    try:
-        h = httpx.get(f"{ORS}/health", timeout=2)
-        if h.status_code == 200 and h.json().get("status") == "ready":
-            break
-    except httpx.HTTPError:
-        pass
-    time.sleep(3)
-
-# 7. Router (segment <= 50 km)
-route = client.post(f"{ORS}/directions/cycling-road/geojson", json={
-    "coordinates": [[7.26, 43.70], [7.42, 43.73]],
-    "elevation": True,
-    "instructions": True,
-    "geometry_simplify": False
-}).json()
-coords = route["features"][0]["geometry"]["coordinates"]
-ascent = route["features"][0]["properties"]["ascent"]
-
-# 8. Enrichissement communes
-if has_communes:
-    passages = client.post(f"{BASE}/communes/detect", json={
-        "traceId": "t-001",
-        "datasetId": ds_id,
-        "points": coords
-    }).json()["passages"]
-
-# 9. Enrichissement tunnels
-if has_tunnels:
-    tunnels = client.post(f"{BASE}/tunnels/detect", json={
-        "traceId": "t-001",
-        "datasetId": ds_id,
-        "points": coords
-    }).json()["tunnels"]
-
-# 10. Stop ORS
-client.post(f"{BASE}/instances/{ds_id}/stop")
-```
-
-### B. Modèles Pydantic (référence M1)
-
-**Communes** :
-```python
-from pydantic import BaseModel, Field
-from typing import Optional
-
-class CommuneParams(BaseModel):
-    admin_level: Optional[str] = Field(default=None, alias="adminLevel")
-    min_segment_km: float = Field(default=0.005, alias="minSegmentKm", ge=0.0)
-    gap_max_m: float = Field(default=50.0, alias="gapMaxM", ge=0.0)
-
-class CommunePassage(BaseModel):
-    commune: str
-    passage: int
-    nb_passages_total: int = Field(alias="nbPassagesTotal")
-    km_entree: float = Field(alias="kmEntree")
-    km_sortie: float = Field(alias="kmSortie")
-    longueur_km: float = Field(alias="longueurKm")
-    ambiguous: bool
-
-class CommunesDetectRequest(BaseModel):
-    trace_id: str = Field(alias="traceId")
-    dataset_id: str = Field(alias="datasetId")
-    points: list[list[float]]
-    params: CommuneParams = Field(default_factory=CommuneParams)
-
-class CommunesDetectResponse(BaseModel):
-    trace_id: str = Field(alias="traceId")
-    dataset_id: str = Field(alias="datasetId")
-    detected_at: str = Field(alias="detectedAt")
-    passages: list[CommunePassage]
-```
-
-**Tunnels** :
-```python
-class TunnelParams(BaseModel):
-    min_length_m: float = Field(default=50.0, alias="minLengthM", ge=0.0)
-    altimetric_check: bool = Field(default=False, alias="altimetricCheck")
-    altimetric_tolerance_m: float = Field(default=30.0, alias="altimetricToleranceM", ge=0.0)
-
-class Tunnel(BaseModel):
-    id: str
-    group_id: Optional[str] = Field(alias="groupId")
-    name: Optional[str]
-    start_km: float = Field(alias="startKm")
-    end_km: float = Field(alias="endKm")
-    length_m: float = Field(alias="lengthM")
-    way_ids: list[str] = Field(alias="wayIds")
-    altimetric_ok: Optional[bool] = Field(alias="altimetricOk")
-
-class TunnelsDetectRequest(BaseModel):
-    trace_id: str = Field(alias="traceId")
-    dataset_id: str = Field(alias="datasetId")
-    points: list[list[float]]
-    params: TunnelParams = Field(default_factory=TunnelParams)
-
-class TunnelsDetectResponse(BaseModel):
-    version: int
-    trace_id: str = Field(alias="traceId")
-    dataset_id: str = Field(alias="datasetId")
-    detected_at: str = Field(alias="detectedAt")
-    params: TunnelParams
-    tunnels: list[Tunnel]
-```
-
-### C. Points d'attention M1
-
-- **Ne pas appeler les routes admin** (401 systématique).
-- **Attendre `status=ready`** avant `start` d'instance (sinon 409 `ors-config.yml manquant`).
-- **Attendre `health=ready`** avant routage (sinon 5xx ORS).
-- **Découper en segments ≤ 50 km** (T47) pour éviter le code 2004.
-- **Vérifier `aux.communes.exists`** avant `communes/detect` (sinon 404).
-- **Vérifier `aux.tunnels.exists && aux.mm.exists`** avant `tunnels/detect`.
-- **Tunnels urbains** : avertir l'utilisateur, ne pas bloquer (A15).
-- **Retry 3× avec backoff** sur `5xx` / timeout réseau.
-- **Keep-alive** : `GET /ping` toutes les 30 s.
-- **Confirmations utilisateur** : sur `DELETE /datasets/{id}` (irréversible).
-- **Un seul dataset en mémoire** : si M1 bascule A → B, l'index A est déchargé (rechargement ~2 s au retour).
-- **`X-Admin-Token`** : M1 ne doit **jamais** le stocker ni l'envoyer.
-
----
-
-*Fin du document. Référence : ref_tech.md v1.10, hermes.md v1.10, plan_action.md v1.10, communes & tunnels.md v1.10.*

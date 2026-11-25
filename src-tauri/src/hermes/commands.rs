@@ -13,10 +13,11 @@ use serde_json::Value;
 
 use super::client::{validate_id, HermesClient};
 use super::config::{self, HermesConfig};
+use super::system_ping;
 use super::types::{
     coded, codes, HermesAuxPrepareResponse, HermesAuxStatus, HermesCreateDatasetRequest,
     HermesDataset, HermesIdStatus, HermesPolygon, HermesPolygonInput, HermesRegion,
-    HermesStatusResponse, HermesWakeResult,
+    HermesServingStatus, HermesStatusResponse, HermesWakeResult,
 };
 use super::wake;
 
@@ -40,6 +41,24 @@ pub async fn hermes_ping(app: tauri::AppHandle) -> Result<HermesStatusResponse, 
     client
         .get_once::<HermesStatusResponse>("/ping", PING_TIMEOUT)
         .await
+}
+
+/// Ping **système** (ICMP) de l'hôte hermes. Il teste la machine et le réseau,
+/// indépendamment du service `hermes-api` : le store l'exécute périodiquement
+/// pendant toute la durée de l'application.
+#[tauri::command]
+pub async fn hermes_system_ping(
+    app: tauri::AppHandle,
+) -> Result<HermesStatusResponse, String> {
+    let config = config::read_config(&app).await;
+    let host = system_ping::host_from_base_url(&config.base_url)
+        .ok_or_else(|| coded(codes::INVALID, "Hôte hermes introuvable dans l'URL."))?;
+    system_ping::ping_once(&host)
+        .await
+        .map_err(|error| coded(codes::OFFLINE, error))?;
+    Ok(HermesStatusResponse {
+        status: "ok".to_string(),
+    })
 }
 
 /// `GET {orsBaseUrl}/health` — santé du moteur ORS hébergé par hermes.
@@ -96,36 +115,58 @@ pub async fn hermes_get_dataset(
         .await
 }
 
-/// `POST /datasets` — crée un dataset en mode `regions` **XOR** `zones`.
+/// `GET /serving` — dataset servi et état de l'instance ORS.
+#[tauri::command]
+pub async fn hermes_get_serving(
+    app: tauri::AppHandle,
+) -> Result<HermesServingStatus, String> {
+    let (config, client) = open(&app).await?;
+    client
+        .get::<HermesServingStatus>("/serving", config.request_timeout)
+        .await
+}
+
+/// `PUT /serving/{id}` — sélectionne le dataset côté serveur et démarre ORS
+/// lorsqu'il est exploitable. La réponse n'est pas interprétée : le store
+/// relit `GET /serving`.
+#[tauri::command]
+pub async fn hermes_set_serving(
+    app: tauri::AppHandle,
+    dataset_id: String,
+) -> Result<(), String> {
+    validate_id(&dataset_id, "dataset")?;
+    let (config, client) = open(&app).await?;
+    client
+        .put_no_body(&format!("/serving/{}", dataset_id), config.request_timeout)
+        .await
+}
+
+/// `DELETE /serving` — arrête ORS et efface la sélection.
+#[tauri::command]
+pub async fn hermes_clear_serving(app: tauri::AppHandle) -> Result<(), String> {
+    let (config, client) = open(&app).await?;
+    client.delete("/serving", config.request_timeout).await
+}
+
+/// `POST /datasets` — crée un dataset composé uniquement de polygones (zones).
 ///
-/// La validation locale reproduit le XOR du serveur pour un message immédiat ;
-/// les limites (4 régions, 100 zones, 50 000 km²) restent l'autorité du serveur
-/// et sont restituées telles quelles.
+/// Pour des raisons de performance, l'IHM ne permet plus de créer un dataset à
+/// partir de régions. La commande refuse donc une sélection vide ou un nombre
+/// de zones supérieur au paramètre `Hermes.Limites.maxPolygonesParDataset`.
+/// Les autres limites du serveur (surface totale, présence des PBF) restent
+/// l'autorité et sont restituées telles quelles.
 #[tauri::command]
 pub async fn hermes_create_dataset(
     app: tauri::AppHandle,
     name: Option<String>,
-    regions: Option<Vec<String>>,
-    zones: Option<Vec<String>>,
+    zones: Vec<String>,
 ) -> Result<HermesIdStatus, String> {
-    let regions = normalize_ids(regions, "région")?;
-    let zones = normalize_ids(zones, "zone")?;
-
-    match (&regions, &zones) {
-        (Some(regions), None) if !regions.is_empty() => {}
-        (None, Some(zones)) if !zones.is_empty() => {}
-        (Some(_), Some(_)) => {
-            return Err(coded(
-                codes::INVALID,
-                "Régions et zones ne peuvent pas être fournies ensemble.",
-            ));
-        }
-        _ => {
-            return Err(coded(
-                codes::INVALID,
-                "Fournissez une liste non vide de régions ou de zones.",
-            ));
-        }
+    let zones = normalize_ids(Some(zones), "zone")?.unwrap_or_default();
+    if zones.is_empty() {
+        return Err(coded(
+            codes::INVALID,
+            "Fournissez au moins un polygone (zone) pour créer un dataset.",
+        ));
     }
 
     let name = name
@@ -133,13 +174,43 @@ pub async fn hermes_create_dataset(
         .filter(|value| !value.is_empty());
 
     let (config, client) = open(&app).await?;
+    if zones.len() as u64 > config.max_polygons_per_dataset {
+        return Err(coded(
+            codes::INVALID,
+            format!(
+                "Un dataset est limité à {} polygones (paramètre Hermes.Limites.maxPolygonesParDataset).",
+                config.max_polygons_per_dataset
+            ),
+        ));
+    }
+
+    // Précontrôle **best-effort** de la surface : une lecture `/polygons` en
+    // échec (500, route indisponible) ne doit pas bloquer la création, le
+    // serveur restant l'autorité. L'IHM applique déjà la même limite.
+    if let Ok(polygons) = client
+        .get::<Vec<HermesPolygon>>("/polygons", config.request_timeout)
+        .await
+    {
+        if let Ok(dataset_area_km2) = dataset_surface_km2(&zones, &polygons) {
+            if dataset_area_km2 > config.max_dataset_area_km2 {
+                return Err(coded(
+                    codes::INVALID,
+                    format!(
+                        "Surface du dataset {:.1} km² supérieure au maximum autorisé ({:.0} km², paramètre Hermes.Limites.surfaceMaxDatasetKm2).",
+                        dataset_area_km2, config.max_dataset_area_km2
+                    ),
+                ));
+            }
+        }
+    }
+
     client
         .post::<HermesIdStatus, _>(
             "/datasets",
             &HermesCreateDatasetRequest {
                 name,
-                regions,
-                zones,
+                regions: None,
+                zones: Some(zones),
             },
             config.request_timeout,
         )
@@ -180,21 +251,17 @@ pub async fn hermes_aux_status(
 /// `POST /datasets/{id}/aux/prepare` — lance la génération des artefacts aux.
 ///
 /// Le serveur répond 202 et poursuit en tâche de fond : le store suit ensuite
-/// `GET /datasets/{id}/aux`. `force` régénère les artefacts existants,
-/// `skip_mm` saute la génération du dossier `mm/`.
+/// `GET /datasets/{id}/aux`. Le contrat v1.9 n'accepte que `force` : `skipMm`
+/// a disparu du payload.
 #[tauri::command]
 pub async fn hermes_prepare_aux(
     app: tauri::AppHandle,
     dataset_id: String,
     force: bool,
-    skip_mm: bool,
 ) -> Result<HermesAuxPrepareResponse, String> {
     validate_id(&dataset_id, "dataset")?;
     let (config, client) = open(&app).await?;
-    let body = serde_json::json!({
-        "force": force,
-        "skipMm": skip_mm,
-    });
+    let body = serde_json::json!({ "force": force });
     client
         .post(
             &format!("/datasets/{}/aux/prepare", dataset_id),
@@ -297,14 +364,14 @@ pub async fn hermes_get_polygon(
 }
 
 /// `POST /polygons` — crée une zone custom. L'identifiant est un slug fourni
-/// par l'IHM ; `index` est réservé par le serveur.
+/// par l'IHM ; `index` est réservé par le serveur. La couleur n'est plus
+/// traitée par l'application : le champ est envoyé à `null`.
 #[tauri::command]
 pub async fn hermes_create_polygon(
     app: tauri::AppHandle,
     id: String,
     name: String,
     description: Option<String>,
-    color: Option<String>,
     geometry: Value,
 ) -> Result<HermesPolygon, String> {
     validate_id(&id, "polygone")?;
@@ -324,6 +391,8 @@ pub async fn hermes_create_polygon(
     validate_polygon_geometry(&geometry)?;
 
     let (config, client) = open(&app).await?;
+    validate_polygon_area(&geometry, config.max_polygon_area_km2)?;
+
     client
         .post::<HermesPolygon, _>(
             "/polygons",
@@ -331,7 +400,6 @@ pub async fn hermes_create_polygon(
                 id: Some(id),
                 name,
                 description: clean_optional(description),
-                color: clean_optional(color),
                 geometry,
             },
             config.request_timeout,
@@ -347,7 +415,6 @@ pub async fn hermes_update_polygon(
     polygon_id: String,
     name: String,
     description: Option<String>,
-    color: Option<String>,
     geometry: Value,
 ) -> Result<HermesPolygon, String> {
     validate_id(&polygon_id, "polygone")?;
@@ -361,6 +428,8 @@ pub async fn hermes_update_polygon(
     validate_polygon_geometry(&geometry)?;
 
     let (config, client) = open(&app).await?;
+    validate_polygon_area(&geometry, config.max_polygon_area_km2)?;
+
     client
         .put::<HermesPolygon, _>(
             &format!("/polygons/{}", polygon_id),
@@ -368,7 +437,6 @@ pub async fn hermes_update_polygon(
                 id: None,
                 name,
                 description: clean_optional(description),
-                color: clean_optional(color),
                 geometry,
             },
             config.request_timeout,
@@ -421,4 +489,89 @@ fn validate_polygon_geometry(geometry: &Value) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Surface de l'anneau extérieur d'un polygone GeoJSON, en km².
+///
+/// L'anneau est refermé s'il ne l'est pas (le serveur le fait silencieusement)
+/// et sa surface est calculée avec la même formule sphérique que les communes.
+/// Une géométrie illisible est refusée par un code `HERMES_INVALID`.
+pub(crate) fn polygon_outer_area_km2(geometry: &Value) -> Result<f64, String> {
+    let coordinates = geometry
+        .get("coordinates")
+        .and_then(Value::as_array)
+        .ok_or_else(|| coded(codes::INVALID, "Coordonnées du polygone absentes."))?;
+    let outer = coordinates
+        .first()
+        .and_then(Value::as_array)
+        .ok_or_else(|| coded(codes::INVALID, "Anneau extérieur du polygone absent."))?;
+
+    let mut ring: Vec<[f64; 2]> = Vec::with_capacity(outer.len());
+    for point in outer {
+        let pair = point
+            .as_array()
+            .ok_or_else(|| coded(codes::INVALID, "Sommet de polygone illisible."))?;
+        let lon = pair
+            .first()
+            .and_then(Value::as_f64)
+            .ok_or_else(|| coded(codes::INVALID, "Longitude de polygone invalide."))?;
+        let lat = pair
+            .get(1)
+            .and_then(Value::as_f64)
+            .ok_or_else(|| coded(codes::INVALID, "Latitude de polygone invalide."))?;
+        if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+            return Err(coded(
+                codes::INVALID,
+                "Coordonnées hors WGS84 (lon ±180, lat ±90).",
+            ));
+        }
+        ring.push([lon, lat]);
+    }
+
+    if ring.len() < 4 {
+        return Err(coded(
+            codes::INVALID,
+            "Un polygone doit avoir au moins 4 sommets (anneau fermé).",
+        ));
+    }
+    let first = ring[0];
+    let last = ring[ring.len() - 1];
+    if first != last {
+        ring.push(first);
+    }
+
+    Ok(crate::gpx_communes::geometry::ring_area_m2(&ring) / 1_000_000.0)
+}
+
+/// Refuse un polygone dont la surface dépasse la limite configurée (km²).
+fn validate_polygon_area(geometry: &Value, max_area_km2: f64) -> Result<(), String> {
+    let area_km2 = polygon_outer_area_km2(geometry)?;
+    if area_km2 > max_area_km2 {
+        return Err(coded(
+            codes::INVALID,
+            format!(
+                "Surface du polygone {:.1} km² supérieure au maximum autorisé ({:.0} km²).",
+                area_km2, max_area_km2
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Surface cumulée des zones d'un dataset, en km².
+///
+/// Les identifiants absents de `polygons` sont ignorés : le serveur refusera
+/// de toute façon une zone inconnue. Une géométrie illisible en revanche est
+/// signalée, pour ne pas laisser passer un dataset sous-évalué.
+pub(crate) fn dataset_surface_km2(
+    zones: &[String],
+    polygons: &[HermesPolygon],
+) -> Result<f64, String> {
+    let mut total = 0.0;
+    for zone_id in zones {
+        if let Some(polygon) = polygons.iter().find(|candidate| &candidate.id == zone_id) {
+            total += polygon_outer_area_km2(&polygon.geometry)?;
+        }
+    }
+    Ok(total)
 }

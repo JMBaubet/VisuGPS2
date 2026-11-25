@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 /// Codes machine préfixant les erreurs renvoyées au frontend.
 pub mod codes {
-    /// Connexion refusée, DNS, ZeroTier absent.
+    /// Connexion refusée, DNS, Tailscale absent.
     pub const OFFLINE: &str = "HERMES_OFFLINE";
     /// Délai dépassé.
     pub const TIMEOUT: &str = "HERMES_TIMEOUT";
@@ -61,6 +61,9 @@ pub struct HermesStatusResponse {
 #[serde(rename_all = "camelCase")]
 pub struct HermesDataset {
     pub id: String,
+    /// Nom d'affichage du dataset (facultatif : absent des serveurs < v1.11).
+    #[serde(default)]
+    pub name: Option<String>,
     /// Régions fusionnées (mode `regions`), ou `null` en mode `zones`.
     #[serde(default)]
     pub regions: Option<Vec<String>>,
@@ -69,8 +72,22 @@ pub struct HermesDataset {
     pub zones: Option<Vec<String>>,
     #[serde(default, alias = "created_at")]
     pub created_at: String,
-    /// `preparing`, `ready` ou `failed`.
+    /// Champ historique : `preparing`, `ready` ou `failed`.
     pub status: String,
+    /// État de référence v1.9 : `initializing`, `building`, `ready`,
+    /// `unavailable`, `degradedCommunes`, `degradedTunnels`, `degradedAux`.
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default, alias = "state_label")]
+    pub state_label: Option<String>,
+    /// Phase courante du build (ex. `pbf`).
+    #[serde(default)]
+    pub phase: Option<String>,
+    /// Présence des artefacts `pbf`, `ors`, `communes`, `tunnels`, `mm`.
+    #[serde(default)]
+    pub artifacts: Option<serde_json::Value>,
+    #[serde(default, alias = "run_id")]
+    pub run_id: Option<String>,
     #[serde(default, alias = "size_bytes")]
     pub size_bytes: u64,
     #[serde(default, alias = "ors_version")]
@@ -80,6 +97,28 @@ pub struct HermesDataset {
     /// Dernière ligne de log d'un build échoué (`GET /datasets/{id}`).
     #[serde(default, alias = "last_log_tail")]
     pub last_log_tail: Option<String>,
+}
+
+/// État du dataset servi par Hermes (`GET /serving`).
+///
+/// `state` vaut `none`, `waiting`, `starting`, `active`, `stopped` ou
+/// `failed`. La sélection est persistée côté serveur dans `serving.json` ;
+/// `PUT /serving/{id}` la modifie et démarre ORS, `DELETE /serving` l'efface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesServingStatus {
+    #[serde(default, alias = "dataset_id")]
+    pub dataset_id: Option<String>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, alias = "state_label")]
+    pub state_label: Option<String>,
+    #[serde(default, alias = "dataset_state")]
+    pub dataset_state: Option<String>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Réponse `{id, status}` de `POST /datasets`, `GET /instances` et des
@@ -160,8 +199,6 @@ pub struct HermesPolygonInput {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
     pub geometry: serde_json::Value,
 }
 
@@ -173,11 +210,20 @@ pub struct HermesPolygonInput {
 #[serde(rename_all = "camelCase")]
 pub struct HermesAuxFile {
     pub name: String,
+    /// `pending`, `building`, `ready` ou `failed` (contrat v1.10).
+    #[serde(default)]
+    pub state: String,
     pub exists: bool,
     #[serde(default, alias = "size_bytes")]
     pub size_bytes: Option<u64>,
     #[serde(default, alias = "modified_at")]
     pub modified_at: Option<String>,
+    #[serde(default, alias = "completed_at")]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default, alias = "run_id")]
+    pub run_id: Option<String>,
 }
 
 /// Réponse de `GET /datasets/{id}/aux`.

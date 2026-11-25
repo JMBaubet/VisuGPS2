@@ -1566,10 +1566,8 @@ mod tests {
 
     /// Le namespace `Hermes.*` est déclaré et cohérent avec la vue `_meta`.
     ///
-    /// La vue `/hermes` porte ses deux groupes de réglages (connexion et
-    /// réveil). Les huit paramètres visibles doivent être rattachés à l'un
-    /// d'eux ; `Hermes.Dataset.actif` est un paramètre **caché**, piloté par la
-    /// vue Hermes et volontairement absent de `_meta` — comme `Carte.Vue.*`.
+    /// La vue `/hermes` porte ses trois groupes de réglages (connexion, réveil
+    /// et limites). Les onze paramètres visibles sont rattachés à l'un d'eux.
     #[test]
     fn hermes_namespace_is_declared_and_consistent() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -1582,13 +1580,13 @@ mod tests {
         flatten_settings(&table, "", &mut defs);
         let meta = extract_meta(&table);
 
-        // 1. La vue `/hermes` est déclarée, avec ses deux groupes et leurs
+        // 1. La vue `/hermes` est déclarée, avec ses trois groupes et leurs
         //    métadonnées d'affichage.
         let hermes = meta.views.get("hermes").expect("vue `hermes` déclarée");
         assert_eq!(hermes.label, "Hermes");
         assert_eq!(hermes.icon, "mdi-server-network");
-        assert_eq!(hermes.groups.len(), 2);
-        for group_id in ["Hermes.Connexion", "Hermes.Reveil"] {
+        assert_eq!(hermes.groups.len(), 3);
+        for group_id in ["Hermes.Connexion", "Hermes.Reveil", "Hermes.Limites"] {
             assert!(
                 hermes.groups.contains(&group_id.to_string()),
                 "groupe `{group_id}` absent de la vue hermes : {:?}",
@@ -1602,36 +1600,21 @@ mod tests {
             assert!(group.icon.is_some(), "groupe `{group_id}` sans icône");
         }
 
-        // 2. Neuf paramètres `Hermes.*` : huit visibles + le dataset actif
-        //    caché.
+        // 2. Douze paramètres `Hermes.*`, tous visibles.
         let hermes_defs: Vec<_> = defs
             .iter()
             .filter(|d| d.path.starts_with("Hermes."))
             .collect();
         assert_eq!(
             hermes_defs.len(),
-            9,
-            "9 paramètres `Hermes.*` attendus : {:?}",
+            12,
+            "12 paramètres `Hermes.*` attendus : {:?}",
             hermes_defs.iter().map(|d| &d.path).collect::<Vec<_>>()
         );
 
-        // 3. Chaque paramètre visible appartient à un groupe de la vue ; le
-        //    dataset actif est le seul hors `_meta`.
+        // 3. Chaque paramètre appartient à un groupe de la vue.
         for def in &hermes_defs {
             let group_path = def.path.split('.').take(2).collect::<Vec<_>>().join(".");
-            if def.path == "Hermes.Dataset.actif" {
-                assert!(
-                    !hermes.groups.contains(&group_path),
-                    "`Hermes.Dataset.actif` doit rester caché (groupe `{group_path}`)"
-                );
-                assert!(
-                    meta.views
-                        .values()
-                        .all(|view| !view.groups.contains(&group_path)),
-                    "`Hermes.Dataset.actif` ne doit être rattaché à aucune vue"
-                );
-                continue;
-            }
             assert!(
                 hermes.groups.contains(&group_path),
                 "paramètre `{}` rattaché au groupe `{}`, absent de la vue hermes",
@@ -1712,11 +1695,36 @@ mod tests {
         assert_eq!(delai_max.min, Some(30.0));
         assert_eq!(delai_max.max, Some(300.0));
 
-        let dataset = hermes_defs
+        let max_polygons = hermes_defs
             .iter()
-            .find(|d| d.path == "Hermes.Dataset.actif")
-            .expect("paramètre `Hermes.Dataset.actif` déclaré");
-        assert_eq!(dataset.setting_type, "string");
-        assert_eq!(dataset.default.as_str(), Some(""));
+            .find(|d| d.path == "Hermes.Limites.maxPolygonesParDataset")
+            .expect("paramètre `Hermes.Limites.maxPolygonesParDataset` déclaré");
+        assert_eq!(max_polygons.setting_type, "int");
+        assert_eq!(max_polygons.default.as_i64(), Some(2));
+        assert_eq!(max_polygons.min, Some(1.0));
+        assert_eq!(max_polygons.max, Some(10.0));
+        assert_eq!(max_polygons.step, Some(1.0));
+
+        let max_area = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Limites.surfaceMaxPolygoneKm2")
+            .expect("paramètre `Hermes.Limites.surfaceMaxPolygoneKm2` déclaré");
+        assert_eq!(max_area.setting_type, "int");
+        assert_eq!(max_area.default.as_i64(), Some(10_000));
+        assert_eq!(max_area.min, Some(1_000.0));
+        assert_eq!(max_area.max, Some(100_000.0));
+        assert_eq!(max_area.step, Some(500.0));
+        assert_eq!(max_area.unit.as_deref(), Some("km²"));
+
+        let max_dataset_area = hermes_defs
+            .iter()
+            .find(|d| d.path == "Hermes.Limites.surfaceMaxDatasetKm2")
+            .expect("paramètre `Hermes.Limites.surfaceMaxDatasetKm2` déclaré");
+        assert_eq!(max_dataset_area.setting_type, "int");
+        assert_eq!(max_dataset_area.default.as_i64(), Some(50_000));
+        assert_eq!(max_dataset_area.min, Some(1_000.0));
+        assert_eq!(max_dataset_area.max, Some(100_000.0));
+        assert_eq!(max_dataset_area.step, Some(500.0));
+        assert_eq!(max_dataset_area.unit.as_deref(), Some("km²"));
     }
 }

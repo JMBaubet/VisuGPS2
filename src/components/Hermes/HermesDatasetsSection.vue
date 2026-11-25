@@ -2,7 +2,7 @@
   <div class="hermes-section">
     <div class="hermes-section__header">
       <v-icon icon="mdi-database" size="16" class="mr-1" />
-      <span class="text-subtitle-2">Datasets</span>
+      <span class="text-subtitle-2">Jeu de données</span>
       <v-chip size="x-small" variant="tonal" class="ml-2">
         {{ hermesStore.datasets.length }}
       </v-chip>
@@ -11,7 +11,7 @@
         size="x-small"
         variant="tonal"
         prepend-icon="mdi-plus"
-        :disabled="hermesStore.orsStarting"
+        :disabled="hermesStore.datasetsLoading"
         @click="emit('create-dataset')"
       >
         Nouveau
@@ -20,7 +20,7 @@
         icon="mdi-refresh"
         size="x-small"
         variant="text"
-        title="Recharger les datasets"
+        title="Recharger les jeux de données"
         :loading="hermesStore.datasetsLoading"
         @click="reload"
       />
@@ -33,7 +33,7 @@
       hide-details
       clearable
       prepend-inner-icon="mdi-magnify"
-      placeholder="Filtrer les datasets…"
+      placeholder="Filtrer les jeux de données…"
       class="mb-1 hermes-section__filter"
     />
 
@@ -44,8 +44,9 @@
         class="hermes-section__hint-icon"
       />
       <span>
-        Un dataset assemble des régions ou des zones existantes ; la création
-        ne dessine rien.
+        Un jeu de données assemble des secteurs existants. Cliquez l'icône
+        d'une ligne pour le servir ; l'arrêt et le démarrage du service se font
+        dans la carte Serveur.
       </span>
     </div>
 
@@ -62,134 +63,18 @@
       nav
       class="hermes-list"
     >
-      <v-list-item
+      <HermesDatasetRow
         v-for="dataset in filteredDatasets"
         :key="dataset.id"
-        @mouseenter="emit('hover-dataset', dataset.id)"
-        @mouseleave="emit('hover-dataset', null)"
-      >
-        <template #prepend>
-          <v-icon
-            :icon="
-              dataset.id === hermesStore.activeDatasetId
-                ? 'mdi-check-circle'
-                : 'mdi-database-outline'
-            "
-            :color="
-              dataset.id === hermesStore.activeDatasetId
-                ? 'success'
-                : undefined
-            "
-            size="18"
-          />
-        </template>
-
-        <v-list-item-title class="d-flex align-center flex-wrap">
-          {{ dataset.id }}
-          <v-chip
-            size="x-small"
-            variant="tonal"
-            :color="statusColor(dataset.status)"
-            class="ml-2"
-          >
-            {{ dataset.status }}
-          </v-chip>
-          <v-chip
-            v-if="dataset.stale"
-            size="x-small"
-            variant="tonal"
-            color="warning"
-            class="ml-1"
-          >
-            obsolète
-          </v-chip>
-          <v-progress-circular
-            v-if="hermesStore.pollingDatasetId === dataset.id"
-            indeterminate
-            size="12"
-            class="ml-2"
-          />
-        </v-list-item-title>
-
-        <v-list-item-subtitle>{{ scope(dataset) }}</v-list-item-subtitle>
-        <v-list-item-subtitle>
-          {{ formatFileSize(dataset.sizeBytes) }} · ORS
-          {{ dataset.orsVersion || '—' }}
-          <span v-if="isActiveInstance(dataset)">
-            · instance active
-          </span>
-        </v-list-item-subtitle>
-
-        <template #append>
-          <div class="d-flex align-center ga-1">
-            <v-tooltip
-              v-if="dataset.status === 'failed' && dataset.lastLogTail"
-              location="left"
-              max-width="420"
-            >
-              <template #activator="{ props }">
-                <v-icon
-                  v-bind="props"
-                  icon="mdi-alert-circle-outline"
-                  color="error"
-                  size="18"
-                />
-              </template>
-              <div class="hermes-log-tail">{{ dataset.lastLogTail }}</div>
-            </v-tooltip>
-
-            <v-menu location="bottom end">
-              <template #activator="{ props }">
-                <v-btn
-                  v-bind="props"
-                  icon="mdi-dots-vertical"
-                  size="small"
-                  variant="text"
-                  :title="`Actions pour ${dataset.id}`"
-                  :disabled="hermesStore.orsStarting"
-                />
-              </template>
-              <v-list density="compact">
-                <v-list-item
-                  v-if="
-                    dataset.status === 'ready' &&
-                    dataset.id !== hermesStore.activeDatasetId
-                  "
-                  prepend-icon="mdi-check-circle-outline"
-                  title="Définir comme actif"
-                  @click="activate(dataset.id)"
-                />
-                <v-list-item
-                  v-if="dataset.status === 'ready'"
-                  :prepend-icon="
-                    isActiveInstance(dataset)
-                      ? 'mdi-stop-circle-outline'
-                      : 'mdi-play-circle-outline'
-                  "
-                  :title="
-                    isActiveInstance(dataset)
-                      ? 'Arrêter ORS'
-                      : 'Démarrer ORS'
-                  "
-                  :disabled="hermesStore.orsStarting"
-                  @click="
-                    isActiveInstance(dataset)
-                      ? stopOrs(dataset)
-                      : requestStartOrs(dataset)
-                  "
-                />
-                <v-divider />
-                <v-list-item
-                  prepend-icon="mdi-delete-outline"
-                  title="Supprimer"
-                  class="text-error"
-                  @click="emit('delete-dataset', dataset)"
-                />
-              </v-list>
-            </v-menu>
-          </div>
-        </template>
-      </v-list-item>
+        :dataset="dataset"
+        :active="dataset.id === hermesStore.activeDatasetId"
+        interactive
+        show-delete
+        @select-dataset="emit('select-dataset', $event)"
+        @update-dataset="emit('update-dataset', $event)"
+        @delete-dataset="emit('delete-dataset', $event)"
+        @hover-dataset="emit('hover-dataset', $event)"
+      />
     </v-list>
 
     <v-empty-state
@@ -197,158 +82,59 @@
       icon="mdi-database-off-outline"
       :title="
         hermesStore.datasets.length > 0
-          ? 'Aucun dataset correspondant'
-          : 'Aucun dataset'
+          ? 'Aucun jeu de données correspondant'
+          : 'Aucun jeu de données'
       "
       :text="
         hermesStore.datasets.length > 0
-          ? 'Le filtre ne correspond à aucun dataset.'
-          : 'Aucun dataset sur le serveur.'
+          ? 'Le filtre ne correspond à aucun jeu de données.'
+          : 'Aucun jeu de données sur le serveur.'
       "
     />
-
-    <v-dialog v-model="orsDialogOpen" max-width="480" persistent>
-      <v-card>
-        <v-card-title class="text-h6">Démarrer ORS ?</v-card-title>
-        <v-card-text>
-          Une instance ORS est déjà active pour
-          <b>{{ hermesStore.activeInstance?.id }}</b>. Démarrer
-          <b>{{ orsCandidate?.id }}</b> arrêtera la précédente : le serveur ne
-          maintient qu'une instance à la fois.
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="cancelStartOrs">Annuler</v-btn>
-          <v-btn color="primary" variant="flat" @click="confirmStartOrs">
-            Démarrer
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * Onglet « Datasets » : liste, activation, suppression et gestion ORS.
+ * Onglet « Jeu de données » : liste, création, suppression et sélection.
  *
- * La création ouvre `HermesDatasetForm`, qui assemble des régions ou des
- * polygones existants. Un build en préparation est suivi par le store
- * (`loadDatasets` relance le polling). ORS ne maintient qu'une instance :
- * démarrer un autre dataset demande confirmation.
+ * Chaque ligne est rendue par `HermesDatasetRow` (partagée avec la carte
+ * Serveur). L'icône de tête sélectionne le dataset servi (`PUT /serving/{id}`)
+ * après confirmation dans la vue.
  */
 import { computed, onMounted, ref } from 'vue'
-import {
-  useHermesStore,
-  type HermesDataset,
-} from '../../stores/hermes'
-import { useUiStore } from '../../stores/ui'
-import { formatFileSize } from '../../utils/format'
-import { parseHermesError } from '../../utils/hermes'
+import { useHermesStore, type HermesDataset } from '../../stores/hermes'
+import { datasetDisplayName, datasetSectorNames } from '../../utils/hermes'
+import HermesDatasetRow from './HermesDatasetRow.vue'
 
 const emit = defineEmits<{
   'create-dataset': []
   'delete-dataset': [dataset: HermesDataset]
+  'select-dataset': [dataset: HermesDataset]
+  'update-dataset': [dataset: HermesDataset]
   'hover-dataset': [id: string | null]
 }>()
 
 const hermesStore = useHermesStore()
-const ui = useUiStore()
-
-const orsDialogOpen = ref(false)
-const orsCandidate = ref<HermesDataset | null>(null)
 const search = ref('')
 
-/** Filtre sur l'identifiant, les régions et les zones assemblées. */
+/** Filtre sur le nom, l'identifiant, les régions et les secteurs. */
 const filteredDatasets = computed(() => {
   const query = search.value.trim().toLowerCase()
   if (!query) return hermesStore.datasets
   return hermesStore.datasets.filter(dataset => {
     const regions = (dataset.regions ?? []).join(' ').toLowerCase()
-    const zones = (dataset.zones ?? []).join(' ').toLowerCase()
+    const sectors = datasetSectorNames(dataset, hermesStore.polygons)
+      .join(' ')
+      .toLowerCase()
     return (
+      datasetDisplayName(dataset).toLowerCase().includes(query) ||
       dataset.id.toLowerCase().includes(query) ||
       regions.includes(query) ||
-      zones.includes(query)
+      sectors.includes(query)
     )
   })
 })
-
-function statusColor(status: string): string {
-  switch (status) {
-    case 'ready':
-      return 'success'
-    case 'preparing':
-      return 'warning'
-    case 'failed':
-      return 'error'
-    default:
-      return 'grey'
-  }
-}
-
-function scope(dataset: HermesDataset): string {
-  if (dataset.regions && dataset.regions.length > 0) {
-    return `régions : ${dataset.regions.join(', ')}`
-  }
-  if (dataset.zones && dataset.zones.length > 0) {
-    return `zones : ${dataset.zones.join(', ')}`
-  }
-  return 'périmètre inconnu'
-}
-
-function isActiveInstance(dataset: HermesDataset): boolean {
-  return hermesStore.activeInstance?.id === dataset.id
-}
-
-async function activate(datasetId: string): Promise<void> {
-  try {
-    await hermesStore.setActiveDataset(datasetId)
-  } catch (error) {
-    ui.showError(parseHermesError(error).message)
-  }
-}
-
-function requestStartOrs(dataset: HermesDataset): void {
-  const current = hermesStore.activeInstance
-  if (current && current.id !== dataset.id) {
-    orsCandidate.value = dataset
-    orsDialogOpen.value = true
-    return
-  }
-  void startOrs(dataset)
-}
-
-async function startOrs(dataset: HermesDataset): Promise<void> {
-  try {
-    await hermesStore.startInstance(dataset.id)
-  } catch (error) {
-    ui.showError(parseHermesError(error).message)
-  }
-}
-
-async function stopOrs(dataset: HermesDataset): Promise<void> {
-  try {
-    await hermesStore.stopInstance(dataset.id)
-    ui.showSuccess(`ORS arrêté pour ${dataset.id}.`)
-  } catch (error) {
-    ui.showError(parseHermesError(error).message)
-  }
-}
-
-function cancelStartOrs(): void {
-  orsDialogOpen.value = false
-  orsCandidate.value = null
-}
-
-function confirmStartOrs(): void {
-  const dataset = orsCandidate.value
-  orsDialogOpen.value = false
-  orsCandidate.value = null
-  if (dataset) {
-    void startOrs(dataset)
-  }
-}
 
 async function reload(): Promise<void> {
   await hermesStore.loadDatasets()
@@ -357,6 +143,10 @@ async function reload(): Promise<void> {
 onMounted(() => {
   if (hermesStore.datasets.length === 0) {
     void hermesStore.loadDatasets()
+  }
+  // Les noms des secteurs et l'état « à mettre à jour » dépendent de cette liste.
+  if (hermesStore.polygons.length === 0) {
+    void hermesStore.loadPolygons()
   }
 })
 </script>
@@ -424,14 +214,6 @@ onMounted(() => {
 .hermes-list {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-}
-
-.hermes-log-tail {
-  font-size: 0.75rem;
-  line-height: 1.35;
-  white-space: pre-wrap;
-  max-height: 240px;
   overflow-y: auto;
 }
 </style>

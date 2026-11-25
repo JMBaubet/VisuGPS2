@@ -2,7 +2,7 @@
   <div class="hermes-section">
     <div class="hermes-section__header">
       <v-icon icon="mdi-shape-polygon-plus" size="16" class="mr-1" />
-      <span class="text-subtitle-2">Polygones</span>
+      <span class="text-subtitle-2">Secteurs</span>
       <v-chip size="x-small" variant="tonal" class="ml-2">
         {{ hermesStore.polygons.length }}
       </v-chip>
@@ -20,7 +20,7 @@
         icon="mdi-refresh"
         size="x-small"
         variant="text"
-        title="Recharger les polygones"
+        title="Recharger les secteurs"
         :loading="hermesStore.polygonsLoading"
         @click="reload"
       />
@@ -33,7 +33,7 @@
       hide-details
       clearable
       prepend-inner-icon="mdi-magnify"
-      placeholder="Filtrer les polygones…"
+      placeholder="Filtrer les secteurs…"
       class="mb-1 hermes-section__filter"
     />
 
@@ -44,7 +44,7 @@
         class="hermes-section__hint-icon"
       />
       <span>
-        « Nouveau » dessine un polygone sur la carte ; les sommets restent
+        « Nouveau » dessine un secteur sur la carte ; les sommets restent
         modifiables.
       </span>
     </div>
@@ -71,15 +71,27 @@
         @mouseleave="emit('hover-polygon', null)"
       >
         <template #prepend>
-          <span
-            class="hermes-polygon-swatch"
-            :style="{ backgroundColor: polygon.color ?? '#3B82F6' }"
-          />
+          <v-icon icon="mdi-vector-polygon" size="18" />
         </template>
-        <v-list-item-title>{{ polygon.name }}</v-list-item-title>
+        <v-list-item-title class="d-flex align-center flex-wrap">
+          {{ polygon.name }}
+          <v-chip
+            v-if="isOversized(polygon)"
+            size="x-small"
+            variant="tonal"
+            color="warning"
+            class="ml-2"
+          >
+            surface &gt; max
+          </v-chip>
+        </v-list-item-title>
         <v-list-item-subtitle>
-          {{ polygon.id }} · {{ areaLabel(polygon) }} · rév.
+          {{ areaLabel(polygon) }} · modifié le
+          {{ formatDateTime(polygon.updatedAt) }} · rév.
           {{ polygon.revision }}
+        </v-list-item-subtitle>
+        <v-list-item-subtitle v-if="appStore.isDebug">
+          {{ polygon.id }}
         </v-list-item-subtitle>
         <template #append>
           <div class="d-flex align-center ga-1">
@@ -87,16 +99,35 @@
               icon="mdi-pencil-outline"
               size="x-small"
               variant="text"
-              title="Modifier le polygone"
+              title="Modifier le secteur"
               :disabled="busy"
               @click.stop="emit('edit-polygon', polygon)"
             />
+            <v-tooltip
+              v-if="usedByDataset(polygon.id)"
+              location="left"
+              max-width="300"
+            >
+              <template #activator="{ props }">
+                <v-icon
+                  v-bind="props"
+                  icon="mdi-lock-outline"
+                  size="16"
+                  color="grey"
+                />
+              </template>
+              <span>
+                Secteur utilisé par au moins un jeu de données : suppression
+                désactivée.
+              </span>
+            </v-tooltip>
             <v-btn
+              v-else
               icon="mdi-delete-outline"
               size="x-small"
               variant="text"
               color="error"
-              title="Supprimer le polygone"
+              title="Supprimer le secteur"
               :disabled="busy"
               @click.stop="emit('delete-polygon', polygon)"
             />
@@ -108,22 +139,30 @@
     <v-empty-state
       v-else
       icon="mdi-shape-polygon-plus"
-      title="Aucun polygone"
-      text="Aucun polygone custom, ou filtre trop restrictif."
+      title="Aucun secteur"
+      text="Aucun secteur custom, ou filtre trop restrictif."
     />
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * Onglet « Polygones » : liste, création, édition et suppression.
+ * Onglet « Secteurs » : liste, création, édition et suppression.
  *
- * Cliquer un polygone le sélectionne et cadre la carte ; un second clic
+ * Cliquer un secteur le sélectionne et cadre la carte ; un second clic
  * désélectionne. Le survol est remonté à la vue, qui le transmet à la carte.
+ * La suppression est masquée dès qu'un jeu de données utilise le secteur.
  */
 import { computed, onMounted, ref } from 'vue'
+import { useAppStore } from '../../stores/app'
 import { useHermesStore, type HermesPolygon } from '../../stores/hermes'
-import { polygonAreaKm2 } from '../../utils/hermes'
+import { useSettingsStore } from '../../stores/settings'
+import { formatDateTime } from '../../utils/format'
+import {
+  HERMES_LIMIT_DEFAULTS,
+  HERMES_LIMIT_PATHS,
+  polygonAreaKm2,
+} from '../../utils/hermes'
 
 const props = defineProps<{
   selectedPolygonId: string | null
@@ -140,7 +179,19 @@ const emit = defineEmits<{
 }>()
 
 const hermesStore = useHermesStore()
+const settingsStore = useSettingsStore()
+const appStore = useAppStore()
 const search = ref('')
+
+/** Surface maximale autorisée (km²), pour signaler les secteurs hérités. */
+const maxAreaKm2 = computed(() => {
+  const value = Number(
+    settingsStore.getParamDef(HERMES_LIMIT_PATHS.maxPolygonAreaKm2)?.value,
+  )
+  return Number.isFinite(value) && value > 0
+    ? value
+    : HERMES_LIMIT_DEFAULTS.maxPolygonAreaKm2
+})
 
 const filteredPolygons = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -153,12 +204,27 @@ const filteredPolygons = computed(() => {
   })
 })
 
+/** Le secteur est-il assemblé dans au moins un jeu de données ? */
+function usedByDataset(polygonId: string): boolean {
+  return hermesStore.datasets.some(dataset =>
+    dataset.zones?.includes(polygonId),
+  )
+}
+
 function areaLabel(polygon: HermesPolygon): string {
   try {
     const area = polygonAreaKm2(polygon.geometry)
     return Number.isFinite(area) ? `${area.toFixed(1)} km²` : '—'
   } catch {
     return '—'
+  }
+}
+
+function isOversized(polygon: HermesPolygon): boolean {
+  try {
+    return polygonAreaKm2(polygon.geometry) > maxAreaKm2.value
+  } catch {
+    return false
   }
 }
 
@@ -176,6 +242,10 @@ async function reload(): Promise<void> {
 onMounted(() => {
   if (hermesStore.polygons.length === 0) {
     void hermesStore.loadPolygons()
+  }
+  // La poubelle dépend des jeux de données qui assemblent le secteur.
+  if (hermesStore.datasets.length === 0) {
+    void hermesStore.loadDatasets()
   }
 })
 </script>
@@ -244,13 +314,5 @@ onMounted(() => {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-}
-
-.hermes-polygon-swatch {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.25);
 }
 </style>

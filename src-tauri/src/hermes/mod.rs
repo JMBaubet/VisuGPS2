@@ -9,6 +9,7 @@
 //! - `config` — lecture des paramètres `Hermes.*` et construction du client ;
 //! - `types` — contrats IPC et codes d'erreur ;
 //! - `client` — requêtes HTTP, reprises et mapping d'erreurs ;
+//! - `system_ping` — ping ICMP de la machine, distinct du `GET /ping` de l'API ;
 //! - `wake` — paquet magique WoL et envoi UDP ;
 //! - `commands` — les commandes Tauri.
 //!
@@ -18,6 +19,7 @@
 pub mod client;
 pub mod commands;
 pub mod config;
+pub mod system_ping;
 pub mod types;
 pub mod wake;
 

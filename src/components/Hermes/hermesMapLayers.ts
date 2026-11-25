@@ -1,10 +1,10 @@
 // Contrat de rendu de la carte Hermes : sources, couches, styles et
 // conversions GeoJSON des datasets, régions et polygones custom.
 //
-// La carte est pilotée par l'onglet actif du panneau :
-// - **Datasets** : dataset actif en vert, autres datasets en gris ;
-// - **Régions** : contour du dataset actif en vert, régions en jaune ;
-// - **Polygones** : contour du dataset actif en vert, polygones en orange.
+// Les régions indexées sont une couche de fond **permanente** (jaune). Les
+// autres couches dépendent de l'onglet actif du panneau :
+// - **Datasets** : dataset servi en vert, autres datasets en gris ;
+// - **Polygones** : polygones custom en orange.
 //
 // Dans tous les cas, l'élément survolé (ou sélectionné) passe en bleu. Les
 // couleurs sont des nuances de la palette Material Design.
@@ -259,7 +259,7 @@ function stateWidth(
   ] as unknown as ExpressionSpecification
 }
 
-/** Couverture du dataset actif (vert, ou bleu s'il est survolé). */
+/** Couverture du dataset servi (vert, ou bleu s'il est survolé). */
 export function coverageFeatureCollection(
   dataset: DatasetScope,
   regions: RegionShape[],
@@ -299,24 +299,16 @@ export function datasetsFeatureCollection(
   return { type: 'FeatureCollection', features }
 }
 
-/** Régions affichables ; `highlight` couvre sélection, aperçu et survol. */
+/**
+ * Régions affichables. Couche de fond permanente : aucune sélection ni survol.
+ */
 export function regionsFeatureCollection(
   regions: RegionShape[],
-  selectedId: string | null,
-  previewIds: string[] = [],
-  hoveredId: string | null = null,
 ): GeoJSON.FeatureCollection {
-  const preview = new Set(previewIds)
   const features: GeoJSON.Feature[] = regions.map(
     (region): GeoJSON.Feature => ({
       type: 'Feature',
-      properties: {
-        id: region.id,
-        highlight:
-          region.id === selectedId ||
-          preview.has(region.id) ||
-          region.id === hoveredId,
-      },
+      properties: { id: region.id },
       geometry: regionGeometry(region),
     }),
   )
@@ -364,16 +356,18 @@ export function setSourceData(
   source?.setData(data)
 }
 
-/** Rend visibles les seules couches utiles à l'onglet courant. */
+/**
+ * Rend visibles les couches utiles à l'onglet courant. Les régions sont une
+ * couche de fond permanente, quel que soit l'onglet.
+ */
 export function applyHermesVisibility(
   map: Map,
   tab: HermesTab,
-  hasRegionPreview: boolean,
   hasPolygonPreview: boolean,
 ): void {
   setLayerVisibility(map, [HERMES_LAYER_IDS.coverageFill], tab === 'datasets')
   // Le contour vert reste visible sur tous les onglets : il matérialise le
-  // périmètre du dataset actif sans masquer les remplissages jaune/orange.
+  // périmètre du dataset servi sans masquer les remplissages jaune/orange.
   setLayerVisibility(map, [HERMES_LAYER_IDS.coverageLine], true)
   setLayerVisibility(
     map,
@@ -383,7 +377,7 @@ export function applyHermesVisibility(
   setLayerVisibility(
     map,
     [HERMES_LAYER_IDS.regionsFill, HERMES_LAYER_IDS.regionsLine],
-    tab === 'regions' || hasRegionPreview,
+    true,
   )
   setLayerVisibility(
     map,

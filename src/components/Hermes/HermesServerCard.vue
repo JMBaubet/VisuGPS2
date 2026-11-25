@@ -7,145 +7,115 @@
         size="18"
         class="mr-2"
       />
-      Serveur hermes
+      <div class="d-flex flex-column">
+        <span>Serveur hermes</span>
+        <span
+          v-if="serverCaption"
+          class="text-caption text-medium-emphasis"
+        >
+          {{ serverCaption }}
+        </span>
+      </div>
       <v-spacer />
       <v-chip
-        :color="hermesStore.statusDisplay.color"
+        :color="serviceDisplay.color"
         variant="tonal"
-        size="x-small"
+        size="small"
+        title="État du service"
       >
-        {{ hermesStore.statusDisplay.label }}
+        {{ serviceDisplay.label }}
       </v-chip>
     </v-card-title>
 
     <v-card-text class="pt-1 pb-3">
-      <div class="hermes-line">
-        <span class="hermes-line__label">URL</span>
-        <span class="hermes-line__value" :title="hermesStore.baseUrl">
-          {{ hermesStore.baseUrl }}
-        </span>
-      </div>
-      <div class="hermes-line">
-        <span class="hermes-line__label">Dernier ping</span>
-        <span class="hermes-line__value">{{ lastPingLabel }}</span>
-      </div>
-
-      <v-select
-        :model-value="hermesStore.activeDatasetId"
-        :items="hermesStore.datasets"
-        item-title="id"
-        item-value="id"
-        label="Dataset actif"
-        placeholder="Choisir un dataset…"
-        persistent-placeholder
-        density="compact"
-        variant="outlined"
-        hide-details
-        clearable
-        class="mt-2"
-        :loading="hermesStore.datasetsLoading"
-        :disabled="hermesStore.datasetsLoading"
-        @update:model-value="onSelectDataset"
-      >
-        <template #item="{ props: itemProps, item }">
-          <v-list-item
-            v-bind="itemProps"
-            :disabled="item.raw.status !== 'ready'"
-            :subtitle="
-              `${item.raw.status}${item.raw.stale ? ' · obsolète' : ''}`
-            "
+      <template v-if="hermesStore.activeDataset">
+        <v-list density="compact" nav class="hermes-served">
+          <HermesDatasetRow
+            :dataset="hermesStore.activeDataset"
+            active
+            :interactive="false"
+            :show-delete="false"
+            @update-dataset="emit('update-dataset', $event)"
           />
-        </template>
-      </v-select>
+        </v-list>
+      </template>
+      <template v-else>
+        <div class="hermes-line">
+          <span class="hermes-line__label">Jeu de données</span>
+          <span
+            class="hermes-line__value"
+            :class="{ 'text-medium-emphasis': !servedName }"
+            :title="servedName ?? undefined"
+          >
+            {{ servedName ?? 'Aucun' }}
+          </span>
+        </div>
+        <div
+          v-if="!hermesStore.activeDatasetId"
+          class="text-caption text-medium-emphasis mt-1"
+        >
+          Choisissez un jeu de données dans la liste pour le servir.
+        </div>
+      </template>
 
-      <div v-if="hermesStore.activeDataset" class="hermes-line mt-2">
-        <span class="hermes-line__label">Statut</span>
-        <span class="hermes-line__value">
-          {{ hermesStore.activeDataset.status
-          }}{{ hermesStore.activeDataset.stale ? ' · obsolète' : '' }}
-        </span>
-      </div>
-
-      <div v-if="auxChips.length" class="hermes-aux mt-2">
-        <v-chip
-          v-for="chip in auxChips"
-          :key="chip.key"
-          size="x-small"
+      <div class="d-flex flex-wrap ga-2 mt-3">
+        <v-btn
+          v-if="showWake"
+          size="small"
+          color="primary"
           variant="tonal"
-          :color="chip.exists ? 'success' : 'warning'"
-          :prepend-icon="
-            chip.exists ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'
-          "
-          :title="`${chip.label} : ${
-            chip.exists ? formatFileSize(chip.size) : 'absent'
-          }`"
+          prepend-icon="mdi-power"
+          :loading="hermesStore.server === 'waking'"
+          :disabled="hermesStore.server === 'waking'"
+          @click="wake"
         >
-          {{ chip.label }}
-        </v-chip>
-      </div>
-
-      <div
-        v-if="hermesStore.activeDataset"
-        class="d-flex align-center ga-2 mt-2"
-      >
-        <v-tooltip location="bottom" max-width="320">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              size="x-small"
-              variant="tonal"
-              prepend-icon="mdi-hammer-wrench"
-              :loading="auxBusyActive"
-              :disabled="
-                auxBusyActive ||
-                hermesStore.auxPreparing ||
-                hermesStore.activeDataset.status !== 'ready'
-              "
-              @click="onPrepareAux"
-            >
-              {{ auxActionLabel }}
-            </v-btn>
-          </template>
-          <span>{{ auxActionHint }}</span>
-        </v-tooltip>
-        <span
-          v-if="hermesStore.activeDataset.status !== 'ready'"
-          class="text-caption text-medium-emphasis"
-        >
-          Dataset non prêt
-        </span>
-        <span
-          v-else-if="
-            hermesStore.auxPreparing &&
-            !auxBusyActive &&
-            hermesStore.auxPreparingDatasetId
-          "
-          class="text-caption text-medium-emphasis"
-        >
-          Aux en cours : {{ hermesStore.auxPreparingDatasetId }}
-        </span>
-      </div>
-
-      <div
-        v-if="hermesStore.activeAux?.lastError && !allAuxPresent"
-        class="text-caption text-error mt-1"
-        :title="hermesStore.activeAux.lastError"
-      >
-        {{ hermesStore.activeAux.lastError }}
-      </div>
-
-      <div class="hermes-line mt-2">
-        <span class="hermes-line__label">Instance ORS</span>
-        <span class="hermes-line__value">{{ orsLabel }}</span>
+          {{ wakeLabel }}
+        </v-btn>
+        <template v-else>
+          <v-btn
+            v-if="showStop"
+            size="small"
+            color="error"
+            variant="tonal"
+            prepend-icon="mdi-stop-circle-outline"
+            :loading="hermesStore.servingBusy"
+            :disabled="actionDisabled"
+            @click="onStop"
+          >
+            Arrêter le service
+          </v-btn>
+          <v-btn
+            v-else
+            size="small"
+            color="success"
+            variant="tonal"
+            prepend-icon="mdi-play-circle-outline"
+            :loading="hermesStore.servingBusy"
+            :disabled="
+              actionDisabled ||
+              !hermesStore.activeDatasetId ||
+              !serviceReachable
+            "
+            @click="onStart"
+          >
+            Démarrer le service
+          </v-btn>
+          <span
+            v-if="actionDisabled && hermesStore.constructionInProgress"
+            class="text-caption text-blue align-self-center"
+          >
+            Construction en cours…
+          </span>
+        </template>
       </div>
 
       <v-alert
-        v-if="hermesStore.lastError"
+        v-if="showError"
         type="error"
         variant="tonal"
         density="compact"
         class="mt-2"
-        :text="hermesStore.lastError"
+        :text="hermesStore.lastError ?? undefined"
       />
 
       <div v-if="hermesStore.wakeProgress" class="mt-2 text-body-2">
@@ -153,130 +123,175 @@
         {{ hermesStore.wakeProgress.attempts }},
         {{ hermesStore.wakeProgress.elapsedSec }} s.
       </div>
-
-      <div class="d-flex ga-2 mt-3">
-        <v-btn
-          size="small"
-          variant="tonal"
-          prepend-icon="mdi-refresh"
-          :loading="hermesStore.loading"
-          @click="refresh"
-        >
-          Tester
-        </v-btn>
-        <v-btn
-          v-if="hermesStore.server !== 'online'"
-          size="small"
-          color="primary"
-          variant="flat"
-          prepend-icon="mdi-power"
-          :loading="hermesStore.server === 'waking'"
-          :disabled="hermesStore.server === 'waking'"
-          @click="wake"
-        >
-          Réveiller
-        </v-btn>
-      </div>
     </v-card-text>
   </v-card>
 </template>
 
 <script setup lang="ts">
 /**
- * Carte « Serveur » du panneau Hermes : état, URL, dataset actif, artefacts
- * auxiliaires, instance ORS, réveil WoL.
+ * Carte « Serveur » du panneau Hermes.
  *
- * Elle est toujours visible, quel que soit l'onglet actif. Le choix du dataset
- * est persisté dans `Hermes.Dataset.actif` ; seuls les datasets `ready` sont
- * sélectionnables. Le bouton de préparation aux lance
- * `POST /datasets/{id}/aux/prepare` pour le dataset actif et suit son
- * avancement.
+ * Trois niveaux distincts :
+ * - **serveur** (machine + réseau Tailscale, ping système) : caption sous le
+ *   titre uniquement dans les cas dégradés (injoignable, réveil en cours,
+ *   perdu) ;
+ * - **service** (API hermes + instance ORS) : chip en en-tête (Actif, Attente
+ *   fin de construction, Démarrage en cours, Arrêté, Aucun service, Échec,
+ *   Service arrêté, Inconnu) ; « Actif » n'apparaît qu'une fois la
+ *   construction (build + aux) terminée ;
+ * - **jeu de données servi** : même ligne que l'onglet « Jeu de données »
+ *   (sans poubelle, coche colorée comme le chip d'état).
+ *
+ * Un ping en échec propose « Réveiller » ; après un réveil resté sans réponse,
+ * le serveur est présumé perdu et le bouton devient « Réessayer le réveil ».
+ * La sélection se fait depuis la liste ; « Arrêter le service » et « Démarrer
+ * le service » agissent sur l'instance sans perdre la sélection
+ * (`POST /instances/{id}/stop|start`).
  */
 import { computed } from 'vue'
-import { useHermesStore } from '../../stores/hermes'
+import { useHermesStore, type HermesDataset } from '../../stores/hermes'
 import { useUiStore } from '../../stores/ui'
-import { formatDateTime, formatFileSize } from '../../utils/format'
-import { parseHermesError } from '../../utils/hermes'
+import { datasetDisplayName, parseHermesError } from '../../utils/hermes'
+import HermesDatasetRow from './HermesDatasetRow.vue'
+
+const emit = defineEmits<{
+  'update-dataset': [dataset: HermesDataset]
+}>()
 
 const hermesStore = useHermesStore()
 const ui = useUiStore()
 
-const lastPingLabel = computed(() => formatDateTime(hermesStore.lastPingAt))
+const serving = computed(() => hermesStore.serving)
 
-const auxChips = computed(() => {
-  const aux = hermesStore.activeAux
-  if (!aux) return []
-  return [
-    {
-      key: 'communes',
-      label: 'communes',
-      exists: aux.communes.exists,
-      size: aux.communes.sizeBytes,
-    },
-    {
-      key: 'tunnels',
-      label: 'tunnels',
-      exists: aux.tunnels.exists,
-      size: aux.tunnels.sizeBytes,
-    },
-    {
-      key: 'mm',
-      label: 'mm',
-      exists: aux.mm.exists,
-      size: aux.mm.sizeBytes,
-    },
-  ]
+/** Nom du jeu de données sélectionné (id en repli si le manifest est absent). */
+const servedName = computed<string | null>(() => {
+  const dataset = hermesStore.activeDataset
+  if (dataset) return datasetDisplayName(dataset)
+  return hermesStore.activeDatasetId
 })
 
-const allAuxPresent = computed(() => {
-  const aux = hermesStore.activeAux
-  return !!aux && aux.communes.exists && aux.tunnels.exists && aux.mm.exists
-})
+interface ServiceDisplay {
+  label: string
+  color: string
+}
 
-/** Une préparation est en cours pour le dataset actif (locale ou serveur). */
-const auxBusyActive = computed(
-  () =>
-    (hermesStore.auxPreparing &&
-      hermesStore.auxPreparingDatasetId === hermesStore.activeDatasetId) ||
-    hermesStore.activeAux?.preparing === true,
-)
-
-const auxActionLabel = computed(() => {
-  if (auxBusyActive.value) return 'Préparation en cours…'
-  return allAuxPresent.value ? 'Relancer la préparation' : 'Préparer les aux'
-})
-
-const auxActionHint = computed(() =>
-  allAuxPresent.value
-    ? 'Régénère communes, tunnels et mm (force).'
-    : 'Génère les artefacts aux manquants pour le dataset actif.',
-)
-
-const orsLabel = computed(() => {
-  const instance = hermesStore.activeInstance
-  const health = hermesStore.orsHealth
-  if (!instance) {
-    return health ? `aucune instance (${health})` : 'aucune instance'
+/**
+ * Texte d'état du serveur, uniquement dans les cas dégradés : la situation
+ * normale (« en ligne ») n'a pas besoin d'être répétée.
+ */
+const serverCaption = computed<string | null>(() => {
+  switch (hermesStore.server) {
+    case 'offline':
+      return 'injoignable'
+    case 'waking':
+      return 'réveil en cours'
+    case 'lost':
+      return 'serveur perdu'
+    default:
+      return null
   }
-  return `${instance.id} (${instance.status})${health ? ` · ${health}` : ''}`
 })
 
-async function onSelectDataset(value: string | null): Promise<void> {
+/**
+ * État du **service**, distinct de l'état du **serveur** :
+ * - serveur muet : « Inconnu » (le service n'est pas interrogeable) ;
+ * - serveur joignable mais API muette : « Service arrêté » (orange) ;
+ * - API joignable : état du dataset servi (ORS).
+ * « Aucun service » (rouge) est réservé au serveur joignable sans dataset servi.
+ */
+const serviceDisplay = computed<ServiceDisplay>(() => {
+  if (hermesStore.server !== 'online') {
+    return { label: 'Inconnu', color: 'grey' }
+  }
+  if (hermesStore.apiOnline === false) {
+    return { label: 'Service arrêté', color: 'orange' }
+  }
+  if (hermesStore.apiOnline !== true) {
+    return { label: 'Inconnu', color: 'grey' }
+  }
+  const state = serving.value?.state
+  // « Attente fin de construction » prime sur les états transitoires : pendant
+  // une construction (build ou aux), le serveur peut repasser brièvement en
+  // `starting` ; on ne veut pas voir clignoter « Démarrage en cours ».
+  if (
+    hermesStore.constructionInProgress &&
+    (state === 'active' || state === 'waiting' || state === 'starting')
+  ) {
+    return { label: 'Attente fin de construction', color: 'blue' }
+  }
+  switch (state) {
+    case 'active':
+      return { label: 'Actif', color: 'green' }
+    case 'waiting':
+      return { label: 'Attente fin de construction', color: 'blue' }
+    case 'starting':
+      return { label: 'Démarrage en cours', color: 'blue' }
+    case 'stopped':
+      return { label: 'Arrêté', color: 'orange' }
+    case 'failed':
+      return { label: 'Échec', color: 'red' }
+    default:
+      return { label: 'Aucun service', color: 'red' }
+  }
+})
+
+/** États pendant lesquels ORS est engagé : l'action proposée est « Arrêter le service ». */
+const RUNNING_STATES = new Set(['active', 'waiting', 'starting'])
+
+const serviceReachable = computed(() => hermesStore.apiOnline === true)
+
+const showStop = computed(
+  () =>
+    serviceReachable.value &&
+    !!hermesStore.activeDatasetId &&
+    RUNNING_STATES.has(serving.value?.state ?? ''),
+)
+
+/** Le ping a échoué : le réveil remplace Arrêter/Démarrer le service. */
+const showWake = computed(
+  () =>
+    hermesStore.server === 'offline' ||
+    hermesStore.server === 'waking' ||
+    hermesStore.server === 'lost',
+)
+
+/** Après un réveil échoué, le bouton indique qu'il s'agit d'une nouvelle tentative. */
+const wakeLabel = computed(() =>
+  hermesStore.server === 'lost' ? 'Réessayer le réveil' : 'Réveiller',
+)
+
+const actionDisabled = computed(
+  () => hermesStore.servingBusy || hermesStore.constructionInProgress,
+)
+
+/**
+ * La perte du **service** est signalée par une popup, pas par un message dans
+ * la carte : l'alerte est masquée tant que l'API est muette. Le message
+ * « Perte du serveur » (`lost`) et les autres erreurs d'un serveur en ligne
+ * restent visibles.
+ */
+const showError = computed(() => {
+  if (!hermesStore.lastError) return false
+  if (hermesStore.server === 'lost') return true
+  if (hermesStore.server !== 'online') return false
+  return hermesStore.apiOnline !== false
+})
+
+async function onStop(): Promise<void> {
   try {
-    await hermesStore.setActiveDataset(value ?? null)
+    await hermesStore.stopServedDataset()
+    ui.showSuccess('Instance ORS arrêtée, jeu de données conservé.')
   } catch (error) {
     ui.showError(parseHermesError(error).message)
   }
 }
 
-async function onPrepareAux(): Promise<void> {
-  const dataset = hermesStore.activeDataset
-  if (!dataset || dataset.status !== 'ready' || auxBusyActive.value) return
-  await hermesStore.prepareAux(dataset.id, allAuxPresent.value)
-}
-
-async function refresh(): Promise<void> {
-  await hermesStore.refreshServer()
+async function onStart(): Promise<void> {
+  try {
+    await hermesStore.startServedDataset()
+  } catch (error) {
+    ui.showError(parseHermesError(error).message)
+  }
 }
 
 async function wake(): Promise<void> {
@@ -316,9 +331,8 @@ async function wake(): Promise<void> {
   text-align: right;
 }
 
-.hermes-aux {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+.hermes-served {
+  padding: 0;
+  background: transparent;
 }
 </style>

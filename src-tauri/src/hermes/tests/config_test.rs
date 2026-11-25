@@ -1,7 +1,8 @@
 //! Tests de la lecture des paramètres `Hermes.*`.
 
 use crate::hermes::config::{
-    config_from_tables, normalize_url, DEFAULT_BASE_URL, DEFAULT_ORS_BASE_URL,
+    config_from_tables, normalize_url, DEFAULT_BASE_URL, DEFAULT_MAX_DATASET_AREA_KM2,
+    DEFAULT_MAX_POLYGON_AREA_KM2, DEFAULT_MAX_POLYGONS_PER_DATASET, DEFAULT_ORS_BASE_URL,
     DEFAULT_WAKE_ADDRESS, DEFAULT_WAKE_MAC,
 };
 
@@ -22,7 +23,12 @@ fn defaults_are_used_without_overrides() {
     assert_eq!(config.wake_mac, DEFAULT_WAKE_MAC);
     assert_eq!(config.wake_port, 9);
     assert_eq!(config.wake_timeout.as_secs(), 120);
-    assert_eq!(config.active_dataset, None);
+    assert_eq!(
+        config.max_polygons_per_dataset,
+        DEFAULT_MAX_POLYGONS_PER_DATASET
+    );
+    assert_eq!(config.max_polygon_area_km2, DEFAULT_MAX_POLYGON_AREA_KM2);
+    assert_eq!(config.max_dataset_area_km2, DEFAULT_MAX_DATASET_AREA_KM2);
 }
 
 #[test]
@@ -41,8 +47,10 @@ mac = "AA-BB-CC-DD-EE-FF"
 port = 7
 delaiMaxSec = 60
 
-[Hermes.Dataset]
-actif = "  mon-ds  "
+[Hermes.Limites]
+maxPolygonesParDataset = 5
+surfaceMaxPolygoneKm2 = 25000
+surfaceMaxDatasetKm2 = 35000
 "#,
     );
     let empty = toml::Table::new();
@@ -56,7 +64,9 @@ actif = "  mon-ds  "
     assert_eq!(config.wake_mac, "AA-BB-CC-DD-EE-FF");
     assert_eq!(config.wake_port, 7);
     assert_eq!(config.wake_timeout.as_secs(), 60);
-    assert_eq!(config.active_dataset.as_deref(), Some("mon-ds"));
+    assert_eq!(config.max_polygons_per_dataset, 5);
+    assert_eq!(config.max_polygon_area_km2, 25_000.0);
+    assert_eq!(config.max_dataset_area_km2, 35_000.0);
 }
 
 #[test]
@@ -86,6 +96,11 @@ keepAliveSec = 999
 [Hermes.Reveil]
 port = 0
 delaiMaxSec = 9999
+
+[Hermes.Limites]
+maxPolygonesParDataset = 0
+surfaceMaxPolygoneKm2 = 10
+surfaceMaxDatasetKm2 = 10
 "#,
     );
     let empty = toml::Table::new();
@@ -95,6 +110,9 @@ delaiMaxSec = 9999
     assert_eq!(config.keep_alive.map(|period| period.as_secs()), Some(300));
     assert_eq!(config.wake_port, 1);
     assert_eq!(config.wake_timeout.as_secs(), 300);
+    assert_eq!(config.max_polygons_per_dataset, 1);
+    assert_eq!(config.max_polygon_area_km2, 1_000.0);
+    assert_eq!(config.max_dataset_area_km2, 1_000.0);
 }
 
 #[test]
@@ -106,6 +124,11 @@ delaiSec = 999
 
 [Hermes.Reveil]
 port = 70000
+
+[Hermes.Limites]
+maxPolygonesParDataset = 99
+surfaceMaxPolygoneKm2 = 999999
+surfaceMaxDatasetKm2 = 999999
 "#,
     );
     let empty = toml::Table::new();
@@ -113,19 +136,9 @@ port = 70000
 
     assert_eq!(config.request_timeout.as_secs(), 60);
     assert_eq!(config.wake_port, 65535);
-}
-
-#[test]
-fn empty_active_dataset_is_none() {
-    let overrides = table(
-        r#"
-[Hermes.Dataset]
-actif = "   "
-"#,
-    );
-    let empty = toml::Table::new();
-    let config = config_from_tables(&empty, &overrides);
-    assert_eq!(config.active_dataset, None);
+    assert_eq!(config.max_polygons_per_dataset, 10);
+    assert_eq!(config.max_polygon_area_km2, 100_000.0);
+    assert_eq!(config.max_dataset_area_km2, 100_000.0);
 }
 
 #[test]

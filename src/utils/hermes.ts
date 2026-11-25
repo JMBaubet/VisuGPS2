@@ -22,33 +22,109 @@ export interface HermesErrorInfo {
  * Décode une erreur remontée par une commande Tauri `hermes_*`.
  *
  * Les commandes renvoient `Result<T, String>` et préfixent la chaîne par un
- * code (`HERMES_OFFLINE: Connexion…`). Une erreur sans code connu est classée
- * `HERMES_UNKNOWN` : l'IHM affiche le message tel quel.
+ * code (`HERMES_OFFLINE: Connexion…`). Les erreurs de connexion (chaîne reqwest
+ * brute) sont résumées pour l'utilisateur ; une erreur sans code connu est
+ * classée `HERMES_UNKNOWN`.
  */
 export function parseHermesError(error: unknown): HermesErrorInfo {
   const raw = error instanceof Error ? error.message : String(error)
   const trimmed = raw.trim()
   const match = /^(HERMES_[A-Z_]+):\s*(.+)$/s.exec(trimmed)
   if (match) {
-    return { code: match[1], message: match[2] }
+    const code = match[1]
+    const message = match[2]
+    if (code === 'HERMES_OFFLINE') {
+      return {
+        code,
+        message: 'Serveur hermes injoignable (Tailscale ou veille).',
+      }
+    }
+    if (code === 'HERMES_TIMEOUT') {
+      return {
+        code,
+        message: 'Le serveur hermes ne répond pas (délai dépassé).',
+      }
+    }
+    return { code, message }
+  }
+  const networkError =
+    /tcp connect error|connection refused|error sending request/i.test(trimmed)
+  if (networkError) {
+    return {
+      code: 'HERMES_OFFLINE',
+      message: 'Serveur hermes injoignable (Tailscale ou veille).',
+    }
   }
   return { code: 'HERMES_UNKNOWN', message: trimmed || 'Erreur hermes inconnue.' }
 }
 
-/** État de connexion au serveur, tel que porté par le store. */
-export type HermesServerState = 'unknown' | 'online' | 'offline' | 'waking'
+/**
+ * État de connexion au **serveur** (machine + hermes-api joignable). Distinct
+ * de l'état du **service** (instance ORS / dataset servi).
+ */
+export type HermesServerState =
+  | 'unknown'
+  | 'online'
+  | 'offline'
+  | 'waking'
+  | 'lost'
 
 /** Mode de l'outil de dessin de polygones sur la carte Hermes. */
 export type HermesDrawMode = 'idle' | 'create' | 'edit'
 
 /** Onglet actif du panneau Hermes ; la carte adapte ses couches. */
-export type HermesTab = 'datasets' | 'regions' | 'polygons'
+export type HermesTab = 'datasets' | 'polygons'
+
+/** Vue minimale d'un artefact aux pour juger de sa disponibilité. */
+export interface AuxFileLike {
+  exists: boolean
+  state?: string | null
+}
+
+/**
+ * Un artefact aux est prêt si son marqueur v1.10 vaut `ready`. Pour un serveur
+ * antérieur qui ne fournit pas `state`, on retombe sur `exists`.
+ * En particulier, un dossier `mm/` non vide ne suffit pas (contrat).
+ */
+export function auxFileReady(file: AuxFileLike): boolean {
+  return file.state ? file.state === 'ready' : file.exists
+}
 
 /** Vue minimale d'un dataset nécessaire à l'affichage du chip. */
 export interface HermesDatasetStatusLike {
   id: string
+  /** Nom d'affichage (repli sur `id` s'il est absent du manifest). */
+  name?: string | null
   status: string
+  /** État v1.9 (initializing, building, ready, degraded*, unavailable). */
+  state?: string | null
+  stateLabel?: string | null
+  /** Artefacts v1.9 : `pbf`, `ors`, `communes`, `tunnels`, `mm`. */
+  artifacts?: Record<string, unknown> | null
   stale: boolean
+}
+
+/** État d'un artefact v1.9 (`ready`, `pending`, `preparing`, `failed`, …). */
+export function datasetArtifactState(
+  dataset: HermesDatasetStatusLike,
+  key: 'pbf' | 'ors' | 'communes' | 'tunnels' | 'mm',
+): string | null {
+  const value = dataset.artifacts?.[key]
+  if (!value || typeof value !== 'object') return null
+  const state = (value as Record<string, unknown>).state
+  return typeof state === 'string' ? state : null
+}
+
+/**
+ * Le graphe ORS est-il construit ? Avec v1.9, `status` peut rester
+ * `preparing` pendant la génération aux : c'est l'artefact `ors` qui marque la
+ * fin du build. Le champ historique `status=ready` reste accepté.
+ */
+export function isDatasetGraphReady(
+  dataset: HermesDatasetStatusLike,
+): boolean {
+  if (dataset.status === 'ready' || dataset.state === 'ready') return true
+  return datasetArtifactState(dataset, 'ors') === 'ready'
 }
 
 /** Affichage prêt à rendre pour le chip de la toolbar. */
@@ -67,37 +143,174 @@ function stateLabel(state: HermesServerState): string {
       return 'hors ligne'
     case 'waking':
       return 'réveil en cours'
+    case 'lost':
+      return 'serveur perdu'
     default:
       return 'état inconnu'
   }
 }
 
+/** Libellé d'état d'un dataset, avec repli sur le champ historique `status`. */
+export function datasetStateLabel(dataset: HermesDatasetStatusLike): string {
+  return dataset.stateLabel ?? dataset.state ?? dataset.status
+}
+
+/** Nom d'affichage d'un dataset : le serveur peut l'omettre (repli `id`). */
+export function datasetDisplayName(dataset: {
+  id: string
+  name?: string | null
+}): string {
+  const name = dataset.name?.trim()
+  return name ? name : dataset.id
+}
+
+/** Vue minimale d'un polygone pour résoudre les noms des secteurs assemblés. */
+export interface HermesPolygonNameLike {
+  id: string
+  name: string
+}
+
+/** Noms des secteurs assemblés par un dataset (repli sur l'id inconnu). */
+export function datasetSectorNames(
+  dataset: { zones?: string[] | null } | null | undefined,
+  polygons: HermesPolygonNameLike[],
+): string[] {
+  return (dataset?.zones ?? []).map(
+    polygonId =>
+      polygons.find(polygon => polygon.id === polygonId)?.name ?? polygonId,
+  )
+}
+
+/** Vue minimale d'un polygone pour juger de sa révision après un build. */
+export interface HermesPolygonRevisionLike {
+  id: string
+  updatedAt?: string | null
+}
+
+/** Vue minimale d'un dataset zones pour juger de sa fraîcheur. */
+export interface HermesDatasetUpdateLike extends HermesDatasetStatusLike {
+  zones?: string[] | null
+  createdAt?: string | null
+}
+
 /**
- * Décrit le chip « état serveur + dataset actif » de la toolbar de l'Accueil.
+ * Un dataset en mode zones doit-il être reconstruit après une modification de
+ * secteur ?
  *
- * Le libellé est l'identifiant technique du dataset — le serveur n'expose pas
- * de nom d'affichage dans `GET /datasets`. La couleur résume l'état : vert
- * (serveur en ligne et dataset prêt), orange (aucun dataset, préparation en
- * cours ou attente), rouge (serveur hors ligne ou build échoué), gris (état
- * inconnu).
+ * Heuristique provisoire, en attendant un état serveur fiable : un polygone
+ * modifié après la création du dataset (date de lancement du build) est
+ * considéré comme plus récent que le clippage. La liste des polygones doit
+ * être chargée, sinon on ne conclut rien.
+ */
+export function datasetNeedsUpdate(
+  dataset: HermesDatasetUpdateLike,
+  polygons: HermesPolygonRevisionLike[],
+): boolean {
+  const zones = dataset.zones ?? []
+  if (zones.length === 0 || polygons.length === 0) return false
+  const builtAt = Date.parse(dataset.createdAt ?? '')
+  if (!Number.isFinite(builtAt)) return false
+  return zones.some(zoneId => {
+    const polygon = polygons.find(candidate => candidate.id === zoneId)
+    // Secteur supprimé depuis le build : le dataset ne peut plus être régénéré
+    // à l'identique, il est à mettre à jour.
+    if (!polygon) return true
+    const updatedAt = Date.parse(polygon.updatedAt ?? '')
+    return Number.isFinite(updatedAt) && updatedAt > builtAt
+  })
+}
+
+/**
+ * Artefacts auxiliaires dégradés d'un dataset, dans l'ordre d'affichage.
+ *
+ * Les états v1.9 `degraded*` nomment la chaîne fautive ; les états d'artefact
+ * `failed` servent de repli pour les serveurs qui ne renseignent pas `state`.
+ */
+export function datasetAuxIssues(dataset: HermesDatasetStatusLike): string[] {
+  const state = dataset.state ?? ''
+  const issues: string[] = []
+  if (
+    state === 'degradedCommunes' ||
+    datasetArtifactState(dataset, 'communes') === 'failed'
+  ) {
+    issues.push('Communes')
+  }
+  if (
+    state === 'degradedTunnels' ||
+    datasetArtifactState(dataset, 'tunnels') === 'failed'
+  ) {
+    issues.push('Tunnels')
+  }
+  if (
+    state === 'degradedAux' ||
+    datasetArtifactState(dataset, 'mm') === 'failed'
+  ) {
+    issues.push('f(Tunnels/mm)')
+  }
+  return issues
+}
+
+/** Couleur du chip pour l'état d'un dataset (états v1.9 + repli `status`). */
+export function datasetStateColor(dataset: HermesDatasetStatusLike): string {
+  const state = dataset.state ?? ''
+  if (state === 'ready') return 'green'
+  if (state === 'unavailable') return 'red'
+  if (state.startsWith('degraded')) return 'orange'
+  // Initialisation et construction : bleu, comme les états « en cours » du
+  // service.
+  if (state === 'building' || state === 'initializing') return 'blue'
+  switch (dataset.status) {
+    case 'ready':
+      return 'green'
+    case 'preparing':
+      return 'blue'
+    case 'failed':
+      return 'red'
+    default:
+      return 'grey'
+  }
+}
+
+/**
+ * Décrit le chip « serveur + service » de la toolbar de l'Accueil.
+ *
+ * `state` décrit la **machine** (ping système) ; `apiOnline` décrit le
+ * **service** (`GET /ping`). Un serveur joignable avec une API muette affiche
+ * « Service arrêté » (orange). Le libellé du dataset est son nom d'affichage
+ * s'il existe, sinon son identifiant.
  */
 export function describeHermesStatus(
   state: HermesServerState,
   dataset: HermesDatasetStatusLike | null,
   lastError: string | null,
   baseUrl: string,
+  apiOnline: boolean | null = null,
 ): HermesStatusDisplay {
   const tooltip = [
     `Serveur hermes : ${stateLabel(state)}.`,
     `URL : ${baseUrl}`,
   ]
 
+  if (state === 'online') {
+    const service =
+      apiOnline === true
+        ? 'joignable'
+        : apiOnline === false
+          ? 'arrêté (API injoignable)'
+          : 'état inconnu'
+    tooltip.push(`Service hermes : ${service}.`)
+  }
+
   if (dataset) {
     const stale = dataset.stale ? ' — obsolète' : ''
-    tooltip.push(`Dataset actif : ${dataset.id} (${dataset.status}${stale}).`)
+    tooltip.push(
+      `Jeu de données servi : ${datasetDisplayName(dataset)} (${datasetStateLabel(
+        dataset,
+      )}${stale}).`,
+    )
   } else {
     tooltip.push(
-      'Aucun dataset actif — choisissez-en un dans la carte Serveur.',
+      'Aucun jeu de données servi — choisissez-en un dans la liste.',
     )
   }
   if (lastError) {
@@ -121,6 +334,14 @@ export function describeHermesStatus(
       tooltip,
     }
   }
+  if (state === 'lost') {
+    return {
+      icon: 'mdi-server-off',
+      color: 'red',
+      label: 'Serveur perdu',
+      tooltip,
+    }
+  }
   if (state === 'unknown') {
     return {
       icon: 'mdi-server',
@@ -129,46 +350,58 @@ export function describeHermesStatus(
       tooltip,
     }
   }
+  // Machine joignable mais API muette : c'est le service qui est arrêté.
+  if (state === 'online' && apiOnline === false) {
+    return {
+      icon: 'mdi-server-alert',
+      color: 'orange',
+      label: 'Service arrêté',
+      tooltip,
+    }
+  }
   if (!dataset) {
     return {
       icon: 'mdi-server-network',
       color: 'orange',
-      label: 'Dataset à choisir',
+      label: 'Jeu de données à choisir',
       tooltip,
     }
   }
-  if (dataset.status === 'ready') {
+
+  const color = datasetStateColor(dataset)
+  if (color === 'green') {
     return {
       icon: 'mdi-server-network',
-      color: 'green',
-      label: dataset.id,
-      tooltip,
-    }
-  }
-  if (dataset.status === 'preparing') {
-    return {
-      icon: 'mdi-progress-clock',
-      color: 'orange',
-      label: `${dataset.id} · préparation`,
+      color,
+      label: datasetDisplayName(dataset),
       tooltip,
     }
   }
   return {
-    icon: 'mdi-server-alert',
-    color: 'red',
-    label: `${dataset.id} · échec`,
+    icon: color === 'red' ? 'mdi-server-alert' : 'mdi-progress-clock',
+    color,
+    label: `${datasetDisplayName(dataset)} · ${datasetStateLabel(dataset)}`,
     tooltip,
   }
 }
 
 /**
- * Limites par défaut du serveur, pour les **avertissements souples** de l'IHM.
- * Le serveur reste l'autorité : ses messages 400 sont affichés tels quels.
+ * Paramètres `Hermes.Limites.*` qui bornent la création des polygones et des
+ * datasets. Les valeurs de repli ne servent que tant que les settings ne sont
+ * pas chargés. La surface d'un dataset est **distincte** de celle d'un
+ * polygone : la première borne la somme des zones assemblées, la seconde borne
+ * chaque polygone pris isolément.
  */
-export const DATASET_LIMITS = {
-  maxRegions: 4,
-  maxZones: 100,
-  maxAreaKm2: 50_000,
+export const HERMES_LIMIT_PATHS = {
+  maxPolygonsPerDataset: 'Hermes.Limites.maxPolygonesParDataset',
+  maxPolygonAreaKm2: 'Hermes.Limites.surfaceMaxPolygoneKm2',
+  maxDatasetAreaKm2: 'Hermes.Limites.surfaceMaxDatasetKm2',
+} as const
+
+export const HERMES_LIMIT_DEFAULTS = {
+  maxPolygonsPerDataset: 2,
+  maxPolygonAreaKm2: 10_000,
+  maxDatasetAreaKm2: 50_000,
 } as const
 
 /**
@@ -249,7 +482,7 @@ export function validatePolygonGeometry(
   }
   const rings = geometry.coordinates
   if (!Array.isArray(rings) || rings.length === 0) {
-    return { ok: false, message: 'Le polygone est vide.' }
+    return { ok: false, message: 'Le secteur est vide.' }
   }
   if (rings.length > 1) {
     return { ok: false, message: 'Les trous ne sont pas acceptés par le serveur.' }
@@ -258,16 +491,16 @@ export function validatePolygonGeometry(
   if (!Array.isArray(ring) || ring.length < 4) {
     return {
       ok: false,
-      message: 'Un polygone doit avoir au moins 4 sommets (anneau fermé).',
+      message: 'Un secteur doit avoir au moins 4 sommets (anneau fermé).',
     }
   }
   if (ring.length > 1000) {
-    return { ok: false, message: 'Un polygone est limité à 1000 sommets.' }
+    return { ok: false, message: 'Un secteur est limité à 1000 sommets.' }
   }
   const first = ring[0]
   const last = ring[ring.length - 1]
   if (!first || !last) {
-    return { ok: false, message: 'Anneau de polygone invalide.' }
+    return { ok: false, message: 'Anneau de secteur invalide.' }
   }
   if (first[0] !== last[0] || first[1] !== last[1]) {
     return {

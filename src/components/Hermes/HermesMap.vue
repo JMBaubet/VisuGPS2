@@ -10,7 +10,7 @@
     />
 
     <v-tooltip
-      v-if="drawMode !== 'idle'"
+      v-if="hasMapboxKey && mapReady"
       location="right"
       :open-delay="300"
       max-width="280"
@@ -30,6 +30,12 @@
       <span>{{ distanceToolHint }}</span>
     </v-tooltip>
 
+    <div v-if="drawMode !== 'idle'" class="hermes-map__edit-hint">
+      <v-icon icon="mdi-gesture-tap" size="14" class="mr-1" />
+      Cliquez un point intermédiaire pour ajouter un sommet, glissez pour le
+      déplacer, sélectionnez-le puis Suppr pour le retirer.
+    </div>
+
     <v-empty-state
       v-if="!hasMapboxKey"
       icon="mdi-map-marker-off-outline"
@@ -44,24 +50,27 @@
 /**
  * Carte de la vue Hermes : datasets, régions indexées et polygones custom.
  *
- * Les couches dépendent de l'onglet actif du panneau : dataset actif en vert
- * (contour sur les onglets Régions/Polygones, remplissage sur l'onglet
- * Datasets), autres datasets en gris, régions en jaune, polygones en orange.
- * L'élément survolé dans la liste — ou sélectionné au clic — passe en bleu.
- * Les traces favorites et affichées de l'Accueil restent visibles sur tous les
- * onglets, avec la même représentation que sur la carte principale.
+ * Les régions sont affichées en permanence, en couche de fond jaune. Les
+ * couches dépendent de l'onglet actif du panneau : dataset servi en vert
+ * (contour sur l'onglet Polygones, remplissage sur l'onglet Datasets), autres
+ * datasets en gris, polygones en orange. L'élément survolé dans la liste — ou
+ * le polygone sélectionné au clic — passe en bleu. Les traces favorites et
+ * affichées de l'Accueil restent visibles sur tous les onglets, avec la même
+ * représentation que sur la carte principale.
  *
- * En création ou édition de polygone, le bouton « marqueur distance » arme un
- * clic de placement : des cercles mauves de 10 à 150 km, renforcés tous les
- * 50 km, sont alors dessinés autour du centre choisi.
+ * En création ou édition de polygone, Mapbox Draw affiche les sommets et les
+ * points intermédiaires : cliquer un point intermédiaire ajoute un sommet, le
+ * glisser le déplace, et Suppr retire le sommet sélectionné. Le bouton
+ * « marqueur distance » est indépendant du dessin : il reste disponible en
+ * permanence sur les deux onglets.
  *
  * Le style `outdoors-v12` est volontairement classique (pas le style Standard
  * de l'Accueil) : les couches GeoJSON et l'outil de dessin Mapbox s'y ajoutent
  * sans configuration de « slots ».
  *
- * La sélection est remontée au parent (`select-region` / `select-polygon`) ;
- * le parent la renvoie en props, ce qui recharge les FeatureCollections et
- * cadre la carte sur l'objet choisi.
+ * La sélection est remontée au parent (`select-polygon`) ; le parent la renvoie
+ * en props, ce qui recharge les FeatureCollections et cadre la carte sur le
+ * polygone choisi.
  */
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
@@ -109,22 +118,20 @@ import {
 const props = defineProps<{
   regions: HermesRegion[]
   polygons: HermesPolygon[]
-  /** Tous les datasets : l'actif est en vert, les autres en gris. */
+  /** Tous les datasets : le dataset servi est en vert, les autres en gris. */
   datasets: HermesDataset[]
   /** Dataset actif, dont la couverture est dessinée sur tous les onglets. */
   activeDatasetId: string | null
   /** Onglet du panneau : détermine les couches visibles. */
   activeTab: HermesTab
-  selectedRegionId: string | null
   selectedPolygonId: string | null
   /** Identifiants survolés dans l'onglet courant. */
   hoveredDatasetId: string | null
-  hoveredRegionId: string | null
   hoveredPolygonId: string | null
+  /** Dataset prévisualisé avant confirmation : surligné et cadré. */
+  previewDatasetId: string | null
   drawMode: HermesDrawMode
   editingPolygon: HermesPolygon | null
-  /** Régions surlignées par le formulaire de dataset (sélection multiple). */
-  previewRegionIds: string[]
   /** Polygones surlignés par le formulaire de dataset (sélection multiple). */
   previewPolygonIds: string[]
   /**
@@ -137,10 +144,11 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'select-region': [id: string | null]
   'select-polygon': [id: string | null]
   'draw-create': [geometry: GeoJSON.Polygon]
   'draw-update': [geometry: GeoJSON.Polygon]
+  'draw-draft': [geometry: GeoJSON.Polygon | null]
+  'draw-clear': []
 }>()
 
 const settingsStore = useSettingsStore()
@@ -159,6 +167,14 @@ let ringMarkers: mapboxgl.Marker[] = []
 
 let resizeObserver: ResizeObserver | null = null
 let draw: MapboxDraw | null = null
+/** Canvas de la carte, cible des raccourcis clavier de Mapbox Draw. */
+let drawCanvas: HTMLCanvasElement | null = null
+/** Neutralise `draw.delete` pendant que `applyDrawMode` nettoie l'outil. */
+let applyingMode = false
+/** Émet le tracé en cours pendant `draw_polygon`, jusqu'au `draw.create`. */
+let draftActive = false
+let lastDraftKey = ''
+let lastDraftAt = 0
 let hasFitted = false
 /** Jeton d'invalidation des chargements de géométries de traces. */
 let traceRefreshToken = 0
@@ -183,13 +199,68 @@ const distanceToolHint = computed(() => {
   if (ringCenter.value) {
     return 'Effacer les cercles de distance.'
   }
-  return 'Afficher les cercles de distance (10 à 150 km, renforcés tous les 50 km).'
+  return 'Afficher les cercles de distance (10 à 150 km, renforcés tous les 50 km). Disponible sur les deux onglets.'
 })
 
 /** Première géométrie `Polygon` d'un événement Mapbox Draw. */
 function firstPolygon(features: GeoJSON.Feature[]): GeoJSON.Polygon | null {
   const geometry = features[0]?.geometry
   return geometry && geometry.type === 'Polygon' ? geometry : null
+}
+
+/** Polygone en cours de tracé, ou `null` tant qu'il n'a pas deux points. */
+function currentDraftGeometry(): GeoJSON.Polygon | null {
+  const drawControl = draw
+  if (!drawControl) return null
+  const feature = drawControl
+    .getAll()
+    .features.find(candidate => candidate.geometry.type === 'Polygon')
+  if (!feature || feature.geometry.type !== 'Polygon') return null
+  const ring = feature.geometry.coordinates[0]
+  if (!ring || ring.length < 2) return null
+  return feature.geometry
+}
+
+/**
+ * Émet le brouillon pendant `draw_polygon`. `draw.render` est déjà lié aux
+ * animation frames par Mapbox Draw ; on limite en plus à ~10 Hz pour ne pas
+ * recalculer la surface à chaque pixel de souris.
+ */
+function emitDrawDraft(): void {
+  if (!draftActive || props.drawMode !== 'create') return
+  const now = performance.now()
+  if (now - lastDraftAt < 100) return
+  const geometry = currentDraftGeometry()
+  const key = geometry ? JSON.stringify(geometry.coordinates) : ''
+  if (key === lastDraftKey) return
+  lastDraftKey = key
+  lastDraftAt = now
+  emit('draw-draft', geometry)
+}
+
+/** Donne le focus clavier au canvas pour que Suppr atteigne Mapbox Draw. */
+function focusDrawCanvas(): void {
+  const canvas = map.value?.getCanvas()
+  if (!canvas) return
+  canvas.tabIndex = 0
+  canvas.focus({ preventScroll: true })
+}
+
+/**
+ * Raccourci de suppression de sommet.
+ *
+ * Avec `displayControlsDefault: false` et `controls: {}`, Mapbox Draw met
+ * `controls.trash` à `false` et désactive son propre traitement de
+ * `Suppr`/`Backspace`. On le rétablit uniquement en `direct_select`, pour ne
+ * jamais supprimer le polygone entier depuis `simple_select`.
+ */
+function onDrawKeyDown(event: KeyboardEvent): void {
+  const drawControl = draw
+  if (!drawControl || props.drawMode === 'idle') return
+  if (event.key !== 'Delete' && event.key !== 'Backspace') return
+  if (drawControl.getMode() !== 'direct_select') return
+  event.preventDefault()
+  drawControl.trash()
 }
 
 /**
@@ -200,25 +271,35 @@ function firstPolygon(features: GeoJSON.Feature[]): GeoJSON.Polygon | null {
 function applyDrawMode(): void {
   const drawControl = draw
   if (!drawControl) return
-  drawControl.deleteAll()
+  applyingMode = true
+  try {
+    drawControl.deleteAll()
 
-  if (props.drawMode === 'create') {
-    drawControl.changeMode('draw_polygon')
-    return
-  }
-  if (props.drawMode === 'edit' && props.editingPolygon) {
-    const ids = drawControl.add({
-      type: 'Feature',
-      properties: {},
-      geometry: props.editingPolygon.geometry,
-    })
-    const featureId = ids[0]
-    if (featureId) {
-      drawControl.changeMode('direct_select', { featureId })
+    if (props.drawMode === 'create') {
+      draftActive = true
+      lastDraftKey = ''
+      lastDraftAt = 0
+      drawControl.changeMode('draw_polygon')
+      return
     }
-    return
+    draftActive = false
+    if (props.drawMode === 'edit' && props.editingPolygon) {
+      const ids = drawControl.add({
+        type: 'Feature',
+        properties: {},
+        geometry: props.editingPolygon.geometry,
+      })
+      const featureId = ids[0]
+      if (featureId) {
+        drawControl.changeMode('direct_select', { featureId })
+        focusDrawCanvas()
+      }
+      return
+    }
+    drawControl.changeMode('simple_select')
+  } finally {
+    applyingMode = false
   }
-  drawControl.changeMode('simple_select')
 }
 
 /**
@@ -296,26 +377,16 @@ function render(): void {
       props.datasets.filter(dataset => dataset.id !== active?.id),
       props.regions,
       props.polygons,
-      props.hoveredDatasetId,
+      props.previewDatasetId ?? props.hoveredDatasetId,
     ),
   )
 
-  // Hors de l'onglet Régions, seuls les aperçus du formulaire de dataset
-  // doivent rester visibles (le formulaire s'ouvre depuis l'onglet Datasets).
-  const previewRegions = new Set(props.previewRegionIds)
-  const drawnRegions =
-    props.activeTab === 'regions'
-      ? props.regions
-      : props.regions.filter(region => previewRegions.has(region.id))
+  // Les régions sont une couche de fond permanente : elles restent visibles
+  // sur les deux onglets, en jaune, sans sélection ni survol.
   setSourceData(
     instance,
     HERMES_SOURCE_IDS.regions,
-    regionsFeatureCollection(
-      drawnRegions,
-      props.selectedRegionId,
-      props.previewRegionIds,
-      props.hoveredRegionId,
-    ),
+    regionsFeatureCollection(props.regions),
   )
 
   const previewPolygons = new Set(props.previewPolygonIds)
@@ -340,12 +411,15 @@ function render(): void {
   applyHermesVisibility(
     instance,
     props.activeTab,
-    props.previewRegionIds.length > 0,
     props.previewPolygonIds.length > 0,
   )
 
   if (!hasFitted && (props.regions.length > 0 || props.polygons.length > 0)) {
-    fitAll()
+    if (props.activeDatasetId) {
+      fitDataset()
+    } else {
+      fitAll()
+    }
     hasFitted = true
   }
 }
@@ -367,16 +441,48 @@ function fitAll(): void {
   )
 }
 
+/**
+ * Cadre la carte sur le périmètre complet d'un jeu de données : union des bbox
+ * de ses secteurs (zones) ou, à défaut, de ses régions.
+ */
+function fitDataset(dataset: HermesDataset | null = activeDataset.value): void {
+  const instance = map.value
+  if (!dataset || !instance) return
+  const bboxes: [number, number, number, number][] = []
+  for (const zoneId of dataset.zones ?? []) {
+    const polygon = props.polygons.find(candidate => candidate.id === zoneId)
+    if (polygon) bboxes.push(polygon.bbox)
+  }
+  for (const regionId of dataset.regions ?? []) {
+    const region = props.regions.find(candidate => candidate.id === regionId)
+    if (region) bboxes.push(region.bbox)
+  }
+  const bbox = unionBboxes(bboxes)
+  if (!bbox) return
+  instance.fitBounds(
+    [
+      [bbox[0], bbox[1]],
+      [bbox[2], bbox[3]],
+    ],
+    { padding: 60, duration: 600, maxZoom: 10 },
+  )
+}
+
+/** Cadre la carte sur un dataset arbitraire (prévisualisation). */
+function fitDatasetById(datasetId: string | null): void {
+  if (!datasetId) return
+  fitDataset(
+    props.datasets.find(dataset => dataset.id === datasetId) ?? null,
+  )
+}
+
 function fitSelection(): void {
   const instance = map.value
   if (!instance) return
-  const region = props.selectedRegionId
-    ? props.regions.find(candidate => candidate.id === props.selectedRegionId)
-    : null
   const polygon = props.selectedPolygonId
     ? props.polygons.find(candidate => candidate.id === props.selectedPolygonId)
     : null
-  const bbox = region?.bbox ?? polygon?.bbox
+  const bbox = polygon?.bbox
   if (!bbox) return
   instance.fitBounds(
     [
@@ -387,9 +493,8 @@ function fitSelection(): void {
   )
 }
 
-/** Couches cliquables : seules celles de l'onglet courant. */
+/** Couches cliquables : seuls les polygones de l'onglet Polygones. */
 function selectionLayers(): string[] {
-  if (props.activeTab === 'regions') return [HERMES_LAYER_IDS.regionsFill]
   if (props.activeTab === 'polygons') return [HERMES_LAYER_IDS.polygonsFill]
   return []
 }
@@ -572,20 +677,14 @@ function onMapClick(event: MapMouseEvent): void {
 
   const features = instance.queryRenderedFeatures(event.point, { layers })
   if (features.length === 0) {
-    if (props.activeTab === 'regions') {
-      emit('select-region', null)
-    } else {
-      emit('select-polygon', null)
-    }
+    emit('select-polygon', null)
     return
   }
 
   const feature = features[0]
   const id = feature.properties?.id
   if (typeof id !== 'string' || !id) return
-  if (feature.layer?.id === HERMES_LAYER_IDS.regionsFill) {
-    emit('select-region', id)
-  } else if (feature.layer?.id === HERMES_LAYER_IDS.polygonsFill) {
+  if (feature.layer?.id === HERMES_LAYER_IDS.polygonsFill) {
     emit('select-polygon', id)
   }
 }
@@ -655,13 +754,39 @@ async function initializeMap(token: string): Promise<void> {
     draw = drawControl
     instance.addControl(drawControl)
 
+    drawCanvas = instance.getCanvas()
+    drawCanvas.addEventListener('keydown', onDrawKeyDown)
+
+    instance.on('draw.render', emitDrawDraft)
+
     instance.on('draw.create', (event: MapboxDraw.DrawCreateEvent) => {
-      const geometry = firstPolygon(event.features)
-      if (geometry) emit('draw-create', geometry)
+      draftActive = false
+      const feature = event.features[0]
+      if (!feature || feature.geometry.type !== 'Polygon') return
+      emit('draw-create', feature.geometry)
+
+      // `onStop` de draw_polygon déclenche `draw.create` puis bascule lui-même
+      // en simple_select : on diffère la sélection directe pour ne pas être
+      // écrasé, et on rend les sommets immédiatement manipulables.
+      const featureId =
+        typeof feature.id === 'string' ? feature.id : null
+      if (!featureId) return
+      window.setTimeout(() => {
+        if (!draw || props.drawMode === 'idle') return
+        draw.changeMode('direct_select', { featureId })
+        focusDrawCanvas()
+      }, 0)
     })
     instance.on('draw.update', (event: MapboxDraw.DrawUpdateEvent) => {
       const geometry = firstPolygon(event.features)
       if (geometry) emit('draw-update', geometry)
+    })
+    instance.on('draw.delete', () => {
+      draftActive = false
+      // `deleteAll()` de `applyDrawMode` émet aussi `draw.delete` : ne pas
+      // vider une géométrie d'édition à cause d'un nettoyage interne.
+      if (applyingMode) return
+      emit('draw-clear')
     })
 
     render()
@@ -674,6 +799,10 @@ async function initializeMap(token: string): Promise<void> {
 function destroyMap(): void {
   traceRefreshToken += 1
   clearRingMarkers()
+  if (drawCanvas) {
+    drawCanvas.removeEventListener('keydown', onDrawKeyDown)
+    drawCanvas = null
+  }
   if (map.value) {
     try {
       map.value.remove()
@@ -683,6 +812,7 @@ function destroyMap(): void {
   }
   map.value = null
   draw = null
+  applyingMode = false
   mapReady.value = false
   hasFitted = false
 }
@@ -729,21 +859,41 @@ watch(
       props.activeDatasetId,
       props.activeTab,
       props.hoveredDatasetId,
-      props.hoveredRegionId,
       props.hoveredPolygonId,
-      props.previewRegionIds,
+      props.previewDatasetId,
       props.previewPolygonIds,
     ] as const,
   () => render(),
 )
 
 watch(
-  () => [props.selectedRegionId, props.selectedPolygonId] as const,
+  () => props.selectedPolygonId,
   () => {
     render()
-    if (props.selectedRegionId || props.selectedPolygonId) {
+    if (props.selectedPolygonId) {
       fitSelection()
     }
+  },
+)
+
+// Sélection d'un jeu de données : la carte cadre son périmètre complet, pour
+// que sa couverture soit entièrement visible.
+watch(
+  () => props.activeDatasetId,
+  datasetId => {
+    render()
+    if (datasetId) {
+      fitDataset()
+    }
+  },
+)
+
+// Prévisualisation avant confirmation : surbrillance puis cadrage.
+watch(
+  () => props.previewDatasetId,
+  datasetId => {
+    render()
+    fitDatasetById(datasetId)
   },
 )
 
@@ -752,18 +902,6 @@ watch(
   () => {
     applyDrawMode()
     render()
-  },
-)
-
-watch(
-  () => props.drawSession,
-  () => clearDistanceRings(),
-)
-
-watch(
-  () => props.drawMode,
-  mode => {
-    if (mode === 'idle') clearDistanceRings()
   },
 )
 
@@ -800,6 +938,29 @@ watch(
   top: 10px;
   left: 10px;
   z-index: 4;
+}
+
+.hermes-map__edit-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  max-width: min(620px, calc(100% - 24px));
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface), 0.92);
+  color: rgba(var(--v-theme-on-surface), 0.85);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.hermes-map :deep(.mapboxgl-canvas:focus) {
+  outline: none;
 }
 
 .hermes-map__empty {

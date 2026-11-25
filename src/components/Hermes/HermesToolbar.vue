@@ -65,6 +65,7 @@ const stateColor = computed(() => {
     case 'online':
       return 'green'
     case 'offline':
+    case 'lost':
       return 'red'
     case 'waking':
       return 'orange'

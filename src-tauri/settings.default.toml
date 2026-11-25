@@ -87,6 +87,7 @@ icon = "mdi-server-network"
 groups = [
   "Hermes.Connexion",
   "Hermes.Reveil",
+  "Hermes.Limites",
 ]
 
 # --- Métadonnées d'affichage des catégories (libellé / icône) ---
@@ -122,6 +123,10 @@ icon = "mdi-server-network"
 [_meta.groups."Hermes.Reveil"]
 label = "Hermes — Réveil"
 icon = "mdi-power-sleep"
+
+[_meta.groups."Hermes.Limites"]
+label = "Hermes — Limites"
+icon = "mdi-shape-polygon-plus"
 
 [_meta.groups."Affichage.moniteurs"]
 label = "Configuration des fenêtres"
@@ -1652,7 +1657,7 @@ icon = "mdi-timer-sand"
 # HERMES — Serveur d'enrichissement géographique et de routage.
 # ---------------------------------------------------------------------------
 #
-# L'application M1 est un client du serveur `hermes` (ZeroTier, port 9000).
+# L'application M1 est un client du serveur `hermes` (Tailscale, port 9000).
 # Les réglages ci-dessous sont utilisés par le module Rust `hermes` et la vue
 # `/hermes` ; ils ne concernent ni l'ORS public (routage de l'audit), ni les
 # seuils de détection des communes/tunnels, qui vivent côté serveur.
@@ -1667,7 +1672,7 @@ documentation = """
 URL du contrôleur `hermes-api`, préfixe `/api/v1` compris :
 `http://100.118.62.10:9000/api/v1` par défaut.
 
-Le serveur n'est joignable que par le réseau privé **ZeroTier** (aucune
+Le serveur n'est joignable que par le réseau privé **Tailscale** (aucune
 exposition publique). Si l'adresse ou le port changent, mettre à jour cette
 valeur et `Hermes.Connexion.orsBaseUrl`.
 
@@ -1703,7 +1708,7 @@ Délai maximal accordé à une requête HTTP vers `hermes-api`.
 
 - Les routes courtes (`/ping`, `/datasets`, `/regions`, `/polygons`, `/aux`)
   doivent répondre en quelques millisecondes : **30 s** laisse une marge
-  confortable sur ZeroTier.
+  confortable sur Tailscale.
 - `POST /communes/detect` peut charger l'index d'un dataset au premier appel
   (~2,2 s pour la PACA) : **30 s** suffit.
 - `POST /tunnels/detect` exécute `map_matching_2` : le client utilise un délai
@@ -1729,10 +1734,10 @@ Période du `GET /ping` envoyé **uniquement pendant un travail actif** : pollin
 d'un dataset, démarrage d'ORS, file de détection des communes/tunnels. Valeur
 par défaut : **30 s** ; **0** désactive le keep-alive.
 
-Le ping est un signal d'activité du veilleur `hermes` : un keep-alive permanent
-empêcherait la mise en veille automatique (grâce de 15 min) et maintiendrait le
-serveur éveillé sans raison. C'est pourquoi il ne tourne jamais en dehors d'une
-opération en cours.
+Le ping est un signal d'activité du veilleur `hermes`. Il ne tourne que pendant
+une opération en cours ; le moniteur de santé permanent (`pingApiSec`) sollicite
+déjà l'API en continu tant que l'application tourne, ce qui maintient le service
+éveillé. Ce keep-alive reste utile pour les opérations longues.
 
 Le réveil du serveur (WoL) et les actions de la vue Hermes ne dépendent pas de
 ce réglage.
@@ -1745,6 +1750,30 @@ step = 10
 unit = "s"
 icon = "mdi-heart-pulse"
 
+[Hermes.Connexion.pingApiSec]
+description = "Période du ping API (s)"
+documentation = """
+Période du ping **API** (`GET /ping`) envoyé pendant toute la durée de
+l'application : **10 s** par défaut (bornes 3 à 60).
+
+Ce ping teste le **service** `hermes-api` (et, par sa réponse, la joignabilité
+de la machine). Il détecte l'arrêt de l'API sans attendre l'ouverture de la vue
+Hermes. Comme il touche l'API, il maintient le service éveillé tant que
+l'application tourne : c'est le prix de la surveillance permanente.
+
+Lorsque l'API ne répond pas, un ping **système** (ICMP) est lancé une seule
+fois pour lever le doute : machine joignable ⇒ « Service arrêté » ; machine
+muette ⇒ alerte Tailscale et proposition de réveil. Le ping système n'est pas
+périodique.
+"""
+type = "int"
+default = 10
+min = 3
+max = 60
+step = 1
+unit = "s"
+icon = "mdi-lan-connect"
+
 [Hermes.Reveil.adresse]
 description = "Adresse de réveil WoL"
 documentation = """
@@ -1752,9 +1781,10 @@ Adresse à laquelle envoyer le paquet magique Wake-on-LAN :
 `87.91.31.205` (box FAI Bouygues) par défaut.
 
 Le paquet UDP est émis vers cette adresse et le port
-`Hermes.Reveil.port` ; la box le relaie au serveur. Le réveil est **manuel** :
-aucun paquet n'est envoyé au lancement de l'application ni pendant le
-rattrapage des détections.
+`Hermes.Reveil.port` ; la box le relaie au serveur. Une trame est envoyée
+**systématiquement au lancement de l'application** (le serveur se met en veille
+par défaut) ; le bouton « Réveiller » de la vue Hermes permet de la renvoyer
+ensuite. Aucune trame n'est émise pendant le rattrapage des détections.
 """
 type = "string"
 default = "87.91.31.205"
@@ -1805,29 +1835,77 @@ step = 10
 unit = "s"
 icon = "mdi-timer-sand"
 
-# --- Sélection du dataset actif ---
-# Paramètre **caché** du drawer : le groupe `Hermes.Dataset` n'est listé dans
-# aucune catégorie `_meta`. Il est écrit par la vue `/hermes` (carte Serveur ou
-# onglet Datasets) et relu par les stores de détection pour choisir le dataset
-# envoyé à `POST /communes/detect` et `POST /tunnels/detect`.
+# --- Limites des polygones et des datasets ---
+# Ces bornes sont contrôlées par l'IHM et revalidées côté client Rust avant
+# l'envoi. Le serveur garde ses propres limites ; ses erreurs 400 restent
+# affichées telles quelles.
 
-[Hermes.Dataset.actif]
-description = "Dataset hermes actif"
+[Hermes.Limites.maxPolygonesParDataset]
+description = "Nombre maximal de polygones par dataset"
 documentation = """
-Identifiant du dataset `hermes` utilisé par les détections de communes et de
-tunnels. Valeur vide : aucun dataset actif — les détections sont bloquées avec
-un message invitant à en choisir un dans la vue Hermes.
+Nombre de polygones (zones) qu'un dataset peut assembler : **2** par défaut.
 
-Le dataset est choisi manuellement parmi les datasets `ready` (`GET /datasets`).
-Il est persisté par mode d'exécution, comme tous les paramètres : un mode EVAL
-peut utiliser un dataset de test, un mode OPE le dataset de production.
+Pour des raisons de performance, seuls des datasets constitués de polygones
+peuvent être créés depuis la vue Hermes. Le paramètre borne la sélection du
+formulaire de création et est revalidé côté client Rust.
 
-Le serveur ne conserve qu'**un seul dataset en mémoire** : changer de dataset
-décharge le précédent, et le premier appel de détection sur le nouveau coûte
-~2 s (rechargement de l'index).
+Bornes : **1 à 10**. Une valeur trop élevée allonge le build et la
+préparation des artefacts aux côté serveur.
 """
-type = "string"
-default = ""
+type = "int"
+default = 2
+min = 1
+max = 10
+step = 1
+unit = "polygones"
+icon = "mdi-format-list-numbered"
+
+[Hermes.Limites.surfaceMaxPolygoneKm2]
+description = "Surface maximale d'un polygone (km²)"
+documentation = """
+Surface maximale autorisée pour un polygone custom, en **km²** : **10 000** par
+défaut, soit environ 100 km × 100 km.
+
+Le formulaire de polygone bloque l'enregistrement au-delà de cette surface et
+le client Rust revalide la géométrie avant l'envoi. Un polygone existant devenu
+hors limite après abaissement du paramètre est signalé dans la liste ; il n'est
+ni supprimé ni modifié automatiquement.
+
+Bornes : **1 000 à 100 000 km²**, pas de **500 km²**. Cette limite est
+**distincte** de `Hermes.Limites.surfaceMaxDatasetKm2`, qui borne la somme des
+polygones assemblés.
+"""
+type = "int"
+default = 10000
+min = 1000
+max = 100000
+step = 500
+unit = "km²"
+icon = "mdi-shape-polygon-plus"
+
+[Hermes.Limites.surfaceMaxDatasetKm2]
+description = "Surface maximale d'un dataset (km²)"
+documentation = """
+Surface maximale autorisée pour un dataset, en **km²** : **50 000** par défaut.
+
+Elle est **distincte** de `Hermes.Limites.surfaceMaxPolygoneKm2` :
+- la limite par polygone borne chaque zone prise isolément ;
+- la limite du dataset borne la **somme des surfaces** des polygones qui le
+  composent.
+
+Le formulaire de dataset affiche la surface cumulée et bloque la création
+lorsqu'elle dépasse cette valeur ; le client Rust revalide la somme avant
+l'envoi. Un dataset existant n'est pas modifié si le paramètre est abaissé.
+
+Bornes : **1 000 à 100 000 km²**, pas de **500 km²**. Le serveur applique par
+ailleurs sa propre limite de surface cumulée.
+"""
+type = "int"
+default = 50000
+min = 1000
+max = 100000
+step = 500
+unit = "km²"
 icon = "mdi-database-check"
 
 # ---------------------------------------------------------------------------

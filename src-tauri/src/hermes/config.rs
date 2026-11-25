@@ -25,6 +25,9 @@ pub(crate) const DEFAULT_WAKE_PORT: u16 = 9;
 pub(crate) const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub(crate) const DEFAULT_KEEP_ALIVE_SECS: u64 = 30;
 pub(crate) const DEFAULT_WAKE_TIMEOUT_SECS: u64 = 120;
+pub(crate) const DEFAULT_MAX_POLYGONS_PER_DATASET: u64 = 2;
+pub(crate) const DEFAULT_MAX_POLYGON_AREA_KM2: f64 = 10_000.0;
+pub(crate) const DEFAULT_MAX_DATASET_AREA_KM2: f64 = 50_000.0;
 
 /// Configuration effective du client `hermes`.
 #[derive(Debug, Clone, PartialEq)]
@@ -42,8 +45,12 @@ pub struct HermesConfig {
     pub wake_port: u16,
     /// Attente maximale après un réveil WoL.
     pub wake_timeout: Duration,
-    /// Dataset actif, ou `None` si aucun n'est sélectionné.
-    pub active_dataset: Option<String>,
+    /// Nombre maximal de polygones qu'un dataset peut assembler.
+    pub max_polygons_per_dataset: u64,
+    /// Surface maximale d'un polygone custom, en km².
+    pub max_polygon_area_km2: f64,
+    /// Surface maximale d'un dataset, somme des polygones, en km².
+    pub max_dataset_area_km2: f64,
 }
 
 impl Default for HermesConfig {
@@ -57,7 +64,9 @@ impl Default for HermesConfig {
             wake_mac: DEFAULT_WAKE_MAC.to_string(),
             wake_port: DEFAULT_WAKE_PORT,
             wake_timeout: Duration::from_secs(DEFAULT_WAKE_TIMEOUT_SECS),
-            active_dataset: None,
+            max_polygons_per_dataset: DEFAULT_MAX_POLYGONS_PER_DATASET,
+            max_polygon_area_km2: DEFAULT_MAX_POLYGON_AREA_KM2,
+            max_dataset_area_km2: DEFAULT_MAX_DATASET_AREA_KM2,
         }
     }
 }
@@ -135,9 +144,29 @@ pub(crate) fn config_from_tables(
     .unwrap_or(DEFAULT_WAKE_TIMEOUT_SECS)
     .clamp(30, 300);
 
-    let active_dataset = string_at(default_toml, user_overrides, "Hermes.Dataset.actif")
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let max_polygons_per_dataset = u64_at(
+        default_toml,
+        user_overrides,
+        "Hermes.Limites.maxPolygonesParDataset",
+    )
+    .unwrap_or(DEFAULT_MAX_POLYGONS_PER_DATASET)
+    .clamp(1, 10);
+
+    let max_polygon_area_km2 = f64_at(
+        default_toml,
+        user_overrides,
+        "Hermes.Limites.surfaceMaxPolygoneKm2",
+    )
+    .unwrap_or(DEFAULT_MAX_POLYGON_AREA_KM2)
+    .clamp(1_000.0, 100_000.0);
+
+    let max_dataset_area_km2 = f64_at(
+        default_toml,
+        user_overrides,
+        "Hermes.Limites.surfaceMaxDatasetKm2",
+    )
+    .unwrap_or(DEFAULT_MAX_DATASET_AREA_KM2)
+    .clamp(1_000.0, 100_000.0);
 
     HermesConfig {
         base_url,
@@ -148,7 +177,9 @@ pub(crate) fn config_from_tables(
         wake_mac,
         wake_port,
         wake_timeout: Duration::from_secs(wake_timeout_secs),
-        active_dataset,
+        max_polygons_per_dataset,
+        max_polygon_area_km2,
+        max_dataset_area_km2,
     }
 }
 
@@ -189,6 +220,14 @@ fn u64_at(default_toml: &toml::Table, user_overrides: &toml::Table, path: &str) 
     match value_at(default_toml, user_overrides, path) {
         Some(toml::Value::Integer(value)) => Some((*value).max(0) as u64),
         Some(toml::Value::Float(value)) => Some(value.max(0.0).round() as u64),
+        _ => None,
+    }
+}
+
+fn f64_at(default_toml: &toml::Table, user_overrides: &toml::Table, path: &str) -> Option<f64> {
+    match value_at(default_toml, user_overrides, path) {
+        Some(toml::Value::Integer(value)) => Some(*value as f64),
+        Some(toml::Value::Float(value)) => Some(*value),
         _ => None,
     }
 }
