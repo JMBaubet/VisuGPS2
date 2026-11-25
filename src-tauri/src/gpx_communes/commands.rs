@@ -12,9 +12,15 @@
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use tauri::Manager;
 
+use crate::hermes::client::{validate_id, HermesClient};
+use crate::hermes::types::{
+    coded, codes, HermesCommunesDetectRequest, HermesCommunesDetectResponse, HermesCommunesParams,
+    HermesDataset, HermesPolygon, HermesRegion, HermesServingStatus,
+};
 use crate::import_gpx::{
     get_geojson_path, get_mode_dir, get_traces_path, load_registry, rebuild_geometry_from_gpx,
     update_registry,
@@ -22,9 +28,10 @@ use crate::import_gpx::{
 use crate::settings::{get_toml_value_by_path, SettingsState};
 
 use super::file;
+use super::hermes::{coverage_rings, is_outside_coverage, passages_from_hermes};
 use super::osm;
 use super::pipeline;
-use super::types::{CommuneParams, CommunePassage};
+use super::types::{CommuneDetection, CommuneParams, CommunePassage};
 
 // ─── Lecture des paramètres ───────────────────────────────────────────
 
@@ -103,6 +110,10 @@ pub fn communes_params_from_settings(
 
 // ─── Détection ────────────────────────────────────────────────────────
 
+/// Message d'abandon commun aux deux moteurs : la trace a été réécrite (audit
+/// appliqué) pendant que la détection travaillait sur l'ancienne géométrie.
+const ABANDONED: &str = "Trace réécrite pendant la détection (audit appliqué) : la détection a été abandonnée et sera rejouée.";
+
 /// Détecte les communes traversées par une trace et persiste le résultat.
 ///
 /// `osm` porte la **réponse Overpass brute** (tableau des `elements`, sérialisé
@@ -160,10 +171,7 @@ pub fn detect_impl(
     //    description serait un état mensonger, et une trace supprimée ou
     //    réécrite pendant l'analyse ne doit rien recevoir.
     if commit_detection(mode_dir, trace_id, &passages, reference_hash.as_deref())? {
-        return Err(
-            "Trace réécrite pendant la détection (audit appliqué) : la détection a été abandonnée et sera rejouée."
-                .to_string(),
-        );
+        return Err(ABANDONED.to_string());
     }
 
     let distinct = passages
@@ -221,6 +229,194 @@ pub(crate) fn commit_detection(
         entry.communes_completed = true;
         Ok(false)
     })
+}
+
+// ─── Détection par hermes ─────────────────────────────────────────────
+
+/// Détecte les communes traversées par une trace **via le serveur hermes** et
+/// persiste le résultat — moteur nominal depuis l'intégration du serveur.
+///
+/// La trace n'est jamais transmise : la commande relit `trace.geojson` côté
+/// backend et n'envoie au serveur que les **points** de la trace, avec les deux
+/// réglages qui gardent un sens côté client (`adminLevel`, `minSegmentKm`).
+/// L'écriture et le drapeau du registre passent par `commit_detection`, comme le
+/// moteur Overpass : même garde d'empreinte, même fichier.
+///
+/// Le dataset vient de `GET /serving` — source de vérité unique de la sélection,
+/// persistée côté serveur — et non du frontend, qui ne peut donc pas désigner un
+/// dataset périmé.
+#[tauri::command]
+pub async fn communes_detect_hermes(
+    app: tauri::AppHandle,
+    trace_id: String,
+) -> Result<CommuneDetection, String> {
+    let mode_dir = get_mode_dir(&app)?;
+    let params = read_communes_params(&app);
+    let points = load_trace_coordinates(&mode_dir, &trace_id)?;
+    let reference_hash = registry_hash(&mode_dir, &trace_id);
+
+    let config = crate::hermes::config::read_config(&app).await;
+    let client = HermesClient::new(&config)?;
+    let dataset_id = serving_dataset(&client, config.request_timeout).await?;
+
+    let request = build_detection_request(&trace_id, &dataset_id, points.clone(), &params);
+    let response = match client
+        .post::<HermesCommunesDetectResponse, _>(
+            "/communes/detect",
+            &request,
+            config.request_timeout,
+        )
+        .await
+    {
+        Ok(response) => response,
+        // 404 : dataset inconnu, ou `communes.geojson` absent. Le code réservé
+        // `HERMES_NOT_PREPARED` permet au store de proposer la bonne action.
+        Err(error) if error.starts_with(codes::NOT_FOUND) => {
+            return Err(coded(
+                codes::NOT_PREPARED,
+                format!(
+                    "Communes non préparées pour le dataset « {} » (communes.geojson absent). Contactez l'administrateur.",
+                    dataset_id
+                ),
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+
+    // Le contrôle de couverture ne sert qu'à départager un résultat **vide** :
+    // une liste non vide prouve à elle seule que la trace est dans le dataset.
+    let outside = response.passages.is_empty()
+        && outside_coverage(&client, config.request_timeout, &dataset_id, &points).await;
+    if outside {
+        println!(
+            "[communes] {} : aucun point dans la couverture du dataset {} — résultat vide consigné.",
+            trace_id, dataset_id
+        );
+    }
+
+    let detection =
+        commit_hermes_detection(&mode_dir, &trace_id, &response, outside, reference_hash.as_deref())?;
+
+    println!(
+        "[communes] {} : {} passage(s) via hermes (dataset {}).",
+        trace_id,
+        detection.passages.len(),
+        detection.dataset_id
+    );
+    Ok(detection)
+}
+
+/// Partie **locale** de `communes_detect_hermes`, testable sans réseau :
+/// conversion de la réponse, écriture de la description et drapeau du registre.
+///
+/// L'ordre et la garde d'empreinte sont ceux du moteur Overpass : une trace
+/// réécrite pendant l'analyse (audit appliqué) fait abandonner la détection,
+/// rien n'est écrit, la trace sera reprise.
+pub fn commit_hermes_detection(
+    mode_dir: &Path,
+    trace_id: &str,
+    response: &HermesCommunesDetectResponse,
+    outside_coverage: bool,
+    reference_hash: Option<&str>,
+) -> Result<CommuneDetection, String> {
+    let passages = passages_from_hermes(&response.passages);
+    if commit_detection(mode_dir, trace_id, &passages, reference_hash)? {
+        return Err(ABANDONED.to_string());
+    }
+    Ok(CommuneDetection {
+        passages,
+        dataset_id: response.dataset_id.clone(),
+        outside_coverage,
+    })
+}
+
+/// Construit la requête de détection : identifiants, points de la trace et
+/// réglages transmis au serveur. `adminLevel` vide est omis (le serveur applique
+/// alors son mapping par pays).
+pub fn build_detection_request(
+    trace_id: &str,
+    dataset_id: &str,
+    points: Vec<[f64; 2]>,
+    params: &CommuneParams,
+) -> HermesCommunesDetectRequest {
+    HermesCommunesDetectRequest {
+        trace_id: trace_id.to_string(),
+        dataset_id: dataset_id.to_string(),
+        points,
+        params: HermesCommunesParams {
+            admin_level: Some(params.admin_level.clone())
+                .filter(|level| !level.trim().is_empty()),
+            min_segment_km: params.min_segment_km,
+        },
+    }
+}
+
+/// Dataset servi (`GET /serving`), validé avant de composer l'URL.
+async fn serving_dataset(client: &HermesClient, timeout: Duration) -> Result<String, String> {
+    let serving = client.get::<HermesServingStatus>("/serving", timeout).await?;
+    let dataset_id = serving.dataset_id.ok_or_else(|| {
+        coded(
+            codes::NO_DATASET,
+            "Aucun dataset servi par hermes. Sélectionnez un jeu de données dans la vue Hermes.",
+        )
+    })?;
+    validate_id(&dataset_id, "dataset")?;
+    Ok(dataset_id)
+}
+
+/// Vrai quand **aucun** point de la trace ne tombe dans la couverture du
+/// dataset — le serveur renvoie alors `passages: []`, indistinguable d'un
+/// « aucune commune traversée ».
+///
+/// Les deux requêtes de géométrie sont **facultatives** : un échec ne doit pas
+/// transformer une détection réussie en erreur. Sans géométrie exploitable, on
+/// ne conclut rien (`false`) — mieux vaut pas d'alerte qu'une alerte fausse.
+async fn outside_coverage(
+    client: &HermesClient,
+    timeout: Duration,
+    dataset_id: &str,
+    points: &[[f64; 2]],
+) -> bool {
+    let dataset = match client
+        .get::<HermesDataset>(&format!("/datasets/{}", dataset_id), timeout)
+        .await
+    {
+        Ok(dataset) => dataset,
+        Err(error) => {
+            eprintln!("[communes] Couverture : dataset illisible ({}).", error);
+            return false;
+        }
+    };
+
+    let rings = if dataset
+        .zones
+        .as_deref()
+        .is_some_and(|zones| !zones.is_empty())
+    {
+        match client
+            .get::<Vec<HermesPolygon>>("/polygons", timeout)
+            .await
+        {
+            Ok(polygons) => coverage_rings(&dataset, &[], &polygons),
+            Err(error) => {
+                eprintln!("[communes] Couverture : secteurs illisibles ({}).", error);
+                return false;
+            }
+        }
+    } else {
+        match client
+            .get::<Vec<HermesRegion>>("/regions", timeout)
+            .await
+        {
+            Ok(regions) => coverage_rings(&dataset, &regions, &[]),
+            Err(error) => {
+                eprintln!("[communes] Couverture : régions illisibles ({}).", error);
+                return false;
+            }
+        }
+    };
+
+    is_outside_coverage(points, &rings)
 }
 
 // ─── Consultation et réinitialisation ─────────────────────────────────

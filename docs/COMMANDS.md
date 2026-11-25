@@ -11,7 +11,7 @@
 - **Types `Option<T>` Rust** : représentés par `null` côté TS (ex. `update_trace`).
 - Les types sont en miroir exact entre les structs Rust (`#[derive(Serialize)]`) et les interfaces TS (`TraceMetadata`, `TraceStats`, `Point3D`...).
 
-## Catalogue (88 commandes)
+## Catalogue (90 commandes)
 
 ### Application
 
@@ -389,26 +389,33 @@ pub struct MultiridePassage {
 
 > Le module Communes détecte les **communes traversées** par une trace nettoyée
 > (`audit_status = "clean"`) et calcule, pour chaque passage, les kilomètres
-> d'entrée et de sortie. Le croisement se fait avec les limites administratives
-> d'OpenStreetMap (`boundary=administrative`, `admin_level = 8`).
+> d'entrée et de sortie.
 >
-> **Le réseau reste côté front** (WebView) : le front interroge l'API Overpass
-> (4 miroirs en cascade) et transmet à la commande la **réponse brute** ; le
-> backend se charge de la géométrie, de l'écriture et de l'état. Aucune
+> **Moteur nominal : le serveur hermes.** Le backend envoie les points de la
+> trace à `POST /communes/detect` ; le croisement avec les limites
+> administratives d'OpenStreetMap est fait côté serveur, sur le **dataset
+> servi** (`GET /serving`, seule source de vérité de la sélection). Aucune
 > géométrie de trace ne franchit l'IPC : le backend relit la trace depuis son
-> propre stockage.
+> propre stockage, et le réseau vit en Rust comme pour le reste de hermes.
+>
+> Le **moteur Overpass** historique reste enregistré (`communes_detect`) mais
+> n'est plus appelé par l'interface : son composable front
+> (`src/composables/useCommunesOverpass.ts`) est dormant jusqu'au nettoyage
+> prévu à l'étape 4 du plan Hermes.
 >
 > **Un seul fichier est produit** : `traces/{trace_id}/communes.json` — tableau
-> racine d'objets à six clés, sans géométrie. L'état de la fonctionnalité vit
+> racine d'objets à sept clés, sans géométrie. L'état de la fonctionnalité vit
 > dans le registre (`communes_completed`), reposé à `false` par
 > `audit_validate` (le GPX réécrit change la géométrie de la trace). Un résultat
 > **vide** est un résultat — la trace ne traverse aucune commune connue — et non
-> une erreur. Voir
+> une erreur ; `outsideCoverage` distingue le cas où la trace sort du dataset.
+> Voir
 > [DATA_STORAGE.md](./DATA_STORAGE.md#traces-trace_idcommunesjson--communes-traversées).
 
 | Commande | Signature Rust | Retour |
 |---|---|---|
-| `communes_detect` | `async (app, trace_id: String, osm: String) -> Result<Vec<CommunePassage>, String>` | Lit la trace nettoyée (`trace.geojson`, régénéré depuis le GPX au besoin), assemble les polygones de la réponse Overpass, exécute la détection (simplification, échantillonnage au pas fixe, arbitrage par centroïde, raffinement des transitions), écrit `communes.json` (écriture atomique) et pose `communes_completed`. Retourne les passages écrits. Si l'empreinte du GPX a changé pendant l'analyse — un audit a réécrit la trace — la détection est **abandonnée** (rien n'est écrit, la trace sera rejouée) : la description aurait décrit l'ancienne géométrie. |
+| `communes_detect_hermes` | `async (app, trace_id: String) -> Result<CommuneDetection, String>` | **Moteur nominal.** Relit la trace (`trace.geojson`, régénéré depuis le GPX au besoin), résout le dataset servi par `GET /serving`, envoie les points et les réglages retenus (`adminLevel`, `minSegmentKm`) à `POST /communes/detect`, convertit la réponse au format du fichier (arrondi au mètre, `longueur = sortie − entrée`), écrit `communes.json` et pose `communes_completed`. Un `404` du serveur (dataset inconnu, `communes.geojson` absent) devient `HERMES_NOT_PREPARED` ; aucun dataset servi, `HERMES_NO_DATASET`. Quand la réponse est vide, compare la trace à la **couverture** du dataset (secteurs, ou contours de régions) et renvoie `outsideCoverage` : la liste vide est alors un « hors zone », pas un « aucune commune ». Un échec des requêtes de couverture ne fait pas échouer la détection. Même garde d'empreinte que le moteur Overpass : une trace réécrite pendant l'analyse fait abandonner la détection. |
+| `communes_detect` | `async (app, trace_id: String, osm: String) -> Result<Vec<CommunePassage>, String>` | **Moteur Overpass historique, dormant** (plus appelé par l'interface). Lit la trace nettoyée, assemble les polygones de la réponse Overpass transmise par le front, exécute la détection (simplification, échantillonnage au pas fixe, arbitrage par centroïde, raffinement des transitions), écrit `communes.json` (écriture atomique) et pose `communes_completed`. Retourne les passages écrits. Si l'empreinte du GPX a changé pendant l'analyse — un audit a réécrit la trace — la détection est **abandonnée** (rien n'est écrit, la trace sera rejouée). |
 | `communes_load` | `async (app, trace_id: String) -> Result<Option<Vec<CommunePassage>>, String>` | Relit la description d'une trace, pour la **consultation** ouverte depuis la carte du circuit. `null` si le fichier est absent ou illisible — ce n'est pas une erreur. Un tableau vide signifie « aucune commune traversée ». |
 | `communes_reset` | `async (app, trace_id: String) -> Result<(), String>` | **Diagnostic** (exposé en mode debug dans la fenêtre de consultation) : supprime `communes.json` et repose `communes_completed` — la trace redevient « à détecter ». Refusé pour une trace inconnue du registre, sans rien modifier. |
 
@@ -421,13 +428,25 @@ pub struct CommunePassage {
     pub km_entree: f64,            // kilomètre d'entrée, depuis le départ de la trace
     pub km_sortie: f64,
     pub longueur_km: f64,          // km_sortie − km_entree, bornes arrondies au mètre
+    pub ambiguous: bool,           // chevauchement de frontières OSM (> 1 m) — hermes
 }
 ```
 
-> **Paramètres** : `Communes.Detection.*` (8 seuils) et
-> `Communes.Overpass.delaiSec` (délai d'attente par miroir, 60 s par défaut). Les
-> deux groupes sont rattachés à la vue `accueil` : la détection se déclenche
-> depuis la carte d'un circuit, elle n'a pas de vue dédiée.
+**Type `CommuneDetection`** (retour de `communes_detect_hermes`, sérialisé en camelCase) :
+```rust
+pub struct CommuneDetection {
+    pub passages: Vec<CommunePassage>,  // format du fichier, snake_case
+    pub dataset_id: String,             // dataset servi utilisé
+    pub outside_coverage: bool,         // aucun point de la trace dans le dataset
+}
+```
+
+> **Paramètres** : `Communes.Detection.adminLevel` et
+> `Communes.Detection.minSegmentKm` sont **transmis à hermes**. Les six autres
+> seuils de `Communes.Detection.*` et `Communes.Overpass.delaiSec` ne servent
+> qu'au moteur Overpass historique, sans effet sur la détection hermes. Les deux
+> groupes sont rattachés à la vue `accueil` : la détection se déclenche depuis la
+> carte d'un circuit, elle n'a pas de vue dédiée.
 
 ### Altimétrie (`gpx_altimetrie/commands.rs`)
 

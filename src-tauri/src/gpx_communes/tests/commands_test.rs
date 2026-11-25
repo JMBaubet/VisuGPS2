@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::gpx_communes::commands::{
-    commit_detection, default_communes_params, detect_impl, reset_impl,
+    build_detection_request, commit_detection, commit_hermes_detection, default_communes_params,
+    detect_impl, reset_impl,
 };
 use crate::gpx_communes::file::{file_path, load_file};
+use crate::hermes::types::HermesCommunesDetectResponse;
 use crate::import_gpx::{
     get_traces_path, load_registry, save_registry, Point3D, TraceMetadata, TraceStats,
 };
@@ -226,4 +228,113 @@ fn detection_is_abandoned_when_the_trace_changed_during_the_analysis() {
     assert!(load_registry(&get_traces_path(&mode))[0].communes_completed);
 
     let _ = fs::remove_dir_all(&mode);
+}
+
+// ─── Détection par hermes (partie locale) ─────────────────────────────
+
+/// Réponse hermes minimale, relue par le type du client — c'est exactement ce
+/// que la commande reçoit du serveur après le `POST /communes/detect`.
+fn hermes_response(trace_id: &str, dataset_id: &str) -> HermesCommunesDetectResponse {
+    serde_json::from_value(json!({
+        "traceId": trace_id,
+        "datasetId": dataset_id,
+        "detectedAt": "2026-11-25T10:00:00Z",
+        "passages": [
+            {"commune": "Nice", "passage": 1, "nbPassagesTotal": 1,
+             "kmEntree": 0.012_34, "kmSortie": 5.130_6, "longueurKm": 5.118_26,
+             "ambiguous": false},
+            {"commune": "Monaco", "passage": 1, "nbPassagesTotal": 1,
+             "kmEntree": 5.130_6, "kmSortie": 5.4, "longueurKm": 0.269_4,
+             "ambiguous": true}
+        ]
+    }))
+    .expect("réponse hermes lisible")
+}
+
+/// La chaîne locale d'une détection hermes écrit le fichier au format du module
+/// et pose le drapeau du registre.
+#[test]
+fn hermes_detection_writes_the_description_and_raises_the_flag() {
+    let trace_id = "t-hermes";
+    let mode = setup("hermes_detect", trace_id);
+    let empreinte = load_registry(&get_traces_path(&mode))[0].hash.clone();
+    let response = hermes_response(trace_id, "provence-alpes-cote-dazur");
+
+    let detection = commit_hermes_detection(&mode, trace_id, &response, false, Some(&empreinte))
+        .expect("la détection doit aboutir");
+
+    assert_eq!(detection.dataset_id, "provence-alpes-cote-dazur");
+    assert!(!detection.outside_coverage);
+    assert_eq!(detection.passages.len(), 2);
+
+    // Arrondi au mètre et invariant du fichier : longueur = sortie − entrée.
+    let nice = &detection.passages[0];
+    assert_eq!(nice.km_entree, 0.012);
+    assert_eq!(nice.km_sortie, 5.131);
+    assert_eq!(nice.longueur_km, 5.119);
+    assert!(!nice.ambiguous);
+    assert!(detection.passages[1].ambiguous, "le drapeau du serveur est conservé");
+
+    assert_eq!(
+        load_file(&mode, trace_id),
+        Some(detection.passages.clone()),
+        "la description est relisible telle quelle"
+    );
+    assert!(
+        load_registry(&get_traces_path(&mode))[0].communes_completed,
+        "le drapeau doit être posé"
+    );
+
+    let _ = fs::remove_dir_all(&mode);
+}
+
+/// Une trace réécrite pendant l'appel au serveur — un audit appliqué a changé la
+/// géométrie — n'est pas marquée détectée : rien n'est écrit.
+#[test]
+fn hermes_detection_is_abandoned_when_the_trace_changed() {
+    let trace_id = "t-hermes-abandon";
+    let mode = setup("hermes_abandon", trace_id);
+    let response = hermes_response(trace_id, "ds");
+
+    let erreur = commit_hermes_detection(
+        &mode,
+        trace_id,
+        &response,
+        false,
+        Some("sha256:empreinte-precedente"),
+    )
+    .expect_err("l'empreinte ne correspond plus");
+
+    assert!(erreur.contains("abandonnée"), "message inattendu : {erreur}");
+    assert!(
+        !file_path(&mode, trace_id).exists(),
+        "aucune description ne doit être écrite"
+    );
+    assert!(!load_registry(&get_traces_path(&mode))[0].communes_completed);
+
+    let _ = fs::remove_dir_all(&mode);
+}
+
+/// La requête transmet les points et les deux réglages retenus — `adminLevel` et
+/// `minSegmentKm` —, sans `gapMaxM` (défaut du serveur).
+#[test]
+fn detection_request_transmits_the_local_settings() {
+    let mut params = default_communes_params();
+    params.admin_level = "6".to_string();
+    params.min_segment_km = 0.02;
+
+    let request = build_detection_request(
+        "t-1",
+        "provence-alpes-cote-dazur",
+        vec![[2.0, 45.0], [2.02, 45.0]],
+        &params,
+    );
+    let out = serde_json::to_value(&request).expect("requête sérialisable");
+
+    assert_eq!(out["traceId"], "t-1");
+    assert_eq!(out["datasetId"], "provence-alpes-cote-dazur");
+    assert_eq!(out["points"][0], json!([2.0, 45.0]));
+    assert_eq!(out["params"]["adminLevel"], "6");
+    assert_eq!(out["params"]["minSegmentKm"], 0.02);
+    assert!(out["params"].get("gapMaxM").is_none());
 }

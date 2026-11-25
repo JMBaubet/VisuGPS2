@@ -24,12 +24,8 @@ pub mod codes {
     /// Ressource inconnue (404 générique).
     pub const NOT_FOUND: &str = "HERMES_NOT_FOUND";
     /// Artefacts auxiliaires absents (404 d'une route de détection).
-    /// Réservé aux détections communes/tunnels (étapes 2 et 3).
-    #[allow(dead_code)]
     pub const NOT_PREPARED: &str = "HERMES_NOT_PREPARED";
     /// Aucun dataset actif n'est sélectionné.
-    /// Réservé aux détections communes/tunnels (étapes 2 et 3).
-    #[allow(dead_code)]
     pub const NO_DATASET: &str = "HERMES_NO_DATASET";
     /// Conflit : build ORS ou préparation aux en cours (409).
     pub const CONFLICT: &str = "HERMES_CONFLICT";
