@@ -22,7 +22,8 @@ import type { LatLon, OrsRoute } from '../stores/audit'
 /** Délai maximal d'une requête (`ORS_TIMEOUT_MS`). */
 export const ORS_TIMEOUT_MS = 12000
 
-const ORS_BASE = 'https://api.openrouteservice.org/v2/directions'
+// Nouvelle URL HeiGIT unifiée (l'ancienne api.openrouteservice.org a été définitivement coupée le 24/11/2026 avec un 410 GONE)
+const ORS_BASE = 'https://api.heigit.org/openrouteservice/v2/directions'
 
 /** Profils interrogés, dans l'ordre du HTML de référence. */
 export type OrsProfile = 'driving-car' | 'cycling-road'
