@@ -71,6 +71,19 @@ pub async fn hermes_ors_health(app: tauri::AppHandle) -> Result<HermesStatusResp
         .await
 }
 
+/// `POST {orsBaseUrl}/directions/{profile}/geojson` — calcule un itinéraire sur l'instance ORS hermes.
+#[tauri::command]
+pub async fn hermes_ors_directions(
+    app: tauri::AppHandle,
+    profile: String,
+    coordinates: Vec<[f64; 2]>,
+) -> Result<serde_json::Value, String> {
+    let (config, client) = open(&app).await?;
+    client
+        .ors_directions(&profile, &coordinates, config.request_timeout)
+        .await
+}
+
 /// Envoie le paquet magique Wake-on-LAN. Le polling de disponibilité est
 /// piloté par le store (ping toutes les 3 s, budget `delaiMaxSec`).
 #[tauri::command]

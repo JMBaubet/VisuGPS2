@@ -97,7 +97,47 @@ export function useAuditOrs() {
   }
 
   /**
-   * Interroge un profil ORS.
+   * Parse la réponse GeoJSON commune à HeiGIT et Hermes ORS.
+   */
+  function parseOrsFeature(body: any): OrsRoute {
+    const feature = body?.features?.[0]
+    const raw = feature?.geometry?.coordinates
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new Error('aucun itinéraire')
+    }
+
+    const coords: LatLon[] = raw.map((c: number[]) => ({
+      lat: c[1],
+      lon: c[0],
+    }))
+    const summary = feature?.properties?.summary ?? {}
+    return {
+      coords,
+      distance: summary.distance ?? 0,
+      duration: summary.duration ?? 0,
+    }
+  }
+
+  /**
+   * Interroge le moteur ORS local hébergé sur le serveur Hermes.
+   */
+  async function fetchRouteFromHermes(
+    profile: OrsProfile,
+    a: LatLon,
+    b: LatLon,
+  ): Promise<OrsRoute> {
+    const body = await invoke<any>('hermes_ors_directions', {
+      profile,
+      coordinates: [
+        [a.lon, a.lat],
+        [b.lon, b.lat],
+      ],
+    })
+    return parseOrsFeature(body)
+  }
+
+  /**
+   * Interroge un profil ORS public (HeiGIT).
    *
    * Le contrat d'appel reçoit des objets `{ lat, lon }` et sérialise lui-même
    * au format ORS `[lon, lat]` — c'est l'inversion la plus fréquente lors d'une
@@ -140,22 +180,7 @@ export function useAuditOrs() {
     }
 
     const body = await res.json()
-    const feature = body?.features?.[0]
-    const raw = feature?.geometry?.coordinates
-    if (!Array.isArray(raw) || raw.length === 0) {
-      throw new Error('aucun itinéraire')
-    }
-
-    const coords: LatLon[] = raw.map((c: number[]) => ({
-      lat: c[1],
-      lon: c[0],
-    }))
-    const summary = feature?.properties?.summary ?? {}
-    return {
-      coords,
-      distance: summary.distance ?? 0,
-      duration: summary.duration ?? 0,
-    }
+    return parseOrsFeature(body)
   }
 
   /** Cause d'un rejet, telle qu'affichée à l'utilisateur (§18.4). */
@@ -183,22 +208,54 @@ export function useAuditOrs() {
       return null
     }
 
-    // Aucune clé active mais une clé de secours : bascule d'office.
-    if (!(await currentKey())) {
-      if (await otherKey()) {
-        switchKey()
-      } else {
-        ui.showError('Renseignez au moins une clé API OpenRouteService.')
-        return null
-      }
-    }
-
     isLoading.value = true
     controller = new AbortController()
     stoppedByUser = false
     let timer = window.setTimeout(() => controller?.abort(), ORS_TIMEOUT_MS)
 
     try {
+      // 1. Tentative prioritaire sur l'instance ORS locale Hermes (si prête)
+      try {
+        const health = await invoke<{ status: string }>('hermes_ors_health').catch(() => null)
+        if (health && health.status === 'ready') {
+          const [carRes, bikeRes] = await Promise.allSettled([
+            fetchRouteFromHermes('driving-car', a, b),
+            fetchRouteFromHermes('cycling-road', a, b),
+          ])
+
+          if (stoppedByUser) {
+            ui.showInfo('Requête annulée — vous pouvez relancer immédiatement.')
+            return null
+          }
+
+          const car = carRes.status === 'fulfilled' ? carRes.value : null
+          const bike = bikeRes.status === 'fulfilled' ? bikeRes.value : null
+
+          if (car || bike) {
+            const identical = await invoke<boolean>('audit_routes_identical', {
+              car: car?.coords ?? [],
+              carDistance: car?.distance ?? 0,
+              bike: bike?.coords ?? [],
+              bikeDistance: bike?.distance ?? 0,
+            })
+            ui.showSuccess('Itinéraire calculé via Hermes ORS.')
+            return { car, bike, identical }
+          }
+        }
+      } catch {
+        // Hors couverture ou indisponibilité : repli transparent sur HeiGIT
+      }
+
+      // 2. Repli sur l'API publique HeiGIT (nécessite une clé)
+      if (!(await currentKey())) {
+        if (await otherKey()) {
+          switchKey()
+        } else {
+          ui.showError('Hermes indisponible : renseignez au moins une clé API OpenRouteService.')
+          return null
+        }
+      }
+
       let car: OrsRoute | null = null
       let bike: OrsRoute | null = null
 

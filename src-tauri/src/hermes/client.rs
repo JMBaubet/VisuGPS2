@@ -152,6 +152,28 @@ impl HermesClient {
         format!("{}/health", self.ors_base_url)
     }
 
+    /// Calcule un itinéraire sur l'instance ORS de hermes (`{orsBaseUrl}/directions/{profile}/geojson`).
+    pub async fn ors_directions(
+        &self,
+        profile: &str,
+        coordinates: &[[f64; 2]],
+        timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!("{}/directions/{}/geojson", self.ors_base_url, profile);
+        let body = serde_json::json!({
+            "coordinates": coordinates,
+            "elevation": true,
+        });
+        self.send_json(
+            reqwest::Method::POST,
+            &url,
+            Some(body.to_string()),
+            timeout,
+            false,
+        )
+        .await
+    }
+
     async fn send_json<T: DeserializeOwned>(
         &self,
         method: reqwest::Method,

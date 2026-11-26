@@ -114,6 +114,7 @@ pub struct ModeInfo {
 | `hermes_ping` | `async (app) -> Result<HermesStatusResponse, String>` | `GET /ping` : teste l'**API** (le service), timeout 2 s, sans reprise. Exécuté en permanence par le moniteur (`Hermes.Connexion.pingApiSec`, 3–60 s, défaut 10 s). |
 | `hermes_system_ping` | `async (app) -> Result<HermesStatusResponse, String>` | Ping **ICMP** de l'hôte de `Hermes.Connexion.baseUrl` (machine/réseau), indépendant de l'API. Appelé **uniquement quand le ping API échoue** (levée de doute service/serveur) et pendant le réveil. |
 | `hermes_ors_health` | `async (app) -> Result<HermesStatusResponse, String>` | `GET {orsBaseUrl}/health`, timeout 2 s. |
+| `hermes_ors_directions` | `async (app, profile: String, coordinates: Vec<[f64; 2]>) -> Result<serde_json::Value, String>` | `POST {orsBaseUrl}/directions/{profile}/geojson` : calcul d'itinéraire (Audit / routage). |
 | `hermes_wake` | `async (app) -> Result<HermesWakeResult, String>` | Envoie le paquet magique WoL trois fois (UDP). Une trame est envoyée **systématiquement au lancement** de l'application ; le polling de disponibilité est piloté par le store. |
 | `hermes_list_datasets` | `async (app) -> Result<Vec<HermesDataset>, String>` | `GET /datasets`. |
 | `hermes_get_dataset` | `async (app, dataset_id: String) -> Result<HermesDataset, String>` | `GET /datasets/{id}` (polling de build). |

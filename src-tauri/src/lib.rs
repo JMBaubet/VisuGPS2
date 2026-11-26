@@ -99,6 +99,7 @@ pub fn run() {
             hermes::commands::hermes_ping,
             hermes::commands::hermes_system_ping,
             hermes::commands::hermes_ors_health,
+            hermes::commands::hermes_ors_directions,
             hermes::commands::hermes_wake,
             hermes::commands::hermes_list_datasets,
             hermes::commands::hermes_get_dataset,
